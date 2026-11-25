@@ -38,6 +38,7 @@ from sqlalchemy import text
 
 from domovoi import admin_auth, ai_features, egress
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.chat_access import Viewer, chat_viewer
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery, diagnostics
 from domovoi.help_desk import facts as help_facts
@@ -310,7 +311,8 @@ async def report(body: ReportBody, request: Request) -> dict[str, Any]:
 
 @router.get("/deliveries", dependencies=READ)
 async def deliveries(person_id: int | None = Query(None, ge=1), since_id: int | None = Query(None, ge=0),
-                     limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+                     limit: int = Query(20, ge=1, le=100),
+                     viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     """Help steps sent by voice (V035): newest first, or after ``since_id``
     oldest first. The app reads its owner's on start and after a
     ``help_deliveries.changed`` event."""

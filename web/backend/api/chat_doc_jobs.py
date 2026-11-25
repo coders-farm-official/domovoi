@@ -62,8 +62,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
-from domovoi import doc_extract
+from domovoi import chat_access, doc_extract
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.chat_access import Action, Viewer, chat_viewer
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
 from domovoi.doc_extract import runner
@@ -1041,33 +1042,52 @@ async def _start_private(job_id: str, file: UploadFile, question: str) -> Any:
     return _stream(job_events(job))
 
 
+async def _checked_job(job_id: str, viewer: Viewer, action: Action) -> Job:
+    """The job, when ``viewer`` may ``action`` its chat (chat_access). A
+    phone's private job has no chat: its 128-bit id is the capability."""
+    if not _valid(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    live = _JOBS.get(job_id)
+    async with session_scope() as s:
+        # Its chat first (from memory, or the row), so a hidden chat's job
+        # is never loaded and answers exactly as a missing one.
+        if live is not None:
+            thread_id = live.thread_id
+        else:
+            row = (await s.execute(text("SELECT thread_id FROM chat_doc_jobs WHERE id = :id"),
+                                   {"id": job_id})).first()
+            thread_id = row[0] if row is not None else None
+        await chat_access.thread_for_child(s, thread_id, viewer, action, not_found="job not found")
+    return await _job(job_id)
+
+
 @router.get("/doc-jobs/{job_id}", dependencies=READ)
-async def get_job(job_id: str) -> dict[str, Any]:
+async def get_job(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     """A job's progress, or its result once it ended (a phone coming back
     to a private job, a dashboard re-opening a chat)."""
-    return (await _job(job_id)).view()
+    return (await _checked_job(job_id, viewer, Action.READ)).view()
 
 
 @router.get("/doc-jobs/{job_id}/events", dependencies=READ)
-async def job_stream(job_id: str) -> StreamingResponse:
+async def job_stream(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> StreamingResponse:
     """The job's progress as SSE from now on (the same events as the start)."""
-    return _stream(job_events(await _job(job_id)))
+    return _stream(job_events(await _checked_job(job_id, viewer, Action.READ)))
 
 
 @router.post("/doc-jobs/{job_id}/stop", dependencies=DEVICE)
-async def stop_job(job_id: str) -> dict[str, Any]:
+async def stop_job(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     """Stops the job: the part being read is abandoned, the notes kept, and
     the reply is the summary of what was read ("(stopped)")."""
-    job = await _job(job_id)
+    job = await _checked_job(job_id, viewer, Action.WRITE)
     await stop(job)
     return job.view()
 
 
 @router.post("/doc-jobs/{job_id}/resume", dependencies=SEND)
-async def resume_job(job_id: str) -> Any:
+async def resume_job(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> Any:
     """Carry on: a stopped (or failed) home-server chat's job reads the parts
     it hasn't, then writes the whole summary as a new reply."""
-    job = await _job(job_id)
+    job = await _checked_job(job_id, viewer, Action.WRITE)
     if job.private:
         return _docs._refused(409, "private", "A phone's job can't carry on: its document was deleted when it ended.")
     if job.task is not None and not job.task.done():
@@ -1090,7 +1110,7 @@ async def resume_job(job_id: str) -> Any:
 
 
 @router.delete("/doc-jobs/{job_id}", dependencies=DEVICE)
-async def delete_job(job_id: str) -> dict[str, Any]:
+async def delete_job(job_id: str, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     """A phone took its private job's summary: the job goes, its text with
     it. (A home-server chat's job goes with its chat.)"""
     job = _JOBS.get(job_id) if _valid(job_id) else None

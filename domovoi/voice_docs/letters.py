@@ -296,11 +296,16 @@ async def _start_thread(state: dict[str, Any], dictation: str) -> int:
     if room:
         said += " in the " + str(room).replace("_", " ").replace("-", " ")
     said += ":\n\n" + (dictation or "(nothing more was said)")
+    from domovoi import chat_access
+
     async with session_scope() as s:
+        # Said aloud in a shared room and saved into household Documents
+        # anyway: shared, with no owner (chat_access, PRIVATE-CHATS §2.3).
+        cols, vals, extra = await chat_access.create_columns(s, None, True)
         thread_id = int((await s.execute(text(
-            "INSERT INTO chat_threads (title, person_id, title_generated) "
-            "VALUES (:t, (SELECT id FROM people WHERE id = CAST(:p AS BIGINT)), true) RETURNING id"),
-            {"t": (state.get("title") or "Letter")[:200], "p": state.get("author_id")})).scalar_one())
+            f"INSERT INTO chat_threads (title, person_id, title_generated{cols}) "
+            f"VALUES (:t, (SELECT id FROM people WHERE id = CAST(:p AS BIGINT)), true{vals}) RETURNING id"),
+            {"t": (state.get("title") or "Letter")[:200], "p": state.get("author_id"), **extra})).scalar_one())
         await s.execute(text(
             "INSERT INTO chat_messages (thread_id, role, content, source, speaker_person_id) "
             "VALUES (:t, 'user', :c, 'voice', (SELECT id FROM people WHERE id = CAST(:p AS BIGINT)))"),

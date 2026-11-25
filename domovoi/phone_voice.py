@@ -75,6 +75,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from domovoi import chat_access
 from domovoi.chat_titles import first_words_title
 from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import (
@@ -501,11 +502,26 @@ def message_dict(row: Any) -> dict[str, Any]:
 
 
 async def _thread_exists(thread_id: int) -> bool:
+    """Whether the thread is still there (after a save failed: was it
+    deleted meanwhile?). No caller's view: the turn was checked first."""
     async with session_scope() as s:
-        row = (
-            await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-    return row is not None
+        return (await chat_access.load_thread(s, thread_id)) is not None
+
+
+async def _check_thread(thread_id: int, viewer: chat_access.Viewer) -> None:
+    """The caller may write into the thread (chat_access.thread_for), or
+    the turn is refused before anything is heard: 404 for a thread it
+    can't see (the same answer as a missing one), 403 when it may only
+    read it."""
+    async with session_scope() as s:
+        _, refusal = await chat_access.check_thread(
+            s, thread_id, viewer, chat_access.Action.WRITE, lock=False,
+        )
+    if refusal is None:
+        return
+    if refusal.status == 404:
+        raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
+    raise PhoneTurnRefused(refusal.status, refusal.detail, refusal.code)
 
 
 async def _write_turn(
@@ -631,6 +647,7 @@ async def run_phone_turn(
     audio: bytes,
     player: dict[str, Any] | None = None,
     speak: bool = True,
+    viewer: chat_access.Viewer | None = None,
 ) -> dict[str, Any]:
     """Answer one push-to-talk turn. Raises :class:`PhoneTurnRefused` for
     a turn refused before anything was written. ``speak=False``: the phone
@@ -658,8 +675,10 @@ async def run_phone_turn(
         raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
     room = phone_room(phone_id)
     pcm = pcm_from_upload(audio)
-    if not await _thread_exists(thread_id):
-        raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
+    # Who may speak into this chat: chat_access, from the caller's device
+    # key (the web forwards it), never from phone_id. ``viewer`` None is
+    # a keyless household caller.
+    await _check_thread(thread_id, viewer or chat_access.Viewer())
     if len(pcm) < MIN_CLIP_SEC * BYTES_PER_SEC:
         return _not_heard("too_short", room)
     if room in _BUSY:

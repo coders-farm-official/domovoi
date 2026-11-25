@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Chat: the live events carry no chat content
+
+- **What changed.** Two live events on `/ws/state` went to every paired
+  phone and browser with chat content in them. `chat.changed` carried the
+  house's thread count and when a chat was last written; it is now
+  `{"changed": "<opaque digest>"}`, which only moves, and each client
+  reads its own thread list again, as the dashboard and both apps already
+  did. `help_deliveries.changed` carried each delivered chat's title
+  ("Photos: …"); its `title` is now "Photos from Domovoi" for a photo
+  search sent to a phone and empty otherwise, so a phone's notification
+  reads "Help: Photos from Domovoi". The full title is in the chat, and in
+  `GET /api/help/deliveries`.
+- **For API readers:** don't read `threads` or `latest` from `chat.changed`
+  (they are gone), or a title from a `help_deliveries.changed` row.
+  `person_id` and `thread_id` stay in the push for the apps that post from
+  it.
+
 ## 1.5.0 (unreleased) — Rooms: satellites name themselves; press Upgrade satellite
 
 - **What to do.** Press **Upgrade satellite** on every Raspberry Pi and

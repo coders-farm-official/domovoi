@@ -52,8 +52,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import ai_features, doc_extract
+from domovoi import ai_features, chat_access, doc_extract
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.chat_access import Action, Viewer, chat_viewer
 from domovoi.doc_extract import runner
 from domovoi.doc_qa import answer as qa
 from domovoi.doc_qa import calc as qa_calc
@@ -331,9 +332,9 @@ async def extract_document(file: UploadFile = File(...)) -> Any:
 
 
 @router.get("/documents/{token}/parts", dependencies=READ)
-async def document_parts(token: str) -> dict[str, Any]:
+async def document_parts(token: str, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     cache = load_cache(token)
-    if cache is None:
+    if cache is None or not await _token_readable(token, viewer):
         raise HTTPException(status_code=404, detail="document not found")
     parts = [{"label": p.get("label"), "page": p.get("page"), "text": p.get("text"), "head": p.get("head")}
              for p in cache["parts"]]
@@ -341,12 +342,12 @@ async def document_parts(token: str) -> dict[str, Any]:
 
 
 @router.get("/documents/{token}/file", dependencies=READ)
-async def document_file(token: str):
+async def document_file(token: str, viewer: Viewer = Depends(chat_viewer)):
     """The original file: a PDF inline (the dashboard opens it at
     ``#page=N``), anything else as a download. Household content, read on
     the same tier as the thread; an ``<a href>`` carries ``?device_token=``."""
     p = doc_path(token)
-    if p is None:
+    if p is None or not await _token_readable(token, viewer):
         raise HTTPException(status_code=404, detail="document not found")
     meta = meta_of(token) or {}
     kind = doc_extract.kind_for(p.name) or ""
@@ -355,6 +356,13 @@ async def document_file(token: str):
     headers = {"Cache-Control": "private, max-age=3600", **inert_headers(media, name)}
     return FileResponse(p, media_type=media, filename=name, headers=headers,
                         content_disposition_type="inline" if kind == "pdf" else "attachment")
+
+
+async def _token_readable(token: str, viewer: Viewer) -> bool:
+    """A document token is a capability; a caller with an identity must
+    be able to read a thread it was sent in (chat_access.token_readable)."""
+    async with session_scope() as s:
+        return await chat_access.token_readable(s, token, "documents", viewer)
 
 
 async def thread_documents(thread_id: int, s: Any = None) -> list[dict[str, Any]]:
@@ -384,10 +392,9 @@ async def thread_documents(thread_id: int, s: Any = None) -> list[dict[str, Any]
 
 
 @router.get("/threads/{thread_id}/documents", dependencies=READ)
-async def list_thread_documents(thread_id: int) -> dict[str, Any]:
+async def list_thread_documents(thread_id: int, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     async with session_scope() as s:
-        if (await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})).first() is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        await chat_access.thread_for(s, thread_id, viewer, Action.READ)
         return {"documents": await thread_documents(thread_id, s)}
 
 
@@ -424,7 +431,7 @@ class FromDocument(BaseModel):
 
 
 @router.post("/threads/from-document", dependencies=SEND, responses=_REFUSALS)
-async def thread_from_document(body: FromDocument) -> Any:
+async def thread_from_document(body: FromDocument, viewer: Viewer = Depends(chat_viewer)) -> Any:
     """"Ask about this document" on the Documents page: a new chat ("About
     lease.pdf") with the file attached, read through the Documents routes'
     own checks (inside the library, no secret-shaped names), copied into
@@ -459,10 +466,13 @@ async def thread_from_document(body: FromDocument) -> Any:
     docs = [{k: meta.get(k) for k in _META_KEYS}]
     reply = attach_reply(docs)
     doc = {"mode": "attached", "found": True, "sources": [], "notes": list(meta.get("notes") or [])}
+    owner, shared = chat_access.new_thread(viewer)
     async with session_scope() as s:
+        cols, vals, extra = await chat_access.create_columns(s, owner, shared)
         thread = (await s.execute(text(
-            "INSERT INTO chat_threads (title) VALUES (:t) RETURNING id, title, archived, created_at, updated_at"),
-            {"t": f"About {name}"[:200]})).mappings().first()
+            f"INSERT INTO chat_threads (title{cols}) VALUES (:t{vals}) "
+            "RETURNING id, title, archived, created_at, updated_at"),
+            {"t": f"About {name}"[:200], **extra})).mappings().first()
         await s.execute(text(
             "INSERT INTO chat_messages (thread_id, role, content, documents) "
             "VALUES (:t, 'user', '', CAST(:d AS JSONB))"), {"t": thread["id"], "d": json.dumps(docs)})

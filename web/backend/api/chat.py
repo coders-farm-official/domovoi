@@ -103,8 +103,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import ai_features, chat_titles, egress, executors, image_safety, live_env, lookup_answer, uncertainty
+from domovoi import ai_features, chat_access, chat_titles, egress, executors, image_safety, live_env, lookup_answer, uncertainty
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.chat_access import Action, Viewer, chat_viewer
 from domovoi.clients import ollama as ollama_client
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery as help_delivery
@@ -233,6 +234,7 @@ async def list_threads(
         description="Search: threads whose title or any message contains this (case ignored), newest first, "
                     "at most 100, each with `match_snippet` (the words around the first match in a message).",
     ),
+    viewer: Viewer = Depends(chat_viewer),
 ) -> dict[str, Any]:
     query = (q or "").strip()
     where: list[str] = []
@@ -254,6 +256,11 @@ async def list_threads(
         )
         limit = f"LIMIT {_SEARCH_LIMIT}"
     async with session_scope() as s:
+        # Only the threads this caller may see, and so only their
+        # snippets and search matches (chat_access).
+        visible, vparams = await chat_access.visible_sql(s, "t", viewer)
+        where.append(visible)
+        params |= vparams
         rows = (
             await s.execute(
                 text(
@@ -287,20 +294,22 @@ async def list_threads(
 
 
 @router.post("/threads", dependencies=DEVICE)
-async def create_thread(body: ThreadCreate) -> dict[str, Any]:
+async def create_thread(body: ThreadCreate, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     title = chat_titles.plain_title(body.title) or None
+    owner, shared = chat_access.new_thread(viewer)
     async with session_scope() as s:
+        cols, vals, extra = await chat_access.create_columns(s, owner, shared)
         row = (
             await s.execute(
                 text(
-                    """
-                    INSERT INTO chat_threads (title, title_by_user) VALUES (:t, :by)
+                    f"""
+                    INSERT INTO chat_threads (title, title_by_user{cols}) VALUES (:t, :by{vals})
                     RETURNING id, title, archived, title_by_user, created_at, updated_at,
                               internet_allowed, used_internet
                     """
                 ),
                 # A thread made with a name was named by whoever made it.
-                {"t": title, "by": title is not None},
+                {"t": title, "by": title is not None, **extra},
             )
         ).mappings().first()
         if (body.title or "").startswith(help_delivery.TITLE_PREFIX):
@@ -318,7 +327,7 @@ async def create_thread(body: ThreadCreate) -> dict[str, Any]:
 
 
 @router.patch("/threads/{thread_id}", dependencies=DEVICE)
-async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
+async def patch_thread(thread_id: int, body: ThreadPatch, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     """Rename and/or archive a thread. A title set here is the person's
     (``title_by_user``): the model's title job never writes over it. A
     blank title is refused (400)."""
@@ -339,6 +348,7 @@ async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
     if not sets:
         raise HTTPException(status_code=400, detail="nothing to change")
     async with session_scope() as s:
+        await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
         r = await s.execute(
             text(f"UPDATE chat_threads SET {', '.join(sets)} WHERE id = :id"),
             params,
@@ -354,10 +364,11 @@ async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
 
 
 @router.delete("/threads/{thread_id}", dependencies=DEVICE)
-async def delete_thread(thread_id: int) -> dict[str, Any]:
+async def delete_thread(thread_id: int, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     """Delete a thread and its messages (CASCADE). Upload files referenced by
     the thread are removed too when no other message references them."""
     async with session_scope() as s:
+        await chat_access.thread_for(s, thread_id, viewer, Action.DELETE, lock=True)
         rows = (
             await s.execute(
                 text("SELECT images FROM chat_messages WHERE thread_id = :id AND images IS NOT NULL"),
@@ -634,17 +645,15 @@ def _reply_stats(
 
 
 @router.get("/threads/{thread_id}/messages", dependencies=READ)
-async def list_messages(thread_id: int, request: Request = None) -> dict[str, Any]:  # type: ignore[assignment]
+async def list_messages(
+    thread_id: int, request: Request = None, viewer: Viewer = Depends(chat_viewer),  # type: ignore[assignment]
+) -> dict[str, Any]:
     """The thread's messages, oldest first. No device ids: a user row says
     ``mine`` (sent from the ``X-Device-Id`` the caller names) and
     ``device_name``."""
     me = caller_id(request)
     async with session_scope() as s:
-        exists = (
-            await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-        if exists is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        await chat_access.thread_for(s, thread_id, viewer, Action.READ)
         rows = (
             await s.execute(
                 text(
@@ -974,7 +983,9 @@ async def _help_turn(
 
 
 @router.post("/threads/{thread_id}/messages", dependencies=SEND)
-async def send_message(thread_id: int, body: SendBody, request: Request) -> StreamingResponse:
+async def send_message(
+    thread_id: int, body: SendBody, request: Request, viewer: Viewer = Depends(chat_viewer),
+) -> StreamingResponse:
     """Persist the user turn, stream the assistant reply as SSE, persist the
     assistant turn at stream end. Events:
 
@@ -1021,15 +1032,13 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         raise HTTPException(status_code=422, detail="a message needs some words, or a document attached")
     # Well-formed or nothing, as every other route that reads a device id.
     device_id = valid_device_id(body.device_id)
-    if body.revise_draft is not None and not await _drafts.draft_in_thread(thread_id, body.revise_draft):
-        raise HTTPException(status_code=404, detail="draft not found in this chat")
 
     async with session_scope() as s:
-        thread = (
-            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        # Checked, and the row locked until the user turn is in
+        # (chat_access): a share switch waits for it.
+        thread = await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
+        if body.revise_draft is not None and not await _drafts.draft_in_thread(thread_id, body.revise_draft, s):
+            raise HTTPException(status_code=404, detail="draft not found in this chat")
         # The model's attention is the reply's now: every title job stops
         # and waits for it (a refused request holds nothing up).
         stop_title_jobs()
@@ -1124,7 +1133,7 @@ def _retry_refused(code: str, detail: str) -> JSONResponse:
                                     "writer's reply, not the chat model's), `already_retried` (another try again "
                                     "on this reply is running, or has replaced it)"}},
 )
-async def retry_reply(thread_id: int) -> StreamingResponse:
+async def retry_reply(thread_id: int, viewer: Viewer = Depends(chat_viewer)) -> StreamingResponse:
     """"Try again": a new reply to the thread's last question, in place of
     the reply it got. Streams as ``POST .../messages`` does; the old row is
     deleted and the new one written in one transaction once the new reply
@@ -1140,11 +1149,7 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
     question, 409 ``already_retried`` when another try again is replacing
     it. The model doesn't see the reply being replaced."""
     async with session_scope() as s:
-        thread = (
-            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        thread = await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
         last = (
             await s.execute(
                 text(
@@ -1189,7 +1194,9 @@ class HeadsUpAnswer(BaseModel):
                                     "card), `already_answered` (an option was picked already), `stale` (a newer "
                                     "message followed the card), `bad_option` (not one of the card's options)"}},
 )
-async def answer_heads_up(thread_id: int, body: HeadsUpAnswer, request: Request) -> Any:
+async def answer_heads_up(
+    thread_id: int, body: HeadsUpAnswer, request: Request, viewer: Viewer = Depends(chat_viewer),
+) -> Any:
     """The person's pick on a heads-up card: the card row keeps it
     (``doc.heads_up.chosen``) and the question before it is answered that
     way, streamed as ``POST .../messages`` streams ("try anyway": as it
@@ -1198,11 +1205,7 @@ async def answer_heads_up(thread_id: int, body: HeadsUpAnswer, request: Request)
     card is answered once, and only while it is the thread's last
     message."""
     async with session_scope() as s:
-        thread = (
-            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        thread = await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
         card = (await s.execute(text(
             "SELECT id, doc FROM chat_messages WHERE id = :m AND thread_id = :t AND role = 'assistant'"),
             {"m": body.message_id, "t": thread_id})).first()
@@ -2323,6 +2326,7 @@ async def decide_lookup(
     body: LookupDecision,
     thread_id: int = PathParam(..., ge=1, le=2**63 - 1),
     message_id: int = PathParam(..., ge=1, le=2**63 - 1),
+    viewer: Viewer = Depends(chat_viewer),
 ) -> StreamingResponse:
     """The person's answer to a permission card (``stats.lookup_card`` on
     assistant row ``message_id``): ``once`` / ``chat`` look it up and
@@ -2331,6 +2335,7 @@ async def decide_lookup(
     (``delta`` / ``replace`` / ``done`` / ``error``). A card is answered
     once: 409 for a card already answered, 404 for no such card."""
     async with session_scope() as s:
+        await chat_access.thread_for(s, thread_id, viewer, Action.WRITE, not_found="no such lookup card")
         row = (
             await s.execute(
                 text(
@@ -2682,6 +2687,7 @@ async def send_voice(
     player: Optional[str] = Form(None, max_length=2048),
     # False: the phone speaks the reply itself, so the core renders none.
     speak: bool = Form(True),
+    viewer: Viewer = Depends(chat_viewer),
 ):
     """One push-to-talk turn from the app's chat mic, answered in this
     thread: forwarded with the caller's credentials to the core's
@@ -2696,6 +2702,11 @@ async def send_voice(
     guard (domovoi/transport_guard.py: 1 MiB for a route not listed there,
     on a declared Content-Length and on a streamed overrun alike), which
     leaves room for the longest recording (30 s, 960 kB) and its form."""
+    # Checked here too (the core checks again, from the key forwarded
+    # with the caller's credentials): a hidden thread is a 404 before
+    # anything is recorded or forwarded.
+    async with session_scope() as s:
+        await chat_access.thread_for(s, thread_id, viewer, Action.WRITE, lock=False)
     data = await audio.read(_VOICE_MAX_BYTES + 1)
     if len(data) > _VOICE_MAX_BYTES:
         raise HTTPException(status_code=413, detail="a voice turn is at most 30 seconds")
@@ -3035,7 +3046,7 @@ async def _picture_heads_up(thread_id: int, user_row_id: int | None, question: s
 
 
 @router.get("/uploads/{token}", dependencies=READ)
-async def get_upload(token: str):
+async def get_upload(token: str, viewer: Viewer = Depends(chat_viewer)):
     """Serve a staged/persisted chat image inline (for rendering in the
     transcript). Token-addressed — the client never names paths. The token
     is unguessable, but the image is household content like the thread it
@@ -3044,6 +3055,11 @@ async def get_upload(token: str):
     p = _upload_path(token)
     if p is None:
         raise HTTPException(status_code=404, detail="upload not found")
+    # A capability (chat_access.token_readable): a caller with an identity
+    # must be able to read a thread the picture was sent in.
+    async with session_scope() as s:
+        if not await chat_access.token_readable(s, token, "images", viewer):
+            raise HTTPException(status_code=404, detail="upload not found")
     media = {
         ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",

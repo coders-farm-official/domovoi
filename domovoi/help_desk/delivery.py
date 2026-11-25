@@ -198,9 +198,19 @@ async def deliver(
     if not phones:
         raise ValueError("deliver needs the person's phones")
     title = title or help_title(question)
+    from domovoi import chat_access
+
+    # Private to ONE phone, the person's most recently seen (PRIVATE-CHATS
+    # §2.4, owner answer Q1): like a chat started there. A phone with no
+    # device key yet (an app from before 1.5.0) couldn't open a private
+    # chat, so it gets a shared one, as its own chats are.
+    target = phones[0].device_id
+    keyed = await chat_access.device_has_key(session, target)
+    owner, shared = (target, False) if keyed else (None, True)
+    cols, vals, extra = await chat_access.create_columns(session, owner, shared)
     thread_id = (await session.execute(
-        text("INSERT INTO chat_threads (title, person_id) VALUES (:t, :p) RETURNING id"),
-        {"t": title, "p": person_id},
+        text(f"INSERT INTO chat_threads (title, person_id{cols}) VALUES (:t, :p{vals}) RETURNING id"),
+        {"t": title, "p": person_id, **extra},
     )).scalar_one()
     await mark_title_kept(session, thread_id)
     await session.execute(
@@ -215,9 +225,12 @@ async def deliver(
              "VALUES (:t, 'assistant', :c, NULL, CAST(:st AS JSONB))"),
         {"t": thread_id, "c": steps, "st": json.dumps(stats or {"model_role": HELP_MODEL_ROLE})},
     )
+    # The phone it went to (V086), so only that phone's catch-up read lists it.
+    dev_col, dev_val = (", device_id", ", :dev") if cols and keyed else ("", "")
     delivery_id = (await session.execute(
-        text("INSERT INTO help_deliveries (person_id, thread_id, title) VALUES (:p, :t, :ti) RETURNING id"),
-        {"p": person_id, "t": thread_id, "ti": title},
+        text(f"INSERT INTO help_deliveries (person_id, thread_id, title{dev_col}) "
+             f"VALUES (:p, :t, :ti{dev_val}) RETURNING id"),
+        {"p": person_id, "t": thread_id, "ti": title, **({"dev": target} if dev_col else {})},
     )).scalar_one()
     await session.execute(text("SELECT pg_notify('chat_changed', 'help-delivery')"))
     await session.execute(text("SELECT pg_notify(:c, :r)"), {"c": NOTIFY_CHANNEL, "r": str(delivery_id)})

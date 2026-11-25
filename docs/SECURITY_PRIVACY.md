@@ -5845,6 +5845,18 @@ state still answered the LAN, so polling them was the feed this gate
 denied. They take the household tier now (see *Device tier*, "So is who is
 home"), so the socket and the reads beside it answer the same callers.
 
+**Chats are not on the socket (1.5.0).** Every paired phone and browser gets
+every event, so the two that concern chats carry no chat content.
+`chat.changed` is an opaque digest (an HMAC under a key that lives only in
+the web process's memory) that moves when any chat is written: no thread
+count, no time, no id. Each client then reads its own list over HTTP,
+which shows it only the chats it may see (`domovoi/chat_access.py`).
+`help_deliveries.changed` rows carry ids and a time, and as the title only
+the kind ("Photos from Domovoi", or nothing), never the chat's own title;
+`person_id` and `thread_id` stay so the phone apps can tell which rows are
+theirs. Until 1.5.0 the first carried the house's chat count and last-write
+time, and the second each delivered chat's title.
+
 ## A room phone (Android room mode)
 
 A spare phone or tablet can be a room (docs/SPARE_DEVICE_SATELLITES.md, "Phones and tablets";

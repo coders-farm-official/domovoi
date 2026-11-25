@@ -54,7 +54,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from domovoi import chat_access
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.chat_access import Action, Viewer, chat_viewer
 from domovoi.clients import ollama as ollama_client
 from domovoi.drafts import ats, blocks, diff, docx_file, kinds, pdf_file, phrases, prompts, templates
 from domovoi.drafts import store as draft_store
@@ -361,10 +363,14 @@ async def _after_draft(thread_id: int) -> bool:
     return isinstance(d, dict) and d.get("action") in ("create", "revise")
 
 
-async def draft_in_thread(thread_id: int, draft_id: int) -> bool:
-    async with session_scope() as s:
-        return (await s.execute(text("SELECT 1 FROM chat_drafts WHERE id = :d AND thread_id = :t"),
-                                {"d": draft_id, "t": thread_id})).first() is not None
+async def draft_in_thread(thread_id: int, draft_id: int, s: Any = None) -> bool:
+    """Whether draft ``draft_id`` is in ``thread_id`` (asked after the
+    caller's thread_for on that thread)."""
+    q = text("SELECT 1 FROM chat_drafts WHERE id = :d AND thread_id = :t")
+    if s is not None:
+        return (await s.execute(q, {"d": draft_id, "t": thread_id})).first() is not None
+    async with session_scope() as sess:
+        return (await sess.execute(q, {"d": draft_id, "t": thread_id})).first() is not None
 
 
 async def attachment_print_turn(thread_id: int, question: str, *, current: bool) -> DraftTurn | None:
@@ -451,14 +457,18 @@ def guided_turn(thread_id: int, kind: str, template: str, title: str, request: s
 
 # ─── Routes ─────────────────────────────────────────────────────────────
 @router.get("/drafts", dependencies=READ)
-async def list_all_drafts(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
-    """Every chat's drafts, newest first (the Chat page lists them even with
-    AI features off, so a draft can still be saved)."""
+async def list_all_drafts(limit: int = Query(50, ge=1, le=200),
+                          viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
+    """The drafts of every chat the caller can see, newest first (the Chat
+    page lists them even with AI features off, so a draft can still be
+    saved)."""
     async with session_scope() as s:
+        visible, params = await chat_access.visible_sql(s, "t", viewer)
         rows = (await s.execute(text(
             "SELECT d.id, d.thread_id, d.kind, d.template, d.title, d.created_at, d.updated_at, "
             "t.title AS thread_title FROM chat_drafts d JOIN chat_threads t ON t.id = d.thread_id "
-            "ORDER BY d.updated_at DESC, d.id DESC LIMIT :n"), {"n": limit})).mappings().all()
+            f"WHERE {visible} "
+            "ORDER BY d.updated_at DESC, d.id DESC LIMIT :n"), {"n": limit, **params})).mappings().all()
         out = []
         for r in rows:
             d = _draft_row(r)
@@ -467,10 +477,9 @@ async def list_all_drafts(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any
 
 
 @router.get("/threads/{thread_id}/drafts", dependencies=READ)
-async def list_thread_drafts(thread_id: int) -> dict[str, Any]:
+async def list_thread_drafts(thread_id: int, viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     async with session_scope() as s:
-        if (await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})).first() is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        await chat_access.thread_for(s, thread_id, viewer, Action.READ)
         rows = (await s.execute(text(
             "SELECT id, thread_id, kind, template, title, created_at, updated_at FROM chat_drafts "
             "WHERE thread_id = :t ORDER BY id"), {"t": thread_id})).mappings().all()
@@ -491,7 +500,9 @@ def _with_changes(versions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 @router.get("/drafts/{draft_id}", dependencies=READ)
-async def get_draft(draft_id: int, request: Request = None) -> dict[str, Any]:  # type: ignore[assignment]
+async def get_draft(
+    draft_id: int, request: Request = None, viewer: Viewer = Depends(chat_viewer),  # type: ignore[assignment]
+) -> dict[str, Any]:
     """The draft and every version (oldest first): its markdown, the plain
     text the changes view shows (``display``), and ``changes`` against the
     version before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``
@@ -504,6 +515,7 @@ async def get_draft(draft_id: int, request: Request = None) -> dict[str, Any]:  
         d = await _draft(s, draft_id)
         if d is None:
             raise HTTPException(status_code=404, detail="draft not found")
+        await chat_access.thread_for_child(s, d["thread_id"], viewer, Action.READ, not_found="draft not found")
         versions = await _versions(s, draft_id, me)
     tpl = [{"id": t.id, "label": t.label} for t in templates.for_kind(d["kind"])]
     # Off the event loop: each diff is bounded (diff.WORK_BUDGET), but a
@@ -531,7 +543,9 @@ def _stale(latest: int) -> Any:
 
 @router.post("/drafts/{draft_id}/versions", dependencies=DEVICE,
              responses={409: {"description": '{"detail", "code": "stale_version", "latest": n}'}})
-async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> Any:  # type: ignore[assignment]
+async def edit_draft(
+    draft_id: int, body: EditBody, request: Request = None, viewer: Viewer = Depends(chat_viewer),  # type: ignore[assignment]
+) -> Any:
     """A hand edit: saved as the next version, "edited by you" on the device
     that made it. Characters XML can't hold are taken out first. Two edits
     from the same version at once: one is saved, the other is a 409
@@ -549,6 +563,11 @@ async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> 
         device = valid_device_id(caller_device_id(request))
     try:
         async with session_scope() as s:
+            owner = (await s.execute(text("SELECT thread_id FROM chat_drafts WHERE id = :d"),
+                                     {"d": draft_id})).first()
+            if owner is None:
+                raise HTTPException(status_code=404, detail="draft not found")
+            await chat_access.thread_for_child(s, owner[0], viewer, Action.WRITE, not_found="draft not found")
             if (await s.execute(text("SELECT id FROM chat_drafts WHERE id = :d FOR UPDATE"),
                                 {"d": draft_id})).first() is None:
                 raise HTTPException(status_code=404, detail="draft not found")
@@ -605,10 +624,14 @@ class SaveBody(BaseModel):
     device_id: Optional[str] = Field(None, min_length=3, max_length=64)
 
 
-async def _target(s: Any, draft_id: int, version: int | None) -> tuple[dict[str, Any], dict[str, Any]]:
+async def _target(s: Any, draft_id: int, version: int | None, viewer: Viewer,
+                  action: Action) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The draft and its version, when ``viewer`` may ``action`` its chat
+    (a hidden one is the draft's own 404)."""
     d = await _draft(s, draft_id)
     if d is None:
         raise HTTPException(status_code=404, detail="draft not found")
+    await chat_access.thread_for_child(s, d["thread_id"], viewer, action, not_found="draft not found")
     v = await _version(s, draft_id, version)
     if v is None:
         raise HTTPException(status_code=404, detail="version not found")
@@ -640,7 +663,8 @@ def _write_into_chat_folder(name: str, data: bytes) -> str:
 
 
 @router.post("/drafts/{draft_id}/save", dependencies=DEVICE)
-async def save_draft(draft_id: int, body: SaveBody, request: Request) -> dict[str, Any]:
+async def save_draft(draft_id: int, body: SaveBody, request: Request,
+                     viewer: Viewer = Depends(chat_viewer)) -> dict[str, Any]:
     """Saves a version (the latest by default) as .docx or PDF (the kind's
     default by default) into Documents → From Chat, then checks the file:
     ``check`` is ``{ok, line}`` — ``text readable · single column`` when
@@ -649,7 +673,7 @@ async def save_draft(draft_id: int, body: SaveBody, request: Request) -> dict[st
 
     await documents_api._assert_files_policy(request, body.device_id)
     async with session_scope() as s:
-        d, v = await _target(s, draft_id, body.version)
+        d, v = await _target(s, draft_id, body.version, viewer, Action.WRITE)
     fmt = body.format or kinds.default_format(d["kind"])
     tpl = _template_for(d, body.template)
     data = await render_file(v["body"], tpl, fmt, d["title"])
@@ -670,10 +694,11 @@ async def save_draft(draft_id: int, body: SaveBody, request: Request) -> dict[st
 @router.get("/drafts/{draft_id}/export", dependencies=READ)
 async def export_draft(draft_id: int, version: Optional[int] = Query(None, ge=1),
                        format: Optional[Literal["docx", "pdf"]] = Query(None),
-                       template: Optional[str] = Query(None, max_length=40)) -> Response:
+                       template: Optional[str] = Query(None, max_length=40),
+                       viewer: Viewer = Depends(chat_viewer)) -> Response:
     """The version as a file to download; nothing is kept on the server."""
     async with session_scope() as s:
-        d, v = await _target(s, draft_id, version)
+        d, v = await _target(s, draft_id, version, viewer, Action.READ)
     fmt = format or kinds.default_format(d["kind"])
     data = await render_file(v["body"], _template_for(d, template), fmt, d["title"])
     name = file_name(d["title"], v["version"], fmt)
@@ -691,11 +716,11 @@ class PrintDraftBody(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
-async def _print(core_path: str, draft_id: int, body: PrintDraftBody, request: Request):
+async def _print(core_path: str, draft_id: int, body: PrintDraftBody, request: Request, viewer: Viewer):
     from web.backend.api import printers
 
     async with session_scope() as s:
-        d, v = await _target(s, draft_id, body.version)
+        d, v = await _target(s, draft_id, body.version, viewer, Action.WRITE)
     data = await render_file(v["body"], _template_for(d, body.template), "pdf", d["title"])
     return await printers.forward_print_bytes(
         core_path, request, data, file_name(d["title"], v["version"], "pdf"),
@@ -703,15 +728,17 @@ async def _print(core_path: str, draft_id: int, body: PrintDraftBody, request: R
 
 
 @router.post("/drafts/{draft_id}/print/preview", dependencies=DEVICE)
-async def print_draft_preview(draft_id: int, body: PrintDraftBody, request: Request):
+async def print_draft_preview(draft_id: int, body: PrintDraftBody, request: Request,
+                              viewer: Viewer = Depends(chat_viewer)):
     """The print preview of a version's PDF (the Print dialog's)."""
-    return await _print("/v1/print/preview", draft_id, body, request)
+    return await _print("/v1/print/preview", draft_id, body, request, viewer)
 
 
 @router.post("/drafts/{draft_id}/print/jobs", dependencies=DEVICE, status_code=202)
-async def print_draft(draft_id: int, body: PrintDraftBody, request: Request):
+async def print_draft(draft_id: int, body: PrintDraftBody, request: Request,
+                      viewer: Viewer = Depends(chat_viewer)):
     """Prints a version's PDF on the home's printer (after its preview)."""
-    return await _print("/v1/print/jobs", draft_id, body, request)
+    return await _print("/v1/print/jobs", draft_id, body, request, viewer)
 
 
 # ─── Printing a chat attachment ─────────────────────────────────────────
@@ -722,11 +749,16 @@ def _attachment_file(token: str):
     return _chat._upload_path(token) or _docs.doc_path(token)
 
 
-async def _print_attachment(core_path: str, token: str, body: PrintDraftBody, request: Request):
+async def _print_attachment(core_path: str, token: str, body: PrintDraftBody, request: Request, viewer: Viewer):
     from web.backend.api import printers
 
     p = _attachment_file(token)
     if p is None:
+        raise HTTPException(status_code=404, detail="that attachment is no longer on this Domovoi")
+    async with session_scope() as s:
+        readable = (await chat_access.token_readable(s, token, "images", viewer)
+                    and await chat_access.token_readable(s, token, "documents", viewer))
+    if not readable:
         raise HTTPException(status_code=404, detail="that attachment is no longer on this Domovoi")
     return await printers.forward_print_bytes(
         core_path, request, p.read_bytes(), p.name, title=p.stem, printer_id=body.printer_id,
@@ -734,12 +766,14 @@ async def _print_attachment(core_path: str, token: str, body: PrintDraftBody, re
 
 
 @router.post("/attachments/{token}/print/preview", dependencies=DEVICE)
-async def print_attachment_preview(token: str, body: PrintDraftBody, request: Request):
+async def print_attachment_preview(token: str, body: PrintDraftBody, request: Request,
+                                   viewer: Viewer = Depends(chat_viewer)):
     """The Print dialog's preview of a chat attachment (a picture or document)."""
-    return await _print_attachment("/v1/print/preview", token, body, request)
+    return await _print_attachment("/v1/print/preview", token, body, request, viewer)
 
 
 @router.post("/attachments/{token}/print/jobs", dependencies=DEVICE, status_code=202)
-async def print_attachment(token: str, body: PrintDraftBody, request: Request):
+async def print_attachment(token: str, body: PrintDraftBody, request: Request,
+                           viewer: Viewer = Depends(chat_viewer)):
     """Prints a chat attachment on the home's printer (after its preview)."""
-    return await _print_attachment("/v1/print/jobs", token, body, request)
+    return await _print_attachment("/v1/print/jobs", token, body, request, viewer)

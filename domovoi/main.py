@@ -42,6 +42,7 @@ from domovoi import update_notice  # noqa: E402
 from domovoi import self_restart  # noqa: E402
 from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
+from domovoi import chat_access  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
 from domovoi import room_ids  # noqa: E402
@@ -1370,6 +1371,7 @@ async def phone_voice_turn(
     # False: the phone speaks the reply itself (its own voice pick), so no
     # audio is rendered for it. Default true, as before.
     speak: bool = Form(True),
+    viewer: Any = Depends(chat_access.chat_viewer),
 ) -> Any:
     """One push-to-talk turn from the app's chat mic: speech-to-text, voice
     identification, the router satellites use, text-to-speech (unless
@@ -1387,6 +1389,7 @@ async def phone_voice_turn(
             audio=data,
             player=phone_voice.parse_player(player),
             speak=speak,
+            viewer=viewer,
         )
     except phone_voice.PhoneTurnRefused as e:
         return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})

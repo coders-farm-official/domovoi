@@ -523,6 +523,19 @@ app.include_router(audiobooks_api.router)
 app.include_router(videos_api.router)
 app.include_router(images_api.router)
 app.include_router(chat_api.router)
+
+
+# A chat the caller can see but may not do this to (domovoi/chat_access.py):
+# 403/409 as {"detail", "code"}, the shape the apps branch on.
+async def _chat_access_refused(request, exc):  # noqa: ANN001 — FastAPI's handler signature
+    from domovoi import chat_access as _chat_access
+
+    return _chat_access.refusal_response(exc)
+
+
+from domovoi.chat_access import ChatAccessRefused as _ChatAccessRefused  # noqa: E402
+
+app.add_exception_handler(_ChatAccessRefused, _chat_access_refused)
 app.include_router(help_api.router)
 app.include_router(models_api.router)
 app.include_router(news_api.router)
