@@ -381,7 +381,7 @@ public final class RoomKioskModel: ObservableObject {
         objectWillChange.send()
     }
 
-    /// A cover from the room's own server, for the now-playing card.
+    /// A cover or a result's thumbnail from the room's own server, no credential.
     public func art(_ path: String) async -> Data? {
         guard let d = display else { return nil }
         return await d.art(path)

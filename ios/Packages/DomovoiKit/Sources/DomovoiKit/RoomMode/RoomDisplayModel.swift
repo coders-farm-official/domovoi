@@ -81,17 +81,87 @@ public enum RoomDisplayModel {
         /// A timer is nearly done: the timers go above the music, so the
         /// soonest one is on screen without scrolling.
         public var timersFirst: Bool
+        /// Photo and video results asked for here (1.5.0); nil: none.
+        public var media: Media? = nil
 
         /// Anything for the second column of a landscape screen.
         public var hasCards: Bool {
-            ringing != nil || nowPlaying != nil || !timers.isEmpty || nextAlarm != nil
+            ringing != nil || nowPlaying != nil || !timers.isEmpty || nextAlarm != nil || media != nil
         }
 
         /// Something on screen counts down or moves on: the display redraws
-        /// every second while this holds, once a minute otherwise.
+        /// every second while this holds, once a minute otherwise. Results
+        /// count: they go when their time is up, not a minute later.
         public var ticks: Bool {
-            ringing != nil || !timers.isEmpty || nowPlaying != nil
+            ringing != nil || !timers.isEmpty || nowPlaying != nil || media != nil
         }
+    }
+
+    /// The results card (the dashboard kiosk's DpMedia at phone size): the
+    /// spoken answer, up to six tiles, and "and more" when there are more.
+    public struct Media: Equatable, Sendable {
+        public var id: Int64
+        public var said: String
+        public var tiles: [MediaTile]
+        /// "and more on the Photos page"; nil when all are shown.
+        public var more: String?
+    }
+
+    public struct MediaTile: Equatable, Sendable {
+        public var thumb: String?
+        public var video: Bool
+        /// "0:42": a video's best moment, on its tile; nil: none.
+        public var at: String?
+        /// "Might show: …", plain text; nil: no caption.
+        public var caption: String?
+        /// "Jul 14, 2025", the phone's own way; nil: unknown.
+        public var date: String?
+        public var description: String
+    }
+
+    /// "and more on the Photos page" (the results not sent are there).
+    public static let mediaMore = "and more on the Photos page"
+
+    /// A caption as every screen draws it: a guess, plain text.
+    public static func mightShow(_ caption: String) -> String { "Might show: \(caption)" }
+
+    /// `2025-07-14` → "Jul 14, 2025" (the phone's medium date); nil for
+    /// anything that is not a date.
+    public static func mediaDate(_ iso: String?, locale: Locale) -> String? {
+        guard let iso, RoomDisplayFeed.isDate(iso) else { return nil }
+        let utc = TimeZone(identifier: "UTC")!
+        let parse = DateFormatter()
+        parse.locale = Locale(identifier: "en_US_POSIX")
+        parse.timeZone = utc
+        parse.dateFormat = "yyyy-MM-dd"
+        parse.isLenient = false
+        guard let day = parse.date(from: iso), parse.string(from: day) == iso else { return nil }
+        let show = DateFormatter()
+        show.locale = locale
+        show.timeZone = utc
+        show.dateStyle = .medium
+        show.timeStyle = .none
+        return show.string(from: day)
+    }
+
+    private static func media(_ m: RoomFeedMedia, locale: Locale) -> Media {
+        Media(
+            id: m.id,
+            said: m.said,
+            tiles: m.items.map { item in
+                let date = mediaDate(item.date, locale: locale)
+                // Whole seconds, as the kiosk's time badge rounds them.
+                let at = item.atS.map { countdown(Int64(max(0, $0).rounded()) * 1000) }
+                let video = item.kind == .video
+                let caption = item.caption.map(mightShow)
+                let first = video ? "video" + (at.map { " at \($0)" } ?? "") : "photo"
+                return MediaTile(
+                    thumb: item.thumb, video: video, at: at, caption: caption, date: date,
+                    description: ([first] + [caption, date].compactMap { $0 }).joined(separator: ", ")
+                )
+            },
+            more: m.more || m.count > m.items.count ? mediaMore : nil
+        )
     }
 
     public struct NowPlaying: Equatable, Sendable {
@@ -213,7 +283,8 @@ public enum RoomDisplayModel {
             },
             moreTimers: max(0, timers.count - maxTimersShown),
             nextAlarm: nextAlarm,
-            timersFirst: timers.first.map { $0.1 < urgentTimerMS } ?? false
+            timersFirst: timers.first.map { $0.1 < urgentTimerMS } ?? false,
+            media: (feed?.media).flatMap { since < $0.expiresInMS ? media($0, locale: i.locale) : nil }
         )
     }
 
