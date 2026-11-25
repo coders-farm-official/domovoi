@@ -352,3 +352,26 @@ def test_privacy_scope_matches_the_corpus() -> None:
     # H1 (22.13, "do you share my data with Google?") is fixed: this house
     # is the one sharing, whoever with.
     assert wrong == set(), sorted(wrong)
+
+
+def test_sandbox_restores_modules_imported_inside_it() -> None:
+    """A module first imported INSIDE the sandbox binds the fixture session by
+    name; on exit the sandbox must point it back to the real one, or a later
+    test in the same process gets NeedsDB (fixed in #60)."""
+    import types
+
+    from domovoi.db import session as db_session
+
+    real_scope, real_local = db_session.session_scope, db_session.SessionLocal
+    name = "domovoi._capability_sandbox_probe"  # the sweep covers domovoi.*, web.*, plugins.*
+    try:
+        with ev.sandbox():
+            probe = types.ModuleType(name)
+            sys.modules[name] = probe
+            exec("from domovoi.db.session import session_scope, SessionLocal", probe.__dict__)
+            assert probe.session_scope is not real_scope  # the sandbox's, while inside
+        assert probe.session_scope is real_scope
+        assert probe.SessionLocal is real_local
+        assert db_session.session_scope is real_scope
+    finally:
+        sys.modules.pop(name, None)
