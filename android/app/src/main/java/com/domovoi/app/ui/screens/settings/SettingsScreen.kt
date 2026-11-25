@@ -156,6 +156,11 @@ internal enum class SettingsSection(
     Internet("internet", "Internet", SettingsGroup.Privacy,
         "Will this Domovoi have internet? It sets the defaults of the online extras.",
         "internet online offline network web", dashboard = "internet"),
+    // How long the house keeps what was said (1.5.0), read-only: an admin
+    // changes it on the dashboard (KeepVoiceHistoryPanel).
+    KeepVoiceHistory("keep-voice-history", "Keep voice history", SettingsGroup.Privacy,
+        "How long what people say to Domovoi, and what it answered, is kept.",
+        "voice history keep kept retention how long days year forever conversations sessions said transcript privacy delete"),
     // "Voice history" until 1.5.0: it is the opt-in command recordings (the
     // dashboard's Settings → Privacy → Command recordings). Its old keys
     // still land here. The dashboard is opened at `recordings`, the address
@@ -310,6 +315,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
                     SettingsSection.About -> AboutPanel(navigate)
                     SettingsSection.Health -> HealthPanel(navigate)
                     SettingsSection.Chat -> ChatSettingsPanel(navigate)
+                    SettingsSection.KeepVoiceHistory -> KeepVoiceHistoryPanel()
                     else -> DashboardPanel(place.section)
                 }
             }
