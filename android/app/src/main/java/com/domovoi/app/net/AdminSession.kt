@@ -206,13 +206,7 @@ class AdminSession(
         } catch (e: NotSignedIn) {
             return Keep.Refused("sign in with the admin password first")
         } catch (e: ApiException) {
-            return Keep.Refused(
-                when (e.status) {
-                    403 -> "sign in with the password again first: keeping admin today needs a sign-in from the last 5 minutes"
-                    429 -> e.retryAfterSec?.let { "too many tries; try again in $it s" } ?: "too many tries; try again later"
-                    else -> detailOf(e) ?: "the server didn't keep admin today (HTTP ${e.status})"
-                },
-            )
+            return Keep.Refused(keepRefusal(e.status, detailOf(e), e.retryAfterSec))
         } catch (e: IOException) {
             return Keep.Refused("couldn't reach the server")
         }
@@ -436,6 +430,22 @@ class AdminSession(
     }
 
     /** Drop today's grant here: the stored copy and the key that seals it. */
+    /**
+     * This phone started over at [server] under a new device id (it lost
+     * its device key there; Prefs.startOverAt): a grant kept for that
+     * server was issued to the old id, which the server no longer takes,
+     * so it goes now rather than at the next fingerprint. A password
+     * session is not bound to the id and stays.
+     */
+    fun startedOver(server: String) {
+        val g = runCatching { grants?.readGrant() }.getOrNull() ?: return
+        if (com.domovoi.app.data.ServerCredentials.normalize(g.server) != com.domovoi.app.data.ServerCredentials.normalize(server)) return
+        grants?.writeGrant(null)
+        runCatching { locker?.destroy() }
+        live = live?.copy(grant = null, keptUntilMs = null)
+        refresh()
+    }
+
     fun dropGrant() {
         if (grants?.readGrant() != null) grants.writeGrant(null)
         runCatching { locker?.destroy() }
@@ -485,6 +495,21 @@ class AdminSession(
 
         const val NO_BIOMETRICS = "keeping admin today needs a fingerprint or face unlock set up on this phone"
         const val DAY_OVER = "today's admin on this phone has ended; sign in with the password"
+
+        /** Issuing a grant was refused because the server can't match this
+         *  phone's device key (missing or out of date; auth.py's
+         *  _PHONE_GRANT_KEY_DETAIL): in plain words. */
+        const val DEVICE_KEY_REFUSED =
+            "the server couldn't match this phone's device key, so admin isn't kept today. " +
+                "Let the phone reconnect to the server (it registers again), then sign in with the admin password."
+
+        /** Why keeping admin today was refused, from the server's answer. */
+        fun keepRefusal(status: Int, detail: String?, retryAfterSec: Long?): String = when {
+            status == 403 && detail?.contains("device key", ignoreCase = true) == true -> DEVICE_KEY_REFUSED
+            status == 403 -> "sign in with the password again first: keeping admin today needs a sign-in from the last 5 minutes"
+            status == 429 -> retryAfterSec?.let { "too many tries; try again in $it s" } ?: "too many tries; try again later"
+            else -> detail ?: "the server didn't keep admin today (HTTP $status)"
+        }
 
         private const val DAY_MS = 24L * 60 * 60 * 1000
         private val GRANT = Regex("^[0-9a-f]{64}$")
@@ -547,5 +572,11 @@ object AdminSessions {
      *  recomputed for it. */
     fun refreshAll() {
         for (ref in sessions) ref.get()?.refresh()
+    }
+
+    /** The phone started over at [server] under a new device id: a grant
+     *  kept there goes ([AdminSession.startedOver]). */
+    fun startedOver(server: String) {
+        for (ref in sessions) ref.get()?.startedOver(server)
     }
 }

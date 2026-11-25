@@ -852,6 +852,8 @@ class Prefs(
         if (clean.isBlank()) return id
         setDeviceIds(deviceIds + (clean to id))
         Log.i(TAG, "device key lost at a server: registering there under a new device id")
+        // A grant kept there was issued to the old id: it goes with it.
+        AdminSessions.startedOver(clean)
         return id
     }
 

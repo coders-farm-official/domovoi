@@ -33,6 +33,9 @@ class AdminSessionTest {
     @Volatile private var revokeBody: String = ""
     @Volatile private var freshSignIn = true
     @Volatile private var grantExpired = false
+    /** The server takes the phone-grant routes only with this device key
+     *  (1.5.0: the grant is bound to the per-device key). */
+    @Volatile private var keyRequired = false
     private var clock = 1_000_000L
 
     @Before fun setUp() {
@@ -60,6 +63,9 @@ class AdminSessionTest {
                         when {
                             request.getHeader("Authorization") != "Bearer ${"a".repeat(64)}" ->
                                 MockResponse().setResponseCode(401).setBody("""{"detail":"admin session required"}""")
+                            keyRequired && request.getHeader("X-Domovoi-Device-Key") != DEVICE_KEY -> MockResponse().setResponseCode(403).setBody(
+                                """{"detail":"this phone can't prove it is that device (its device key is missing or out of date) — register it again, then sign in with the password"}""",
+                            )
                             !freshSignIn -> MockResponse().setResponseCode(403).setBody("""{"detail":"sign in with the password again"}""")
                             else -> MockResponse().setBody("""{"grant":"$GRANT","expires_at":"2026-11-25T10:00:00Z"}""")
                         }
@@ -69,6 +75,8 @@ class AdminSessionTest {
                         val o = DomovoiJson.parseToJsonElement(exchangeBody).jsonObject
                         when {
                             grantExpired -> MockResponse().setResponseCode(401).setBody("""{"detail":"phone grant has expired"}""")
+                            keyRequired && request.getHeader("X-Domovoi-Device-Key") != DEVICE_KEY ->
+                                MockResponse().setResponseCode(401).setBody("""{"detail":"phone grant not valid — sign in with the password"}""")
                             o["grant"]!!.jsonPrimitive.content != GRANT || o["device_id"]!!.jsonPrimitive.content != "android-test" ->
                                 MockResponse().setResponseCode(401).setBody("""{"detail":"phone grant not valid"}""")
                             else -> MockResponse().setBody(
@@ -347,10 +355,92 @@ class AdminSessionTest {
     private val locker = FakeLocker()
     private val shelf = FakeShelf()
 
-    private fun keeping() = AdminSession(
-        api, { b -> IdentityAdmission.fingerprint(verdict, b) }, now = { clock },
-        grants = shelf, locker = locker, deviceId = { "android-test" },
+    @Volatile private var deviceId = "android-test"
+    @Volatile private var phoneKey: String? = DEVICE_KEY
+
+    private fun keeping(client: ApiClient = api) = AdminSession(
+        client, { b -> IdentityAdmission.fingerprint(verdict, b) }, now = { clock },
+        grants = shelf, locker = locker, deviceId = { deviceId },
     )
+
+    /** The app's client: the household token, and this phone's device key
+     *  for its own server only (Prefs.deviceKeyFor). */
+    private val keyedApi by lazy {
+        ApiClient({ base }, { "household-abc" }, deviceKeyForServer = { if (it.trimEnd('/') == base) phoneKey else null })
+    }
+
+    // ---- the grant is bound to the per-device key (1.5.0) ------------------
+
+    @Test fun issueExchangeAndRevokeCarryTheDeviceKey() = runBlocking {
+        keyRequired = true
+        val s = keeping(keyedApi)
+        s.signIn("right-password", "phone")
+        assertTrue(s.keepToday("phone") is AdminSession.Keep.Ok)
+        s.forget()
+        assertEquals(AdminSession.SignIn.Ok, s.resume())
+        s.signOut()
+        for (path in listOf("/api/auth/phone-grant", "/api/auth/phone-grant/exchange", "/api/auth/phone-grant/revoke")) {
+            assertEquals(path, DEVICE_KEY, seen.last { it.path == path }.getHeader("X-Domovoi-Device-Key"))
+        }
+        // The password sign-in is not one of its routes.
+        assertNull(seen.last { it.path == "/api/auth/login" }.getHeader("X-Domovoi-Device-Key"))
+    }
+
+    @Test fun aMissingKeyOnIssueIsSaidInPlainWords() = runBlocking {
+        keyRequired = true
+        phoneKey = null
+        val s = keeping(keyedApi)
+        s.signIn("right-password", "phone")
+        val r = s.keepToday("phone") as AdminSession.Keep.Refused
+        assertEquals(AdminSession.DEVICE_KEY_REFUSED, r.reason)
+        assertNull(shelf.g)
+        assertEquals(
+            "sign in with the password again first: keeping admin today needs a sign-in from the last 5 minutes",
+            AdminSession.keepRefusal(403, "sign in with the password again", null),
+        )
+        assertEquals("too many tries; try again in 9 s", AdminSession.keepRefusal(429, null, 9))
+    }
+
+    @Test fun aWrongKeyOnExchangeDropsTheGrantForThePassword() = runBlocking {
+        keyRequired = true
+        val s = keeping(keyedApi)
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        phoneKey = "dk-1-" + "B".repeat(36)
+        val r = s.resume() as AdminSession.SignIn.Refused
+        assertTrue(r.reason, r.reason.contains("sign in with the password"))
+        assertNull("the grant went", shelf.g)
+        assertEquals(AdminSession.State.SignedOut, s.state.value)
+    }
+
+    @Test fun startingOverUnderANewIdDropsTheKeptGrant() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        assertTrue(s.state.value is AdminSession.State.Kept)
+        // Another server starting over leaves it.
+        s.startedOver("http://192.168.1.30:6369")
+        assertTrue(shelf.g != null)
+        // This one: it goes at once, and the key is destroyed.
+        s.startedOver("$base/")
+        assertNull(shelf.g)
+        assertEquals(AdminSession.State.SignedOut, s.state.value)
+        assertTrue(locker.destroyed > 0)
+    }
+
+    @Test fun resumeUnderAnotherIdDropsTheGrant() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        deviceId = "android-started-over"
+        val r = s.resume() as AdminSession.SignIn.Refused
+        assertEquals("this phone's id changed; sign in with the password", r.reason)
+        assertNull(shelf.g)
+        assertFalse("nothing was exchanged", seen.any { it.path == "/api/auth/phone-grant/exchange" })
+    }
 
     @Test fun keepTodaySealsTheGrantBoundToThisServerAndIdentity() = runBlocking {
         val s = keeping()
@@ -529,5 +619,6 @@ class AdminSessionTest {
 
     private companion object {
         val GRANT = "0123456789abcdef".repeat(4)
+        val DEVICE_KEY = "dk-1-" + "A".repeat(36)
     }
 }
