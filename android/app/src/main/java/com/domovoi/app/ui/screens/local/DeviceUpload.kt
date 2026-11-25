@@ -354,7 +354,7 @@ internal fun UploadRefusedCard(refused: UploadTarget.Refused, modifier: Modifier
         Text(
             refused.reason + if (refused.blocked) {
                 ". You can browse and play what's on this phone, but not upload it. " +
-                    "An admin lifts the block in the dashboard under Settings → Phones & browsers."
+                    com.domovoi.app.ui.screens.settings.AdminDeleteWords.LIFTED_WHERE
             } else {
                 ", so uploads are off. Everything else here works."
             },

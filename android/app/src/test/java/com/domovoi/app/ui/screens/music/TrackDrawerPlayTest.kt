@@ -94,6 +94,10 @@ class TrackDrawerPlayTest {
             setField(app, "prefs", prefs)
             setField(app, "api", api)
             setField(app, "bus", bus)
+            // The drawer reads whether admin is held here (its delete): not.
+            val admin = allocateWithoutConstructor(com.domovoi.app.net.AdminSession::class.java)
+            setField(admin, "state", MutableStateFlow<com.domovoi.app.net.AdminSession.State>(com.domovoi.app.net.AdminSession.State.SignedOut))
+            setField(app, "admin", admin)
 
             val tree = NodeTree()
             withHeadlessWindow {

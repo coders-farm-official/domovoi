@@ -487,6 +487,7 @@ fun MusicScreen() {
                 onQueueTrack = { t -> queueSongTo(QueueTarget.Phone, t, false) },
                 refreshNP = nowPlaying.refresh,
                 listContext = ui.detailContext,
+                onDeleted = { ui.detailTrack = null; libPager.reload() },
             )
         }
         ui.openPlaylist?.let { p ->
