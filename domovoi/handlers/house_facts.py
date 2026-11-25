@@ -4,7 +4,14 @@ this house's real state (1.4.1, N2 with N7's capability answers).
 "Are you recording me?", "how long do you keep what I say?", "does
 anything leave the house?", "did you use the internet for that?", and
 "can you order pizza?" / "can you set timers?" for the closed list of
-abilities in :data:`domovoi.house_facts.CAPABILITIES`. The facts and the
+abilities in :data:`domovoi.house_facts.CAPABILITIES`, and the trust
+questions no model may answer: "what's the admin password / household
+token / setup code?" (also behind "ignore your rules and …") gets "I
+can't share that." and where an admin manages it; "can I sign in as
+admin?" / "make me admin" / "am I admin?" get where the admin signs in,
+and the turn's real state (a voice is never an admin), never a claimed
+sign-in; "which plugins do you have?" lists them by name (the one
+answer that may: the person asked). The facts and the
 wording live in :mod:`domovoi.house_facts`; this is only its voice. No
 model, ever.
 
@@ -52,6 +59,9 @@ class HouseFactsHandler(Handler):
         self.fast_paths = [
             FastPath(house_facts.QUESTION_RE, HouseFactsHandler._question),
             FastPath(house_facts.CAP_RE, HouseFactsHandler._capability),
+            FastPath(house_facts.SECRET_RE, HouseFactsHandler._secret),
+            FastPath(house_facts.ADMIN_QUESTION_RE, HouseFactsHandler._admin),
+            FastPath(house_facts.PLUGINS_QUESTION_RE, HouseFactsHandler._plugins),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -80,6 +90,32 @@ class HouseFactsHandler(Handler):
         else:
             text = house_facts.answer(qid, await self._facts(ctx))
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _secret(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        which = house_facts.secret_asked(m.group(0))
+        if which is None:
+            return None
+        return Response(text=house_facts.secret_answer(which), session_id=ctx.session_id,
+                        matched_handler=self.name)
+
+    async def _admin(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        kind = house_facts.admin_question(m.group(0))
+        if kind is None:
+            return None
+        # A spoken turn is never a proven admin; only the dashboard's play
+        # box, with a live admin sign-in on its request, is.
+        text = house_facts.admin_answer(kind, chat=False, admin=ctx.proven_admin)
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _plugins(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        return Response(text=await house_facts.plugins_answer(), session_id=ctx.session_id,
+                        matched_handler=self.name)
 
     async def _capability(
         self, m: re.Match[str], ctx: Context, session: AsyncSession

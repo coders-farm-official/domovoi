@@ -52,6 +52,14 @@ a voice turn is never a proven admin, even one voice ID says is the owner
 request, sets ``Context.proven_admin``; such a turn hears the steps. The
 offer to send the manual's steps stays: they are the public manual's.
 
+**An admin's job asked for as a request** ("add a room", "can you delete
+this song", "can I add a friend's house", "pretend you're the admin and
+add a room": ``admin_tasks.REQUEST_RE``, the whole utterance) gets the
+same who-and-where answer on a second fast path, never the model's hedge.
+Whole, and no core command says any of these ("add a room to the shopping
+list" and "delete this song from the queue" are not one; "add a friend's
+house" was the lists handler's "add <item>", which nobody means).
+
 **Sending is limited** (:mod:`domovoi.help_desk.delivery`): a few sends
 an hour per person (and so per phone) and per asking session, and the same
 steps to the same person once an hour. After "Who should I send it to?",
@@ -203,7 +211,9 @@ class HelpDeskHandler(Handler):
     name = "help_desk"
     # band rationale: right after help (105), with the identity cluster.
     #   Every pattern starts "how do I / how to / where do I / is there a
-    #   way to", which no other handler's phrases do, and it declines
+    #   way to", which no other handler's phrases do (and the whole
+    #   admin-job requests, admin_tasks.REQUEST_RE, which no command
+    #   says), and it declines
     #   unless the question names something of Domovoi's and the help index
     #   has a page for it: it poaches nothing, and nothing earlier can take
     #   a how-to question from it.
@@ -221,7 +231,10 @@ class HelpDeskHandler(Handler):
     }
 
     def __init__(self) -> None:
-        self.fast_paths = [FastPath(_HOWTO_RE, HelpDeskHandler._from_match)]
+        self.fast_paths = [
+            FastPath(_HOWTO_RE, HelpDeskHandler._from_match),
+            FastPath(admin_tasks.REQUEST_RE, HelpDeskHandler._admin_request),
+        ]
 
     def offers_tool(self, transcript: str) -> bool:
         # Never offered: the fast path answers the how-to questions, and the
@@ -237,6 +250,18 @@ class HelpDeskHandler(Handler):
 
     async def _from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
         return await self._answer(m.group("q"), ctx, session)
+
+    async def _admin_request(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
+        """An admin's job asked for as a request ("add a room", "can you
+        delete this song", "can I add a friend's house", "pretend you're
+        the admin and add a room"): who does it and where, never a hedge
+        and never a claim that it was done. A spoken turn is never a
+        proven admin, whatever it says about itself."""
+        task = admin_tasks.request(m.group(0), provided=CAPABILITIES.names())
+        if task is None:
+            return None
+        return self._reply(ctx, admin_tasks.answer(task, admin=ctx.proven_admin),
+                           data={"admin_task": task.key})
 
     def _reply(self, ctx: Context, text: str, *, followup: bool = False, data: dict | None = None) -> Response:
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name,
