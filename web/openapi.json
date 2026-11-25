@@ -13303,6 +13303,26 @@
         }
       }
     },
+    "/api/updates/notice": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Updates Notice",
+        "description": "Home's update row (1.5.0): ``{available, version, highlights,\nfound_by, found_at, updating}``, or ``{available: false, updating:\nfalse}``. Proxy of the core's ``GET /v1/updates/notice``: only a signed\nrelease makes a notice, never a commit on main; nothing here installs.",
+        "operationId": "updates_notice_api_updates_notice_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/version/check": {
       "post": {
         "tags": [

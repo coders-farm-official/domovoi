@@ -2359,9 +2359,14 @@ answer doesn't reach it there.
 [Settings → System → About & updates](#settings/about) shows the release
 you run.
 
+With the internet setting **Yes**, Domovoi looks by itself once a day and
+Home says *Domovoi 1.5.0 is available*. Untick **Check for updates by
+itself** to look only when you ask. Only a signed release makes this
+notice, with its three highlights; nothing installs by itself.
+
 **How to** *(admin)*
 
-1. **Check for updates**.
+1. **Check for updates** (or **Update** on Home).
 2. **Update Domovoi**. It pulls the update, then restarts with it.
 3. On a server that can't restart itself, **Restart to apply changes**
    comes next.

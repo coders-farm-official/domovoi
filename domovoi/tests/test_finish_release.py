@@ -991,7 +991,8 @@ def test_release_docs_after_1_3_0_are_in_the_house_style():
     for p in sorted((REPO / "docs" / "release").glob("v*.md")):
         v = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)(-.*)?", p.stem)
         if v and tuple(int(x) for x in v.groups()[:3]) > (1, 3, 0):
-            assert fr.release_doc_problems(p.read_text(encoding="utf-8")) == [], p.name
+            # With its version: from 1.5.0 the Highlights are required too.
+            assert fr.release_doc_problems(p.read_text(encoding="utf-8"), p.stem[1:]) == [], p.name
 
 
 # ─── the notes, piece by piece ───────────────────────────────────────────

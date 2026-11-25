@@ -1835,6 +1835,18 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .home-att-acts { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .home-att-quiet { padding: 8px 16px; font-size: 12px; color: var(--fg-muted); }
 .home-att-foot { padding: 8px 16px 4px; border-top: 1px solid var(--border-soft); }
+/* A new release (update notices): the words wrap anywhere (a version
+   never splits from its line's start only because it can't fit), the muted
+   line under them, and an admin's Update, which never shrinks. Below 420 px
+   the button takes its own line, at the right. */
+.home-att-update .txt { overflow-wrap: anywhere; }
+.home-att-update-title { display: block; }
+.home-att-update-sub { display: block; font-size: 12px; color: var(--fg-muted); }
+.home-att-update .home-att-acts { flex: none; }
+.home-att-update .home-att-acts .btn { flex: none; }
+@media (max-width: 420px) {
+  .home-att-update .home-att-acts { flex-basis: 100%; justify-content: flex-end; }
+}
 
 /* timers */
 .home-timer {
@@ -2822,3 +2834,9 @@ table.qh-tbl td.mono, table.qh-tbl .qh-nowrap { white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   .dv-spin { animation: none; }
 }
+
+/* Update notices (About & updates): a release's three highlights, as text. */
+.version-highlights { margin-top: 6px; }
+.version-highlights-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.version-highlights ul { margin: 4px 0 0; padding-left: 18px; color: var(--fg); }
+.version-highlights li { overflow-wrap: anywhere; line-height: 1.4; }
