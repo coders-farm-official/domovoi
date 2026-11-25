@@ -504,7 +504,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
             Log.w(TAG, "ready names this phone ${f.satelliteId}, not $own")
         }
         f.room?.let { here ->
-            store.setRoomName(here.name)
+            store.noteRoom(here)
             update { it.copy(place = here) }
         }
         features = f.features
@@ -533,7 +533,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         val here = f.room ?: return
         val before = _status.value.place
         if (before?.roomId != here.roomId) Log.i(TAG, "moved to another room (${here.roomId})")
-        store.setRoomName(here.name)
+        store.noteRoom(here)
         update { it.copy(place = here) }
     }
 

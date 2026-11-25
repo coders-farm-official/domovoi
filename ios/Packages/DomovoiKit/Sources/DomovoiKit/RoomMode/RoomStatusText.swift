@@ -157,22 +157,37 @@ public enum RoomStatusText {
     /// no iPad wording of its own.
     public static let entryTitle = "Use this phone in a room"
 
-    /// The room's name to show: the server's (``RoomStatus/place``), else the
-    /// one kept from the last connect or the room code's `in=`
-    /// (``RoomKeeping/roomName``), else the room code's own
-    /// (``RoomEnrolment/roomLabel``).
-    public static func roomName(_ s: RoomStatus?, kept: String?, label: String) -> String {
+    /// The room's name to show, or nil when none is known for the room this
+    /// phone is in: never its id (satellite-fixtures.json `rooms.name_about`).
+    ///
+    /// Once the server has said where the phone is (``RoomStatus/place``): its
+    /// name, else the name kept for the SAME room (`kept`, kept for
+    /// `keptFor`: ``RoomKeeping/roomName`` / ``RoomKeeping/roomNameRoom``),
+    /// else none (a move to another room, or a room the core could not
+    /// read). Before that: the kept name, else the room code's own
+    /// (``RoomEnrolment/roomLabel``). `RoomStatusText.roomName` on Android.
+    public static func roomName(_ s: RoomStatus?, kept: String?, keptFor: String?, label: String?) -> String? {
         func shown(_ v: String?) -> String? {
             guard let v, !v.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
             return v
         }
-        return shown(s?.place?.name) ?? shown(kept) ?? label
+        if let place = s?.place {
+            return shown(place.name) ?? (keptFor == place.roomID ? shown(kept) : nil)
+        }
+        return shown(kept) ?? shown(label)
     }
 
+    /// The room screen's title with no name known (`NO_NAME_TITLE`).
+    public static let noNameTitle = "This room"
+
+    /// The title for `name`: the name, or ``noNameTitle``.
+    public static func title(_ name: String?) -> String { name ?? noNameTitle }
+
     /// "the Kitchen"; a name that already reads as one ("The Den",
-    /// "Alex's room") is left as it is.
-    public static func theRoom(_ name: String) -> String {
-        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// "Alex's room") is left as it is; no name is "this room".
+    public static func theRoom(_ name: String?) -> String {
+        let n = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.isEmpty { return "this room" }
         if n.lowercased().hasPrefix("the ") || possessive(n) { return n }
         return "the \(n)"
     }
@@ -191,7 +206,8 @@ public enum RoomStatusText {
     /// the Kitchen" once the server has said so (with "with other devices"
     /// when it shares the room), "This phone will join the Kitchen" until the
     /// phone has been approved (`approved`: ``RoomKeeping/approvedOnce``).
-    public static func whereLine(_ s: RoomStatus?, roomName: String, approved: Bool) -> String {
+    /// With no name (`roomName` nil): "This phone is in this room".
+    public static func whereLine(_ s: RoomStatus?, roomName: String?, approved: Bool) -> String {
         let room = theRoom(roomName)
         if let place = s?.place, place.shared { return "This phone is in \(room), with other devices" }
         if s?.place != nil || approved { return "This phone is in \(room)" }

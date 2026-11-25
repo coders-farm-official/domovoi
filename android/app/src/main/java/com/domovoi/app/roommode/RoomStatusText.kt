@@ -112,16 +112,33 @@ object RoomStatusText {
     /** Settings → Rooms' card and the explainer's heading. */
     const val ENTRY_TITLE = "Use this phone in a room"
 
-    /** The room's name to show: the server's ([RoomEngine.Status.place]),
-     *  else the one kept from the last connect or the room code's `in=`
-     *  ([RoomStore.roomName]), else the room code's own ([Enrolment.roomLabel]). */
-    fun roomName(s: RoomEngine.Status?, kept: String?, label: String): String =
-        s?.place?.name?.takeIf { it.isNotBlank() } ?: kept?.takeIf { it.isNotBlank() } ?: label
+    /**
+     * The room's name to show, or null when none is known for the room this
+     * phone is in: never its id (satellite-fixtures.json rooms.name_about).
+     *
+     * Once the server has said where the phone is ([RoomEngine.Status.place]):
+     * its name, else the name kept for the SAME room ([kept], kept for
+     * [keptFor]: [RoomStore.roomName] / [RoomStore.roomNameRoom]), else none
+     * (a move to another room, or a room the core could not read). Before
+     * that: the kept name, else the room code's own ([Enrolment.roomLabel]).
+     */
+    fun roomName(s: RoomEngine.Status?, kept: String?, keptFor: String?, label: String?): String? {
+        val keptName = kept?.takeIf { it.isNotBlank() }
+        val place = s?.place
+        if (place != null) return place.name?.takeIf { it.isNotBlank() } ?: keptName?.takeIf { keptFor == place.roomId }
+        return keptName ?: label?.takeIf { it.isNotBlank() }
+    }
+
+    /** The room screen's and the notification's title with no name known. */
+    const val NO_NAME_TITLE = "This room"
+
+    /** The title for [name]: the name, or [NO_NAME_TITLE]. */
+    fun title(name: String?): String = name ?: NO_NAME_TITLE
 
     /** "the Kitchen"; a name that already reads as one ("The Den",
-     *  "Alex's room") is left as it is. */
-    fun theRoom(name: String): String {
-        val n = name.trim()
+     *  "Alex's room") is left as it is; no name is "this room". */
+    fun theRoom(name: String?): String {
+        val n = name?.trim()?.takeIf { it.isNotEmpty() } ?: return "this room"
         val possessive = Regex("['’]s(\\s|$)").containsMatchIn(n)
         return if (n.startsWith("the ", ignoreCase = true) || possessive) n else "the $n"
     }
@@ -130,9 +147,10 @@ object RoomStatusText {
      * The line under the room's name on the room screen: "This phone is in
      * the Kitchen" once the server has said so (with "with other devices"
      * when it shares the room), "This phone will join the Kitchen" until the
-     * phone has been approved ([approved]: [RoomStore.approvedOnce]).
+     * phone has been approved ([approved]: [RoomStore.approvedOnce]). With
+     * no name ([roomName] null): "This phone is in this room".
      */
-    fun whereLine(s: RoomEngine.Status?, roomName: String, approved: Boolean): String {
+    fun whereLine(s: RoomEngine.Status?, roomName: String?, approved: Boolean): String {
         val room = theRoom(roomName)
         val place = s?.place
         return when {
