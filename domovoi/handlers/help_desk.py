@@ -281,9 +281,11 @@ class HelpDeskHandler(Handler):
             said = admin_tasks.answer(task, admin=ctx.proven_admin)
         data = {"question": question, "passages": [h.passage.id for h in hits],
                 "section": hits[0].passage.section}
-        if ctx.from_phone or ctx.session_id is None:
-            # A phone turn is on the phone already; a turn with no session
-            # can't hear a yes. The page is named either way.
+        if ctx.from_phone or ctx.session_id is None or not ctx.answerable:
+            # A phone turn is on the phone already; a turn with no session,
+            # or from a surface that can't answer back (the dashboard's play
+            # box, Context.answerable False), can't say yes, so the offer
+            # isn't made. The page is named either way.
             return self._reply(ctx, said, data=data)
         await request_confirmation(
             session, ctx.session_id, kind=SEND_KIND, handler=self.name,

@@ -271,6 +271,20 @@ async def test_a_phone_turn_gets_the_answer_without_the_offer(voice) -> None:
     assert r.matched_handler == "help_desk" and "Want me to send" not in r.text and not r.expect_followup
 
 
+@requires_db
+@pytest.mark.asyncio
+async def test_a_surface_that_cant_answer_back_gets_no_offer(voice) -> None:
+    # G4 (case 8.7h): the dashboard's play box (main._admin_route_intent,
+    # Context.answerable False) can't say yes: the answer, no offer, nothing
+    # parked. A room keeps the offer (above).
+    sid = (await voice("what time is it")).session_id
+    ctx = Context(room_id="kitchen", session_id=sid, online=True, answerable=False)
+    r = await route(Intent(transcript="how do I change the wake word", room_id="kitchen"), ctx, voice.db)
+    assert r.matched_handler == "help_desk" and "Want me to send" not in r.text and not r.expect_followup
+    data = await SessionRepository(voice.db).get_context(sid) or {}
+    assert (data.get("pending_confirmation") or {}).get("kind") != "core.help_send"
+
+
 # ── round 1 review: limits, the name question, commands in how-to clothes ──
 
 
