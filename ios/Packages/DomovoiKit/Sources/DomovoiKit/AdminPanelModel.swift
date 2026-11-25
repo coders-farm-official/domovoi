@@ -22,8 +22,11 @@ public enum AdminStrings {
     public static let jobs =
         "As admin on this phone you can approve or turn away a room device asking to join, and restart, upgrade "
         + "or change the settings of a room (Settings → Rooms), "
-        + "answer friend requests and remove, block or unblock friend houses (Friend Houses → friends & connections), "
-        + "and acknowledge or clear Health incidents (Settings → Health). Everything else is on the dashboard for now."
+        + "answer friend requests, remove, block or unblock friend houses, and save a copy of or delete a conversation "
+        + "(Friend Houses → friends & connections), "
+        + "acknowledge or clear Health incidents (Settings → Health), "
+        + "and install an update or restart the Domovoi server (Settings → About & updates). "
+        + "Everything else is on the dashboard for now."
 
     /// `ADMIN_SHARED`.
     public static let shared =
