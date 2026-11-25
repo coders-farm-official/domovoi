@@ -17,6 +17,7 @@ import com.domovoi.app.testing.texts
 import com.domovoi.app.testing.withHeadlessWindow
 import com.domovoi.app.ui.components.Tone
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -41,7 +42,7 @@ class HomeUpdateNoticeTest {
         "Commits on main never make a notice",
     )
 
-    private fun notice(version: String = "1.5.0", highlights: List<String> = hl, updating: Boolean = false) =
+    private fun notice(version: String? = "1.5.0", highlights: List<String> = hl, updating: Boolean = false) =
         UpdateNotice(version, highlights, updating)
 
     // ─── the shapes the server sends ─────────────────────────────────────
@@ -54,19 +55,24 @@ class HomeUpdateNoticeTest {
         assertEquals(notice(), n)
     }
 
-    @Test fun aManualNoticeWithNoHighlightsWhileUpdating() {
+    @Test fun updatingIsRestartingWhateverAvailableSays() {
+        // Core's final rule: `updating` true is Domovoi restarting, with a
+        // notice or without one (even under the internet answer No).
         val n = UpdateNotices.parse(
-            """{"available": true, "version": "1.5.0", "highlights": [],
+            """{"available": true, "version": "1.5.0", "highlights": ${json(hl)},
                "found_by": "manual", "found_at": "2026-11-25T08:02:11Z", "updating": true}""",
         )
         assertEquals(notice(highlights = emptyList(), updating = true), n)
+        assertEquals(notice(version = null, highlights = emptyList(), updating = true),
+            UpdateNotices.parse("""{"available": false, "updating": true}"""))
+        assertEquals(notice(version = null, highlights = emptyList(), updating = true),
+            UpdateNotices.parse("""{"updating": true}"""))
     }
 
     @Test fun nothingAvailableIsNoNotice() {
         // What the server answers with no notice, under the internet answer
         // No, and without git (update_notice._payload(None, ...)).
         assertNull(UpdateNotices.parse("""{"available": false, "updating": false}"""))
-        assertNull(UpdateNotices.parse("""{"available": false, "updating": true}"""))
         assertNull(UpdateNotices.parse("""{"available": false, "version": "1.5.0"}"""))
     }
 
@@ -121,6 +127,25 @@ class HomeUpdateNoticeTest {
                 "tab\there", "$at80", "fine words"]}""",
         )
         assertEquals(listOf(at80, "fine words"), parsed?.highlights)
+    }
+
+    @Test fun highlightsAreEightToEightyCodePointsAfterNfc() {
+        val seven = "x".repeat(7)
+        val eight = "x".repeat(8)
+        val parsed = UpdateNotices.parse(
+            """{"available": true, "version": "1.5.0", "highlights": ${json(listOf(seven, eight))}}""",
+        )
+        assertEquals(listOf(eight), parsed?.highlights)
+        // A decomposed é (e + U+0301) is one code point after NFC: seven
+        // letters and it make eight, and so are kept.
+        val decomposed = "x".repeat(7) + "e\u0301"
+        assertEquals(9, decomposed.codePointCount(0, decomposed.length))
+        assertEquals(8, UpdateNotices.codePoints(decomposed))
+        assertEquals(listOf(decomposed), UpdateNotices.highlights(Json.parseToJsonElement(json(listOf(decomposed)))))
+        // ...and 79 letters and a decomposed é are 80, kept; 80 and it, 81.
+        val at80 = "x".repeat(79) + "e\u0301"
+        val at81 = "x".repeat(80) + "e\u0301"
+        assertEquals(listOf(at80), UpdateNotices.highlights(Json.parseToJsonElement(json(listOf(at81, at80)))))
     }
 
     @Test fun highlightsCountCodePointsNotUtf16Units() {
@@ -183,12 +208,27 @@ class HomeUpdateNoticeTest {
         assertEquals("An admin can install it.", sharedAdmin.sub)
     }
 
-    @Test fun whileUpdatingItSaysSoAndNothingElse() {
-        val u = updateNoticeRow(notice(updating = true), paired = true, admin = true)!!.update!!
-        assertEquals("Domovoi is updating…", u.title)
-        assertNull(u.sub)
-        assertEquals(emptyList<String>(), u.highlights)
-        assertFalse(u.canUpdate)
+    @Test fun whileUpdatingItSaysOnlyThatDomovoiIsRestarting() {
+        // One line, no button, for anyone, whatever `available` says; and
+        // never the word "updating".
+        val withNotice = UpdateNotices.parse("""{"available": true, "version": "1.5.0", "highlights": ${json(hl)}, "updating": true}""")
+        val without = UpdateNotices.parse("""{"available": false, "updating": true}""")
+        for (n in listOf(withNotice, without)) {
+            for (admin in listOf(false, true)) {
+                val row = updateNoticeRow(n, paired = true, admin = admin)!!
+                val u = row.update!!
+                assertEquals("Domovoi is restarting…", u.title)
+                assertEquals("Domovoi is restarting…", row.text)
+                assertNull(u.sub)
+                assertEquals(emptyList<String>(), u.highlights)
+                assertFalse(u.canUpdate)
+                assertFalse(u.title.contains("updating", ignoreCase = true))
+            }
+        }
+        assertEquals("Domovoi is restarting\u2026", UpdateNoticeWords.RESTARTING)
+        assertNull("still never unpaired", updateNoticeRow(without, paired = false))
+        // A notice that is neither available nor restarting has no row.
+        assertNull(updateNoticeRow(notice(version = null), paired = true))
     }
 
     @Test fun hiddenWhenUnpairedOrWithNothingAvailable() {
@@ -327,12 +367,12 @@ class HomeUpdateNoticeTest {
     }
 
     @Test fun everyLineWrapsAndNothingIsCutShort() {
-        // The longest version the server lets through, the "updating" words,
+        // The longest version the server lets through, the restarting line,
         // and highlights at the 80-character limit, at the narrowest width:
         // no line limit (so no ellipsis), soft wrap on, balanced breaking
         // (no lone last word), and no fixed width anywhere around the text.
         val long = notice(version = "1234.5678.9012", highlights = listOf("w".repeat(80), "a b c d e f g h i j k l m n o p", hl[0]))
-        listOf(long, long.copy(updating = true)).forEach { n ->
+        listOf(long, long.copy(updating = true), notice(version = null, updating = true)).forEach { n ->
             val u = updateNoticeRow(n, paired = true)!!.update!!
             composed(u) { tree ->
                 val texts = textParams(tree)
