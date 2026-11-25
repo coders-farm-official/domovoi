@@ -124,10 +124,55 @@ class RoomRulesTest {
     @Test
     fun theScreenSaysTheRoomsNameNeverItsId() {
         // The server's name wins, then the kept one, then the room code's.
-        assertEquals("Kitchen", RoomStatusText.roomName(status().copy(place = kitchen), "Den", "Kitchen 2"))
-        assertEquals("Den", RoomStatusText.roomName(status(), "Den", "Kitchen 2"))
-        assertEquals("Kitchen 2", RoomStatusText.roomName(null, null, "Kitchen 2"))
-        assertEquals("Kitchen 2", RoomStatusText.roomName(null, " ", "Kitchen 2"))
+        assertEquals("Kitchen", RoomStatusText.roomName(status().copy(place = kitchen), "Den", "den", "Kitchen 2"))
+        assertEquals("Den", RoomStatusText.roomName(status(), "Den", "den", "Kitchen 2"))
+        assertEquals("Kitchen 2", RoomStatusText.roomName(null, null, null, "Kitchen 2"))
+        assertEquals("Kitchen 2", RoomStatusText.roomName(null, " ", null, "Kitchen 2"))
+        assertNull(RoomStatusText.roomName(null, null, null, null))
+    }
+
+    /** satellite-fixtures.json rooms.name_about: the core sends a null name
+     *  for a room it could not read. */
+    @Test
+    fun anUnnamedRoomKeepsTheLastNameForTheSameRoomOnly() {
+        val unnamed = kitchen.copy(name = null)
+        // The same room: the name last shown for it.
+        assertEquals("Kitchen", RoomStatusText.roomName(status().copy(place = unnamed), "Kitchen", "kitchen", "Kitchen 2"))
+        // Another room (a move), a name kept before 1.5.0 (no room), or none:
+        // no name, and never the id or the room code's own name.
+        val den = RoomProtocol.RoomPlace("den", null, shared = false)
+        assertNull(RoomStatusText.roomName(status().copy(place = den), "Kitchen", "kitchen", "Kitchen 2"))
+        assertNull(RoomStatusText.roomName(status().copy(place = unnamed), "Kitchen", null, "Kitchen 2"))
+        assertNull(RoomStatusText.roomName(status().copy(place = unnamed), null, null, "Kitchen 2"))
+        // The words then name no room.
+        assertEquals("This phone is in this room", RoomStatusText.whereLine(status().copy(place = den), null, approved = true))
+        assertEquals(
+            "This phone is in this room, with other devices",
+            RoomStatusText.whereLine(status().copy(place = den.copy(shared = true)), null, approved = true),
+        )
+        assertEquals(
+            "This phone will join this room",
+            RoomStatusText.whereLine(status(link = RoomEngine.Link.AwaitingApproval("305117")), null, approved = false),
+        )
+        assertEquals("This room", RoomStatusText.title(null))
+        assertEquals("Kitchen", RoomStatusText.title("Kitchen"))
+        assertEquals("this room", RoomStatusText.theRoom(null))
+        assertEquals("this room", RoomStatusText.theRoom(" "))
+    }
+
+    @Test
+    fun noNameNeverOverwritesTheKeptOne() {
+        // A name is kept with its room.
+        assertEquals("kitchen" to "Kitchen", RoomStore.nameToKeep(kitchen, null, null))
+        assertEquals("den" to "Den", RoomStore.nameToKeep(RoomProtocol.RoomPlace("den", "Den", false), "Kitchen", "kitchen"))
+        // The same name for the same room: nothing to write.
+        assertNull(RoomStore.nameToKeep(kitchen, "Kitchen", "kitchen"))
+        // The same name, now for another room (or a pre-1.5.0 kept name): kept with it.
+        assertEquals("kitchen" to "Kitchen", RoomStore.nameToKeep(kitchen, "Kitchen", null))
+        // No name: nothing written, the last name stays.
+        assertNull(RoomStore.nameToKeep(kitchen.copy(name = null), "Kitchen", "kitchen"))
+        assertNull(RoomStore.nameToKeep(RoomProtocol.RoomPlace("den", null, false), "Kitchen", "kitchen"))
+        assertNull(RoomStore.nameToKeep(kitchen.copy(name = " "), "Kitchen", "kitchen"))
     }
 
     @Test

@@ -73,11 +73,15 @@ public struct RoomEnrolment: Equatable, Sendable, Codable {
 /// `RoomProtocol.RoomPlace` (`RoomProtocol.kt`).
 public struct RoomPlace: Equatable, Sendable {
     public let roomID: String
-    public let name: String
+    /// The room's name; nil when the core could not read the room's row (it
+    /// sends null, never the id). The phone then keeps the name it last
+    /// showed for the same room, or says "this room"
+    /// (``RoomStatusText/roomName(_:kept:keptFor:label:)``).
+    public let name: String?
     public let shared: Bool
     public let claim: Bool
 
-    public init(roomID: String, name: String, shared: Bool, claim: Bool = false) {
+    public init(roomID: String, name: String?, shared: Bool, claim: Bool = false) {
         self.roomID = roomID
         self.name = name
         self.shared = shared
@@ -273,10 +277,42 @@ public protocol RoomKeeping: RoomModelBook {
     func clearRequestedRoom()
     /// The name of the room this phone is in, as the server last said it
     /// (`ready.room` / the `room` frame), or before that the room the room
-    /// code said it joins; nil: only the room code's own name is known.
+    /// code said it joins or makes; nil: none known. Kept WITH the room it
+    /// names (``roomNameRoom``): a name is only ever shown for that room.
     var roomName: String? { get }
-    /// Blank, or the same name, writes nothing.
-    func setRoomName(_ name: String)
+    /// The room id ``roomName`` belongs to; nil for a name kept before 1.5.0.
+    var roomNameRoom: String? { get }
+    /// The server said where this phone is (``RoomNameKeeping/nameToKeep(_:keptName:keptFor:)``):
+    /// a name is kept with its room; no name writes nothing.
+    func noteRoom(_ place: RoomPlace)
+}
+
+/// The kept room name's one rule (`RoomStore.nameToKeep`), here so the real
+/// store and the in-memory one cannot differ.
+public enum RoomNameKeeping {
+    /// What ``RoomKeeping/noteRoom(_:)`` writes for `place`: its (room id,
+    /// name) when it has a name that is not already the one kept for that
+    /// room; nil (write nothing) for no name, so a room the core could not
+    /// read never overwrites the last name.
+    public static func nameToKeep(_ place: RoomPlace, keptName: String?, keptFor: String?) -> (roomID: String, name: String)? {
+        guard let name = place.name, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        if name == keptName && place.roomID == keptFor { return nil }
+        return (place.roomID, name)
+    }
+
+    /// The name an enrolment knows, kept with its room: the room `in=` joins
+    /// (``RoomEnrolment/inRoomName``), else the room the code makes (its own
+    /// name, ``RoomEnrolment/roomLabel``).
+    public static func enrolled(_ e: RoomEnrolment) -> (roomID: String, name: String)? {
+        func shown(_ v: String?) -> String? {
+            guard let v, !v.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return v
+        }
+        if let asked = e.inRoom.flatMap({ RoomEnrolmentParser.isRoomID($0) ? $0 : nil }) {
+            return shown(e.inRoomName).map { (asked, $0) }
+        }
+        return shown(e.roomLabel).map { (e.roomID, $0) }
+    }
 }
 
 /// The store's rules every implementation shares (`RoomStore.kt:185-208`),
@@ -340,6 +376,7 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
         var trained: [String: String] = [:]
         var requested: String?
         var roomName: String?
+        var roomNameRoom: String?
     }
 
     private let state: RoomLock<State>
@@ -348,7 +385,8 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
         state = RoomLock(State(
             enrolment: enrolment, token: pairingToken, code: approvalCode,
             requested: enrolment?.inRoom.flatMap { RoomEnrolmentParser.isRoomID($0) ? $0 : nil },
-            roomName: enrolment?.inRoomName
+            roomName: enrolment.flatMap(RoomNameKeeping.enrolled)?.name,
+            roomNameRoom: enrolment.flatMap(RoomNameKeeping.enrolled)?.roomID
         ))
     }
 
@@ -389,9 +427,13 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
     public var roomName: String? {
         state.withLock { $0.roomName.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } }
     }
-    public func setRoomName(_ name: String) {
-        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        state.withLock { $0.roomName = name }
+    public var roomNameRoom: String? { state.withLock { $0.roomNameRoom } }
+    public func noteRoom(_ place: RoomPlace) {
+        state.withLock {
+            guard let kept = RoomNameKeeping.nameToKeep(place, keptName: $0.roomName, keptFor: $0.roomNameRoom) else { return }
+            $0.roomName = kept.name
+            $0.roomNameRoom = kept.roomID
+        }
     }
 }
 

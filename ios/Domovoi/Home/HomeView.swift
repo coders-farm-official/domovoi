@@ -132,6 +132,11 @@ struct HomeView: View {
     /// `.task` for ``home``'s reason; asks nothing on an unpaired phone.
     @State private var groups: MusicGroupsModel?
 
+    /// The update notice (`GET /api/updates/notice`, update notices 1.5.0):
+    /// device tier, so asked only on a paired phone; re-read on coming back
+    /// at most every ten minutes. Built in `.task` for ``home``'s reason.
+    @State private var updates: UpdateNoticeModel?
+
     /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
     ///
     /// Not a nicety: Home is a `NavigationStack` root, so it is still in the
@@ -177,6 +182,10 @@ struct HomeView: View {
                 groups = MusicGroupsModel(container: model.container)
             }
             groups?.start(paired: model.isPaired)
+            if updates == nil {
+                updates = UpdateNoticeModel(container: model.container)
+            }
+            updates?.start(paired: model.isPaired)
         }
         .onAppear { visible = true }
         // `repeatOnLifecycle(STARTED)` on Android: the loops stop with the
@@ -185,6 +194,7 @@ struct HomeView: View {
             visible = false
             home?.stop()
             groups?.stop()
+            updates?.stop()
             // **The announce send is deliberately NOT cancelled here**, and
             // that is a named divergence: Android's runs in the composable's
             // scope and dies with the screen. The toast it produces is the
@@ -209,7 +219,15 @@ struct HomeView: View {
         // the same thing on its own side; two independent mechanisms, because
         // the one-sided version cost Home its socket for whole sessions.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active, visible { home?.cameBackOnScreen() }
+            if phase == .active, visible {
+                home?.cameBackOnScreen()
+                updates?.cameBackOnScreen()
+            }
+        }
+        // Paired or unpaired while Home is up: the notice is device tier, so
+        // it is asked for (or forgotten) then, not on the next visit.
+        .onChange(of: model.isPaired) { _, paired in
+            if visible { updates?.start(paired: paired) }
         }
         // Same guard, same reason: `LaunchedEffect(live, lifecycle)` does not
         // run for a composable that is gone. A socket change missed while Home
@@ -301,7 +319,16 @@ struct HomeView: View {
                 expanded: attentionExpanded,
                 // Friend Houses' unread row: the gate's count for this
                 // server, only while Friend houses can be opened here.
-                friendHousesUnread: model.friendHouses.homeUnread(model.inputs.serverURL)
+                friendHousesUnread: model.friendHouses.homeUnread(model.inputs.serverURL),
+                // The member's row on every phone: no phone signs an admin in
+                // on this branch, so `admin` (the seam for the admin's
+                // Update) stays false.
+                update: homeUpdateNoticeRow(
+                    notice: updates?.notice,
+                    paired: model.isPaired,
+                    admin: false,
+                    shared: shared
+                )
             ),
             nowMs: home.nowMs,
             onRow: open,
@@ -579,7 +606,9 @@ struct HomeView: View {
     /// draws today (``healthTarget``), and **Home fixes nothing itself**: the
     /// per-check `fix` targets are Health's rows, not Home's.
     private func open(_ row: AttentionRow) {
-        switch row.target {
+        // The update notice opens nothing (its row is not a button).
+        guard let target = row.target else { return }
+        switch target {
         case .settings(let tab):
             model.openSettingsTab(tab)
         case .screen(let route):

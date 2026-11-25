@@ -66,14 +66,25 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
     /**
      * The name of the room this phone is in, as the server last said it
      * (`ready.room` / the `room` frame), or before that the room the room
-     * code said it joins; null: only the room code's own name is known
-     * ([Enrolment.roomLabel]). Kept so the screen and the notification say
-     * the room's name before the next connect.
+     * code said it joins or makes; null: none known. Kept so the screen and
+     * the notification say the room's name before the next connect, and
+     * kept WITH the room it names ([roomNameRoom]): a name is only ever
+     * shown for that room.
      */
     val roomName: String? get() = prefs.getString(K_ROOM_NAME, null)?.takeIf { it.isNotBlank() }
 
-    fun setRoomName(name: String) {
-        if (name.isNotBlank() && name != roomName) prefs.edit().putString(K_ROOM_NAME, name).apply()
+    /** The room id [roomName] belongs to; null for a name kept before 1.5.0
+     *  (which then names no room the server places this phone in). */
+    val roomNameRoom: String? get() = prefs.getString(K_ROOM_NAME_ID, null)?.takeIf { RoomEnrolment.isRoomId(it) }
+
+    /**
+     * The server said where this phone is. A name is kept with its room;
+     * no name (the core could not read the room's row) overwrites nothing,
+     * so the last name stays for the same room and names no other.
+     */
+    fun noteRoom(place: RoomProtocol.RoomPlace) {
+        val (id, name) = nameToKeep(place, roomName, roomNameRoom) ?: return
+        prefs.edit().putString(K_ROOM_NAME, name).putString(K_ROOM_NAME_ID, id).apply()
     }
 
     /** Room mode is on: the normal app is locked (MainActivity sends the
@@ -109,7 +120,7 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         if (!same || pairingToken() == null) {
             if (!vault.write(mapOf(TOKEN_KEY to newToken()))) return false
             prefs.edit().putString(K_CODE, newApprovalCode()).remove(K_SERIALS).remove(K_WAKE).remove(K_WAKE_WORDS).remove(K_THRESHOLD)
-                .remove(K_APPROVED).remove(K_ROOM_NAME).commit()
+                .remove(K_APPROVED).remove(K_ROOM_NAME).remove(K_ROOM_NAME_ID).commit()
         }
         prefs.edit()
             .putString(K_CORE, e.coreUrl)
@@ -121,7 +132,11 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
                 // in each hello until the server accepts the phone.
                 val asked = e.inRoom?.takeIf { RoomEnrolment.isRoomId(it) }
                 if (asked != null) putString(K_REQUESTED, asked) else remove(K_REQUESTED)
-                e.inRoomName?.takeIf { asked != null && it.isNotBlank() }?.let { putString(K_ROOM_NAME, it) }
+                // The room's name, kept with the room it names: the room
+                // `in=` joins, else the room this code makes (its own name).
+                val known = if (asked != null) e.inRoomName?.takeIf { it.isNotBlank() }?.let { asked to it }
+                else e.roomLabel.takeIf { it.isNotBlank() }?.let { e.roomId to it }
+                known?.let { (id, name) -> putString(K_ROOM_NAME, name); putString(K_ROOM_NAME_ID, id) }
             }
             .commit()
         return true
@@ -239,7 +254,20 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         private const val K_TRAINED = "trained_sha:"
         private const val K_REQUESTED = "requested_room"
         private const val K_ROOM_NAME = "room_name"
+        private const val K_ROOM_NAME_ID = "room_name_room_id"
         private val SERIALS = MapSerializer(String.serializer(), String.serializer())
+
+        /**
+         * What [noteRoom] writes for [place]: its (room id, name) when it has
+         * a name that is not already the one kept for that room; null (write
+         * nothing) for no name, so a room the core could not read never
+         * overwrites the last name.
+         */
+        internal fun nameToKeep(place: RoomProtocol.RoomPlace, keptName: String?, keptFor: String?): Pair<String, String>? {
+            val name = place.name?.takeIf { it.isNotBlank() } ?: return null
+            if (name == keptName && place.roomId == keptFor) return null
+            return place.roomId to name
+        }
 
         /** 32 random bytes, URL-safe base64 (as `secrets.token_urlsafe(32)`). */
         fun newToken(random: SecureRandom = SecureRandom()): String =

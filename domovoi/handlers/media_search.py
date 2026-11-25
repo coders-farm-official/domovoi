@@ -25,11 +25,11 @@ are results, the asker is a household voice that voice ID recognized
 theirs (Settings → Household → Phones & browsers, "This phone belongs
 to"), the answer ends "Do you want them on your phone?" (``core.media_send``).
 A yes searches again and sends the results to THEIR phones only, through
-the help desk's send-to-their-phone path (``domovoi/help_desk/delivery.py``):
-a home-server chat titled "Photos: …" whose reply carries the result
-cards, and the app's notification. The help desk's limits hold (a few
-sends an hour per person and per asking session, the same search once an
-hour). A phone's own chat mic, a guest, a voice nobody recognized, or a
+the send-to-their-phone path (``domovoi/help_desk/delivery.py``, which
+voice help used until 1.5.0): a home-server chat titled "Photos: …" whose
+reply carries the result cards, and the app's notification. Its limits
+hold (a few sends an hour per person and per asking session, the same
+search once an hour). A phone's own chat mic, a guest, a voice nobody recognized, or a
 person with no phone is never asked.
 
 **Room screens.** Said in a room with a screen (a phone or tablet in room
@@ -64,6 +64,12 @@ SEND_KIND = "core.media_send"
 OFFER_TEXT = "Do you want them on your phone?"
 #: The chat a send makes is titled this, then what was asked.
 TITLE_PREFIX = "Photos: "
+#: A yes from someone with no phone marked as theirs (any more): nothing
+#: is sent, and where to mark one.
+NO_PHONE_TEXT = (
+    "There's no phone marked as {who} yet, so I haven't sent anything. In the Domovoi app, "
+    "open Settings, then Household, then Phones and browsers, and set This phone belongs to."
+)
 
 
 def people_allowed(ctx: Context) -> bool:
@@ -205,16 +211,14 @@ class MediaSearchHandler(Handler):
             return reply("I don't know who that is any more, so I haven't sent anything.")
         phones = await delivery.phones_of(session, person_id)
         if not phones:
-            from domovoi.handlers.help_desk import NO_PHONE_TEXT
-
             return reply(NO_PHONE_TEXT.format(who="yours"))
         req = ask.Request(q=str(data.get("q") or ""), connector=str(data.get("connector") or ""),
                           subject=str(data.get("subject") or ""))
         if not req.q:
             return reply("I couldn't find those again, so I haven't sent anything.")
         title = delivery.help_title(req.subject or req.q, prefix=TITLE_PREFIX)
-        refused = await delivery.refusal(session, person_id=person_id, title=title,
-                                         asker_session=ctx.session_id, what="photos")
+        refused = await delivery.refusal(session, person_id=person_id, title=title, what="photos",
+                                         asker_session=ctx.session_id)
         if refused:
             return reply(refused)
         try:
@@ -225,7 +229,7 @@ class MediaSearchHandler(Handler):
         if found.state != "found" or not found.cards:
             return reply("I couldn't find those again, so I haven't sent anything.")
         d = await delivery.deliver(
-            session, person_id=person_id, question=_asked(req), steps=ask.answer_text(found, req),
+            session, person_id=person_id, question=_asked(req), reply=ask.answer_text(found, req),
             phones=phones, title=title, stats={"model_role": "media", "media": found.as_json()})
         delivery.note_sent(ctx.session_id)
         return reply(f"Sent to your phone. It's in Chat as {d.title}.",

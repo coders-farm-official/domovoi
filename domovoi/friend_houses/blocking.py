@@ -62,6 +62,14 @@ async def block(friend_id: str, *, keep_messages: bool = True, new_address: bool
     from domovoi.friend_houses import messages, plugin_mail, store
 
     async with _db() as s:
+        # plugin_mail's lock order: the friend rows first, in id order (the
+        # one deleted FOR UPDATE, the others this marks FOR NO KEY UPDATE),
+        # before any pair or mail row.
+        if new_address:
+            await plugin_mail.lock_friends(s, "state = 'active' AND id < :i", {"i": friend_id})
+        await plugin_mail.lock_friend_for_delete(s, friend_id)
+        if new_address:
+            await plugin_mail.lock_friends(s, "state = 'active' AND id > :i", {"i": friend_id})
         friend = await store.friend(s, friend_id)
         if friend is None:
             raise BlockError("No such friend house.")

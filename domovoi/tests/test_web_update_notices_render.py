@@ -627,6 +627,33 @@ def test_home_update_row_per_viewer(browser, site, viewer, width):
             assert "GET /api/updates/notice" in api.seen, where
 
 
+
+@pytest.mark.parametrize("viewer", ["admin", "member"])
+@pytest.mark.parametrize("width", sorted(WIDTHS))
+def test_home_restarting_row_has_no_button(browser, site, viewer, width):
+    """While an update or a plain restart runs, with no notice stored (a
+    house on main, a restart pressed by hand), Home says the neutral
+    "Domovoi is restarting…" (owner, 2026-11-25), on one line, with no
+    button for anyone."""
+    base, api = site
+    v = VIEWERS[viewer]
+    busy = {"available": False, "updating": True}
+    table = house(**{"GET /api/auth/status": v["status"], "GET /api/config/version": STABLE_VERSION,
+                     "GET /api/updates/notice": busy})
+    for theme in THEMES:
+        load(browser, base, api, table=table, route="#home", width=WIDTHS[width], theme=theme,
+             ls=v["ls"], ready="document.querySelector('[data-key=\"update-available\"]')")
+        m = probe(browser, _HOME_MEASURE)
+        where = f"restarting {viewer} {width} {theme}"
+        RESULTS[f"home {where}"] = {k: m[k] for k in ("row", "title", "card", "page")}
+        assert m["present"], where
+        assert "Domovoi is restarting…" in m["text"], (where, m["text"])
+        assert "updating" not in m["text"], (where, m["text"])
+        assert m["buttons"] == [], (where, m["buttons"])
+        assert m["adminLine"] == 0 and m["count"] == 0, where
+        assert_no_overflow(m, where)
+        assert m["title"]["lines"] == 1, (where, "the row's words wrap", m["title"])
+
 def test_print_measurements():
     """Not a check: the numbers the tests above measured, for the log (-s)."""
     for k, v in RESULTS.items():

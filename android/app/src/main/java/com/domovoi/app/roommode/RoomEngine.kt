@@ -128,7 +128,9 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
     }
 
     override suspend fun art(path: String): ByteArray? {
-        if (!RoomDisplayFeed.isArtPath(path)) return null
+        // A cover or a photo result's thumbnail, on this room's own server,
+        // with no credential (the room key goes on no HTTP request).
+        if (!RoomDisplayFeed.isImagePath(path)) return null
         val client = http ?: return null
         val core = store.enrolment?.coreUrl?.trimEnd('/') ?: return null
         return withContext(Dispatchers.IO) {
@@ -502,7 +504,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
             Log.w(TAG, "ready names this phone ${f.satelliteId}, not $own")
         }
         f.room?.let { here ->
-            store.setRoomName(here.name)
+            store.noteRoom(here)
             update { it.copy(place = here) }
         }
         features = f.features
@@ -531,7 +533,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         val here = f.room ?: return
         val before = _status.value.place
         if (before?.roomId != here.roomId) Log.i(TAG, "moved to another room (${here.roomId})")
-        store.setRoomName(here.name)
+        store.noteRoom(here)
         update { it.copy(place = here) }
     }
 

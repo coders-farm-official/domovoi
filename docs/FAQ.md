@@ -489,19 +489,25 @@ Everything stays on your network, and printing and scanning keep working when th
 
 ## How do I ask Domovoi for help?
 
-Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, Domovoi can offer to send the steps to the phone marked as yours (the app's Settings → Household → Phones & browsers → "This phone belongs to"). With AI chat and questions turned off, help is a plain search of the manual and the docs.
+Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, it says the short answer and that the full answer is in the manual. With AI chat and questions turned off, help is a plain search of the manual and the docs.
 
 ## How long is what we say kept, and can we delete it?
 
 **90 days by default, and yes.** Domovoi writes down what people say to it
 and what it answered, so the Conversations and Sessions tabs can show it
-(to paired devices only). On the dashboard, **Settings → Household → People → Voice history** has:
+(to paired devices only). On the dashboard:
 
-- **Keep voice history**: 30 days, 90 days (the default), 1 year, or
-  Forever. Anything older is deleted once a day, and right away when you
-  pick a shorter time. It's also in Settings → System → Advanced → Privacy.
-- **Delete all voice history**: deletes everything said until now, in every
-  room and on every phone, after a confirmation that lists what goes.
+- **Settings → Privacy → Keep voice history**: 30 days, 90 days (the
+  default), 1 year, or Forever. Anything older is deleted once a day, and
+  right away when you pick a shorter time. An admin changes it; everyone
+  else can see what it is set to. Settings → Household → People → Voice
+  history and Settings → System → Advanced → Privacy show it and link there.
+- **Delete all voice history** (Settings → Household → People → Voice
+  history, an admin): deletes everything said until now, in every room and
+  on every phone, after a confirmation that lists what goes.
+
+The opt-in command recordings (off unless an admin turns them on for a
+room, 14 days at most) are on **Settings → Privacy → Command recordings**.
 
 Forgetting one person ("forget me" in their own voice, then "yes" when
 Domovoi asks, or **forget person** on their Profile tab) deletes what *they*

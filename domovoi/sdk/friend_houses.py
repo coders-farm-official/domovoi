@@ -213,6 +213,31 @@ class FriendImage:
         return f"FriendImage({self.width}x{self.height}, {len(self.png)} bytes)"
 
 
+def _image_bytes(image: Any) -> tuple[bytes, bool]:
+    """``(bytes, is the core's own PNG)`` for ``send_image``'s ``image``."""
+    if isinstance(image, FriendImage):
+        return image.png, True
+    if isinstance(image, (bytes, bytearray)):
+        if not image:
+            raise ValueError("the image is empty")
+        return bytes(image), False
+    raise TypeError("an image is a FriendImage or this plugin's own image bytes")
+
+
+async def _mail_png(raw: bytes, tag: str, core_png: bool) -> bytes:
+    """The core's compact PNG of ``raw`` that fits an image mail with
+    ``tag`` (``png_compact.mail_png``, in the ``pictures`` pool):
+    :class:`TooLarge` when it can't fit, ValueError when it isn't a picture."""
+    from domovoi import executors
+    from domovoi.plugins_runtime import png_compact
+
+    budget = PAYLOAD_MAX - 1 - len(tag)
+    try:
+        return await executors.run("pictures", png_compact.mail_png, raw, budget, core_png=core_png)
+    except png_compact.TooBig as e:
+        raise TooLarge(str(e)) from None
+
+
 def friend_sentence(*parts: Any) -> FriendSentence:
     """``friend_sentence("Sam played ", FriendText(card), ".")``."""
     return FriendSentence(parts)
@@ -389,28 +414,27 @@ class FriendHousesAPI:
         (one a friend sent, passed on as the core's PNG) or this plugin's own
         PNG, JPEG or WebP bytes. ``tag`` (up to 64 of ``a-z 0-9 _ . : -``)
         tells the friend's copy what it is. The tag and the image together
-        are at most 16,384 bytes (:class:`TooLarge`). The friend's house
-        opens it only in its decoder container and hands its plugin the
-        core's own PNG, at most 768 px a side; its plugin must take images
-        (``on_mail(..., images=True)``). Raises like :meth:`send_mail`."""
+        are at most 16,384 bytes, so the core writes the picture as its own
+        compact PNG (no metadata), lossless when that fits, else with fewer
+        colours, else scaled down (768, 512, 384, 256, 192, 128 px on the
+        long side); a picture that doesn't fit even at 128 px raises
+        :class:`TooLarge`, bytes that aren't a PNG, JPEG or WebP picture
+        ValueError. A :class:`FriendImage` that already fits goes as it is.
+        The friend's house opens it only in its decoder container and hands
+        its plugin the core's own PNG, at most 768 px a side; its plugin
+        must take images (``on_mail(..., images=True)``). Raises like
+        :meth:`send_mail`."""
         from domovoi.friend_houses import envelope as fe
 
         self._need_permission()
         self._check_send(house_id, ttl_s, replace_key)
-        if isinstance(image, FriendImage):
-            raw = image.png
-        elif isinstance(image, (bytes, bytearray)):
-            raw = bytes(image)
-        else:
-            raise TypeError("an image is a FriendImage or this plugin's own image bytes")
-        if not raw:
-            raise ValueError("the image is empty")
+        raw, core_png = _image_bytes(image)
         if not isinstance(tag, str) or not fe.IMAGE_TAG_RE.match(tag):
             raise ValueError("tag is up to 64 of a-z 0-9 _ . : -")
-        payload = fe.image_payload(tag, raw)
+        _refuse_on_open_route()
+        payload = fe.image_payload(tag, await _mail_png(raw, tag, core_png))
         if len(payload) > PAYLOAD_MAX:
             raise TooLarge(f"the tag and image are {len(payload)} bytes; at most {PAYLOAD_MAX}")
-        _refuse_on_open_route()
         from domovoi.friend_houses import plugin_mail
 
         return await plugin_mail.send_to(self.slug, house_id, payload, ttl_s=ttl_s,

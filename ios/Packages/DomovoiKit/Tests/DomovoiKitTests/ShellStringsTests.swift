@@ -90,6 +90,8 @@ final class ShellStringsTests: XCTestCase {
         "ui/components/Format.kt",
         // Part 3a: the toasts of the four writes, which live with the calls.
         "ui/screens/home/HomeIo.kt",
+        // Update notices (1.5.0): the Home row's words.
+        "ui/screens/home/HomeUpdateNotice.kt",
         // I1-H part 1: Chat. All six files, because Chat's words are spread
         // across all six — the list's in `ChatHome.kt`, the constants in
         // `ChatPlace.kt`, the conversation's in `ChatScreen.kt`, the server
@@ -1300,6 +1302,17 @@ final class ShellStringsTests: XCTestCase {
             Self.wholeStrings.contains(HomeAttentionStrings.stale),
             "if Android ever grows this string, port it and drop it from IOSOnlyStrings"
         )
+    }
+
+    /// The update notice's row (1.5.0), against `HomeUpdateNotice.kt` —
+    /// whose words are the dashboard's `HomeUpdateRow`'s. The title has the
+    /// version interpolated, so it is checked around it.
+    func testTheUpdateNoticeSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HomeUpdateNoticeStrings.updating, "U+2026 ellipsis, not three dots")
+        assertKotlinSaysWhole(HomeUpdateNoticeStrings.adminCanInstall)
+        assertKotlinSaysWhole(HomeUpdateNoticeStrings.update)
+        assertKotlinSaysAround(HomeUpdateNoticeStrings.available("\u{1}"))
+        XCTAssertEqual("Domovoi 1.5.0 is available", HomeUpdateNoticeStrings.available("1.5.0"))
     }
 
     /// `+N more`, which is built rather than stored.

@@ -19,8 +19,10 @@ knows for certain, and from nothing else:
   checks, the container guard), through :mod:`.redact`;
 * :mod:`.diagnostics` — the opt-in "report a problem" summary the person
   reviews, then copies or saves; nothing is sent;
-* :mod:`.delivery` — voice "how do I…" steps sent to the asker's own
-  phone as a home-server chat titled "Help: …".
+* :mod:`.delivery` — a voice photo search's results sent to the asker's
+  own phone as a home-server chat titled "Photos: …" (voice help sent its
+  steps this way until 1.5.0; it now answers aloud and points to the
+  manual).
 
 Stdlib and the core's own modules only: the web process imports this too.
 """

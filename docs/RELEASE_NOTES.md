@@ -28,7 +28,8 @@ a way that would otherwise get reported as a bug.
 - **Older apps (1.4.x)** send no key: they keep working on shared chats
   only, and the chats they start are shared. Their own chats from before
   the upgrade are private now and disappear from them until the app is
-  updated.
+  updated; the updated app gets its device key on its next start, with no
+  pairing, and has them back.
 - **Phone admin grants** are bound to the phone's device key too.
 - **"My" actions follow the key.** Whose mix a room follows and whose a
   listen is, clearing a person's listening history, their mix, forgetting
@@ -63,6 +64,51 @@ a way that would otherwise get reported as a bug.
   (they are gone), or a title from a `help_deliveries.changed` row.
   `person_id` and `thread_id` stay in the push for the apps that post from
   it.
+## 1.5.0 (unreleased) — Phones: room media and update notices
+
+- **Room media on the phones.** A phone in room mode shows what the room
+  is playing on its screen, the same as other room displays (Android and
+  iPhone).
+- **Update notices on the phones.** Home on the Android and iPhone apps
+  says when a new signed Domovoi release is available, worded the same as
+  the dashboard. For now every phone gets the household row ("An admin
+  can install it."); the update itself is started from the dashboard.
+- **Photos sent to a phone** arrive under the chat's own title, no
+  longer prefixed with "Help: ".
+
+## 1.5.0 (unreleased) — Voice help no longer sends the steps to your phone
+
+- **What changed.** Ask "how do I add a room?" out loud and Domovoi says
+  the short answer and the page it came from, then "The full answer is in
+  the manual." (for a plugin's page: "The full answer is in that plugin's
+  help."). It no longer asks "Want me to send the steps to your phone?",
+  never asks "Who should I send it to?", and makes no "Help: …" chat. It
+  needed three things at once (Domovoi knowing your voice, a phone marked
+  as yours, and the app reaching the server), and the manual is a tap
+  away. The **?** panel, **ask Domovoi** and help in chat work as before.
+- **What to know.** Nothing to do, no migration. "Help: …" chats sent
+  before stay in Chat. Photos are unchanged: a voice photo search still
+  asks "Do you want them on your phone?" and sends a "Photos: …" chat.
+  `GET /api/help/deliveries` and the `help_deliveries` live channel stay,
+  for the photos and for the apps that read them; they just get no new
+  help rows.
+
+## 1.5.0 (unreleased) — Settings → Privacy: Keep voice history, Command recordings
+
+- **What changed.** "What's kept and for how long" is in one place,
+  Settings → Privacy. **Keep voice history** (`voice_history_keep`: 30
+  days, 90 days by default, 1 year or Forever) has its own section there,
+  `#settings/keep-voice-history`; an admin changes it, through the same
+  config edit as before (`PATCH /api/config/editable`). Settings →
+  Household → People → Voice history (which keeps **Delete all voice
+  history**) and Settings → System → Advanced → Privacy now show its value
+  and link there instead of a second control.
+- **Renamed.** The page that was called **Voice history** in Settings →
+  Privacy holds the opt-in command recordings, so it is now **Command
+  recordings**, at `#settings/command-recordings`. Its old addresses,
+  `#settings/voice-history` and `#settings/recordings`, still open it. The
+  room drawer's capture hint, the manual, the FAQ and SECURITY_PRIVACY.md
+  use the new names.
 
 ## 1.5.0 (unreleased) — Rooms: satellites name themselves; press Upgrade satellite
 
@@ -150,6 +196,23 @@ a way that would otherwise get reported as a bug.
   the Rooms drawer (`DELETE /v1/admin/rooms/{room_id}`), as 1.4.1 allowed
   for satellites. Such an id that names no room is still refused (422);
   every other rooms route keeps refusing it.
+
+## 1.5.0 (unreleased) — Friend Houses: pictures fit an image mail
+
+- **What changed.** `send_image` now writes every picture as Domovoi's own
+  compact PNG before it is queued (exact palette for 256 colours or fewer,
+  PNG filtering, maximum compression): a plugin's own drawing and a
+  friend's picture passed on to another friend alike. A picture that still
+  doesn't fit the 16,384-byte image mail loses colours, then size (768,
+  512, 384, 256, 192, 128 px on the long side); one that doesn't fit even
+  at 128 px is refused with `TooLarge`. Pictures a plugin receives are
+  written the same way, losslessly, at their own size. A typical drawing
+  (a few colours on a plain background) goes at the full 768 px; a photo
+  arrives smaller, around 256 px.
+- **What to know.** Nothing changes on the receiving side or in the wire
+  format: it is still a plain PNG, opened only in the friend's decode-only
+  container. A plugin's own JPEG or WebP now leaves as a PNG, without its
+  metadata.
 
 ## 1.5.0 (unreleased) — Friend Houses: apps with friends, sending and the page
 

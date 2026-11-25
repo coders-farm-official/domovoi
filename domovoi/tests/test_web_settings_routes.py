@@ -111,7 +111,8 @@ _PURE = r"""
                  '#Settings/Configuration/', '#settings/configuration/setup', '#settings/configuration/setup/',
                  '#settings/advanced', '#settings/advanced/setup',
                  '#settings/wake-words', '#settings/wakewords', '#settings/phone-bar', '#settings/satellites',
-                 '#settings/satellites/media', '#settings/devices', '#settings/recordings', '#settings/voice',
+                 '#settings/satellites/media', '#settings/devices', '#settings/recordings', '#settings/voice-history',
+                 '#settings/command-recordings', '#settings/keep-voice-history', '#settings/voice',
                  '#settings/system', '#settings/health', '#settings/nonsense',
                  '#settings/nonsense/setup', '#satellites', '#satellites/x', '#containers', '#music/queue', '', '#'];
   const out = {};
@@ -394,15 +395,19 @@ def test_settings_is_five_groups_in_plain_words(driven) -> None:
         ["Household", ["Rooms", "People", "Phones & browsers"]],
         ["Voice", ["Wake words", "Voices", "Greetings"]],
         ["Chat & AI", ["Models"]],
-        ["Privacy", ["Internet", "Voice history", "Listening history"]],
+        ["Privacy", ["Internet", "Keep voice history", "Command recordings", "Listening history"]],
         ["System", ["About & updates", "Health", "App layout", "Advanced"]],
     ]
     o = driven["settings_groups_and_names"]
     assert o["heads"] == ["Household", "Voice", "Chat & AI", "Privacy", "System"]
     assert [label for label, _ in o["items"]] == [
         "Rooms", "People", "Phones & browsers", "Wake words", "Voices", "Greetings", "Models",
-        "Internet", "Voice history", "Listening history", "About & updates", "Health", "App layout", "Advanced"]
-    assert dict(o["items"])["Voice history"] == "#settings/voice-history"
+        "Internet", "Keep voice history", "Command recordings", "Listening history",
+        "About & updates", "Health", "App layout", "Advanced"]
+    # "Voice history" until 1.5.0 (it is the command recordings), and the
+    # retention setting beside it (1.5.0).
+    assert dict(o["items"])["Command recordings"] == "#settings/command-recordings"
+    assert dict(o["items"])["Keep voice history"] == "#settings/keep-voice-history"
     assert dict(o["items"])["Listening history"] == "#settings/listening-history"
     assert o["title"] == "Greetings"
 
@@ -412,12 +417,13 @@ def test_every_settings_section_has_an_address_and_its_old_names_open_it(driven)
     slugs = dict(o["slugs"])
     assert slugs == {s: s for s in (
         "rooms", "people", "phones-and-browsers", "app-layout", "wake-words", "voices", "greetings", "models",
-        "internet", "voice-history", "listening-history", "about", "health", "advanced")}
+        "internet", "keep-voice-history", "command-recordings", "listening-history", "about", "health", "advanced")}
     ids = [i for i, _ in o["slugs"]]
     assert o["roundTrip"] == ids
     assert dict(o["byAlias"]) == {
         "satellites": "rooms", "devices": "phones-and-browsers", "phone-bar": "app-layout",
-        "phonebar": "app-layout", "wakewords": "wake-words", "recordings": "voice-history",
+        "phonebar": "app-layout", "wakewords": "wake-words",
+        "voice-history": "command-recordings", "recordings": "command-recordings",
         "configuration": "advanced", "config": "advanced"}
     assert o["setup"] == "settings/advanced/setup"
     assert o["acoustid"] == "settings/advanced/acoustid-key"
@@ -448,7 +454,11 @@ def test_how_an_address_reads(driven) -> None:
     # The tray's "prepare a satellite card" link keeps its marker.
     assert tab("#settings/satellites/media") == ("rooms", ["media"], "settings/rooms/media")
     assert tab("#settings/devices") == ("phones-and-browsers", [], "settings/phones-and-browsers")
-    assert tab("#settings/recordings") == ("voice-history", [], "settings/voice-history")
+    # Command recordings: "Voice history" until 1.5.0, "recordings" before that.
+    assert tab("#settings/recordings") == ("command-recordings", [], "settings/command-recordings")
+    assert tab("#settings/voice-history") == ("command-recordings", [], "settings/command-recordings")
+    assert tab("#settings/command-recordings") == ("command-recordings", [], None)
+    assert tab("#settings/keep-voice-history") == ("keep-voice-history", [], None)
     # A group has an address too.
     assert tab("#settings/voice") == ("voice", [], None)
     assert tab("#settings/system") == ("system", [], None)

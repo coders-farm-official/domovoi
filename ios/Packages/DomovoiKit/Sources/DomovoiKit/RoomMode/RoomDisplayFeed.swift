@@ -108,6 +108,62 @@ public struct RoomFeedRinging: Equatable, Sendable {
     }
 }
 
+/// A photo or a video result's kind (Android's `MediaKind`).
+public enum RoomMediaKind: String, Equatable, Sendable {
+    case image, video
+}
+
+/// One photo or video result on the room's screen (`media.items`; Android's
+/// `FeedMediaItem`).
+public struct RoomFeedMediaItem: Equatable, Sendable {
+    public var kind: RoomMediaKind
+    /// Its thumbnail on the room's server (`/v1/room-media/{token}`, good for
+    /// 10 minutes, no credential: ``RoomDisplayFeed/isMediaThumbPath(_:)``);
+    /// nil: none, a blank tile.
+    public var thumb: String?
+    /// What it MIGHT show (a picture model's guess, untrusted): drawn as plain
+    /// text, "Might show: …"; nil: none.
+    public var caption: String?
+    /// When it was taken, `YYYY-MM-DD`; nil: unknown.
+    public var date: String?
+    /// A video's best moment, seconds; nil: none (and never for a photo).
+    public var atS: Double?
+
+    public init(kind: RoomMediaKind, thumb: String?, caption: String?, date: String?, atS: Double?) {
+        self.kind = kind
+        self.thumb = thumb
+        self.caption = caption
+        self.date = date
+        self.atS = atS
+    }
+}
+
+/// Photo and video results asked for by voice in this room (1.5.0, the
+/// `media` part of `room_display`, domovoi/room_media.py; Android's
+/// `FeedMedia`): shown for ``expiresInMS`` from when the frame arrived,
+/// replaced by newer results (a new ``id``), gone with a frame whose `media`
+/// is null.
+public struct RoomFeedMedia: Equatable, Sendable {
+    public var id: Int64
+    /// The spoken answer ("I found 12 photos that might show the beach…").
+    public var said: String
+    public var count: Int
+    /// More results than the server sent (they are on the Photos page).
+    public var more: Bool
+    public var expiresInMS: Int64
+    /// At most ``RoomDisplayFeed/maxMediaItems``.
+    public var items: [RoomFeedMediaItem]
+
+    public init(id: Int64, said: String, count: Int, more: Bool, expiresInMS: Int64, items: [RoomFeedMediaItem]) {
+        self.id = id
+        self.said = said
+        self.count = count
+        self.more = more
+        self.expiresInMS = expiresInMS
+        self.items = items
+    }
+}
+
 /// One `room_display` frame, as the room keeps it (Android's `RoomFeed`).
 public struct RoomFeed: Equatable, Sendable {
     public var nowPlaying: RoomFeedNowPlaying?
@@ -120,19 +176,23 @@ public struct RoomFeed: Equatable, Sendable {
     /// The server's monotonic ms when it sent this frame (`sent_at_ms`): for
     /// ordering only, never shown. Nil: an older shape.
     public var sentAtMS: Int64?
+    /// Photo and video results (1.5.0); nil: none, or an older core.
+    public var media: RoomFeedMedia?
 
     public init(
         nowPlaying: RoomFeedNowPlaying?,
         timers: [RoomFeedTimer],
         ringing: RoomFeedRinging?,
         receivedAt: Int64 = 0,
-        sentAtMS: Int64? = nil
+        sentAtMS: Int64? = nil,
+        media: RoomFeedMedia? = nil
     ) {
         self.nowPlaying = nowPlaying
         self.timers = timers
         self.ringing = ringing
         self.receivedAt = receivedAt
         self.sentAtMS = sentAtMS
+        self.media = media
     }
 }
 
@@ -158,8 +218,9 @@ public protocol RoomDisplaySource: AnyObject, Sendable {
     /// Sets this room's output level and tells the server (`volume_status`,
     /// the frame a Pi reports its level with). False with no session.
     @discardableResult func setVolumeLevel(_ level: Int) -> Bool
-    /// The bytes of an artwork path from the feed, from the room's own
-    /// server; nil when it cannot be had.
+    /// The bytes of an image path from the feed (a cover, or a photo or
+    /// video result's thumbnail: ``RoomDisplayFeed/isImagePath(_:)``), from
+    /// the room's own server, with no credential; nil when it cannot be had.
     func art(_ path: String) async -> Data?
 }
 
@@ -181,7 +242,17 @@ public protocol RoomDisplaySource: AnyObject, Sendable {
 ///                             "art":"/v1/music/cover/{id}"|null,"duration_sec":N,"elapsed_sec":N,
 ///                             "controls":["pause","resume","skip","previous"]},
 ///      "timers": [{"id":N,"kind":"timer"|"alarm","label":..,"remaining_ms":N,"total_ms":N}],
-///      "ringing": null | {"fire_id":N,"kind":"timer"|"alarm","label":..}}
+///      "ringing": null | {"fire_id":N,"kind":"timer"|"alarm","label":..},
+///      "media": null | {"id":N,"said":..,"count":N,"more":bool,"expires_in_ms":N,   (1.5.0)
+///                       "items":[{"kind":"image"|"video","thumb":"/v1/room-media/{token}",
+///                                 "caption":..,"date":"YYYY-MM-DD","at_s":N}]}}
+///
+/// `media` (``RoomFeedMedia``): the results of "show me photos of the beach"
+/// said here, at most six, for `expires_in_ms`; null otherwise, and gone with
+/// the next frame sent for any other reason. A caption is a picture model's
+/// guess: plain text, "Might show: …". `thumb` is fetched from the room's own
+/// server with no credential (``isMediaThumbPath(_:)``). Read leniently: a
+/// `media` this app cannot use is none, and the rest of the frame applies.
 ///
 /// Between frames the phone moves things on itself: `elapsed_sec` while the
 /// state is "play", each `remaining_ms` always (``RoomDisplayModel``). A
@@ -217,12 +288,66 @@ public enum RoomDisplayFeed {
         if case .object(let np)? = o["now_playing"] { nowPlaying = Self.nowPlaying(np) }
         var ringing: RoomFeedRinging?
         if case .object(let r)? = o["ringing"] { ringing = Self.ringing(r) }
+        // Read leniently: a `media` this app cannot use is no media, never a
+        // frame that fails.
+        var media: RoomFeedMedia?
+        if case .object(let m)? = o["media"] { media = Self.media(m) }
         return RoomFeed(
             nowPlaying: nowPlaying,
             timers: timers,
             ringing: ringing,
-            sentAtMS: long(o, "sent_at_ms")
+            sentAtMS: long(o, "sent_at_ms"),
+            media: media
         )
+    }
+
+    /// Most results the server sends a room (domovoi/room_media.py MAX_ITEMS).
+    public static let maxMediaItems = 6
+    /// The spoken answer's longest (room_media.py SAID_MAX).
+    static let maxSaid = 300
+    /// The longest results stay: the server says 90 s; a value past this is
+    /// a mistake, and the screen still clears.
+    static let maxMediaMS: Int64 = 300_000
+
+    private static func media(_ o: [String: RoomJSON]) -> RoomFeedMedia? {
+        guard let id = long(o, "id"), case .array(let raw)? = o["items"] else { return nil }
+        var items: [RoomFeedMediaItem] = []
+        for entry in raw {
+            guard case .object(let i) = entry, let item = mediaItem(i) else { continue }
+            items.append(item)
+            if items.count == maxMediaItems { break }
+        }
+        guard !items.isEmpty else { return nil }
+        let said = str(o, "said")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var more = false
+        if case .bool(let b)? = o["more"] { more = b }
+        let count = long(o, "count").map { WireNumber.clamp($0, to: Int64(items.count)...Int64(Int32.max)) } ?? Int64(items.count)
+        return RoomFeedMedia(
+            id: id,
+            said: String(said.prefix(maxSaid)),
+            count: Int(count),
+            more: more,
+            expiresInMS: WireNumber.clamp(long(o, "expires_in_ms") ?? 90_000, to: 0...maxMediaMS),
+            items: items
+        )
+    }
+
+    private static func mediaItem(_ o: [String: RoomJSON]) -> RoomFeedMediaItem? {
+        guard let kind = str(o, "kind").flatMap(RoomMediaKind.init(rawValue:)) else { return nil }
+        return RoomFeedMediaItem(
+            kind: kind,
+            thumb: str(o, "thumb").flatMap { isMediaThumbPath($0) ? $0 : nil },
+            caption: text(o, "caption"),
+            date: str(o, "date").flatMap { isDate($0) ? $0 : nil },
+            atS: num(o, "at_s").flatMap { kind == .video && $0 >= 0 ? min($0, WireNumber.maxMediaSeconds) : nil }
+        )
+    }
+
+    /// `YYYY-MM-DD`, ASCII digits.
+    static func isDate(_ s: String) -> Bool {
+        let b = Array(s.utf8)
+        guard b.count == 10, b[4] == UInt8(ascii: "-"), b[7] == UInt8(ascii: "-") else { return false }
+        return b.enumerated().allSatisfy { i, c in i == 4 || i == 7 || (c >= UInt8(ascii: "0") && c <= UInt8(ascii: "9")) }
     }
 
     private static func nowPlaying(_ o: [String: RoomJSON]) -> RoomFeedNowPlaying? {
@@ -291,6 +416,25 @@ public enum RoomDisplayFeed {
         let id = p.utf8.dropFirst(prefix.utf8.count)
         return (1...10).contains(id.count) && id.allSatisfy { $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }
     }
+
+    /// Only the core's room-media route with one of its tokens, exactly as
+    /// the core writes it (`/v1/room-media/{token}`, domovoi/room_media.py:
+    /// `secrets.token_urlsafe(24)`, held to `TOKEN_RE` there): exactly
+    /// `^/v1/room-media/[A-Za-z0-9_-]{20,64}$`, ASCII only. Nothing else, no
+    /// other host, no percent-encoding, `..`, query or fragment. Fetched with
+    /// no credential, like a cover (Android's `isMediaThumbPath`).
+    public static func isMediaThumbPath(_ p: String) -> Bool {
+        let prefix = "/v1/room-media/"
+        guard p.hasPrefix(prefix) else { return false }
+        let token = p.utf8.dropFirst(prefix.utf8.count)
+        return (20...64).contains(token.count) && token.allSatisfy { c in
+            (c >= UInt8(ascii: "A") && c <= UInt8(ascii: "Z")) || (c >= UInt8(ascii: "a") && c <= UInt8(ascii: "z"))
+                || (c >= UInt8(ascii: "0") && c <= UInt8(ascii: "9")) || c == UInt8(ascii: "_") || c == UInt8(ascii: "-")
+        }
+    }
+
+    /// What ``RoomDisplaySource/art(_:)`` fetches: a cover or a result's thumbnail.
+    public static func isImagePath(_ p: String) -> Bool { isArtPath(p) || isMediaThumbPath(p) }
 
     /// The `room_control` frame for `c`. It names the action, never the room:
     /// the socket is the room.

@@ -25654,7 +25654,7 @@
           "help"
         ],
         "summary": "Deliveries",
-        "description": "Help steps sent by voice (V035): newest first, or after ``since_id``\noldest first. The app reads its owner's on start and after a\n``help_deliveries.changed`` event. A delivery made to one phone (1.5.0,\nV086) is listed only to that phone (by its device key) and to admins.",
+        "description": "Results sent by voice to a person's phones (V035; a voice photo\nsearch's since 1.5.0): newest first, or after ``since_id`` oldest\nfirst. The app reads its owner's on start and after a\n``help_deliveries.changed`` event. A delivery made to one phone (1.5.0,\nV086) is listed only to that phone (by its device key) and to admins.",
         "operationId": "deliveries_api_help_deliveries_get",
         "parameters": [
           {
@@ -29450,6 +29450,11 @@
               }
             ],
             "title": "Owner Person Id"
+          },
+          "want_device_key": {
+            "type": "boolean",
+            "title": "Want Device Key",
+            "default": false
           }
         },
         "type": "object",

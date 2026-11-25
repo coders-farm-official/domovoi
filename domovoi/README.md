@@ -1016,7 +1016,7 @@ exactly one row regardless of whether the path was fast / fast_offline
 Capped only by retention policy (none currently — add a vacuum worker
 when the table gets unwieldy). A person's own turns are deleted when they
 say "forget me" (see "Voice-profile command vocabulary"), and the voice
-history settings (Settings → Voice history) can prune older ones.
+history settings (Settings → Privacy → Keep voice history) can prune older ones.
 
 ## Environment variables
 

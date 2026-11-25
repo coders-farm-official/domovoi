@@ -6,8 +6,9 @@
   never a slug or a page that no longer exists.
 * The hints that send someone to a Settings section name the section it is
   in now: a blocked device is lifted in Settings → Phones & browsers (not
-  "Devices"), command recordings are reviewed in Settings → Voice history
-  (not "settings → recordings"), the phone's household token is under
+  "Devices"), command recordings are reviewed in Settings → Command
+  recordings (not "settings → recordings", nor "Voice history", its name
+  before 1.5.0), the phone's household token is under
   Settings → Household → Phones & browsers (not "Connection").
 * The About card uses the plain descriptor, not "voice assistant".
 
@@ -35,6 +36,7 @@ FILES = ["web/static/components.jsx", "web/static/settings.jsx", "web/static/con
 
 HASHES = ["#home", "", "#music/queue", "#satellites", "#satellites/drawer", "#containers",
           "#settings", "#settings/phones-and-browsers", "#settings/devices", "#settings/recordings",
+          "#settings/voice-history", "#settings/keep-voice-history",
           "#settings/health", "#settings/rooms-and-devices", "#settings/nonsense", "#manual"]
 
 
@@ -73,7 +75,9 @@ def test_ask_domovoi_names_the_page_as_it_is_now(names) -> None:
     # Sections and groups by their labels, old names included.
     assert names["#settings/phones-and-browsers"] == "Settings → Phones & browsers"
     assert names["#settings/devices"] == "Settings → Phones & browsers"
-    assert names["#settings/recordings"] == "Settings → Voice history"
+    assert names["#settings/recordings"] == "Settings → Command recordings"
+    assert names["#settings/voice-history"] == "Settings → Command recordings"
+    assert names["#settings/keep-voice-history"] == "Settings → Keep voice history"
     assert names["#settings/health"] == "Settings → Health"
     assert names["#settings/rooms-and-devices"] == "Settings → Household"
     assert names["#settings/nonsense"] == "Settings → nonsense"
@@ -91,10 +95,11 @@ def test_a_blocked_device_is_lifted_in_phones_and_browsers(name) -> None:
     assert "An admin lifts the block in Settings → Phones & browsers." in src
 
 
-def test_recordings_are_reviewed_in_voice_history() -> None:
+def test_recordings_are_reviewed_in_command_recordings() -> None:
     src = _src("satellites.jsx")
     assert "settings → recordings" not in src
-    assert "review in Settings → Voice history" in src
+    assert "Settings → Voice history" not in src
+    assert "review in Settings → Command recordings" in src
 
 
 def test_no_screen_sends_a_phone_to_settings_connection() -> None:

@@ -56,20 +56,15 @@ public enum AlertsStrings {
     /// case as a masked one, which has no body at all.
     public static let reminderNoun = "reminder"
 
-    // MARK: - help steps (`HelpDeliveries.kt:79-86`, `HelpNotifier.kt:97`)
+    // MARK: - deliveries to this phone (`HelpDeliveries.kt:79`, `HelpNotifier.kt`)
 
-    /// `helpTitle` (`HelpDeliveries.kt:82`) — a delivery whose thread has no
-    /// title.
-    public static let helpUntitled = "Help from Domovoi"
+    /// `helpTitle` (`HelpDeliveries.kt`) — a delivery whose chat has no
+    /// title. Otherwise the title is the chat's own, exactly as sent.
+    public static let helpUntitled = "From Domovoi"
 
-    /// `helpTitle` (`:85`) — prepended when the row's own title lacks it, so
-    /// every help notification reads the way the assistant plan names it.
-    public static let helpTitlePrefix = "Help: "
-
-    /// `HelpNotifier.kt:97` — the body, which is the whole of what a help
-    /// notification says beyond its title. The steps themselves stay in the
-    /// thread.
-    public static let helpBody = "Tap to open the steps in Chat."
+    /// `HelpNotifier.kt` — the body, the whole of what the notification says
+    /// beyond its title. What was sent stays in the chat.
+    public static let helpBody = "Tap to open it in Chat."
 
     // MARK: - container incidents (`ContainerIncidents.kt:360-384`)
 

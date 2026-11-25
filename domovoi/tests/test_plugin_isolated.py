@@ -1241,7 +1241,8 @@ def test_only_pixels_come_out_of_the_container(fmt, safety_module) -> None:
     png = iso.encode_png(w, h, c, pixels)
     for marker in (b"SecretCam", b"SecretSoftware", b"SecretText", b"SecretIcc", b"Exif", b"GPS"):
         assert marker not in png
-    assert _chunks(png) == [b"IHDR", b"IDAT", b"IEND"]       # no iCCP, eXIf, tEXt: nothing but pixels
+    # no iCCP, eXIf, tEXt: nothing but the pixels (and their palette when few colours)
+    assert _chunks(png) in ([b"IHDR", b"IDAT", b"IEND"], [b"IHDR", b"PLTE", b"IDAT", b"IEND"])
     with PILImage.open(io.BytesIO(png)) as im:
         assert im.size == (64, 48) and "icc_profile" not in im.info and dict(im.getexif()) == {}
 

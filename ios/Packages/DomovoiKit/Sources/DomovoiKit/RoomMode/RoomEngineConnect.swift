@@ -229,7 +229,7 @@ extension RoomEngine {
         // code's `in=` is asked for no more.
         store.clearRequestedRoom()
         if let room {
-            store.setRoomName(room.name)
+            store.noteRoom(room)
             update { $0.place = room }
         }
         let outcome: RoomOneShot<String>? = shared.withLock { s in
@@ -258,7 +258,7 @@ extension RoomEngine {
     /// any room. Only a hello that named `satellite_id` gets this frame.
     func onRoom(_ place: RoomPlace?) {
         guard let place else { return }
-        store.setRoomName(place.name)
+        store.noteRoom(place)
         update { $0.place = place }
     }
 
