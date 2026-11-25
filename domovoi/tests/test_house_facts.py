@@ -34,7 +34,7 @@ BASE = hf.HouseFacts(
     vision_model=True, news_on=True,
 )
 
-ADMIN_VH = "An admin can change how long in Settings → Household → People → Voice history."
+ADMIN_VH = "An admin can change how long in Settings → Household → People, then Voice history."
 NO_REC = "No recordings of your voice are kept."
 INET_CHANGE = "An admin can change that in Settings → Privacy → Internet."
 

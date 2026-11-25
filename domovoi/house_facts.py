@@ -52,7 +52,11 @@ log = logging.getLogger(__name__)
 
 PLACE_INTERNET = "Settings → Privacy → Internet"
 PLACE_ROOMS = "Settings → Household → Rooms"
-PLACE_VOICE_HISTORY = "Settings → Household → People → Voice history"
+# "Keep voice history" is behind the Voice history button on the People
+# page (people.jsx), not a settings section of its own: Settings → Privacy
+# → Voice history is the command recordings. Said as the real path, then
+# the button, so every path a reply names is one the registry knows.
+PLACE_VOICE_HISTORY = "Settings → Household → People, then Voice history"
 PLACE_MUSIC_MIX = "Settings → Household → Music mix"
 PLACE_FRIEND_HOUSES = "Settings → Household → Friend Houses"
 PLACE_PRINTERS = "Settings → Household → Printers & scanners"

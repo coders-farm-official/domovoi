@@ -59,10 +59,6 @@ STUB_CASES = [c for c in CASES if c.stub]
 # expectation and aren't an open N item, reported for triage (test tooling
 # never changes the product to make a case pass). Expected failures here so
 # CI stays green; remove a line once fixed (it shows up as XPASS first).
-_VOICE_HISTORY = (
-    "'Settings → Household → People → Voice history' (house_facts.PLACE_VOICE_HISTORY) isn't a "
-    'path the settings registry knows: Voice history is no search card of People'
-)
 STUB_FINDINGS = {
     '4.23': "a switched-off offline library doesn't offer the web instead, as absent does",
     '4.24': "an offline library with nothing downloaded reads as 'isn't working'",
@@ -70,12 +66,6 @@ STUB_FINDINGS = {
     '7.13': 'Home location in the UK: Thanksgiving is answered with no word of the US',
     '8.1': "the help desk's member answer doesn't say an admin adds a room",
     '8.7a': "the help desk's member answer doesn't say an admin adds a room",
-    '15.7': _VOICE_HISTORY,
-    '15.8': _VOICE_HISTORY,
-    '15.9': _VOICE_HISTORY,
-    '15.10a': _VOICE_HISTORY,
-    '15.10b': _VOICE_HISTORY,
-    '15.10c': _VOICE_HISTORY,
 }
 
 
