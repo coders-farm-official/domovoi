@@ -1,4 +1,4 @@
-"""A room's music player plays a remote stream or file through the core (SDK 1.16).
+"""A room's music player plays a remote stream or file through the core (SDK 1.17).
 
 A room's player (an MPD container) would fetch a remote URL with its own
 DNS lookup and its own redirect following, out of reach of every check in

@@ -4,7 +4,7 @@ The player used to be handed the station's URL and fetch it itself, with
 its own redirect following: a station could answer the core's look at it
 with audio and the player's own request with a redirect into the house.
 Now the radio handler asks ``sdk.playback.relay_url(..., kind="radio")``
-(SDK 1.16) and the player is handed a one-use relay URL on the core, which
+(SDK 1.17) and the player is handed a one-use relay URL on the core, which
 makes the only request to the station, every hop checked.
 
 The relay itself (token, binding, bounds, ICY) is the core's and is tested

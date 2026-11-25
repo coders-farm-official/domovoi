@@ -207,7 +207,7 @@ FRIEND_HOUSES_SECURITY = [
     ("POST", "/v1/admin/friend-houses/friends/{friend_id}/block"),
     ("GET", "/v1/admin/friend-houses/blocked"),
     ("DELETE", "/v1/admin/friend-houses/blocked/{house}"),
-    # Apps with friends (SDK 1.18, design §6.11): the toggle, each app, Resume.
+    # Apps with friends (SDK 1.19, design §6.11): the toggle, each app, Resume.
     ("GET", "/v1/admin/friend-houses/friends/{friend_id}/apps"),
     ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/apps"),
     ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}"),
@@ -320,7 +320,7 @@ def test_the_chat_callback_wears_its_own_secret_gate() -> None:
 #: Core reads open on purpose, each with why.
 OPEN_BY_DESIGN = {
     ("GET", "/v1/player-relay/{token}"): (
-        "a room's music player (SDK 1.16 player relay) holds no credential; the token in "
+        "a room's music player (SDK 1.17 player relay) holds no credential; the token in "
         "the path is it: minted by a play, bound to one room, one remote URL and that "
         "room's player's address (domovoi/player_relay.py, test_player_relay.py)"
     ),
@@ -741,7 +741,7 @@ async def test_voice_activity_says_busy_and_nothing_else_to_the_household_token(
 
 
 def _friend_apps_routes() -> list[tuple[str, str]]:
-    """Every core route for apps with friends (SDK 1.18): the per-friend
+    """Every core route for apps with friends (SDK 1.19): the per-friend
     toggle, allow/revoke, resume and the list (the plugin mail service)."""
     from domovoi.tests.route_walk import iter_route_contexts
 

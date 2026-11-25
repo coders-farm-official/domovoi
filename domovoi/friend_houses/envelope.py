@@ -42,7 +42,7 @@ not the house-wide one. The body, all of it under the signature::
     ttl_s       4   how long the mail may wait, 30..259,200 seconds
     payload     the rest: 1..16,384 bytes, opaque here
 
-consumed to the exact length. An **image mail** (``ver`` 2, SDK 1.18
+consumed to the exact length. An **image mail** (``ver`` 2, SDK 1.19
 ``send_image``) has the same layout; its payload is ``tag_len u8``
 (1..64), ``tag`` (the plugin's label, ``^[a-z0-9_.:-]{1,64}$``) and at
 least one byte of an encoded image, which only the core's image helper in
@@ -81,7 +81,7 @@ _HEADER = struct.Struct(">BB32s32s16s8sQQH")
 SIGNATURE = 64
 
 PLUGIN_BODY_VERSION = 1
-#: An image mail (SDK 1.18 ``send_image``): the payload is a tag and an image.
+#: An image mail (SDK 1.19 ``send_image``): the payload is a tag and an image.
 PLUGIN_BODY_IMAGE = 2
 PLUGIN_BODY_VERSIONS = frozenset({PLUGIN_BODY_VERSION, PLUGIN_BODY_IMAGE})
 IMAGE_TAG_RE = re.compile(r"^[a-z0-9_.:-]{1,64}\Z")

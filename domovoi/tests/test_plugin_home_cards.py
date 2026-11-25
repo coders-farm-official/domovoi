@@ -1,4 +1,4 @@
-"""``[[web.home_cards]]`` (SDK 1.14): a plugin card on the dashboard's Home.
+"""``[[web.home_cards]]`` (SDK 1.15): a plugin card on the dashboard's Home.
 
 Validation in the manifest loader (which ``domovoi plugin pack`` runs too),
 and the web host handing the cards to the browser; the last test takes a
@@ -26,7 +26,7 @@ BASE = textwrap.dedent(
     publisher = "tests"
     license = "MIT"
     description = "generated test plugin"
-    domovoi_api = ">=1.14,<2.0"
+    domovoi_api = ">=1.15,<2.0"
 
     [entry_points]
     core = "domovoi_plugin_cardy.core"
@@ -157,7 +157,7 @@ async def test_the_browser_manifest_carries_an_enabled_plugins_cards(tmp_path: P
     try:
         await registry.insert_plugin(
             slug="cardy", name="Cardy", version="1.0.0", publisher="tests", license="MIT",
-            domovoi_api=">=1.14,<2.0", enabled=True, bundled=False, install_source="zip",
+            domovoi_api=">=1.15,<2.0", enabled=True, bundled=False, install_source="zip",
             source_ref=None, install_dir=str(tmp_path), manifest=manifest.raw,
         )
         entry = await served()

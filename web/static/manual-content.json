@@ -5711,7 +5711,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "[Settings → System → About & updates](route:settings/about) shows the release you run."
+     "text": "[Settings → System → About & updates](route:settings/about) shows the release you run. An admin also sees the **database schema** it is on (for example V086), which is handy when asking for help."
     },
     {
      "type": "p",

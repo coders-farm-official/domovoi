@@ -1301,7 +1301,7 @@ const HomeMediaChip = ({ data }) => {
 
 /* ---- the page ------------------------------------------------------- */
 
-/* Plugin cards (SDK 1.14, [[web.home_cards]]). A plugin's panel bundle
+/* Plugin cards (SDK 1.15, [[web.home_cards]]). A plugin's panel bundle
  * registers `window.DomovoiPlugins.<slug>.homeCards.<Component>`; the
  * manifest (enabled plugins only: a disabled or uninstalled one is not in
  * it) says which cards exist. The slot is QUIET: a card whose script never

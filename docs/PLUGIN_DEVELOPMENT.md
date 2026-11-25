@@ -387,7 +387,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.18.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.19.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -588,7 +588,7 @@ default `false`) plus free-text `warnings`. `satellite_root` is for a
 `[satellite]` below). `friend_houses` (core 1.5.0) is for a plugin that
 exchanges data with friend houses: it requires an `[isolated]` decoder and
 at least one `warnings` entry, and the install is refused without them
-(see `[isolated]` below). The SDK surface that uses it is SDK 1.18's
+(see `[isolated]` below). The SDK surface that uses it is SDK 1.19's
 `sdk.friend_houses` (§4.22).
 These are **not** a sandbox — an installed plugin runs with full access to
 the server (the install preview says exactly that). They are the trust
@@ -616,7 +616,7 @@ kind = "radio"
 stream_url_template = "/api/plugins/radio/stations/{id}/stream"
 room_play_template = "/api/plugins/radio/stations/{id}/play-in-room"   # SDK 1.10, optional
 
-[[web.home_cards]]                              # SDK 1.14: a card on Home
+[[web.home_cards]]                              # SDK 1.15: a card on Home
 id = "today"
 title = "Today's weather"
 component = "WeatherTodayCard"
@@ -691,7 +691,7 @@ order = 50
   and `dispatch` on the core side (§4.5). The radio plugin's
   `/stations/{id}/play-in-room` is the example.
 
-* `[[web.home_cards]]` (SDK 1.14) — a card on the dashboard's Home page.
+* `[[web.home_cards]]` (SDK 1.15) — a card on the dashboard's Home page.
   `id` is lowercase letters, digits, `_` and `-` (1-40 characters, unique in
   the plugin), `title` is at most 60 characters, `component` names a key of
   `window.DomovoiPlugins.<slug>.homeCards` (a plain JavaScript name), and
@@ -716,7 +716,7 @@ order = 50
   frame, no "needs attention" row — so catch your own errors and return
   `null`. A disabled or uninstalled plugin shows no cards. Home has no
   per-household card settings yet, so a card with `default_on = false` is
-  not shown. A core before 1.14 ignores the table, and so does Domovoi 1.4.1 (its SDK 1.14.0 predates home cards): ask for `">=1.15"` to be sure.
+  not shown. A core before SDK 1.15 ignores the table: ask for `">=1.15"` to be sure.
 
   "Household-tier data only" is a rule for you to follow, not something
   the dashboard enforces. A card is your plugin's script running in the
@@ -1011,7 +1011,7 @@ and strings up to 2,048 characters, integers within ±(2⁵³ − 1), no NaN or
 infinity, no duplicate keys, no NUL, control characters or lone
 surrogates. It then re-serializes the answer and checks it, **in the
 core's process**, against the schema your plugin registered
-(`isolated.set_schema(slug, schema)`; SDK 1.18 takes it with `on_mail`).
+(`isolated.set_schema(slug, schema)`; SDK 1.19 takes it with `on_mail`).
 Without a schema nothing is accepted. The schema language is a strict
 subset of JSON Schema: `type` (`object`, `array`, `string`, `integer`,
 `number`, `boolean`, `null`), `properties`, `required`,
@@ -1183,7 +1183,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.18.0"`) is the semver your
+`domovoi.sdk.API_VERSION` (currently `"1.19.0"`) is the semver your
 `domovoi_api` range is checked against. What each minor version added:
 
 | SDK | Added |
@@ -1199,11 +1199,12 @@ from domovoi.sdk import (
 | 1.11 | `@device_endpoint` websocket routes on the core router (§4.15) |
 | 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core (since 1.4.1, when its handler raises or answers nothing on a weather question, core's own lookup stands in if the internet answer allows; "check that online" asks the plugin first too) |
 | 1.13 | `sdk.household.home_location()` (async: the Home location `{name, lat, lon, country}` or `None`; `lat`/`lon`/`country` are `None` for a name that matched no town) and `sdk.places.suggest(text, limit=8)` (the bundled GeoNames town list, offline, biggest first; same shape); `core_config.news_location` is now the Home location's name (§4.13). 1.13.1: `net_safety.open_raw_stream` / `iter_raw` and their `_sync` twins (a stream read as it came, never decoded) |
-| 1.14 | "needs AI": `Handler.needs_ai`, `FastPath.needs_ai`, the manifest's `[[handlers]] needs_ai` and the `[ai]` table — work that IS a model's goes off with the household's AI switch (§3, "`[ai]`"); on 1.5.0 also `[[web.home_cards]]`, a plugin card on the dashboard Home page (§3). Domovoi 1.4.1's 1.14.0 has no home cards, so a plugin with one asks for `">=1.15"` |
-| 1.15 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
-| 1.16 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
-| 1.17 | the event `core.voice_history_deleted` `{person_id}` and `core_config.voice_history_keep`: **the hook every plugin that stores person-linked data must honour** (§4.21) |
-| 1.18 | `sdk.friend_houses` (apps with friends: `friends()`, `send_mail`, `send_image`, `on_mail`, `on_friends_changed`), `FriendText`, `FriendImage`, `friend_sentence`, `friend_reply` and per-plugin friend ids (§4.22). A plugin holding the `friend_houses` permission has every handler reply filtered for speech, with a stand-in in the history |
+| 1.14 | "needs AI": `Handler.needs_ai`, `FastPath.needs_ai`, the manifest's `[[handlers]] needs_ai` and the `[ai]` table — work that IS a model's goes off with the household's AI switch (§3, "`[ai]`") |
+| 1.15 | `[[web.home_cards]]`: a plugin card on the dashboard Home page (§3) |
+| 1.16 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
+| 1.17 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
+| 1.18 | the event `core.voice_history_deleted` `{person_id}` and `core_config.voice_history_keep`: **the hook every plugin that stores person-linked data must honour** (§4.21) |
+| 1.19 | `sdk.friend_houses` (apps with friends: `friends()`, `send_mail`, `send_image`, `on_mail`, `on_friends_changed`), `FriendText`, `FriendImage`, `friend_sentence`, `friend_reply` and per-plugin friend ids (§4.22). A plugin holding the `friend_houses` permission has every handler reply filtered for speech, with a stand-in in the history |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only
@@ -1428,7 +1429,7 @@ failure. A LAN stream (an SDR tuner, a NAS) still plays. Also: `stop(room_id)`, 
 per-room MPD has its own database and Docker Desktop drops host inotify —
 after writing files you must tell every daemon to rescan).
 
-**A remote URL for a room's player** (SDK 1.16). A room's music player is
+**A remote URL for a room's player** (SDK 1.17). A room's music player is
 a container that fetches whatever URL it is given, with its own DNS lookup
 and its own redirect following, where no check in the core can see it: a
 remote server that answers your look with audio can answer the player's
@@ -1436,9 +1437,9 @@ request with a redirect into the house. So never hand `play_url` a remote
 `http(s)` URL. Ask the core for a relay URL and hand the player that:
 
 ```python
-from domovoi.sdk import RelayUnavailable   # 1.16; guard the import on older cores
+from domovoi.sdk import RelayUnavailable   # 1.17; guard the import on older cores
 
-relay_url = getattr(sdk.playback, "relay_url", None)     # None on a core before SDK 1.16
+relay_url = getattr(sdk.playback, "relay_url", None)     # None on a core before SDK 1.17
 if relay_url is None:
     play = remote_url                                     # older core: the old, direct play
 else:
@@ -1474,10 +1475,10 @@ player's file), else `None`. `RelayUnavailable` (a `RuntimeError`): the
 room's player can't be reached (no player yet, Docker didn't answer);
 `ValueError`: an unknown kind or a URL that isn't `http(s)`.
 
-**On a core before SDK 1.16** there is no `relay_url`: feature-test it as
+**On a core before SDK 1.17** there is no `relay_url`: feature-test it as
 above (and import `RelayUnavailable` inside a `try`) and fall back to the
 direct play, which those cores still take, or declare
-`domovoi_api = ">=1.16,<2.0"` to load only where the relay exists (the
+`domovoi_api = ">=1.17,<2.0"` to load only where the relay exists (the
 bundled radio plugin does). `domovoi.sdk.testing`'s recording playback
 mints real relay tokens on loopback, so a test can open them against
 `domovoi.player_relay.router`.
@@ -1637,7 +1638,7 @@ core.timer_fired             core.timer_fire_settled      core.plugin_upgraded
 core.voice_history_deleted
 ```
 
-`core.voice_history_deleted` (SDK 1.17) is emitted after a person's voice
+`core.voice_history_deleted` (SDK 1.18) is emitted after a person's voice
 history, or all of it, is deleted and committed: `{person_id: int}` or
 `{person_id: None}`. Plugins storing person-linked data must honour it;
 see [§4.21](#421-forgetting-people--corevoice_history_deleted-sdk-117).
@@ -1745,7 +1746,7 @@ answers come from; send requests through `sdk.http` so the AI switch
 still applies), and since SDK 1.12 `news_location` (the household's
 place, which core's weather and local news use; since SDK 1.13 the name
 of the Home location, Settings → Household → Home location), and since
-SDK 1.17 `voice_history_keep` ("Keep voice history", live: `"30"`,
+SDK 1.18 `voice_history_keep` ("Keep voice history", live: `"30"`,
 `"90"`, `"365"` or `"forever"`; see §4.21). For the whole
 place, coordinates included, `await sdk.household.home_location()` returns
 `{"name": "Denver, Colorado, US", "lat": 39.7392, "lon": -104.9847,
@@ -2248,7 +2249,7 @@ question that offered `n` things, the way the core's music question does:
 `"pass"` (not an answer: return None from `handle_choice_reply`). See §4.2,
 "Choices".
 
-### 4.21 Forgetting people — `core.voice_history_deleted` (SDK 1.17)
+### 4.21 Forgetting people — `core.voice_history_deleted` (SDK 1.18)
 
 **This is THE hook any plugin that stores person-linked data must honour.**
 Person-linked means anything you keep because of what someone said or who
@@ -2302,11 +2303,11 @@ The bus keeps nothing, so the event is the fast path (§6.4): a person
 deleted while your plugin was disabled or not yet installed sends you
 nothing. If you keep a `person_id`, store it without a foreign key (plugins
 never reference core tables) and have the same trim worker drop rows for
-people who are gone. On a core before SDK 1.17 the event name is unknown
-and subscribing raises: guard with `domovoi_api = ">=1.17,<2.0"`, or wrap
+people who are gone. On a core before SDK 1.18 the event name is unknown
+and subscribing raises: guard with `domovoi_api = ">=1.18,<2.0"`, or wrap
 the subscribe in `try`/`except ValueError` and rely on the trim.
 
-### 4.22 Apps with friends — `sdk.friend_houses` (SDK 1.18)
+### 4.22 Apps with friends — `sdk.friend_houses` (SDK 1.19)
 
 A plugin with `[permissions] friend_houses = true` (which needs an
 `[isolated]` decoder and a `warnings` entry, §3) exchanges mail with **the
@@ -2319,7 +2320,7 @@ allowed your plugin for them. Every other plugin gets the same
 
 ```toml
 [plugin]
-domovoi_api = ">=1.18,<2.0"
+domovoi_api = ">=1.19,<2.0"
 
 [permissions]
 friend_houses = true

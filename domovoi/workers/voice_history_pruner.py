@@ -12,7 +12,7 @@ The tick runs every ``voice_history_pruner_interval_sec`` (an hour) but a
 retention run happens at most once a day (``voice_history.RETENTION_EVERY``,
 read from the last run recorded in ``voice_history_jobs``, so a restart
 doesn't make it run again). Each tick also tells plugins about any
-forget still waiting in ``voice_history_forgets`` (SDK 1.17,
+forget still waiting in ``voice_history_forgets`` (SDK 1.18,
 ``core.voice_history_deleted``). Saving the setting runs one at once (the
 field's reapply hook). Stub-suppressed like the other workers that write
 on their own: the suite drives :meth:`tick` and the functions directly.
@@ -36,6 +36,6 @@ class VoiceHistoryPruner(Worker):
         jobs = await voice_history.run_pending_jobs()
         retention = await voice_history.run_retention()
         # Forgets not yet told to plugins (one the web recorded while the
-        # core was down, an announce that failed): SDK 1.17.
+        # core was down, an announce that failed): SDK 1.18.
         told = await voice_history.announce_forgets()
         return {"delete_all": jobs, "retention": retention, "forgets_announced": len(told)}

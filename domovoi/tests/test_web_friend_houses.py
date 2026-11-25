@@ -133,7 +133,7 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
               {"keep_messages": False, "new_address": True}),
     "blocked": ("GET", "/api/friend-houses/blocked", None),
     "unblock": ("DELETE", f"/api/friend-houses/blocked/{HOUSE}", None),
-    # Apps with friends (SDK 1.18): admin only, at both hops
+    # Apps with friends (SDK 1.19): admin only, at both hops
     "apps": ("GET", "/api/friend-houses/friends/fr0123abcd/apps", None),
     "set-apps": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps", {"on": True, "apps": ["games"]}),
     "set-app": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps/games", {"allowed": False}),
@@ -803,7 +803,7 @@ async def test_an_unblock_needs_a_house_key(monkeypatch, forwarded) -> None:
     assert forwarded == []
 
 
-# ─── apps with friends (SDK 1.18): admin only, once the routes exist ─────
+# ─── apps with friends (SDK 1.19): admin only, once the routes exist ─────
 
 FRIEND_APPS_PLANNED = sorted(FRIEND_APPS_ROUTES)
 

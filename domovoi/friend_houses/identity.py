@@ -220,7 +220,7 @@ class HouseKeys:
         return plugin_house_id_key(self.house_seed)
 
     def plugin_house_id(self, slug: str, friend_house_key: bytes) -> str:
-        """The id plugin ``slug`` knows ``friend_house_key`` by (SDK 1.18,
+        """The id plugin ``slug`` knows ``friend_house_key`` by (SDK 1.19,
         :func:`plugin_house_id`). Derived, never stored, never on the wire."""
         return plugin_house_id(self.plugin_house_id_key, slug, friend_house_key)
 
@@ -249,7 +249,7 @@ def plugin_house_id_key(house_seed: bytes) -> bytes:
 
 
 def plugin_house_id(house_secret: bytes, slug: str, friend_house_key: bytes) -> str:
-    """The id plugin ``slug`` knows a friend house by (SDK 1.18): hex of the
+    """The id plugin ``slug`` knows a friend house by (SDK 1.19): hex of the
     first 16 bytes of ``HMAC-SHA256(K, "fh-plugin-house-id" || 0x00 ||
     len(slug) || slug || friend house key)``, ``K`` being
     :func:`plugin_house_id_key` of the signing seed (never the seed

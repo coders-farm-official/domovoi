@@ -327,9 +327,9 @@ def test_manifest_is_1_x_and_needs_sdk_1_16() -> None:
     manifest = tomllib.loads((PLUGIN_DIR / "domovoi-plugin.toml").read_text(encoding="utf-8"))
     major, minor, _patch = (int(p) for p in manifest["plugin"]["version"].split("."))
     assert major == 1 and minor >= 3  # 1.4.0 added the radio help (SDK 1.8 help file)
-    # 1.16: playback.relay_url (the core's player relay), newer than
+    # 1.17: playback.relay_url (the core's player relay), newer than
     # 1.10's spoken_names / ensure_room and 1.4's egress.
-    assert manifest["plugin"]["domovoi_api"] == ">=1.16,<2.0"
+    assert manifest["plugin"]["domovoi_api"] == ">=1.17,<2.0"
 
 
 # ─── 2026-10-03 review fixes ─────────────────────────────────────────────

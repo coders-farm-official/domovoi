@@ -1018,7 +1018,7 @@ SCENARIOS["tick_rereads_the_setting"] = scenario(
     ls=PAIRED_LS,
 )
 
-# Plugin cards (SDK 1.13): the registry, the quiet slot ----------------------
+# Plugin cards (SDK 1.15): the registry, the quiet slot ----------------------
 _CARD_MANIFEST = {"plugins": [
     {"slug": "wx", "status": "ok", "home_cards": [
         {"id": "today", "title": "Today", "component": "TodayCard", "default_on": True, "order": 20},

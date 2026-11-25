@@ -14,7 +14,7 @@ provider at startup (``bind_active_sessions`` in main.py's lifespan).
 Before binding — or in the web process, where this API must never be
 used — ``announce`` reports zero rooms reached rather than raising.
 
-Words from a friend house (SDK 1.18): ``announce`` and ``render`` take a
+Words from a friend house (SDK 1.19): ``announce`` and ``render`` take a
 :class:`~domovoi.sdk.friend_houses.FriendText` or a ``friend_sentence(...)``
 as well as a ``str`` and filter the friend's words with the wake-phrase
 filter people's messages get. For a plugin with the ``friend_houses``

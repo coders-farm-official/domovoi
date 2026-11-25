@@ -222,7 +222,7 @@ HOME_CARD_COMPONENT_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]{0,63}\Z")
 
 @dataclass(frozen=True)
 class HomeCardDecl:
-    """A ``[[web.home_cards]]`` entry (SDK 1.13): a card on the dashboard's
+    """A ``[[web.home_cards]]`` entry (SDK 1.15): a card on the dashboard's
     Home page. ``component`` names a key in
     ``window.DomovoiPlugins.<slug>.homeCards``."""
 
@@ -1047,7 +1047,7 @@ _ROOM_PLAY_CHARS = re.compile(r"/[A-Za-z0-9_.~{}/-]*")
 
 
 def _home_cards(raw: object) -> tuple[HomeCardDecl, ...]:
-    """``[[web.home_cards]]`` (SDK 1.13): id, title, component, default_on, order."""
+    """``[[web.home_cards]]`` (SDK 1.15): id, title, component, default_on, order."""
     if not isinstance(raw, list):
         raise ManifestError("[[web.home_cards]] must be an array of tables")
     cards: list[HomeCardDecl] = []

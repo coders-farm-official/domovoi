@@ -1,4 +1,4 @@
-"""Friend Houses for plugins, SDK 1.18 routing (design note
+"""Friend Houses for plugins, SDK 1.19 routing (design note
 FRIEND-HOUSES-PLUGINS §4, §10 slice 5), on the test database.
 
 ``friends()`` and ``send_mail`` wired to the plugin mail service (by this

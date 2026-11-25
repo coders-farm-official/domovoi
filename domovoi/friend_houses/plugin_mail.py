@@ -1,7 +1,7 @@
 """Plugin mail: "apps with friends" between two houses' copies of a plugin.
 
 Friend Houses ("serverless messaging and friend system between households")
-carries mail between the same plugin in two friend houses (SDK 1.18, design
+carries mail between the same plugin in two friend houses (SDK 1.19, design
 note ``FRIEND-HOUSES-PLUGINS`` §6, build slice 4). This module is the
 service: the toggle and the pairs, the outbox and the inbox, the receiving
 lane, the decode-and-handle dispatcher, the breaker's persistence and every

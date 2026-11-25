@@ -949,7 +949,7 @@ class RadioHandler(Handler):
             # from the look above, so the player never fetches the station.
             # It is handed a one-use relay URL on the core for this room and
             # this station, and the core fetches the station, every hop
-            # checked, and passes the audio on (SDK 1.16, the core's
+            # checked, and passes the audio on (SDK 1.17, the core's
             # domovoi/player_relay.py).
             try:
                 url_to_play = await self.sdk.playback.relay_url(

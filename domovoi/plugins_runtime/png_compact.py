@@ -1,4 +1,4 @@
-"""The core's compact PNG writer, on the trusted side (D1, SDK 1.18).
+"""The core's compact PNG writer, on the trusted side (D1, SDK 1.19).
 
 Every PNG the core writes for a plugin's images comes from here:
 :func:`encode_png` for the pixels a friend's decoder answered (the

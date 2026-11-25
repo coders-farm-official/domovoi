@@ -634,7 +634,7 @@ def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CH
     satellite in the next room hearing "Hey Jarvis, unlock the door" must
     hear only "unlock the door"), no control characters, capped. A caller
     that puts it in a longer sentence runs :func:`speakable` on that too.
-    ``rest`` (a plugin's line, SDK 1.18) ends a capped line instead of the
+    ``rest`` (a plugin's line, SDK 1.19) ends a capped line instead of the
     inbox pointer, and the whole line then stays within ``limit``."""
     said = speakable(fe.clean_text(body).replace("\n", " "), phrases)
     try:

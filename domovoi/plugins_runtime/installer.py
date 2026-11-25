@@ -998,7 +998,7 @@ async def stage_zip(
             # device_endpoints to any paired household device.
             "open_endpoints": marked["open"],
             "device_endpoints": marked["device"],
-            # SDK 1.18 (review D13): a plugin that talks to friend houses
+            # SDK 1.19 (review D13): a plugin that talks to friend houses
             # and also answers with no sign-in gets its own flag.
             "friend_houses_open_routes": friend_houses_open_routes(manifest, marked["open"]),
             # What lands on every satellite, as root, if the admin confirms

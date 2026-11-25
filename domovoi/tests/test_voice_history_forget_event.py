@@ -1,4 +1,4 @@
-"""SDK 1.17: plugins hear when voice history is deleted (security review M8).
+"""SDK 1.18: plugins hear when voice history is deleted (security review M8).
 
 ``core.voice_history_deleted`` ``{person_id}`` is emitted in the core, only
 after the deletion committed (domovoi/voice_history.py, V079

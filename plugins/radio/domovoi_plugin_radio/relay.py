@@ -2,7 +2,7 @@
 
 The web process relays a station's audio to the browser instead of letting
 the browser fetch it. (A room's music player is relayed by the core itself,
-``sdk.playback.relay_url``, SDK 1.16, which makes the same checks.) The
+``sdk.playback.relay_url``, SDK 1.17, which makes the same checks.) The
 station is opened here, through ``net_safety.open_raw_stream``: http(s) only,
 every redirect hop re-checked and each connection pinned to the address its
 check judged; it asks for ``identity`` and refuses a compressed answer, and

@@ -1,4 +1,4 @@
-"""``sdk.friend_houses``: apps with friends (SDK 1.18).
+"""``sdk.friend_houses``: apps with friends (SDK 1.19).
 
 A plugin with ``[permissions] friend_houses = true`` exchanges mail with
 the same plugin in friend houses an admin turned "Apps with this friend"

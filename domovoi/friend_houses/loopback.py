@@ -1,4 +1,4 @@
-"""``LoopbackPair``: two houses over loopback, for plugin mail tests (SDK 1.18).
+"""``LoopbackPair``: two houses over loopback, for plugin mail tests (SDK 1.19).
 
 The test kit the design note ``FRIEND-HOUSES-PLUGINS`` §4 names. House B's
 real listener (:func:`domovoi.friend_houses.listener.handle`) serves on

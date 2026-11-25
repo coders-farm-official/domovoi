@@ -207,7 +207,7 @@ class PlaybackAPI:
         alone: it leaves the group and the other rooms play on."""
         from domovoi import music_groups, player_relay
 
-        # A relay serving the room ends with the music (SDK 1.16).
+        # A relay serving the room ends with the music (SDK 1.17).
         player_relay.revoke_room(room_id)
         if music_groups.share_of(room_id) is not None:
             from domovoi.plugins_runtime.loader import LOADER
@@ -287,7 +287,7 @@ class PlaybackAPI:
         return True
 
     async def player_route(self, room_id: str) -> PlayerRoute | None:
-        """SDK 1.15: how the music player that plays ``room_id``'s music
+        """SDK 1.16: how the music player that plays ``room_id``'s music
         reaches this core (``.host`` / ``.port``, ``.url(path)``) and the
         address the core sees it call from (``.admits(request.client.host)``),
         for a plugin that hands the player a URL on the core itself, such
@@ -296,7 +296,7 @@ class PlaybackAPI:
         return await player_route(room_id)
 
     async def relay_url(self, room_id: str, remote_url: str, *, kind: str = "file") -> str:
-        """SDK 1.16: a URL on the core for ``room_id``'s music player that
+        """SDK 1.17: a URL on the core for ``room_id``'s music player that
         plays ``remote_url`` through the core's checked fetch
         (domovoi/player_relay.py), to hand to :meth:`play_url` instead of
         the remote URL itself. The player never fetches the remote URL, so
@@ -337,7 +337,7 @@ class PlaybackAPI:
         return player_relay.mint(host, remote_url, route, kind=kind)
 
     def relay_target(self, player_url: str | None) -> str | None:
-        """SDK 1.16: the remote URL a :meth:`relay_url` stands for while it
+        """SDK 1.17: the remote URL a :meth:`relay_url` stands for while it
         is still good (a now-playing matcher reading the player's file),
         else None."""
         from domovoi import player_relay

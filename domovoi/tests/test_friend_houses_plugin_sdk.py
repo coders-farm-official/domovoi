@@ -1,4 +1,4 @@
-"""Friend Houses for plugins, SDK 1.18 (design note FRIEND-HOUSES-PLUGINS
+"""Friend Houses for plugins, SDK 1.19 (design note FRIEND-HOUSES-PLUGINS
 §4, §10): the parts that need no database.
 
 The manifest rules and their open-route flag, ``sdk.friend_houses``'s
@@ -53,12 +53,12 @@ def phrases(monkeypatch):
 def test_the_sdk_is_1_18() -> None:
     from domovoi import sdk
 
-    assert sdk.API_VERSION == "1.18.0"
+    assert sdk.API_VERSION == "1.19.0"
     assert sdk.FriendText is sfh.FriendText and sdk.friend_reply is sfh.friend_reply
 
 
 def test_a_plugin_can_ask_for_1_18() -> None:
-    m = parse_manifest(_toml("fh", perms=FH_PERMS).replace('">=1.0,<2.0"', '">=1.18,<2.0"'))
+    m = parse_manifest(_toml("fh", perms=FH_PERMS).replace('">=1.0,<2.0"', '">=1.19,<2.0"'))
     assert m.permissions["friend_houses"] is True
 
 

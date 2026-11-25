@@ -282,7 +282,7 @@ async def friend_houses_unfriend(friend_id: str, request: Request):
     )
 
 
-# ─── apps with friends (SDK 1.18): the security tier at both hops ────────
+# ─── apps with friends (SDK 1.19): the security tier at both hops ────────
 # "Apps with this friend" (design FRIEND-HOUSES-PLUGINS §6.11): an admin's
 # toggle per friend, each plugin allowed or not, and Resume after a pause.
 # Never on the household tier.

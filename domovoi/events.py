@@ -69,7 +69,7 @@ CORE_EVENTS: frozenset[str] = frozenset({
     # heard_in [room...], acked_by}.
     "core.timer_fired",
     "core.timer_fire_settled",
-    # Added 2026-11-23, SDK 1.17 (additive, so the catalog stays v1;
+    # Added 2026-11-23, SDK 1.18 (additive, so the catalog stays v1;
     # security review M8). Voice history was deleted and the deletion is
     # committed (domovoi/voice_history.py, announce_forgets): a person's
     # ("forget me", People -> delete person) as {person_id: int}, or all

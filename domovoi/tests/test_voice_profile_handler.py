@@ -633,7 +633,7 @@ def stub_people_repo(monkeypatch):
 
     monkeypatch.setattr("domovoi.voice_history.delete_person_history", _history)
 
-    # Plugins hear about it after the turn commits (SDK 1.17); the
+    # Plugins hear about it after the turn commits (SDK 1.18); the
     # listener on a real session has its own tests
     # (test_voice_history_forget_event.py).
     _StubPeopleRepo.announced = []

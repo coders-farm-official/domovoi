@@ -1,4 +1,4 @@
-"""SDK 1.16: the core's player relay (domovoi/player_relay.py).
+"""SDK 1.17: the core's player relay (domovoi/player_relay.py).
 
 A room's music player is never handed a remote URL: a plugin asks
 ``sdk.playback.relay_url`` and the player is handed a token URL on the

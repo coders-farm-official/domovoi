@@ -495,7 +495,7 @@ async def delete_person(person_id: int, request: Request) -> None:
       message's speaker mark, an alias they taught, a phone or browser
       claimed as theirs, a room's music being for them) lapses to NULL.
 
-    Plugins are told (SDK 1.17, ``core.voice_history_deleted``) by the
+    Plugins are told (SDK 1.18, ``core.voice_history_deleted``) by the
     core, the process their event bus lives in: the forget is recorded in
     this transaction, and after the commit this asks the core to announce
     it (``POST /v1/admin/voice-history/announce-forgets``). If the core is
@@ -512,7 +512,7 @@ async def delete_person(person_id: int, request: Request) -> None:
         if (result.rowcount or 0) == 0:
             # Nothing was theirs either (the FK); raising rolls it back.
             raise HTTPException(status_code=404, detail=f"person {person_id} not found")
-    # Committed: ask the core to tell plugins now (SDK 1.17,
+    # Committed: ask the core to tell plugins now (SDK 1.18,
     # core.voice_history_deleted). The forget is already recorded in the
     # transaction above (voice_history_forgets), so a core that is down
     # announces it at its next start or hourly tick instead; the delete

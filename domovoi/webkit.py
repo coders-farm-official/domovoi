@@ -104,7 +104,7 @@ EndpointTier = Literal["open", "device", "admin"]
 #: ``"admin"``; None outside a plugin request (a voice turn, a worker, a
 #: mail handler). Set by :func:`enforce_route_tier` and
 #: :func:`admin_required`; ``sdk.friend_houses`` refuses its calls on
-#: ``"open"`` (SDK 1.18, L16).
+#: ``"open"`` (SDK 1.19, L16).
 REQUEST_TIER: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "domovoi_request_tier", default=None)
 

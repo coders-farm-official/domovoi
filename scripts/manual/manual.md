@@ -2382,7 +2382,8 @@ answer doesn't reach it there.
 ### Updates
 
 [Settings → System → About & updates](#settings/about) shows the release
-you run.
+you run. An admin also sees the **database schema** it is on (for
+example V086), which is handy when asking for help.
 
 With the internet setting **Yes**, Domovoi looks by itself once a day and
 Home says *Domovoi 1.5.0 is available*. Untick **Check for updates by

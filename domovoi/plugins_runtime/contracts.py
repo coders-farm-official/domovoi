@@ -611,7 +611,7 @@ def check_friend_houses_routes(
     manifest: PluginManifest, routers: list[Any], report: ContractReport
 ) -> None:
     """A warning, never an error: a ``friend_houses`` plugin with open
-    routes (SDK 1.18). The trust screen flags the same."""
+    routes (SDK 1.19). The trust screen flags the same."""
     if not manifest.permissions.get("friend_houses"):
         return
     from domovoi.webkit import endpoint_tier, iter_plugin_routes

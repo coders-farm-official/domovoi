@@ -41,7 +41,7 @@ CORE_CONFIG_WHITELIST: tuple[str, ...] = (
     # SDK 1.13 it is the Home location's name (Settings → Household); the
     # whole place is sdk.household.home_location().
     "news_location",
-    # "Keep voice history" (SDK 1.17): "30" | "90" | "365" | "forever",
+    # "Keep voice history" (SDK 1.18): "30" | "90" | "365" | "forever",
     # live. A plugin that keeps anything tied to a person keeps it no
     # longer than this, and deletes it on core.voice_history_deleted.
     "voice_history_keep",

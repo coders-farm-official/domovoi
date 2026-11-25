@@ -39,7 +39,7 @@ somebody else said their name carries the speaker's id (or none) and
 stays: the text is never searched. The short-term conversation of every
 session they spoke in is cleared too (those entries aren't attributed).
 
-Plugins hear about each deletion (SDK 1.17, security review M8): the
+Plugins hear about each deletion (SDK 1.18, security review M8): the
 event ``core.voice_history_deleted`` ``{person_id}`` (None for a
 delete-all), the hook any plugin keeping person-linked data must honour.
 Each deletion writes a row to ``voice_history_forgets`` (V079) in its OWN
@@ -351,7 +351,7 @@ async def delete_person_history(s: AsyncSession, person_id: int) -> dict[str, in
     return counts
 
 
-# ─── Telling plugins (V079 voice_history_forgets, SDK 1.17) ─────────────────
+# ─── Telling plugins (V079 voice_history_forgets, SDK 1.18) ─────────────────
 
 FORGET_EVENT = "core.voice_history_deleted"
 

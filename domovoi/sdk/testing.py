@@ -52,14 +52,14 @@ class RecordingPlayback:
         )
 
     async def player_route(self, room_id: str) -> Any:
-        """SDK 1.15: loopback both ways, as under USE_STUBS. Not recorded
+        """SDK 1.16: loopback both ways, as under USE_STUBS. Not recorded
         in ``calls``."""
         from domovoi.player_route import PlayerRoute
 
         return PlayerRoute(host="127.0.0.1", peer="127.0.0.1")
 
     async def relay_url(self, room_id: str, remote_url: str, *, kind: str = "file") -> str:
-        """SDK 1.16: a real relay token (domovoi/player_relay.py) on the
+        """SDK 1.17: a real relay token (domovoi/player_relay.py) on the
         loopback route above, so a test can open it against the core's
         router. Not recorded in ``calls``."""
         from domovoi import player_relay
@@ -213,7 +213,7 @@ class StubSDK:
         self.state: dict[str, Any] = {}
         self.speech = RecordingSpeech()
         self.http = HttpFactory(self.version)
-        # SDK 1.18: friends() answers ``friend_houses.friends_list`` (set
+        # SDK 1.19: friends() answers ``friend_houses.friends_list`` (set
         # it), send_mail / send_image check their arguments as the core
         # does (send_image writes the core's compact PNG, so a picture too
         # big even scaled down raises TooLarge) and record what they would

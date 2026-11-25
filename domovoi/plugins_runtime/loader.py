@@ -425,7 +425,7 @@ class PluginLoader:
 
             isolated.start_for(slug, install_dir, manifest)
             if sdk.friend_houses.schema is not None:
-                # SDK 1.18: on_mail's schema checks the decoder's answers.
+                # SDK 1.19: on_mail's schema checks the decoder's answers.
                 isolated.set_schema(slug, sdk.friend_houses.schema)
         status = "degraded" if degraded else "ok"
         # A slow import rides along as a soft note (the plugin stays

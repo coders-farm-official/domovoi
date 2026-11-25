@@ -579,7 +579,7 @@ def is_request_for_a_story(raw_transcript: str) -> bool:
 
 def _friend_houses_plugin(*names: str | None) -> str | None:
     """The slug of the plugin whose handler answered, when it holds
-    ``[permissions] friend_houses`` (SDK 1.18), else None."""
+    ``[permissions] friend_houses`` (SDK 1.19), else None."""
     from domovoi.sdk.friend_houses import holds_permission
 
     for name in names:
@@ -616,7 +616,7 @@ async def _persist_turn(
     An unregistered value raises exactly where the CHECK used to abort.
     """
     registered_values.require("matched_path", matched_path)
-    # Friend words in a reply (M5, SDK 1.18): a plugin with the friend_houses
+    # Friend words in a reply (M5, SDK 1.19): a plugin with the friend_houses
     # permission may build its reply from a friend's text. The room hears it
     # through the speech filter, and the chat history and this log keep the
     # stand-in (or the plugin's own history_text, as friend_reply sets).

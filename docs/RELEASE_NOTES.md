@@ -4,6 +4,20 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Plugin SDK numbers after 1.4.1's
+
+- **What changed.** Domovoi 1.4.1 shipped SDK 1.14.0 ("needs AI": the
+  household's AI switch for plugins). The 1.5.0 additions move up one:
+  home cards 1.15, `playback.player_route` 1.16, `playback.relay_url` 1.17,
+  `core.voice_history_deleted` 1.18, `sdk.friend_houses` 1.19. The SDK is
+  **1.19.0**. A plugin asking for one of these asks for its new number
+  (the bundled radio plugin now declares `domovoi_api = ">=1.17,<2.0"`).
+- **On a house where AI is off** a plugin's `needs_ai` handlers and `[ai]`
+  routes stay off in 1.5.0, as in 1.4.1.
+- **"Can you update yourself?"** on a house set up from an offline kit is
+  answered by the house: it updates from a newer kit (Settings → System →
+  About & updates → Update from an offline kit), by an admin.
+
 ## 1.5.0 (unreleased) — Private chats on the home server
 
 - **Your existing server chats are now private to the phone or browser
@@ -24,7 +38,10 @@ a way that would otherwise get reported as a bug.
   device key the first time it registers (a browser keeps it in a cookie
   no page script can read; the apps in their secure storage). Only its
   hash is stored. A browser whose site data was cleared starts again as a
-  new device; its old private chats stay, for the admins.
+  new device; its old private chats stay, for the admins. A phone that
+  said "this is me" before 1.5.0 gets its first device key only by
+  presenting the claim key it got then (`X-Domovoi-Claim-Key`), so knowing
+  its id is not enough to take its chats or its claim.
 - **Older apps (1.4.x)** send no key: they keep working on shared chats
   only, and the chats they start are shared. Their own chats from before
   the upgrade are private now and disappear from them until the app is
@@ -37,6 +54,10 @@ a way that would otherwise get reported as a bug.
   The key proves a claim as the claim key does, and the claim key is still
   accepted, so an older app can still clear its person's history; but what
   an older app plays counts as the household's until it is updated.
+  Typed-chat memory ("remember that …", "forget that", "what do you
+  remember about me?") acts for a device's person only when the device
+  proves itself the same way (its device key, or an older app's claim
+  key); a device id alone gets the "isn't linked to a person" answer.
 - **For API readers:** thread JSON gains `shared`, `mine`, `can_write`,
   `can_share`, `can_delete`, `admin_view` and `owner_name`;
   `GET /api/chat/threads?scope=mine|all`; `POST /api/chat/threads` and
@@ -152,10 +173,12 @@ a way that would otherwise get reported as a bug.
   ever installed by itself.
 - **What to know.** The automatic check is **on by default, but only when
   the house's internet answer is Yes**: a house answered Yes starts
-  looking at its first 1.5.0 start (a `git fetch`, and for a new release
-  two small signed files from the GitHub release); Sometimes, No, not
-  answered and the offline kit never look by themselves. An admin turns it
-  off by unticking the box (`update_auto_check` / `UPDATE_AUTO_CHECK`);
+  looking at its first 1.5.0 start, then once a day against GitHub (a
+  `git fetch`, and for a new release two small signed files from the
+  GitHub release), with no admin action; Sometimes, No, not answered and
+  the offline kit never look by themselves. An admin turns it off by
+  unticking **Check for updates by itself** in Settings → System → About &
+  updates (`update_auto_check` / `UPDATE_AUTO_CHECK`);
   that also drops a notice the automatic check found. **Check for
   updates** now also checks the release's signature and returns the new
   `updates` key, which `GET /v1/admin/version` and `GET /api/config/version`
@@ -216,7 +239,7 @@ a way that would otherwise get reported as a bug.
 
 ## 1.5.0 (unreleased) — Friend Houses: apps with friends, sending and the page
 
-- **What changed.** Plugins can now send as well as receive: SDK 1.18's
+- **What changed.** Plugins can now send as well as receive: SDK 1.19's
   `friends()` lists the friends a plugin may mail (by the plugin's own id
   for each), `send_mail` queues mail for one, and the new `send_image`
   sends a picture, which the friend's house opens only in that friend's
@@ -267,7 +290,7 @@ a way that would otherwise get reported as a bug.
   dashboard's apps section are in the entry above. The listener's image is
   rebuilt once after the upgrade (its code changed).
 
-## 1.5.0 (unreleased) — Plugins: SDK 1.18 for apps with friends
+## 1.5.0 (unreleased) — Plugins: SDK 1.19 for apps with friends
 
 - **What changed.** The plugin SDK is 1.18. A plugin with the
   `friend_houses` permission gets `sdk.friend_houses` (its friends, sending
@@ -279,7 +302,7 @@ a way that would otherwise get reported as a bug.
   can call; the core logs a warning when it loads one.
 - **What to know.** Receiving, sending and the Friend Houses page's "Apps
   with this friend" are in the entries above. A plugin that asks for
-  `domovoi_api = ">=1.18"` won't load on an older core.
+  `domovoi_api = ">=1.19"` won't load on an older core.
 
 ## 1.5.0 (unreleased) — Friend Houses: plugin mail on the wire
 
@@ -314,7 +337,7 @@ a way that would otherwise get reported as a bug.
   numbers), re-serializes it and checks it against the schema the plugin
   registered. A plugin with the new `friend_houses` permission must declare
   one (its install is refused otherwise); the Friend Houses features for
-  plugins come with SDK 1.18. Images never come out of a container as
+  plugins come with SDK 1.19. Images never come out of a container as
   files: the container answers raw pixels (PNG, JPEG or WebP in, at most 4
   megapixels, first frame, at most 768 pixels a side), and the core writes
   the PNG itself.
@@ -730,7 +753,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   let the Docker bridge reach port 6370. A station a room was playing is
   not resumed after its player restarts (the relay URL is spent): play it
   again. The radio
-  plugin now needs SDK 1.15 (new: `playback.player_route`).
+  plugin now needs SDK 1.16 (new: `playback.player_route`).
   SECURITY_PRIVACY.md, "Radio streams".
 
 ## 1.5.0 (unreleased) — Reinstall without losing your rooms
@@ -766,7 +789,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   LINUX_HOST.md and WINDOWS_HOST.md ("…without losing your rooms"),
   SECURITY_PRIVACY.md ("Keeping the house identity across a reinstall").
 
-## 1.5.0 (unreleased) — Plugins forget people too (SDK 1.17)
+## 1.5.0 (unreleased) — Plugins forget people too (SDK 1.18)
 
 - **What changed.** When someone says "forget me", an admin deletes a
   person on People, or an admin deletes all voice history, plugins are
@@ -782,7 +805,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   sends no event. Migration V079 adds the small `voice_history_forgets`
   table the core announces from.
 
-## 1.5.0 (unreleased) — Any plugin can play a remote URL through the core (SDK 1.16)
+## 1.5.0 (unreleased) — Any plugin can play a remote URL through the core (SDK 1.17)
 
 - **What changed.** The relay that plays internet radio in a room is now
   the core's, for any plugin: `sdk.playback.relay_url(room_id, url,
@@ -790,7 +813,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   /v1/player-relay/<token>`) to hand a room's player instead of the
   remote URL. `kind="file"` serves byte ranges, so a player can seek in
   and resume a file; `kind="radio"` is the one-connection stream with ICY
-  titles. The radio plugin (1.5.4, needs SDK 1.16) uses it and no longer
+  titles. The radio plugin (1.5.4, needs SDK 1.17) uses it and no longer
   has its own `/v1/plugins/radio/player-relay/<token>` route.
 - **What to know.** A plugin from outside this repo that hands a room's
   player a remote URL should use it: feature-test
@@ -1064,7 +1087,7 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
 
 ## 1.5.0 (unreleased) — A server can make an offline kit
 
-- **Plugins can add a card to Home (SDK 1.14).** A plugin declares
+- **Plugins can add a card to Home (SDK 1.15).** A plugin declares
   `[[web.home_cards]]` in its manifest and registers the component from its
   panel bundle; Home shows it quietly (a card with nothing to show, or that
   fails, leaves no trace). Nothing changes for a house with no such plugin.

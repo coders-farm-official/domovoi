@@ -21,7 +21,7 @@ const PERMISSION_LABELS = {
   friend_houses: 'talks to friend houses (apps with friends)',
 };
 
-/* The trust screen's lines for a friend_houses plugin (SDK 1.18, design
+/* The trust screen's lines for a friend_houses plugin (SDK 1.19, design
  * FRIEND-HOUSES-PLUGINS §9), and its flag for one with open routes
  * (review D13). */
 const FRIEND_APPS_TRUST = [
