@@ -1263,8 +1263,8 @@ result = await sdk.acquisition.enqueue(
 
 `requested_by` defaults to `plugin:<slug>`. With no fulfiller installed the
 row simply sits `pending` and `result.user_message` carries the canonical
-graceful-absence copy ("I've noted that down, but no media provider is
-installed to fetch it."). Watch `core.acquisition_completed` /
+graceful-absence copy ("I've noted that down, but downloading isn't set up
+on this house."). Watch `core.acquisition_completed` /
 `core.acquisition_failed` events and correlate by `origin_ref` — **and**
 pair the subscription with a periodic reconciliation sweep, because the bus
 is fire-and-forget (see [§6.4](#64-the-offline-contract-and-the-bus-is-not-durable)).

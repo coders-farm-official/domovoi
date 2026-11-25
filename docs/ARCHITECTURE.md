@@ -530,8 +530,8 @@ past that time or with a file bigger than `acquisition_max_bytes` is refused
 and its file removed.
 
 Graceful absence: enqueue always succeeds; with no fulfiller enabled, rows sit
-`pending` and the user hears *"I've noted that down, but no media provider is
-installed to fetch it."* Installing a fulfiller later drains the backlog — a
+`pending` and the user hears *"I've noted that down, but downloading isn't set
+up on this house."* Installing a fulfiller later drains the backlog — a
 feature, not a bug. Dedup is three-layered: library fuzzy match (pg_trgm) at
 enqueue, live-queue identity via a partial-unique `dedup_key` index, and the
 fulfiller's own post-resolve knowledge. Every state change fires
