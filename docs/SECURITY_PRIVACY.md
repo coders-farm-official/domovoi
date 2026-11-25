@@ -2466,9 +2466,14 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   promise is a value Domovoi never saw, written in a way no pattern
   matches. Reading the checks is household tier (`GET /api/help/checks`),
   and what Home shows only to an admin (the update's details, the internet
-  question) is shown only to one, on that page — **never in a chat**: a
-  help chat on the home server is household-shared, so its answers use the
-  household view whoever asks, and say where an admin reads the rest. The
+  question, approvals waiting) is shown only to one, on that page — **never
+  in a chat, even a proven admin's**: a help chat on the home server is
+  household-shared, so its records use the household view whoever asks,
+  and say where an admin reads the rest. What a chat does show a proven
+  admin (below) is the **steps** of an admin's job — add a room, update,
+  install a plugin, the admin password, deleting files — which are the
+  public manual's own words; a member asking the same gets who can do it
+  and where. The
   passages and records reach a model only on this box, in a block marked
   as data with a marker no passage can know; a plugin's help file is quoted
   as third-party text with its web addresses removed, and a reply keeps
@@ -2496,6 +2501,30 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   help steps are offered, nothing more. The steps are a home-server chat
   (household-shared, like every server chat); the delivery row holds only
   the person, the chat and its title.
+* **A "proven admin" changes words, never what is allowed.** A turn's
+  `Context.proven_admin` (N1, owner 2026-11-25) is derived by the server
+  on that turn's own request, never taken from a client:
+  `admin_auth.request_is_proven_admin` is true only when
+  `check_admin_request` answers `ok`, a live admin Bearer. The dashboard
+  cookie alone (`cookie-only`, which only renders), a box with no admin
+  yet (`pre-setup`) and a check that can't run are all a member. It is
+  asked again on every turn and never cached, so a sign-in that ended
+  (sign-out, the idle hour) is a member from the next turn, mid-thread
+  included, and the check moves no idle clock. Two places set it: a
+  home-server chat's send, "try again" and heads-up answer, and the
+  dashboard's play box and room controls (`main._admin_route_intent`;
+  those routes are device tier, so a guest's or a household device's
+  press stays a member). Nothing else does: no voice turn (a satellite,
+  room mode, the phone chat mic — even when voice ID recognises the
+  owner), `/v1/intent`, Friend Houses mail, timers or background work. No
+  request body carries it (`Intent` and the chat bodies drop unknown keys
+  such as `admin` or `proven_admin`). What it changes: an "off" answer
+  ends with the steps ("Turn it on in Settings → … : press …") instead of
+  "An admin can turn it on in …" (`domovoi/off_answers.py`), and a help
+  question about an admin's job gets the steps instead of who can do it
+  and where (`domovoi/help_desk/admin_tasks.py`). Every admin action keeps
+  its own endpoint gate, so the flag can only ever change which words are
+  said. `domovoi/tests/test_proven_admin.py` pins each of these.
 
 ## Documents in chat
 

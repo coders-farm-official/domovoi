@@ -226,9 +226,14 @@ def _on() -> bool:
 
 
 #: "Any messages?" while Friend Houses is off, and where it is turned on.
-_OFF_NO_MESSAGES = off_answers.with_turn_on(
-    "Friend Houses isn't turned on, so there are no messages.", off_answers.FRIEND_HOUSES
-)
+def _off_no_messages(*, admin: bool = False) -> str:
+    """``admin``: the turn's ``Context.proven_admin`` (words only)."""
+    return off_answers.with_turn_on(
+        "Friend Houses isn't turned on, so there are no messages.", off_answers.FRIEND_HOUSES, admin=admin,
+    )
+
+
+_OFF_NO_MESSAGES = _off_no_messages()
 
 #: The longest read-back ("Your message to … says: …. Should I send it?").
 PROMPT_MAX = 200
@@ -404,7 +409,7 @@ class FriendHousesHandler(Handler):
     # ─── check ────────────────────────────────────────────────────────
     async def _check(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         if not _on():
-            return self._reply(ctx, _OFF_NO_MESSAGES)
+            return self._reply(ctx, _off_no_messages(admin=ctx.proven_admin))
         from domovoi.friend_houses import messages
 
         convos = [c for c in await messages.conversations() if c["unread"]]
@@ -424,7 +429,7 @@ class FriendHousesHandler(Handler):
     # ─── read ─────────────────────────────────────────────────────────
     async def _read(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         if not _on():
-            return self._reply(ctx, _OFF_NO_MESSAGES)
+            return self._reply(ctx, _off_no_messages(admin=ctx.proven_admin))
         from domovoi.friend_houses import messages
 
         convos = [c for c in await messages.conversations() if c["unread"]]
