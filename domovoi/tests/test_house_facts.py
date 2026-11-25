@@ -517,6 +517,31 @@ async def test_plugin_features_by_state(db_session) -> None:
 
 @requires_db
 @pytest.mark.asyncio
+async def test_offline_library_offers_the_web_in_every_no(db_session) -> None:
+    """§4.21-4.24: missing or switched off, the web is offered instead the
+    same way (while the internet answer and AI allow it)."""
+    web = " I can look things up on the web instead."
+    await db_session.execute(text("DELETE FROM plugins"))
+    await db_session.commit()
+    try:
+        assert await _cap("can you look things up offline") == (
+            "No, not on this house. An admin can add an offline library from the Plugins page." + web)
+        await _plugin_row(db_session, "kiwix", enabled=False)
+        assert await _cap("can you look things up offline") == (
+            "No, an offline library is switched off on this house. An admin can turn on an offline "
+            "library from the Plugins page." + web)
+        assert await _cap("can you look things up offline", R(BASE, internet="never")) == (
+            "No, an offline library is switched off on this house. An admin can turn on an offline "
+            "library from the Plugins page.")
+        assert (await _cap("can you look things up offline", R(BASE, ai_on=False))).endswith(
+            "from the Plugins page.")
+    finally:
+        await db_session.execute(text("DELETE FROM plugins"))
+        await db_session.commit()
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_print_depends_on_a_printer(db_session) -> None:
     assert await _cap("can you print") == (
         "Not yet: no printer is set up. An admin can add one in Settings → Household → Printers & scanners.")

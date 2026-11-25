@@ -919,6 +919,15 @@ def _ai_off_line(feature: str) -> str:
             + _how_to_turn_on("AI features", place=PLACE_MODELS))
 
 
+def _instead(cap: Capability, f: HouseFacts) -> str:
+    """What a "no" for a plugin's feature offers instead, the same whether
+    the plugin is missing, switched off or not ready: an offline library's
+    lookups go to the web while the internet answer and AI allow it."""
+    if cap.key == "offline_library" and f.internet in ("always", "sometimes", "") and f.ai_on:
+        return " I can look things up on the web instead."
+    return ""
+
+
 async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None) -> str | None:
     """The answer to "can you <X>?" for row ``cap``, or None (no answer:
     the turn goes on as before)."""
@@ -997,12 +1006,10 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return CANT_CHECK
         feature = cap.text or "it"
         if state == "absent":
-            out = f"No, not on this house. {_how_to_turn_on(feature, add=True)}"
-            if cap.key == "offline_library" and f.internet in ("always", "sometimes", "") and f.ai_on:
-                out += " I can look things up on the web instead."
-            return out
+            return f"No, not on this house. {_how_to_turn_on(feature, add=True)}" + _instead(cap, f)
         if state == "off":
-            return f"No, {feature} is switched off on this house. {_how_to_turn_on(feature)}"
+            return (f"No, {feature} is switched off on this house. {_how_to_turn_on(feature)}"
+                    + _instead(cap, f))
         if state == "broken":
             return f"Not right now: {feature} isn't working. An admin can check it on {PLACE_PLUGINS}."
         if cap.needs_internet and f.internet == "never":
