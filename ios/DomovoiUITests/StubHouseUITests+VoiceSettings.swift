@@ -582,12 +582,13 @@ extension StubHouseUITests {
         )
     }
 
-    /// Command recordings' address is **`#settings/command-recordings`**
-    /// (1.5.0; the section was "Voice history", at `#settings/recordings`,
-    /// until then). Its address is its `dashboard` field, which is also its
-    /// key now; the old addresses must not come back.
+    /// Command recordings' address is **`#settings/recordings`** (1.5.0; the
+    /// section was "Voice history" until then). Its key is
+    /// `command-recordings`, but `recordings` is the page every dashboard
+    /// version has (a 1.5.0 one redirects it), so both halves are asserted:
+    /// the right page present, the key's page absent.
     @MainActor
-    func testVoiceSettings_CommandRecordingsSignpostsItsPage() throws {
+    func testVoiceSettings_CommandRecordingsSignpostsRecordings() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the fixtures before the command-recordings signpost")
         let app = launch()
         let open = app.buttons["voicesettings-open-dashboard"]
@@ -609,12 +610,12 @@ extension StubHouseUITests {
         let address = app.descendants(matching: .any)["voicesettings-dashboard-address"]
         XCTAssertTrue(address.exists, "the signpost prints no address")
         XCTAssertTrue(
-            address.label.hasSuffix("#settings/command-recordings"),
-            "Command recordings does not point at its page: \(address.label)"
+            address.label.hasSuffix("#settings/recordings"),
+            "Command recordings does not point at the recordings page: \(address.label)"
         )
         XCTAssertFalse(
-            address.label.contains("#settings/voice-history") || address.label.hasSuffix("#settings/recordings"),
-            "Command recordings points at an old address: \(address.label)"
+            address.label.contains("#settings/command-recordings") || address.label.contains("#settings/voice-history"),
+            "Command recordings points at a key, not a page every dashboard has: \(address.label)"
         )
     }
 

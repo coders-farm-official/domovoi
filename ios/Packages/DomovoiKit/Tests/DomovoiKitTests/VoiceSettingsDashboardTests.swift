@@ -74,21 +74,22 @@ final class VoiceSettingsDashboardTests: XCTestCase {
         )
     }
 
-    /// **Command recordings** (1.5.0, "Voice history" until then): its key
-    /// and its dashboard page are both `command-recordings`, and a link with
-    /// either old key (`voice-history`, `recordings`) still lands on it. The
-    /// address comes from the section's `dashboard` field, never from the
-    /// key a link used.
-    func testCommandRecordingsOpensItsOwnPageWhateverKeyALinkUsed() throws {
+    /// **Command recordings** (1.5.0, "Voice history" until then), the one
+    /// section whose key and dashboard page differ: its key is
+    /// `command-recordings` and its page `recordings`, the address every
+    /// dashboard version understands (a 1.4.x dashboard has no
+    /// `command-recordings`; a 1.5.0 one redirects `recordings` there). A link
+    /// with any of its three keys lands on it and opens that page: the
+    /// address comes from the `dashboard` field, never from the key.
+    func testCommandRecordingsOpensRecordingsWhateverKeyALinkUsed() throws {
         for key in ["command-recordings", "voice-history", "recordings"] {
             let recordings = try section(key)
             XCTAssertEqual(recordings.key, "command-recordings", key)
             XCTAssertEqual(recordings.label, "Command recordings", key)
-            XCTAssertEqual(recordings.dashboard, "command-recordings", key)
-            XCTAssertEqual(
-                VoiceSettingsDashboard.url(serverURL: server, for: recordings),
-                "http://10.0.0.42:6369/#settings/command-recordings"
-            )
+            XCTAssertEqual(recordings.dashboard, "recordings", key)
+            let address = VoiceSettingsDashboard.url(serverURL: server, for: recordings)
+            XCTAssertEqual(address, "http://10.0.0.42:6369/#settings/recordings", key)
+            XCTAssertEqual(address?.contains("command-recordings"), false, key)
         }
     }
 

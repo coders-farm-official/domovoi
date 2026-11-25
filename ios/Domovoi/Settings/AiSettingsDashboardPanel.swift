@@ -54,8 +54,9 @@ struct AiSettingsDashboardPanel: View {
     /// The section being drawn. Its ``SettingsSection/label`` goes into the
     /// paragraph exactly where Android interpolates `${section.label}`
     /// (`SettingsScreen.kt:414`), and its ``SettingsSection/dashboard`` key is
-    /// the dashboard route — **not** ``SettingsSection/key``, nor the old key
-    /// a link used (`voice-history` lands on `command-recordings`, 1.5.0).
+    /// the dashboard route — **not** ``SettingsSection/key``. They are equal
+    /// for `models` and differ for `command-recordings`, whose dashboard page
+    /// is `recordings` (every dashboard version has it).
     let section: SettingsSection
 
     @Environment(\.openURL) private var openURL

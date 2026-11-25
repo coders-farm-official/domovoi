@@ -15,12 +15,14 @@ import Foundation
 /// ### Why the address comes from ``SettingsSection/dashboard`` and not from
 /// the section's key
 ///
-/// Today the two are the same word for every section, but they need not be:
-/// until 1.5.0 Voice history's key was `voice-history` and its dashboard
-/// address `recordings`. Since 1.5.0 it is Command recordings, at
-/// `command-recordings`, and a link with either old key lands on it; the
-/// address is still the `dashboard` field and never the key a link used
-/// (`VoiceSettingsDashboardTests.testCommandRecordingsOpensItsOwnPageWhateverKeyALinkUsed`).
+/// For every section but one the two are the same word. **Command
+/// recordings** ("Voice history" until 1.5.0) is the exception: its key is
+/// `command-recordings` and its dashboard address `recordings`, the one every
+/// dashboard version understands (a 1.4.x dashboard has no
+/// `command-recordings`; a 1.5.0 one redirects `recordings` there). A builder
+/// who reached for `section.key` would send it to a page an older dashboard
+/// does not have. That is a test, not a comment
+/// (`VoiceSettingsDashboardTests.testCommandRecordingsOpensRecordingsWhateverKeyALinkUsed`).
 ///
 /// ### Needs a shared change — after the night, not tonight
 ///
