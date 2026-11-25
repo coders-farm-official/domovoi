@@ -390,3 +390,86 @@ async def test_a_friends_words_stay_out_of_the_chat_history_and_double_check(
     monkeypatch.setattr(dc, "_extract_claim", no_model)
     answer = await dc._verify(SimpleNamespace(session_id=sid, room_id="kitchen"), house.session)
     assert "can't double-check" in answer.text
+
+
+# ─── "send my friend a message": no friend house named (M8, 7.20/7.21) ─────
+
+
+@pytest.mark.parametrize("said", [
+    "send my friend a message", "send a message to my friend", "send a message to my friend's house",
+    "message a friend", "text my friend", "send my friend a message saying dinner at six",
+    "send a message to one of my friends",
+])
+def test_a_friend_but_no_name_is_ours(said: str) -> None:
+    assert fast_path_winner(said) == "friend_houses"
+    assert fhv._TO_A_FRIEND_RE.match(said), said
+
+
+@pytest.mark.parametrize("said", ["message the smiths hi", "send a message to the smiths saying hi"])
+def test_a_named_friend_house_is_not_the_generic_path(said: str) -> None:
+    assert not fhv._TO_A_FRIEND_RE.match(said)
+
+
+class _NoDb:
+    async def execute(self, *a, **k):
+        raise AssertionError("no read while Friend Houses is off")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_send_my_friend_a_message_while_off(monkeypatch, admin: bool) -> None:
+    from domovoi import off_answers
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "friend_houses_enabled", False, raising=False)
+    ctx = SimpleNamespace(session_id=None, room_id="kitchen", app=None, proven_admin=admin)
+    r = await fhv.FriendHousesHandler()._send_to_a_friend(
+        _m(fhv._TO_A_FRIEND_RE, "send my friend a message"), ctx, _NoDb())
+    assert r.text.startswith("Friend Houses isn't turned on")
+    assert r.text.endswith(off_answers.turn_on_line(off_answers.FRIEND_HOUSES, admin=admin))
+    assert "don't think" not in r.text
+
+
+class _Count:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    async def execute(self, *a, **k):
+        return SimpleNamespace(scalar=lambda: self.n)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_send_my_friend_a_message_with_no_friends(monkeypatch, admin: bool) -> None:
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "friend_houses_enabled", True, raising=False)
+    ctx = SimpleNamespace(session_id=None, room_id="kitchen", app=None, proven_admin=admin)
+    r = await fhv.FriendHousesHandler()._send_to_a_friend(
+        _m(fhv._TO_A_FRIEND_RE, "send my friend a message"), ctx, _Count(0))
+    assert r.text.startswith("No friend's house is added yet.")
+    assert "Settings → Household → Friend Houses" in r.text
+    if admin:
+        assert "Make a friend file" in r.text and "Add a friend from their file" in r.text
+    else:
+        assert "An admin adds one" in r.text
+
+
+def test_the_admin_steps_name_the_dashboards_own_cards() -> None:
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2] / "web" / "static" / "friend_houses.jsx").read_text(
+        encoding="utf-8")
+    for card in ("Make a friend file", "Add a friend from their file"):
+        assert f'title="{card}"' in jsx
+    assert "'Make'" in jsx
+
+
+@requires_db
+async def test_send_my_friend_a_message_with_one_friend_reads_it_back(house) -> None:
+    h = fhv.FriendHousesHandler()
+    r = await h._send_to_a_friend(
+        _m(fhv._TO_A_FRIEND_RE, "send my friend a message saying dinner at six"), house.ctx, house.session)
+    assert r.text == "Your message to The Smiths says: dinner at six. Should I send it?"
+    r = await h._send_to_a_friend(_m(fhv._TO_A_FRIEND_RE, "message a friend"), house.ctx, house.session)
+    assert r.text == "What should I tell The Smiths?"

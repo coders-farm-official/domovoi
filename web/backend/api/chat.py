@@ -991,6 +991,17 @@ async def _house_fact_reply(thread_id: int, content: str, user_row_id: int,
         return None
 
 
+async def _owner_egg_reply(thread_id: int, content: str) -> str | None:
+    """The ownership easter egg for ``content``, or None. Never fails the send."""
+    from domovoi import owner_easter_eggs
+
+    try:
+        return await owner_easter_eggs.chat_reply(content, scope=session_scope, key=f"chat:{thread_id}")
+    except Exception as e:  # noqa: BLE001 — the chat answers as before
+        log.warning("chat: owner easter egg failed: %s", type(e).__name__)
+        return None
+
+
 #: Said when a memory command couldn't be done (the database failed): the
 #: model never gets the turn, so nothing claims it was saved or forgotten.
 MEMORY_FAILED_TEXT = "I couldn't reach the saved memories just now, so nothing was saved or forgotten. Try again in a moment."
@@ -1138,6 +1149,11 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         fact = await _house_fact_reply(thread_id, body.content, user_row_id, request)
         if fact is not None:
             return await _immediate_reply(thread_id, fact, {"model_role": "house_facts"})
+        # "I'm the owner" / "who's in charge?": a fixed joke, as by voice
+        # (domovoi/owner_easter_eggs.py). Grants nothing.
+        egg = await _owner_egg_reply(thread_id, body.content)
+        if egg is not None:
+            return await _immediate_reply(thread_id, egg, {"model_role": "owner_easter_egg"})
 
     return await _answer(
         thread_id, thread.person_id, has_images=bool(images), override=body.model,

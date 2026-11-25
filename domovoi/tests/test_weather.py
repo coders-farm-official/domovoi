@@ -144,6 +144,8 @@ async def test_empty_weather_falls_back_to_general_search(db_session, monkeypatc
 @requires_db
 @pytest.mark.asyncio
 async def test_ask_policy_still_offers(db_session) -> None:
+    await home_location.save(db_session, {"name": "Springfield"})
+    await db_session.commit()
     fake = _FakeSearx("never spoken")
     a, b, c = _patched(fake)
     with a, b, c, egress.override_policy("sometimes"):
@@ -195,3 +197,93 @@ def test_a_plugin_can_read_the_household_place_and_take_weather_over():
     assert "news_location" in CORE_CONFIG_WHITELIST
     assert WEATHER_PROVIDER == "weather"
     assert tuple(int(p) for p in API_VERSION.split(".")[:2]) >= (1, 12)
+
+
+# ─── No Home location: say where it's set, before any search (M9, 7.11) ────
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["always", "sometimes"])
+@pytest.mark.parametrize("asked", [
+    "what's the weather", "What's the weather like at home?", "will it rain tomorrow",
+    "how cold is it outside",
+])
+async def test_no_home_location_says_where_to_set_it(db_session, policy, asked) -> None:
+    from domovoi import weather
+
+    await home_location.save(db_session, {"name": ""})
+    await db_session.commit()
+    fake = _FakeSearx("never spoken")
+    a, b, c = _patched(fake)
+    with a, b, c, egress.override_policy(policy):
+        response = await _ask(db_session, asked)
+    assert response.text == weather.NO_PLACE_LINE
+    assert "An admin can set it in Settings → Household → Home location" in response.text
+    assert fake.places == [] and fake.searched == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_no_home_location_a_proven_admin_hears_the_steps(db_session) -> None:
+    from domovoi import weather
+
+    await home_location.save(db_session, {"name": ""})
+    await db_session.commit()
+    ctx = Context(room_id=None, online=True, proven_admin=True)
+    with egress.override_policy("always"):
+        response = await route(Intent(transcript="what's the weather", room_id=None), ctx, db_session)
+    await db_session.commit()
+    assert response.text == weather.NO_PLACE_ADMIN_LINE
+    assert "start typing your town" in response.text
+
+
+@pytest.mark.asyncio
+async def test_no_place_answer_steps_aside(monkeypatch) -> None:
+    """Not for another place, a weather plugin, a house set to never use the
+    internet, a set Home location, or a question that isn't weather."""
+    from domovoi import weather
+
+    ctx = Context(room_id="kitchen", online=True)
+
+    async def none():
+        return None
+
+    async def springfield():
+        return {"name": "Springfield", "lat": None, "lon": None, "query": "Springfield"}
+
+    monkeypatch.setattr(weather, "household_place", none)
+    with egress.override_policy("always"):
+        assert await weather.no_place_answer("what's the weather", ctx) == weather.NO_PLACE_LINE
+        assert await weather.no_place_answer("what's the weather in paris", ctx) is None
+        assert await weather.no_place_answer("how hot is it at the beach", ctx) is None
+        assert await weather.no_place_answer("what's the weather in the morning", ctx) is not None
+        assert await weather.no_place_answer("set a timer for 10 minutes", ctx) is None
+        CAPABILITIES.register(WEATHER_PROVIDER, object(), slug="wx-test")
+        try:
+            assert await weather.no_place_answer("what's the weather", ctx) is None
+        finally:
+            CAPABILITIES.unregister(WEATHER_PROVIDER, slug="wx-test")
+    with egress.override_policy("never"):
+        assert await weather.no_place_answer("what's the weather", ctx) is None
+    from domovoi import ai_features
+
+    with egress.override_policy("always"), ai_features.override(False):
+        assert await weather.no_place_answer("what's the weather", ctx) is None
+    monkeypatch.setattr(weather, "household_place", springfield)
+    with egress.override_policy("always"):
+        assert await weather.no_place_answer("what's the weather", ctx) is None
+
+
+def test_the_place_is_the_dashboards() -> None:
+    from pathlib import Path
+
+    from domovoi import weather
+
+    jsx = (Path(__file__).resolve().parents[2] / "web" / "static" / "settings.jsx").read_text(
+        encoding="utf-8")
+    assert "label: 'Home location'" in jsx and "label: 'Household'" in jsx
+    card = (Path(__file__).resolve().parents[2] / "web" / "static" / "home_location.jsx").read_text(
+        encoding="utf-8")
+    assert "start typing your town" in card
+    assert weather.PLACE_HOME_LOCATION == "Settings → Household → Home location"

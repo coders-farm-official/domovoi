@@ -43,6 +43,7 @@ from domovoi.uncertainty import (
     answer_admits_staleness,
     answer_offers_lookup,
     categorize_question,
+    is_local_lookup,
     looks_like_question,
 )
 from domovoi.log_privacy import said
@@ -323,7 +324,22 @@ _REQUEST_PREAMBLE_RE = re.compile(
 def strip_request_preamble(transcript: str, handlers: Iterable[Handler] | None = None) -> str:
     """``transcript`` (normalized, filler-stripped) without a leading "is
     there a way to" when what follows is a fast-path command (of
-    ``handlers``, the live registry by default); else as is."""
+    ``handlers``, the live registry by default); else as is.
+
+    Likewise a role claim in front of a command ("I'm the owner, set a
+    timer for 5 minutes"): saying it grants nothing, so the command is
+    the turn, with its own rules (domovoi/role_claims.py). A claim whose
+    rest no fast path takes stays whole: the voice profile handler
+    answers it."""
+    from domovoi import role_claims
+
+    claim = role_claims.split_claim(transcript)
+    if claim is not None and claim[1]:
+        cmd = strip_leading_filler(claim[1])
+        hit = first_fast_path(cmd, handlers)
+        if hit is not None and hit[0].name != "voice_profile":
+            return cmd
+        return transcript
     m = _REQUEST_PREAMBLE_RE.match(transcript)
     if not m:
         return transcript
@@ -897,6 +913,50 @@ async def _record_failed_turn(
     return response
 
 
+def _claim_line_for(unstripped: str, transcript: str, ctx: Context) -> str | None:
+    """The easter-egg line for an authority claim the router dropped from
+    in front of a command (``strip_request_preamble``), or None."""
+    if unstripped == transcript:
+        return None
+    from domovoi import owner_easter_eggs, role_claims
+
+    claim = role_claims.split_claim(unstripped)
+    if claim is None or not claim[1] or not role_claims.is_authority(claim[0]):
+        return None
+    return owner_easter_eggs.claim_line(ctx.session_id or ctx.room_id or "")
+
+
+def _after_claim(response: Response, line: str | None) -> None:
+    """"<claim line> <the command's own reply>"."""
+    if line and response.text:
+        response.text = f"{line} {response.text}"
+    elif line:
+        response.text = line
+
+
+async def _settings_answer(transcript: str, ctx: Context) -> str | None:
+    """A fixed answer for a turn no fast path took, when the house's own
+    settings already decide it; None otherwise (the turn goes on to the
+    models). ``transcript`` is normalized and filler-stripped.
+
+    * A weather question about home with no Home location set: where an
+      admin sets it (domovoi/weather.py, ``no_place_answer``), not a web
+      search for "what's the weather".
+    * A local lookup ("restaurants near me") on a house set to never use
+      the internet: it needs the internet, and where an admin changes that
+      (M10, case 5.9), not the model's hedge and "try a mapping service"."""
+    if ctx.capped_capture:
+        return None
+    if egress.internet_turned_off() and is_local_lookup(transcript):
+        from domovoi import off_answers
+
+        return off_answers.with_turn_on(
+            "I'd need the internet for that, and this house is set to never use it.",
+            off_answers.INTERNET, admin=ctx.proven_admin,
+        )
+    return await weather.no_place_answer(transcript, ctx)
+
+
 async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
     # Conversational chat mode (Feature 8) is bypassed UPSTREAM of this
     # function. When a session is in ``conversational_mode`` (set by
@@ -1050,7 +1110,13 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
     # tool-call and QA fallback paths below intentionally use
     # `intent.transcript` (raw) so the LLM sees the user's natural
     # phrasing, not the stripped version.
-    transcript = strip_request_preamble(strip_leading_filler(transcript))
+    unstripped = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(unstripped)
+    # "I'm the owner, set a timer for 10 minutes": the claim was dropped and
+    # the command is the turn. It grants nothing (Context.proven_admin is
+    # untouched); its reply is a joke line, then the command's own reply
+    # (domovoi/owner_easter_eggs.py).
+    claim_line = _claim_line_for(unstripped, transcript, ctx)
 
     # 1. Fast paths (with offline gate), over the band-sorted registry.
     #
@@ -1077,6 +1143,7 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         handler, fp, m = hit
         if offline_blocked(handler, fp, ctx) and phone_refusal(handler, ctx) is None:
             response = await handler.fallback_offline(intent, ctx, session)
+            _after_claim(response, claim_line)
             response.matched_handler = handler.name
             response.matched_path = "fast_offline"
             response.session_id = session_id
@@ -1102,6 +1169,7 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
         if response is not None:
+            _after_claim(response, claim_line)
             response.matched_handler = handler.name
             response.matched_path = "fast"
             response.session_id = session_id
@@ -1123,6 +1191,30 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         # turn goes on to the tool model and the Q&A model as if no fast
         # path had matched.
         log.info("fast path %s declined %r; routing on", handler.name, said(transcript))
+
+    # Answers the house's settings decide, before any model is asked: what
+    # Domovoi can't do here, and why, never depends on the small model.
+    fixed = await _settings_answer(transcript, ctx)
+    if fixed is not None:
+        response = Response(
+            text=fixed,
+            session_id=session_id,
+            matched_handler=None,
+            matched_path="qa",
+            online=ctx.online,
+            expect_followup=False,
+        )
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler=None,
+            matched_path="qa",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
 
     # AI features off (Settings → Chat & AI → Models, domovoi/ai_features.py): no
     # language model is asked anything — not the tool router, not the

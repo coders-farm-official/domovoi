@@ -227,6 +227,9 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
             "core.letter_author", "core.letter_dictation",
         },
         "memory": {"core.forget_what"},
+        # M2: "How long should it be?" / "What time should it go off?" (ask_detail).
+        "timer": {"core.timer_how_long"},
+        "reminder": {"core.alarm_what_time", "core.reminder_what_when"},
     }
 
 
@@ -259,6 +262,8 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
             "core.letter_author", "core.letter_dictation",
         },
+        "timer": {"core.timer_how_long"},
+        "reminder": {"core.alarm_what_time", "core.reminder_what_when"},
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds
