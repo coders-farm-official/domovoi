@@ -37,9 +37,10 @@ NOW_PLAYING_MATCHER = "now-playing-matcher"
 # core steps aside (no weather lookup, no "want me to check?" offer).
 WEATHER_PROVIDER = "weather"
 
-# Canonical graceful-absence voice/UI copy (design §4.8, locked 6).
+# Canonical graceful-absence voice/UI copy (design §4.8, locked 6). Said by
+# feature: replies never name a provider or a plugin.
 ACQUISITION_ABSENCE_MESSAGE = (
-    "I've noted that down, but no media provider is installed to fetch it."
+    "I've noted that down, but downloading isn't set up on this house."
 )
 # No longer spoken by core (2026-11-05: replies never mention providers);
 # kept for plugins that imported it.

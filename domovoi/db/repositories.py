@@ -196,6 +196,26 @@ class TimerRepository:
             return None
         return int(result[0]), result[1], result[2]
 
+    async def list_active(
+        self, room_id: str | None
+    ) -> list[tuple[datetime, datetime, str | None]]:
+        """The room's plain timers, soonest first: (expires_at, created_at,
+        label). What "what timers do I have" reads; reminders and alarms
+        are not timers. Scoped as :meth:`next_active` is."""
+        rows = await self.s.execute(
+            text(
+                """
+                SELECT expires_at, created_at, label
+                FROM timers
+                WHERE room_id IS NOT DISTINCT FROM :room_id
+                  AND message IS NULL
+                ORDER BY expires_at ASC
+                """
+            ),
+            {"room_id": room_id},
+        )
+        return [(r[0], r[1], r[2]) for r in rows.all()]
+
     async def next_for_status(
         self, room_id: str | None
     ) -> tuple[int, datetime, str | None, str | None] | None:

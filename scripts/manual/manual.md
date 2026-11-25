@@ -220,12 +220,14 @@ time it comes; add morning, evening, am or pm to be sure.
 - "set a timer for 10 minutes"
 - "set a timer for 8 minutes for the pasta"
 - "how much time is left on the timer"
+- "what timers do I have"
 - "cancel the timer"
 - "remind me to call Mom in 20 minutes"
 - "remind me in 2 hours to take the bins out"
 - "remind me at 6 pm to take the bins out"
 - "wake me up at 7"
 - "set an alarm for 6:30"
+- "is my alarm set"
 - "cancel the 7 am alarm"
 - "what reminders do I have"
 
@@ -334,7 +336,9 @@ to house, with no company server in between): friends are other Domovoi houses. 
 everyone in the household; making and managing friends is under **Friends and connections** *(admin)*.
 To send one a message, say "message" and its name with the message, like
 "message the Smiths dinner's at six" (or "tell the Smiths …" when AI
-features are on): Domovoi reads it back and sends it when you say yes. Messages are read aloud only when you ask, and anyone in the
+features are on): Domovoi reads it back and sends it when you say yes. It says "Sent" once
+their house has it; when their house can't be reached, it says the message is queued and will go when
+it can. Ask "did my message send?" to hear where it is. Messages are read aloud only when you ask, and anyone in the
 room will hear them.
 
 **App:** on a room's page, tap **drop in from this phone** to talk to that

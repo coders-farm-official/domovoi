@@ -17,6 +17,9 @@ house already does with its friends.
   change how every such turn is planned (router.plan_route), not just ours.
 * **Check:** "any messages?", "do we have any new messages from friends?"
   says how many are unread, and from whom. Never the text.
+* **Did it send:** "did my message send?", "was my message to the Smiths
+  delivered?" says whether the newest message this house sent went:
+  delivered (the friend acknowledged it), still waiting, or not delivered.
 * **Read:** "read my messages", "read the messages from the Smiths" reads
   the unread ones aloud, oldest first, and marks them read. Only on
   request, whatever a friend's alert level: anyone in the room hears them.
@@ -63,6 +66,12 @@ _CHECK_RE = re.compile(
 _READ_RE = re.compile(
     r"^read (?:me )?(?:my |our |the |any |new )*(?:friend (?:house )?)?messages?"
     r"(?: from (?P<name>.+))?$"
+)
+_STATUS_RE = re.compile(
+    r"^(?:did|has|have|was|is) (?:my|our|the) (?:last |latest )?(?:friend (?:house )?)?"
+    r"(?:message|note)(?: to (?P<name>.+?))?"
+    r" (?:send|sent|go|go through|gone|gone through|get sent|get delivered|been sent|been delivered"
+    r"|delivered|arrive|arrived|get there)$"
 )
 _LEAD_IN_RE = re.compile(r"^[\s,:;-]*(?:(?:saying|that|to say|and say)\b[\s,:;]*)?")
 # How long the friend names the patterns below know are trusted before a
@@ -270,6 +279,7 @@ class FriendHousesHandler(Handler):
         self.fast_paths = [
             FastPath(_CHECK_RE, FriendHousesHandler._check),
             FastPath(_READ_RE, FriendHousesHandler._read),
+            FastPath(_STATUS_RE, FriendHousesHandler._status),
             FastPath(_MESSAGE_RE, FriendHousesHandler._send),
             FastPath(_SEND_NAMED_RE, FriendHousesHandler._send_named),
             FastPath(_LET_KNOW_RE, FriendHousesHandler._send_named),
@@ -339,12 +349,51 @@ class FriendHousesHandler(Handler):
         from domovoi.friend_houses import messages
 
         try:
-            await messages.send(str(data.get("friend_id")), str(data.get("text") or ""))
+            row = await messages.send(str(data.get("friend_id")), str(data.get("text") or ""))
         except messages.MessageError as e:
             return self._reply(ctx, str(e))
         name = messages.safe_name(str(data.get("name") or ""), await messages.wake_phrases())
-        return self._reply(ctx, f"Sent to {name or 'them'}.",
-                           history_text="I sent it to the friend house.")
+        # "Sent" only once the friend acknowledged it (N6): send() queues and
+        # tries at once; a house that's offline keeps it in the outbox.
+        if await messages.wait_delivered(int(row["id"])) == "sent":
+            return self._reply(ctx, f"Sent to {name or 'them'}.",
+                               history_text="I sent it to the friend house.")
+        return self._reply(ctx, f"Queued for {name or 'them'}. It'll go when their house is reachable.",
+                           history_text="I queued it for the friend house; it isn't delivered yet.")
+
+    # ─── did it send ──────────────────────────────────────────────────
+    async def _status(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
+        if not _on():
+            return self._reply(ctx, "Friend Houses isn't turned on, so no messages were sent.")
+        from domovoi.friend_houses import messages
+
+        phrases = await messages.wake_phrases()
+        named = (m.groupdict().get("name") or "").strip()
+        house: bytes | None = None
+        if named:
+            for c in await messages.conversations():
+                if any(_fold(named) == _fold(form) for form in spoken_forms(c["name"]) | {c["name"]}):
+                    house = bytes.fromhex(c["house"])
+                    break
+            if house is None:
+                found = split_friend(named, await _friends(session))
+                if found is None or found[1]:
+                    return None  # not a friend house: route on
+                return self._reply(
+                    ctx, f"You haven't sent {messages.safe_name(found[0].local_name, phrases)} any messages.")
+        last = await messages.last_sent(house)
+        if last is None:
+            return self._reply(ctx, "You haven't sent any friend house messages.")
+        name = messages.safe_name(last["name"], phrases) or "them"
+        if last["state"] == "sent":
+            text_ = f"Yes. Your last message to {name} was delivered."
+        elif last["state"] == "failed":
+            text_ = f"No. Your last message to {name} wasn't delivered: their house was offline too long."
+        else:
+            text_ = (f"Not yet. Your last message to {name} is waiting to send. "
+                     "It'll go when their house is reachable.")
+        return self._reply(ctx, text_,
+                           history_text="I said whether the last friend house message was delivered.")
 
     # ─── check ────────────────────────────────────────────────────────
     async def _check(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:

@@ -371,7 +371,7 @@ async def test_add_after_missing_track_enqueues_acquisition_graceful_absence(
     response = await handler._add_after_this("uncatalogued banger", ctx, db_session)
     await db_session.commit()
 
-    assert "no media provider is installed" in response.text.lower()
+    assert "downloading isn't set up on this house" in response.text.lower()
     row = (
         await db_session.execute(
             sql_text(
