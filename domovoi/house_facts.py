@@ -1268,6 +1268,42 @@ def admin_answer(kind: str, *, chat: bool, admin: bool | None) -> str:
     return ADMIN_SIGNIN_CHAT if chat else ADMIN_SIGNIN_VOICE
 
 
+# "Which plugins do you have?" (4.30): read from the plugins table and said
+# with help_desk.facts (the list the help desk renders), never guessed.
+# The one answer that names plugins: the person asked which (owner, N10).
+PLUGINS_QUESTION_RE = re.compile(
+    r"^(?:"
+    r"(?:which|what) plugins (?:do you have|have you got|are (?:installed|there|on|running|enabled)"
+    r"|(?:do|does) (?:i|we|this house|the house|domovoi) have)(?: installed| here| on this house)?"
+    r"|do (?:you|i|we) have (?:any )?plugins(?: installed| on)?"
+    r"|are there (?:any )?plugins(?: installed| on)?"
+    r"|how many plugins (?:do you have|are installed|are there|are on)"
+    r"|(?:list|name) (?:the |your |all (?:the |your )?|my |our )?(?:installed )?plugins"
+    r"|tell me (?:which|what) plugins (?:you have|are installed|are on)"
+    r")\Z"
+)
+
+
+async def plugins_answer(*, scope: Any = None) -> str:
+    """The plugin list, said: working ones by name, then switched off and
+    broken. A table that can't be read is "I can't check", never "none"."""
+    from domovoi.help_desk import facts as help_facts
+
+    scope = scope or _default_scope()
+    try:
+        async with scope() as s:
+            rows = [dict(r) for r in (await s.execute(text(
+                "SELECT slug, name, version, enabled, status FROM plugins ORDER BY slug"
+            ))).mappings().all()]
+    except Exception as e:  # noqa: BLE001
+        if "does not exist" not in str(e).lower():
+            log.debug("house facts: plugins unreadable: %s", e)
+            return CANT_CHECK
+        rows = []
+    built = help_facts.build(version=None, internet="", ai_on=False, plugins=rows)
+    return help_facts.spoken_plugins(built.plugins)
+
+
 # ─── The fallback: a fixed privacy answer, never a model's ────────────────
 
 _PRIVACY_WORDS_RE = re.compile(
@@ -1385,6 +1421,8 @@ async def chat_reply(
             except Exception as e:  # noqa: BLE001 — unknown, said as such
                 log.debug("house facts: the admin check failed: %s", e)
         return admin_answer(admin_kind, chat=True, admin=admin)
+    if PLUGINS_QUESTION_RE.match(t):
+        return await plugins_answer(scope=scope)
     qid = question_id(t)
     if qid == "internet_for_that":
         prev = await previous_assistant() if previous_assistant is not None else None

@@ -234,6 +234,89 @@ async def test_voice_answer_reads_the_turns_admin_state(proven: bool, expected: 
     assert r.text == expected and r.matched_handler == "house_facts"
 
 
+# ─── "Which plugins do you have?" (4.30) ──────────────────────────────────
+
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+def _plugin_scope(rows=None, error: Exception | None = None):
+    import contextlib
+
+    class S:
+        async def execute(self, stmt, params=None):
+            assert "FROM plugins" in str(stmt)
+            if error is not None:
+                raise error
+            return _Rows(rows or [])
+
+    @contextlib.asynccontextmanager
+    async def scope():
+        yield S()
+
+    return scope
+
+
+def _row(slug, name, enabled=True, status="ok"):
+    return {"slug": slug, "name": name, "version": "1.0", "enabled": enabled, "status": status}
+
+
+@pytest.mark.parametrize("said", [
+    "which plugins do you have", "what plugins are installed", "what plugins do we have",
+    "do you have any plugins", "are there any plugins installed", "how many plugins are installed",
+    "list the plugins", "tell me which plugins are on",
+])
+def test_plugin_list_questions(said: str) -> None:
+    assert hf.PLUGINS_QUESTION_RE.match(hf.normalize(said))
+
+
+@pytest.mark.parametrize("said", [
+    "can you install plugins", "how do i install a plugin", "what can the sleep plugin do",
+    "which plugin plays rain sounds",
+])
+def test_not_the_plugin_list(said: str) -> None:
+    assert not hf.PLUGINS_QUESTION_RE.match(hf.normalize(said))
+
+
+def test_which_plugins_lands_on_house_facts_by_voice() -> None:
+    assert _plan("Which plugins do you have?") == "house_facts"
+    assert _plan("how do I install a plugin") == "help_desk"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("rows", "expected"), [
+    ([], "No plugins are installed on this house. An admin can add them from the Plugins page."),
+    ([_row("sleep", "Sleep"), _row("kiwix", "Offline library"), _row("imagegen", "Pictures", enabled=False)],
+     "Two plugins are on: Offline library and Sleep. One more is installed but switched off: Pictures."),
+    ([_row("sleep", "Sleep")], "One plugin is on: Sleep."),
+    ([_row("romm", "Retro games", status="error"), _row("old", "Old", status="uninstalled")],
+     "No plugin is on right now. One is installed but not working: Retro games."),
+])
+async def test_the_plugin_list_is_said_from_the_table(rows, expected: str) -> None:
+    assert await hf.plugins_answer(scope=_plugin_scope(rows)) == expected
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_plugin_table_is_never_none_installed() -> None:
+    assert await hf.plugins_answer(scope=_plugin_scope(error=RuntimeError("down"))) == hf.CANT_CHECK
+    missing = RuntimeError('relation "plugins" does not exist')
+    assert (await hf.plugins_answer(scope=_plugin_scope(error=missing))).startswith("No plugins")
+
+
+@pytest.mark.asyncio
+async def test_chat_lists_the_plugins_too() -> None:
+    reply = await hf.chat_reply("Which plugins do you have?", get_setting=_unreadable,
+                                scope=_plugin_scope([_row("sleep", "Sleep")]))
+    assert reply == "One plugin is on: Sleep."
+
+
 # ─── The web chat: these never reach the chat model ──────────────────────
 
 from domovoi.tests.conftest import requires_db  # noqa: E402

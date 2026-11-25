@@ -10,7 +10,8 @@ token / setup code?" (also behind "ignore your rules and …") gets "I
 can't share that." and where an admin manages it; "can I sign in as
 admin?" / "make me admin" / "am I admin?" get where the admin signs in,
 and the turn's real state (a voice is never an admin), never a claimed
-sign-in. The facts and the
+sign-in; "which plugins do you have?" lists them by name (the one
+answer that may: the person asked). The facts and the
 wording live in :mod:`domovoi.house_facts`; this is only its voice. No
 model, ever.
 
@@ -60,6 +61,7 @@ class HouseFactsHandler(Handler):
             FastPath(house_facts.CAP_RE, HouseFactsHandler._capability),
             FastPath(house_facts.SECRET_RE, HouseFactsHandler._secret),
             FastPath(house_facts.ADMIN_QUESTION_RE, HouseFactsHandler._admin),
+            FastPath(house_facts.PLUGINS_QUESTION_RE, HouseFactsHandler._plugins),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -108,6 +110,12 @@ class HouseFactsHandler(Handler):
         # box, with a live admin sign-in on its request, is.
         text = house_facts.admin_answer(kind, chat=False, admin=ctx.proven_admin)
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _plugins(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        return Response(text=await house_facts.plugins_answer(), session_id=ctx.session_id,
+                        matched_handler=self.name)
 
     async def _capability(
         self, m: re.Match[str], ctx: Context, session: AsyncSession

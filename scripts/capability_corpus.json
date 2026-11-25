@@ -877,7 +877,8 @@
         "off|disabled"
       ],
       "allow_plugin_names": true,
-      "note": "lists the 2 by name (allowed: the person asked which plugins) and says 1 is switched off"
+      "note": "lists the 2 by name (allowed: the person asked which plugins) and says 1 is switched off",
+      "stub": true
     },
     {
       "id": "4.31",
