@@ -1468,6 +1468,14 @@ class Settings(BaseSettings):
     # often the checker looks for a plugin that is due. Each GitHub-installed
     # plugin's repo is asked once a day; never under "never".
     plugin_update_check_tick_sec: float = 3600.0
+    # Update notices (domovoi/update_notice.py, 1.5.0): look for a new
+    # signed Domovoi release once a day and at start, only when this is on
+    # AND the internet answer is Yes (always). Nothing is ever installed by
+    # itself. The About & updates card owns the checkbox.
+    update_auto_check: bool = True
+    # How often the update-notice worker wakes to see whether a check is
+    # due (the check itself runs once a day). Read at start.
+    update_check_tick_sec: float = 3600.0
     # Default newest-N episodes to keep downloaded per show. Per-subscription
     # keep_n overrides this; used only as the default when a subscription
     # doesn't set its own. LRU eviction removes downloaded episodes beyond
