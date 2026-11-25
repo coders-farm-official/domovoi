@@ -25,14 +25,16 @@ public let homeUpdateNoticeGapMs: Int64 = 10 * 60_000
 /// A notice as `GET /api/updates/notice` answers it, held to its shape.
 public struct UpdateNotice: Equatable, Sendable {
     /// `X.Y.Z`, ASCII digits only, at most four per part (the server's
-    /// `TAG_RE`): at most 14 characters, and never split across lines.
-    public let version: String
+    /// `TAG_RE`): at most 14 characters, and never split across lines. Nil
+    /// while Domovoi restarts with nothing available to say.
+    public let version: String?
     /// Up to three plain-text strings; empty when the release has none.
     public let highlights: [String]
-    /// The update unit is running now.
+    /// The update unit is running now: Home says only that Domovoi is
+    /// restarting (``HomeUpdateNoticeStrings/restarting``).
     public let updating: Bool
 
-    public init(version: String, highlights: [String] = [], updating: Bool = false) {
+    public init(version: String?, highlights: [String] = [], updating: Bool = false) {
         self.version = version
         self.highlights = highlights
         self.updating = updating
@@ -44,10 +46,11 @@ public enum UpdateNotices {
 
     public static let path = "/api/updates/notice"
     public static let highlightsMax = 3
-    /// The dashboard's `updateHighlights` limit, counted as it counts
-    /// (JavaScript's `length`, UTF-16 units), so the three apps keep or drop
-    /// the same highlight.
-    public static let highlightMaxUTF16 = 80
+    /// The highlight limits, counted in code points (Unicode scalars: an
+    /// emoji is one) after NFC normalisation, as the server and the dashboard
+    /// count them, so the three keep or drop the same highlight.
+    public static let highlightMinScalars = 8
+    public static let highlightMaxScalars = 80
 
     /// The read, lenient. **Whatever the server answers decides**: an older
     /// server's 404, a refusal (401/403), any other 4xx, or a body that is
@@ -68,8 +71,11 @@ public enum UpdateNotices {
         return parse(data)
     }
 
-    /// `{available: true, version, highlights, found_by, found_at, updating}`
-    /// is a notice; `{available: false, updating: false}`, or anything else,
+    /// The rules (Core's final update-notice rules): `updating` the JSON
+    /// boolean `true` is Domovoi restarting, whatever `available` says
+    /// (`{available: false, updating: true}` is valid, even with the internet
+    /// answer No). Otherwise `{available: true, version, highlights, ...}` is
+    /// a notice, and `{available: false, updating: false}`, or anything else,
     /// is none. `available` must be the JSON boolean `true` and `version`
     /// `X.Y.Z`, or there is no row (the dashboard's `HomeUpdateRow`).
     public static func parse(_ data: Data?) -> UpdateNotice? {
@@ -81,18 +87,16 @@ public enum UpdateNotices {
 
     /// ``parse(_:)`` over what `JSONSerialization` hands back.
     public static func parse(json: Any) -> UpdateNotice? {
-        guard let object = json as? [String: Any], isTrue(object["available"]),
-              let version = object["version"] as? String, isVersion(version)
-        else { return nil }
-        return UpdateNotice(
-            version: version,
-            highlights: highlights(object["highlights"]),
-            updating: isTrue(object["updating"])
-        )
+        guard let object = json as? [String: Any] else { return nil }
+        let version = (object["version"] as? String).flatMap { isVersion($0) ? $0 : nil }
+        if isTrue(object["updating"]) { return UpdateNotice(version: version, highlights: [], updating: true) }
+        guard isTrue(object["available"]), let version else { return nil }
+        return UpdateNotice(version: version, highlights: highlights(object["highlights"]))
     }
 
-    /// The release's highlights as plain text (the dashboard's
-    /// `updateHighlights`): strings of 1 to 80 characters, the first three.
+    /// The release's highlights as plain text: strings of 8 to 80 Unicode
+    /// code points after NFC normalisation (``codePoints(_:)``), the first
+    /// three.
     /// A highlight holding a control character (a line break included) is
     /// dropped rather than drawn: each one is one plain line. Not a list:
     /// none.
@@ -103,11 +107,18 @@ public enum UpdateNotices {
                 .compactMap { $0 as? String }
                 .filter { text in
                     !text.trimmingCharacters(in: .whitespaces).isEmpty
-                        && text.utf16.count <= highlightMaxUTF16
+                        && (highlightMinScalars...highlightMaxScalars).contains(codePoints(text))
                         && !text.unicodeScalars.contains(where: isControl)
                 }
                 .prefix(highlightsMax)
         )
+    }
+
+    /// `text`'s length as the server counts it: Unicode scalars after NFC
+    /// (`precomposedStringWithCanonicalMapping`), never `count` (grapheme
+    /// clusters) or UTF-16 units. A decomposed é is one; so is an emoji.
+    public static func codePoints(_ text: String) -> Int {
+        text.precomposedStringWithCanonicalMapping.unicodeScalars.count
     }
 
     /// The dashboard's `HOME_VERSION_RE`, `^\d{1,4}\.\d{1,4}\.\d{1,4}$`,
@@ -139,7 +150,9 @@ public enum UpdateNotices {
 /// (`UpdateNoticeWords`).
 public enum HomeUpdateNoticeStrings {
     public static func available(_ version: String) -> String { "Domovoi \(version) is available" }
-    public static let updating = "Domovoi is updating…"
+    /// The one line while the update unit runs (Core's rule: Home never
+    /// says "updating"). The only copy of these words in the app.
+    public static let restarting = "Domovoi is restarting…"
     public static let adminCanInstall = "An admin can install it."
     /// The admin's button, once a phone can sign an admin in.
     public static let update = "Update"
@@ -147,7 +160,7 @@ public enum HomeUpdateNoticeStrings {
 
 /// The lines of the update row, apart from the row itself (key, tone).
 public struct UpdateNoticeLines: Equatable, Sendable {
-    /// "Domovoi 1.5.0 is available", or "Domovoi is updating…".
+    /// "Domovoi 1.5.0 is available", or ``HomeUpdateNoticeStrings/restarting``.
     public let title: String
     /// "An admin can install it." for everyone who can't; nil for an admin.
     public let sub: String?
@@ -193,7 +206,8 @@ public func noLoneLastWord(_ text: String) -> String {
 
 /// Home's update row (the dashboard's `HomeUpdateRow`): nil when there is no
 /// notice, and **always nil on an unpaired phone** (the read is device
-/// tier). While the update runs, "Domovoi is updating…" alone.
+/// tier). While the update runs, ``HomeUpdateNoticeStrings/restarting``
+/// alone: one line, no button, for anyone, whatever `available` says.
 ///
 /// `admin` is **the seam for the phone's admin sign-in**, which lives on
 /// another branch: an admin (not on a shared screen) gets the Update action
@@ -210,12 +224,13 @@ public func homeUpdateNoticeRow(
     let lines: UpdateNoticeLines
     if notice.updating {
         lines = UpdateNoticeLines(
-            title: HomeUpdateNoticeStrings.updating, sub: nil, highlights: [], canUpdate: false
+            title: HomeUpdateNoticeStrings.restarting, sub: nil, highlights: [], canUpdate: false
         )
     } else {
+        guard let version = notice.version else { return nil }
         let canUpdate = admin && !shared
         lines = UpdateNoticeLines(
-            title: HomeUpdateNoticeStrings.available(notice.version),
+            title: HomeUpdateNoticeStrings.available(version),
             sub: canUpdate ? nil : HomeUpdateNoticeStrings.adminCanInstall,
             highlights: notice.highlights,
             canUpdate: canUpdate

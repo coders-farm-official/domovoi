@@ -21,7 +21,7 @@ final class HomeUpdateNoticeTests: XCTestCase {
         "Commits on main never make a notice",
     ]
 
-    private func notice(_ version: String = "1.5.0", highlights: [String]? = nil, updating: Bool = false) -> UpdateNotice {
+    private func notice(_ version: String? = "1.5.0", highlights: [String]? = nil, updating: Bool = false) -> UpdateNotice {
         UpdateNotice(version: version, highlights: highlights ?? hl, updating: updating)
     }
 
@@ -51,17 +51,20 @@ final class HomeUpdateNoticeTests: XCTestCase {
         XCTAssertEqual(notice(), n)
     }
 
-    func testAManualNoticeWithNoHighlightsWhileUpdating() {
+    /// Core's final rule: `updating` true is Domovoi restarting, with a
+    /// notice or without one (even under the internet answer No).
+    func testUpdatingIsRestartingWhateverAvailableSays() {
         let n = parse("""
-            {"available": true, "version": "1.5.0", "highlights": [],
+            {"available": true, "version": "1.5.0", "highlights": \(json(hl)),
              "found_by": "manual", "found_at": "2026-11-25T08:02:11Z", "updating": true}
             """)
         XCTAssertEqual(notice(highlights: [], updating: true), n)
+        XCTAssertEqual(notice(nil, highlights: [], updating: true), parse(#"{"available": false, "updating": true}"#))
+        XCTAssertEqual(notice(nil, highlights: [], updating: true), parse(#"{"updating": true}"#))
     }
 
     func testNothingAvailableIsNoNotice() {
         XCTAssertNil(parse(#"{"available": false, "updating": false}"#))
-        XCTAssertNil(parse(#"{"available": false, "updating": true}"#))
         XCTAssertNil(parse(#"{"available": false, "version": "1.5.0"}"#))
     }
 
@@ -119,6 +122,23 @@ final class HomeUpdateNoticeTests: XCTestCase {
         XCTAssertEqual([at80, "fine words"], parsed?.highlights)
     }
 
+    func testHighlightsCountCodePointsNotUTF16Units() {
+        // As the server and the dashboard count: an emoji is one code point
+        // (two UTF-16 units), so 80 with an emoji is kept and 81 is dropped.
+        let at80 = String(repeating: "x", count: 79) + "\u{1F600}"
+        let at81 = String(repeating: "x", count: 80) + "\u{1F600}"
+        let emoji80 = String(repeating: "\u{1F600}", count: 80)
+        XCTAssertEqual(80, at80.unicodeScalars.count)
+        XCTAssertEqual(81, at80.utf16.count)
+        XCTAssertEqual(81, at81.unicodeScalars.count)
+        XCTAssertEqual(160, emoji80.utf16.count)
+        let list = [at81, at80, emoji80, emoji80 + "x"]
+        XCTAssertEqual(
+            [at80, emoji80],
+            parse(#"{"available": true, "version": "1.5.0", "highlights": \#(json(list))}"#)?.highlights
+        )
+    }
+
     func testMarkupInAHighlightStaysText() {
         let odd = [#"<b>bold</b> & <a href="x">a link</a>"#, "[docs](https://example.com)", "**not bold**"]
         let parsed = parse(#"{"available": true, "version": "1.5.0", "highlights": \#(json(odd))}"#)
@@ -157,12 +177,43 @@ final class HomeUpdateNoticeTests: XCTestCase {
         XCTAssertEqual("An admin can install it.", sharedAdmin?.sub)
     }
 
-    func testWhileUpdatingItSaysSoAndNothingElse() {
-        let u = homeUpdateNoticeRow(notice: notice(updating: true), paired: true, admin: true)?.update
-        XCTAssertEqual("Domovoi is updating…", u?.title)
-        XCTAssertNil(u?.sub)
-        XCTAssertEqual([], u?.highlights)
-        XCTAssertEqual(false, u?.canUpdate)
+    /// One line, no button, for anyone, whatever `available` says; and never
+    /// the word "updating".
+    func testWhileUpdatingItSaysOnlyThatDomovoiIsRestarting() {
+        let withNotice = parse(#"{"available": true, "version": "1.5.0", "highlights": \#(json(hl)), "updating": true}"#)
+        let without = parse(#"{"available": false, "updating": true}"#)
+        for n in [withNotice, without] {
+            for admin in [false, true] {
+                let row = homeUpdateNoticeRow(notice: n, paired: true, admin: admin)
+                XCTAssertEqual("Domovoi is restarting…", row?.text)
+                XCTAssertEqual("Domovoi is restarting…", row?.update?.title)
+                XCTAssertNil(row?.update?.sub)
+                XCTAssertEqual([], row?.update?.highlights)
+                XCTAssertEqual(false, row?.update?.canUpdate)
+                XCTAssertEqual(false, row?.update?.title.lowercased().contains("updating"))
+            }
+        }
+        XCTAssertEqual("Domovoi is restarting\u{2026}", HomeUpdateNoticeStrings.restarting)
+        XCTAssertNil(homeUpdateNoticeRow(notice: without, paired: false), "still never unpaired")
+        XCTAssertNil(homeUpdateNoticeRow(notice: notice(nil), paired: true), "neither available nor restarting")
+    }
+
+    func testHighlightsAreEightToEightyCodePointsAfterNFC() {
+        let seven = String(repeating: "x", count: 7)
+        let eight = String(repeating: "x", count: 8)
+        XCTAssertEqual([eight], UpdateNotices.highlights([seven, eight]))
+        // A decomposed é (e + U+0301) is one code point after NFC: seven
+        // letters and it make eight, and so are kept.
+        let decomposed = String(repeating: "x", count: 7) + "e\u{0301}"
+        XCTAssertEqual(9, decomposed.unicodeScalars.count)
+        XCTAssertEqual(8, UpdateNotices.codePoints(decomposed))
+        XCTAssertEqual([decomposed], UpdateNotices.highlights([decomposed]))
+        // ...and 79 letters and a decomposed é are 80, kept; 80 and it, 81.
+        let at80 = String(repeating: "x", count: 79) + "e\u{0301}"
+        let at81 = String(repeating: "x", count: 80) + "e\u{0301}"
+        XCTAssertEqual([at80], UpdateNotices.highlights([at81, at80]))
+        // Through the JSON too.
+        XCTAssertEqual([eight], parse(#"{"available": true, "version": "1.5.0", "highlights": \#(json([seven, eight]))}"#)?.highlights)
     }
 
     func testHiddenWhenUnpairedOrWithNothingAvailable() {
@@ -331,7 +382,7 @@ final class HomeUpdateNoticeTests: XCTestCase {
     func testNoLoneLastWordHoldsTheLastTwoWordsTogether() {
         XCTAssertEqual("Domovoi 1.5.0 is\u{00A0}available", noLoneLastWord("Domovoi 1.5.0 is available"))
         XCTAssertEqual("An admin can install\u{00A0}it.", noLoneLastWord("An admin can install it."))
-        XCTAssertEqual("Domovoi is\u{00A0}updating…", noLoneLastWord("Domovoi is updating…"))
+        XCTAssertEqual("Domovoi is\u{00A0}restarting…", noLoneLastWord(HomeUpdateNoticeStrings.restarting))
         XCTAssertEqual("two words", noLoneLastWord("two words"))
         XCTAssertEqual("one", noLoneLastWord("one"))
         // The words are the same, only how they may break changed.
@@ -391,6 +442,21 @@ final class HomeUpdateNoticeTests: XCTestCase {
                 }
             }
         }
+        // The restarting line is the title while the update runs: it never
+        // ends on one word, and its ellipsis never stands alone.
+        for size: CGFloat in [15, 17, 19, 21] {
+            for width in columns {
+                let got = lines(noLoneLastWord(HomeUpdateNoticeStrings.restarting), width: width, size: size, weight: .semibold)
+                let at = "restarting at \(width) pt, \(size) pt: \(got)"
+                XCTAssertTrue(got.allSatisfy { $0 != "…" }, at)
+                if got.count > 1 {
+                    XCTAssertGreaterThan(
+                        got.last!.split(whereSeparator: { $0 == " " || $0 == "\u{00A0}" }).count, 1,
+                        "a lone last word: \(at)"
+                    )
+                }
+            }
+        }
         // At the default size the longest version still fits on one line
         // with "Domovoi", and the rest follows whole.
         let longest = lines(noLoneLastWord(HomeUpdateNoticeStrings.available("1234.5678.9012")),
@@ -399,7 +465,7 @@ final class HomeUpdateNoticeTests: XCTestCase {
     }
 
     func testTheOtherLinesWrapWithoutALoneLastWord() {
-        let texts = [HomeUpdateNoticeStrings.adminCanInstall, HomeUpdateNoticeStrings.updating]
+        let texts = [HomeUpdateNoticeStrings.adminCanInstall]
             + hl + ["A highlight at the limit of eighty characters, which wraps on a narrow phone ok"]
         for size: CGFloat in [13, 15, 17] {
             for text in texts {

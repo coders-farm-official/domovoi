@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.text.Normalizer
 
 // ---------------------------------------------------------------------------
 // Update notices (1.5.0): Home's "Domovoi 1.5.0 is available" row, the
@@ -29,12 +30,14 @@ internal const val HOME_UPDATE_NOTICE_GAP_MS = 10 * 60_000L
 
 /** A notice as GET /api/updates/notice answers it, held to its shape. */
 internal data class UpdateNotice(
-    /** `X.Y.Z`, digits only, at most 4 per part (the server's TAG_RE). */
-    val version: String,
+    /** `X.Y.Z`, digits only, at most 4 per part (the server's TAG_RE);
+     *  null while Domovoi restarts with nothing available to say. */
+    val version: String?,
     /** Up to three plain-text strings; empty when the release has none. */
-    val highlights: List<String>,
-    /** The update unit is running now. */
-    val updating: Boolean,
+    val highlights: List<String> = emptyList(),
+    /** The update unit is running now: Home says only that Domovoi is
+     *  restarting ([UpdateNoticeWords.RESTARTING]). */
+    val updating: Boolean = false,
 )
 
 internal object UpdateNotices {
@@ -43,6 +46,7 @@ internal object UpdateNotices {
     /** The web's HOME_VERSION_RE: at most 14 characters, so it can't break a line. */
     private val VERSION = Regex("""^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$""")
     const val HIGHLIGHTS_MAX = 3
+    const val HIGHLIGHT_MIN_CHARS = 8
     const val HIGHLIGHT_MAX_CHARS = 80
 
     /**
@@ -67,32 +71,43 @@ internal object UpdateNotices {
         body?.let { runCatching { DomovoiJson.parseToJsonElement(it) }.getOrNull() }?.let(::parse)
 
     /**
-     * `{available: true, version, highlights, found_by, found_at, updating}`
-     * is a notice; `{available: false, updating: false}`, or anything else,
+     * The rules (Core's final update-notice rules): `updating` the JSON
+     * boolean true is Domovoi restarting, whatever `available` says
+     * (`{available: false, updating: true}` is valid, even with the internet
+     * answer No). Otherwise `{available: true, version, highlights, ...}` is
+     * a notice, and `{available: false, updating: false}`, or anything else,
      * is none. `available` must be the JSON boolean true, and `version`
      * `X.Y.Z`, or there is no row (web HomeUpdateRow).
      */
     fun parse(json: JsonElement): UpdateNotice? {
         val obj = json as? JsonObject ?: return null
-        if (!isTrue(obj["available"])) return null
         val version = (obj["version"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-            ?.takeIf { VERSION.matches(it) } ?: return null
-        return UpdateNotice(version, highlights(obj["highlights"]), isTrue(obj["updating"]))
+            ?.takeIf { VERSION.matches(it) }
+        if (isTrue(obj["updating"])) return UpdateNotice(version, emptyList(), updating = true)
+        if (!isTrue(obj["available"]) || version == null) return null
+        return UpdateNotice(version, highlights(obj["highlights"]))
     }
 
     /**
-     * The release's highlights as plain text (the web's updateHighlights):
-     * strings of 1 to 80 characters, the first three. A highlight holding a
-     * control character (a line break included) is dropped rather than
-     * drawn: each one is one plain line. Not a list: none.
+     * The release's highlights as plain text: strings of 8 to 80 Unicode
+     * code points after NFC normalisation (an emoji is one, a decomposed é
+     * is one), as the server counts them, the first three. A highlight
+     * holding a control character (a line break included) is dropped rather
+     * than drawn: each one is one plain line. Not a list: none.
      */
     fun highlights(json: JsonElement?): List<String> {
         val list = json as? JsonArray ?: return emptyList()
         return list.asSequence()
             .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
-            .filter { it.isNotBlank() && it.length <= HIGHLIGHT_MAX_CHARS && it.none(::isControl) }
+            .filter { it.isNotBlank() && codePoints(it) in HIGHLIGHT_MIN_CHARS..HIGHLIGHT_MAX_CHARS && it.none(::isControl) }
             .take(HIGHLIGHTS_MAX)
             .toList()
+    }
+
+    /** [text]'s length as the server counts it: code points after NFC. */
+    fun codePoints(text: String): Int {
+        val nfc = Normalizer.normalize(text, Normalizer.Form.NFC)
+        return nfc.codePointCount(0, nfc.length)
     }
 
     private fun isTrue(e: JsonElement?): Boolean {
@@ -101,7 +116,7 @@ internal object UpdateNotices {
     }
 
     private fun isControl(c: Char): Boolean =
-        Character.isISOControl(c) || c == ' ' || c == ' '
+        Character.isISOControl(c) || c == '\u2028' || c == '\u2029'
 }
 
 /** A notice read, with the server it was read from. */
@@ -112,7 +127,7 @@ internal data class ServerNotice(val server: String, val notice: UpdateNotice?) 
 
 /** The words of the update row, apart from the row itself (key, tone). */
 internal data class UpdateNoticeLines(
-    /** "Domovoi 1.5.0 is available", or "Domovoi is updating…". */
+    /** "Domovoi 1.5.0 is available", or [UpdateNoticeWords.RESTARTING]. */
     val title: String,
     /** "An admin can install it." for everyone who can't; null for an admin. */
     val sub: String?,
@@ -124,14 +139,17 @@ internal data class UpdateNoticeLines(
 
 internal object UpdateNoticeWords {
     fun available(version: String) = "Domovoi $version is available"
-    const val UPDATING = "Domovoi is updating…"
+    /** The one line while the update unit runs (Core's rule: Home never
+     *  says "updating"). The only copy of these words in the app. */
+    const val RESTARTING = "Domovoi is restarting…"
     const val ADMIN_CAN_INSTALL = "An admin can install it."
 }
 
 /**
  * Home's update row (web HomeUpdateRow): null when there is no notice, and
  * always null on an unpaired phone (the read is device tier). While the
- * update runs, "Domovoi is updating…" alone.
+ * update runs, [UpdateNoticeWords.RESTARTING] alone: one line, no button,
+ * for anyone, whatever `available` says.
  *
  * [admin] is the seam for the phone's admin sign-in, which lives on another
  * branch: an admin (not on a shared screen) gets the Update action and no
@@ -147,11 +165,12 @@ internal fun updateNoticeRow(
 ): AttentionRow? {
     if (!paired || notice == null) return null
     val lines = if (notice.updating) {
-        UpdateNoticeLines(UpdateNoticeWords.UPDATING, sub = null, highlights = emptyList(), canUpdate = false)
+        UpdateNoticeLines(UpdateNoticeWords.RESTARTING, sub = null, highlights = emptyList(), canUpdate = false)
     } else {
+        val version = notice.version ?: return null
         val canUpdate = admin && !shared
         UpdateNoticeLines(
-            title = UpdateNoticeWords.available(notice.version),
+            title = UpdateNoticeWords.available(version),
             sub = if (canUpdate) null else UpdateNoticeWords.ADMIN_CAN_INSTALL,
             highlights = notice.highlights,
             canUpdate = canUpdate,
