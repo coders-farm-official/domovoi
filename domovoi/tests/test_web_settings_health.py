@@ -129,10 +129,13 @@ _CHECKS = r"""
 _SEARCH = r"""
   const w = h.global('window');
   const fields = [{ name: 'acoustid_api_key', label: 'AcoustID key', group: 'Library' },
-                  { name: 'bot_name', label: 'Assistant name', group: 'General' }];
+                  { name: 'bot_name', label: 'Assistant name', group: 'General' },
+                  { name: 'voice_history_keep', label: 'Keep voice history', group: 'Privacy' }];
   const find = (q) => w.settingsSearch(w.settingsSearchIndex(w.settingsLayout().groups, fields), q)
     .map((x) => [x.label, x.where, x.route]);
   const before = { wake: find('wake'), history: find('voice history'), recordings: find('recordings'),
+                   keep: find('keep voice history'), commands: find('command recordings'),
+                   howLong: find('how long'),
                    printer: find('printer'), token: find('token'), acoustid: find('acoustid'),
                    satellite: find('satellite'), nothing: find('zzzz'), blank: find('  ') };
   // wf/printing's seam: a page script registers the panel, the slot shows.
@@ -597,8 +600,17 @@ def test_the_banner_and_the_old_containers_address_open_health() -> None:
 def test_search_jumps_straight_to_a_setting(driven) -> None:
     b = driven["search"]["before"]
     assert b["wake"][0] == ["Wake words", "Voice", "settings/wake-words"]
-    assert b["history"][0] == ["Voice history", "Privacy", "settings/voice-history"]
-    assert b["recordings"][0][0] == "Voice history"          # its old name finds it
+    # 1.5.0: "Keep voice history" is its own Privacy section, and the page
+    # once called "Voice history" is Command recordings.
+    assert b["history"][0] == ["Keep voice history", "Privacy", "settings/keep-voice-history"]
+    assert b["keep"][0] == ["Keep voice history", "Privacy", "settings/keep-voice-history"]
+    assert b["howLong"][0] == ["Keep voice history", "Privacy", "settings/keep-voice-history"]
+    assert b["commands"][0] == ["Command recordings", "Privacy", "settings/command-recordings"]
+    assert b["recordings"][0][0] == "Command recordings"
+    # The schema's field is found once, as the section: no second entry
+    # sending the search to Advanced.
+    assert not any(r[2] == "settings/advanced/voice_history_keep" for r in b["keep"] + b["history"])
+    assert sum(r[0] == "Keep voice history" for r in b["keep"]) == 1
     assert b["satellite"][0][0] == "Rooms"
     assert ["Household token", "Household › Phones & browsers",
             "settings/phones-and-browsers/household-token"] in b["token"]
