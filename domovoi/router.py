@@ -43,6 +43,7 @@ from domovoi.uncertainty import (
     answer_admits_staleness,
     answer_offers_lookup,
     categorize_question,
+    is_local_lookup,
     looks_like_question,
 )
 from domovoi.log_privacy import said
@@ -919,9 +920,19 @@ async def _settings_answer(transcript: str, ctx: Context) -> str | None:
 
     * A weather question about home with no Home location set: where an
       admin sets it (domovoi/weather.py, ``no_place_answer``), not a web
-      search for "what's the weather"."""
+      search for "what's the weather".
+    * A local lookup ("restaurants near me") on a house set to never use
+      the internet: it needs the internet, and where an admin changes that
+      (M10, case 5.9), not the model's hedge and "try a mapping service"."""
     if ctx.capped_capture:
         return None
+    if egress.internet_turned_off() and is_local_lookup(transcript):
+        from domovoi import off_answers
+
+        return off_answers.with_turn_on(
+            "I'd need the internet for that, and this house is set to never use it.",
+            off_answers.INTERNET, admin=ctx.proven_admin,
+        )
     return await weather.no_place_answer(transcript, ctx)
 
 

@@ -1034,7 +1034,8 @@
       "kind": "command",
       "must_include": [
         "internet"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "5.10a",
