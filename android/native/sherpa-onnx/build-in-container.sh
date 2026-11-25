@@ -76,7 +76,7 @@ fi
 # ── Build ────────────────────────────────────────────────────────────────
 # Sources unset, so build-native.sh clones each at its pinned commit, as
 # F-Droid's srclibs are.
-ANDROID_NDK=$NDK ORT_AAR=/work/$ORT_AAR_NAME WORK=/work OUT=/out \
+ANDROID_NDK=$NDK ORT_AAR=/work/$ORT_AAR_NAME SHERPA_WORK=/work SHERPA_OUT=/out \
   ABIS="${ALL_ABIS[*]}" bash /src/build-native.sh
 
 # ── Record ───────────────────────────────────────────────────────────────
