@@ -85,7 +85,11 @@ ROUTES: dict[str, dict] = {
     "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
     "settings/search": {"dashboard": "#settings/search", "app": {"dashboard": True}},
     "settings/fonts": {"dashboard": "#settings/fonts", "app": {"dashboard": True}},
-    "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
+    # "Voice history" until 1.5.0 (the command recordings): the app's tab
+    # for them is still "voice-history" until the apps rename it.
+    "settings/command-recordings": {"dashboard": "#settings/command-recordings", "app": {"screen": "Settings", "tab": "voice-history"}},
+    # Keep voice history (1.5.0): the app has no tab for it yet.
+    "settings/keep-voice-history": {"dashboard": "#settings/keep-voice-history", "app": {"dashboard": True}},
     # Listening history (2026-11-12): the app has no tab for it yet.
     "settings/listening-history": {"dashboard": "#settings/listening-history", "app": {"dashboard": True}},
     "settings/music-mix": {"dashboard": "#settings/music-mix", "app": {"dashboard": True}},

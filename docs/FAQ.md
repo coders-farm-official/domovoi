@@ -495,13 +495,19 @@ Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's o
 
 **90 days by default, and yes.** Domovoi writes down what people say to it
 and what it answered, so the Conversations and Sessions tabs can show it
-(to paired devices only). On the dashboard, **Settings → Household → People → Voice history** has:
+(to paired devices only). On the dashboard:
 
-- **Keep voice history**: 30 days, 90 days (the default), 1 year, or
-  Forever. Anything older is deleted once a day, and right away when you
-  pick a shorter time. It's also in Settings → System → Advanced → Privacy.
-- **Delete all voice history**: deletes everything said until now, in every
-  room and on every phone, after a confirmation that lists what goes.
+- **Settings → Privacy → Keep voice history**: 30 days, 90 days (the
+  default), 1 year, or Forever. Anything older is deleted once a day, and
+  right away when you pick a shorter time. An admin changes it; everyone
+  else can see what it is set to. Settings → Household → People → Voice
+  history and Settings → System → Advanced → Privacy show it and link there.
+- **Delete all voice history** (Settings → Household → People → Voice
+  history, an admin): deletes everything said until now, in every room and
+  on every phone, after a confirmation that lists what goes.
+
+The opt-in command recordings (off unless an admin turns them on for a
+room, 14 days at most) are on **Settings → Privacy → Command recordings**.
 
 Forgetting one person ("forget me" in their own voice, then "yes" when
 Domovoi asks, or **forget person** on their Profile tab) deletes what *they*

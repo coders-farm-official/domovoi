@@ -2485,8 +2485,21 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
     // The media paths have their own section (media_folders.jsx), which
     // shows the folder a person can open on every kind of install.
     const paths = list.some((f) => f.group === 'Paths');
+    // "Keep voice history" is edited in Settings → Privacy (1.5.0): its
+    // group here says what it is and links there, no second control.
+    const keepVoice = list.find((f) => f.name === 'voice_history_keep');
     // "Updates" is the About & updates card's own checkbox.
-    const grouped = _groupBy(list.filter((f) => f.group !== 'Internet' && f.group !== 'Paths' && f.group !== 'Updates'));
+    const grouped = _groupBy(list.filter((f) => f.group !== 'Internet' && f.group !== 'Paths' && f.group !== 'Updates'
+                                               && f.name !== 'voice_history_keep'));
+    if (keepVoice && !grouped[keepVoice.group || 'Privacy']) grouped[keepVoice.group || 'Privacy'] = [];
+    const keepVoiceLine = keepVoice && (
+      <div key="keep-voice-history-pointer" className="config-keep-voice-pointer" style={{ fontSize: 13, padding: '6px 0 8px' }}>
+        <span style={{ fontWeight: 500 }}>{keepVoice.label}: </span>
+        <span>{(keepVoice.choice_labels || {})[keepVoice.value] || keepVoice.value}</span>
+        <span style={{ color: 'var(--fg-muted)' }}> · change it in </span>
+        <a href="#settings/keep-voice-history" className="home-link">Settings → Privacy → Keep voice history</a>
+      </div>
+    );
     const pointer = paths && (
       <div key="media-folders-pointer" className="config-media-pointer" style={{ fontSize: 13, padding: '6px 0 12px' }}>
         <span style={{ fontWeight: 500 }}>Media folders: </span>
@@ -2498,6 +2511,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
       <div key={group} style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
                       color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 2 }}>{group}</div>
+        {keepVoice && group === (keepVoice.group || 'Privacy') && keepVoiceLine}
         {grouped[group].map(f => (f.name === 'acoustid_api_key'
           ? <AcoustidKeyField key={f.name} f={f} value={valueOf(f)} internetOff={internetOff}
                               marked={marked === f.name} onChange={v => setEdit(f.name, v)}/>
@@ -6527,7 +6541,7 @@ const SETTINGS_GROUPS = [
     sections: ['rooms', 'people', 'phones-and-browsers', 'home-location', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat', 'photos-and-videos'] },
-  { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
+  { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'keep-voice-history', 'command-recordings', 'listening-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
   { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'app-layout', 'advanced', 'support-sessions'] },
 ];
@@ -6608,9 +6622,17 @@ const SETTINGS_SECTIONS = [
   { id: 'internet', label: 'Internet',
     sub: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
     words: 'internet online offline network web connection search helper' },
-  { id: 'voice-history', label: 'Voice history', aliases: ['recordings'],
+  // people.jsx draws it (VoiceHistoryKeepPanel), 1.5.0: "Keep voice
+  // history" (voice_history_keep), here so what is kept and for how long
+  // is in one place; People → Voice history and Advanced point here.
+  { id: 'keep-voice-history', label: 'Keep voice history',
+    sub: 'How long what people say to Domovoi, and what it answered, is kept.',
+    words: 'voice history keep kept retention how long days year forever conversations sessions said transcript privacy delete' },
+  // "Voice history" until 1.5.0 (it is the command recordings): its old
+  // address, and the one before it, still open it.
+  { id: 'command-recordings', label: 'Command recordings', aliases: ['voice-history', 'recordings'],
     sub: 'Commands kept from the rooms you opted in, to tune when Domovoi stops listening — admins only.',
-    words: 'voice history recordings recording captures commands kept audio transcript privacy delete' },
+    words: 'command commands recordings recording captures kept audio transcript privacy delete tuning' },
   // people.jsx draws it (ListeningHistoryPanel), V051 (2026-11-12).
   { id: 'listening-history', label: 'Listening history',
     sub: 'The songs each room, browser and phone played, and for whom: how long they are kept, and deleting them.',
@@ -6681,7 +6703,11 @@ const settingsPanel = (id, marks) => {
     case 'greetings': return <GreetingsPanel/>;
     case 'models': return <ModelsPanel/>;
     case 'internet': return <InternetPanel/>;
-    case 'voice-history': return <CapturesPanel/>;
+    case 'command-recordings': return <CapturesPanel/>;
+    case 'keep-voice-history': {
+      const Panel = window.VoiceHistoryKeepPanel;
+      return typeof Panel === 'function' ? <Panel/> : null;
+    }
     case 'listening-history': {
       const Panel = window.ListeningHistoryPanel;
       return typeof Panel === 'function' ? <Panel/> : null;
@@ -6742,6 +6768,8 @@ const settingsSearchIndex = (groups, fields) => {
                    words: `${f.name.replace(/_/g, ' ')} updates ${(f.keywords || []).join(' ')} ${f.help || ''}` });
         return;
       }
+      // "Keep voice history" is its own section in Privacy (1.5.0).
+      if (f.name === 'voice_history_keep' && shown.has('keep-voice-history')) return;
       // The media paths are edited in Household → Media folders.
       if (f.group === 'Paths' && shown.has('media-folders')) {
         out.push({ key: `media-folders/${f.name}`, label: f.label, where: shown.get('media-folders'),

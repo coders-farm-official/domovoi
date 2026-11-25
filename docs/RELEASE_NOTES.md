@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Settings → Privacy: Keep voice history, Command recordings
+
+- **What changed.** "What's kept and for how long" is in one place,
+  Settings → Privacy. **Keep voice history** (`voice_history_keep`: 30
+  days, 90 days by default, 1 year or Forever) has its own section there,
+  `#settings/keep-voice-history`; an admin changes it, through the same
+  config edit as before (`PATCH /api/config/editable`). Settings →
+  Household → People → Voice history (which keeps **Delete all voice
+  history**) and Settings → System → Advanced → Privacy now show its value
+  and link there instead of a second control.
+- **Renamed.** The page that was called **Voice history** in Settings →
+  Privacy holds the opt-in command recordings, so it is now **Command
+  recordings**, at `#settings/command-recordings`. Its old addresses,
+  `#settings/voice-history` and `#settings/recordings`, still open it. The
+  room drawer's capture hint, the manual, the FAQ and SECURITY_PRIVACY.md
+  use the new names.
+
 ## 1.5.0 (unreleased) — Rooms: satellites name themselves; press Upgrade satellite
 
 - **What to do.** Press **Upgrade satellite** on every Raspberry Pi and

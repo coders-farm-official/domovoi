@@ -1451,8 +1451,9 @@ Related: the voice-identification denylist — `GET /api/denylist` (Open) and
 `DELETE /api/denylist/{entry_id}` (**Admin (Bearer)**: removing an opt-out
 puts someone back in front of the matcher, so it answers to the operator).
 
-**Voice history** (People → Voice history, 2026-10-17;
-`domovoi/voice_history.py`). "Keep voice history" is the setting
+**Voice history** (Settings → Privacy → Keep voice history since 1.5.0, People →
+Voice history for Delete all, 2026-10-17; `domovoi/voice_history.py`).
+"Keep voice history" is the setting
 `voice_history_keep` (`30`, `90` (the default), `365` or `forever`), written
 like any other through `PATCH /api/config/editable` (**Admin, security
 tier**); a save deletes what is now older at once, and the core's daily
