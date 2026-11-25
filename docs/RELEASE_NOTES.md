@@ -4,6 +4,40 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Voice help no longer sends the steps to your phone
+
+- **What changed.** Ask "how do I add a room?" out loud and Domovoi says
+  the short answer and the page it came from, then "The full answer is in
+  the manual." (for a plugin's page: "The full answer is in that plugin's
+  help."). It no longer asks "Want me to send the steps to your phone?",
+  never asks "Who should I send it to?", and makes no "Help: …" chat. It
+  needed three things at once (Domovoi knowing your voice, a phone marked
+  as yours, and the app reaching the server), and the manual is a tap
+  away. The **?** panel, **ask Domovoi** and help in chat work as before.
+- **What to know.** Nothing to do, no migration. "Help: …" chats sent
+  before stay in Chat. Photos are unchanged: a voice photo search still
+  asks "Do you want them on your phone?" and sends a "Photos: …" chat.
+  `GET /api/help/deliveries` and the `help_deliveries` live channel stay,
+  for the photos and for the apps that read them; they just get no new
+  help rows.
+
+## 1.5.0 (unreleased) — Settings → Privacy: Keep voice history, Command recordings
+
+- **What changed.** "What's kept and for how long" is in one place,
+  Settings → Privacy. **Keep voice history** (`voice_history_keep`: 30
+  days, 90 days by default, 1 year or Forever) has its own section there,
+  `#settings/keep-voice-history`; an admin changes it, through the same
+  config edit as before (`PATCH /api/config/editable`). Settings →
+  Household → People → Voice history (which keeps **Delete all voice
+  history**) and Settings → System → Advanced → Privacy now show its value
+  and link there instead of a second control.
+- **Renamed.** The page that was called **Voice history** in Settings →
+  Privacy holds the opt-in command recordings, so it is now **Command
+  recordings**, at `#settings/command-recordings`. Its old addresses,
+  `#settings/voice-history` and `#settings/recordings`, still open it. The
+  room drawer's capture hint, the manual, the FAQ and SECURITY_PRIVACY.md
+  use the new names.
+
 ## 1.5.0 (unreleased) — Rooms: satellites name themselves; press Upgrade satellite
 
 - **What to do.** Press **Upgrade satellite** on every Raspberry Pi and

@@ -542,7 +542,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
 
     # ─── Privacy ───────────────────────────────────────────────────────
-    # Also on People → Voice history, beside "Delete all voice history"
+    # Edited in Settings → Privacy → Keep voice history (1.5.0); People →
+    # Voice history and Advanced → Privacy show it and link there
     # (domovoi/voice_history.py). 'reapply': a save prunes at once.
     FieldSpec(
         "voice_history_keep", "Keep voice history", "Privacy",
