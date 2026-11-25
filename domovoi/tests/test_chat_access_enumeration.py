@@ -481,6 +481,58 @@ def test_the_behaviour_check_covers_every_child_route() -> None:
 from domovoi.tests.auth_testkit import _db  # noqa: E402,F401 — fixture
 
 
+def _fresh_web_app() -> Any:
+    """A fresh web app with the routers the chat checks need, included as
+    web/backend/main.py includes them (auth, devices, chat with the routers
+    it carries, help), and its chat refusal handler. The behaviour checks
+    run against it, not the global app: the chat_access dependency is on
+    the routes themselves, so this tests the real rule, and a route table
+    another test left changed can't fail a privacy check (that is
+    test_the_global_web_app_serves_every_chat_route's job)."""
+    import importlib
+
+    from fastapi import FastAPI
+
+    from domovoi.chat_access import ChatAccessRefused, refusal_response
+
+    app = FastAPI()
+    for mod in ("auth", "devices", "chat", "help"):
+        app.include_router(importlib.import_module(f"web.backend.api.{mod}").router)
+    chat = importlib.import_module("web.backend.api.chat")
+    have = {(m, r.path) for r in app.routes if _shaped(r) for m in r.methods}
+    for name in CHAT_SUBROUTERS:
+        # chat.py includes these into its router at import; should that
+        # router have lost them in this process, they are added here.
+        sub = importlib.import_module(f"web.backend.api.{name}").router
+        paths = {(m, chat.router.prefix + r.path) for r in sub.routes if _shaped(r) for m in r.methods}
+        if not paths <= have:
+            app.include_router(sub, prefix=chat.router.prefix)
+
+    async def _refused(request: Any, exc: ChatAccessRefused) -> Any:
+        return refusal_response(exc)
+
+    app.add_exception_handler(ChatAccessRefused, _refused)
+    return app
+
+
+def _fresh_client() -> Any:
+    from httpx import ASGITransport, AsyncClient
+
+    return AsyncClient(transport=ASGITransport(app=_fresh_web_app()), base_url="http://test",
+                       headers={"X-Requested-With": "domovoi-tests"})
+
+
+def test_the_global_web_app_serves_every_chat_route() -> None:
+    """ROUTE TABLE LEAK, not a privacy failure: the web app the server runs
+    serves every chat route the modules define. Two CI shards saw routes
+    missing from it, left so by some other test in the same process; a
+    failure here is that leak (find the test that changes
+    web.backend.main.app's routes), not a chat seen by the wrong device."""
+    served = {(m, r.path) for r in _web_app().routes if _shaped(r) for m in r.methods}
+    lost = sorted({(m, r.path) for r in _module_routes() if _is_chat_path(r.path) for m in r.methods} - served)
+    assert not lost, f"ROUTE TABLE LEAK: the global web app lost chat routes: {lost}"
+
+
 async def _ask(c: Any, method: str, url: str, headers: dict[str, str], body: dict[str, Any]) -> tuple[int, bytes]:
     """(status, body). A live stream (a job's events) that is still going
     after a few seconds was answered: it is never a 404."""
@@ -501,16 +553,10 @@ async def test_another_device_asking_for_a_chat_by_id(_db, tmp_path, monkeypatch
     exactly the answer a missing chat gets, and an admin's GET gets 200.
     MODE "shared": it gets the chat (anything but that answer)."""
     from domovoi.db.session import session_scope
-    from domovoi.tests.auth_testkit import HEADER, bearer, claim_admin, db_device_token, web_client
+    from domovoi.tests.auth_testkit import HEADER, bearer, claim_admin, db_device_token
     from web.backend.api import chat as chat_api
     from web.backend.api import chat_documents as docs_api
 
-    # The global web app must still serve every chat route; if a test
-    # elsewhere left its route table changed, say so here (with what is
-    # missing) rather than as a puzzling 404 below.
-    served = {(m, r.path) for r in _web_app().routes if _shaped(r) for m in r.methods}
-    lost = sorted(set(_child_routes()) - served)
-    assert not lost, f"the web app's route table lost chat routes (state leaked from another test?): {lost}"
     monkeypatch.setattr(ai_features, "turned_off", lambda: False)
     monkeypatch.setattr(chat_api, "UPLOADS_DIR", tmp_path / "up")
     monkeypatch.setattr(docs_api, "DOCS_DIR", tmp_path / "docs")
@@ -522,7 +568,7 @@ async def test_another_device_asking_for_a_chat_by_id(_db, tmp_path, monkeypatch
 
     monkeypatch.setattr(chat_api.ollama_client, "chat_stream", stream)
 
-    async with web_client() as c:
+    async with _fresh_client() as c:
         admin = await claim_admin(c)
         # The admin cookie the claim set would make every later request an
         # admin's read: the devices below speak with their own keys only.
@@ -580,9 +626,9 @@ async def test_another_device_asking_for_a_chat_by_id(_db, tmp_path, monkeypatch
 @pytest.mark.asyncio
 async def test_lists_and_search_follow_the_mode(_db) -> None:
     from domovoi.db.session import session_scope
-    from domovoi.tests.auth_testkit import HEADER, db_device_token, web_client
+    from domovoi.tests.auth_testkit import HEADER, db_device_token
 
-    async with web_client() as c:
+    async with _fresh_client() as c:
         token = await db_device_token()
         base = {"X-Requested-With": "domovoi-tests", **({HEADER: token} if token else {})}
 
