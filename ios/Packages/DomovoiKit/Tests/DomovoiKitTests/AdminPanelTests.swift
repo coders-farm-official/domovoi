@@ -54,6 +54,7 @@ final class AdminPanelTests: XCTestCase {
                 + "install an update or restart the Domovoi server (Settings → About & updates), "
                 + "rename or forget someone (People), "
                 + "delete a music track (its drawer), a file on the server (Files) or an audiobook (remove from server), "
+                + "rename or remove a printer (Settings → Printers), "
                 + "and lift a phone's queue or Files block (below). "
                 + "Everything else is on the dashboard for now.",
             AdminStrings.jobs

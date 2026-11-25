@@ -31,6 +31,12 @@ struct PrintersPanelView: View {
 
     let model: ShellModel
 
+    @State private var printerAdmin: PrinterAdminModel?
+
+    private var adminHeld: Bool {
+        printersAdminHeld(model.admin.state, sharedScreen: model.visibility.sharedScreen)
+    }
+
     @State private var panel: PrintersPanelModel?
 
     var body: some View {
@@ -114,6 +120,9 @@ struct PrintersPanelView: View {
         } message: { printer in
             Text(PrintingStrings.testPageBody(printer.displayTitle))
         }
+        .task(id: adminHeld) {
+            if adminHeld, printerAdmin == nil { printerAdmin = PrinterAdminModel(admin: model.container.admin) }
+        }
     }
 
     // MARK: - the saved list
@@ -147,12 +156,15 @@ struct PrintersPanelView: View {
             }
         } else {
             ForEach(panel.rows) { printer in
-                PrinterCardView(printer: printer, panel: panel)
+                PrinterCardView(printer: printer, panel: panel, admin: adminHeld ? printerAdmin : nil)
             }
-            Text(PrintingStrings.adminOnlyLine)
-                .font(.caption)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
+            // Rename and remove: admin on this phone (``PrinterAdminModel``).
+            if let line = printersAdminLine(model.admin.state, sharedScreen: model.visibility.sharedScreen) {
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
