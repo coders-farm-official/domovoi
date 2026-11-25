@@ -280,8 +280,18 @@ def normalize_transcript(raw: str) -> str:
 
 def strip_leading_filler(transcript: str) -> str:
     """Drop leading politeness ("please", "can you", "yeah,") so the
-    anchored fast-path regexes still match (see _LEADING_FILLER_RE)."""
-    return _LEADING_FILLER_RE.sub("", transcript)
+    anchored fast-path regexes still match (see _LEADING_FILLER_RE).
+    A "can you <X>?" question whose X is in the capability table, and no
+    command's, keeps its "can you" (house_facts.kept_question): it is
+    answered, not carried out."""
+    stripped = _LEADING_FILLER_RE.sub("", transcript)
+    if stripped != transcript:
+        from domovoi import house_facts
+
+        kept = house_facts.kept_question(transcript, stripped)
+        if kept is not None:
+            return kept
+    return stripped
 
 
 def first_fast_path(
@@ -1436,6 +1446,11 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
     except Exception as e:
         log.warning("profile_prefix build failed: %s", e)
         profile_prefix = ""
+    # A privacy-worded question the closed set didn't take: the house's
+    # facts go with it, as data (house_facts.with_facts_block; never fails).
+    from domovoi import house_facts
+
+    profile_prefix = await house_facts.with_facts_block(profile_prefix, intent.transcript, ctx) or ""
 
     # Plain QA path. The answer is spoken exactly as the model wrote it.
     # The "want me to check that online?" offer rides on it only for a

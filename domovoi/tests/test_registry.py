@@ -26,6 +26,7 @@ CORE_BANDS = {
     "dismiss": 100,
     "help": 105,
     "help_desk": 106,
+    "house_facts": 107,
     "voice_profile": 110,
     "wifi": 120,
     "voice": 130,

@@ -10,6 +10,8 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     100 dismiss          brush-offs win before anything acts
     105 help             "what can you do" / "help": whole closed questions
     106 help_desk        "how do I …" about Domovoi, from its own help; declines otherwise
+    107 house_facts      whole privacy questions ("are you recording me") and
+                         "can you X?" for the capability table, from real state
     110 voice_profile    "i'm Sarah" before any greedy capture
     120 wifi             "fix the wifi" wins over any future "fix"
     130 voice            device-control cluster near top
@@ -73,6 +75,7 @@ from domovoi.handlers.friend_houses import FriendHousesHandler
 from domovoi.handlers.help import HelpHandler
 from domovoi.handlers.help_desk import HelpDeskHandler
 from domovoi.handlers.homelab import HomelabHandler
+from domovoi.handlers.house_facts import HouseFactsHandler
 from domovoi.handlers.household_calendar import CalendarHandler
 from domovoi.handlers.intercom import IntercomHandler
 from domovoi.handlers.library import LibraryHandler
@@ -107,6 +110,7 @@ _CORE_HANDLERS: list[Handler] = [
     HelpHandler(),
     HelpDeskHandler(),
     HomelabHandler(),
+    HouseFactsHandler(),
     IntercomHandler(),
     LibraryHandler(),
     ListsHandler(),
@@ -174,6 +178,7 @@ __all__ = [
     "HelpHandler",
     "HelpDeskHandler",
     "HomelabHandler",
+    "HouseFactsHandler",
     "IntercomHandler",
     "LibraryHandler",
     "ListsHandler",
