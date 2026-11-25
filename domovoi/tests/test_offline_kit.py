@@ -660,3 +660,67 @@ def test_household_added_component_brings_its_notice(tmp_path: Path) -> None:
 def test_layout_folders_match_the_kinds() -> None:
     assert fmt.FOLDERS == ("apt", "images", "licences", "linux", "mac", "ollama", "phone",
                            "python", "release", "rooms", "source", "speech", "wake", "windows")
+
+
+# ── A kit made with "AI chat and questions" unticked ────────────────────
+# No models, Domovoi's Ollama all the same (owner decision, 1.5.0): the
+# format and the checker accept it, and provision.sh installs from it with
+# AI off, refusing a kit without Ollama whatever the AI answer.
+
+PROVISION = REPO / "scripts" / "linux" / "provision.sh"
+
+
+def _no_ai_components() -> list[Component]:
+    return [c for c in _components() if c.kind != "ollama-model"] + [
+        Component("ollama-runtime", "ollama", "0.34.4", "MIT",
+                  [Source("ollama/ollama-linux-amd64.tar.zst", b"ollama for linux")], pinned_by="docs/LINUX_HOST.md"),
+    ]
+
+
+def test_a_kit_with_no_models_is_accepted(tmp_path: Path) -> None:
+    root = tmp_path / "DOMOVOIKIT"
+    write_kit(root, version=VERSION, commit=COMMIT, components=_no_ai_components(), includes=[],
+              created_at="2026-11-22T10:15:00Z", part_size=PART)
+    report = _check(root)
+    assert report.errors == [] and report.ok
+    doc = _doc(root)
+    assert doc["includes"] == []
+    assert not [c for c in doc["components"] if c["kind"] == "ollama-model"]
+    assert [c["kind"] for c in doc["components"]].count("ollama-runtime") == 1
+    assert fmt.validate(doc) == ([], [])
+
+
+def _bash_function(text: str, name: str) -> str:
+    body = text[text.index(f"\n{name}() {{\n"):]
+    return body[: body.index("\n}\n")]
+
+
+def test_provision_refuses_a_kit_without_ollama_whatever_the_ai_answer() -> None:
+    text = PROVISION.read_text(encoding="utf-8")
+    check = _bash_function(text, "kit_check")
+    line = next(ln for ln in check.splitlines() if 'missing+=("Ollama (ollama/)")' in ln)
+    # Not under an AI or models condition.
+    assert "AI" not in line and "SKIP_MODELS" not in line and "kit_includes" not in line
+    # At the function's top level, not inside an if.
+    assert line.startswith("  [ ") and not line.startswith("   ")
+    # The AI refusal is not kit_check's: only an explicit ask for AI with a
+    # kit that has none is refused (kit_ai_check, after decide_ai).
+    assert '"$AI"' not in check
+    ai_check = _bash_function(text, "kit_ai_check")
+    assert '[ "$AI" = yes ]' in ai_check and "! kit_includes ai" in ai_check
+
+
+def test_provision_installs_a_kit_without_models_with_ai_off() -> None:
+    text = PROVISION.read_text(encoding="utf-8")
+    decide = _bash_function(text, "decide_ai")
+    kit_branch = decide.index("if kit && ! kit_includes ai; then")
+    # The option given comes first (--ai-models is then refused), the
+    # household's own .env answer next, then the kit, then the question.
+    assert decide.index('if [ -n "$AI_FLAG" ]') < kit_branch < decide.index("stdin_is_tty")
+    assert 'AI=no' in decide[kit_branch:kit_branch + 120]
+    # kit_check reads the kit (KIT_INCLUDES) before decide_ai asks, and
+    # kit_ai_check runs after it, all before anything is changed.
+    main = text[text.index("\nif kit; then kit_check; fi\n"):]
+    assert main.index("\ndecide_ai\n") < main.index("\nif kit; then kit_ai_check; fi\n") < main.index("take_lock")
+    # AI off: the models step is skipped and Ollama is still installed.
+    assert "Ollama is still installed" in text

@@ -5957,15 +5957,43 @@ case_kit_second_run_skips_everything() {
   end_case
 }
 
-case_kit_without_ai_models_says_how() {
-  kit_case kit_without_ai_models_says_how noai || return 0
-  run_prov --offline-kit "$KIT" --internet never
-  check "refused" eq "$RC" 1
-  check "in plain words" said "The kit has no AI models. Install with --no-ai-models"
-  check "before anything ran" not_called "apt-get"
-  run_prov --offline-kit "$KIT" --internet never --no-ai-models
-  check "with --no-ai-models it installs" eq "$(final_field result)" '"ok"'
+# A kit made with "AI chat and questions" unticked: no models, but Domovoi's
+# Ollama all the same (the kit builder's base group). It installs with no
+# option, AI off, Ollama installed and running from the kit, nothing pulled.
+case_kit_without_ai_models_installs_with_ai_off() {
+  kit_case kit_without_ai_models_installs_with_ai_off noai || return 0
+  local envf=$CHECKOUT/domovoi/.env
+  run_prov --offline-kit "$KIT" --internet never --timezone Etc/UTC
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "the final line says AI is off" eq "$(final_field ai)" false
+  check "said why at the start" said "AI chat and questions: left out (the offline kit has no AI models)"
+  check "not asked" bash -c "! grep -qF 'Include AI chat and questions?' '$CASE/output.log'"
+  check "nothing reached for the internet" no_internet
+  check "Ollama from the kit" test -x "$ROOT/usr/local/bin/ollama"
+  check "its step done" eq "$(state_of ollama)" done
+  check "and it runs" test -f "$STATE/active/ollama.service"
+  check "models skipped" eq "$(state_of models)" skip
+  check "says why" said "[models] skipped: the offline kit has no AI models: AI chat and questions are off"
+  check "no pull at all" not_called "/api/pull"
   check "no models" absent "$ROOT/home/ollama/.ollama/models/manifests"
+  check ".env: AI_FEATURES=false" has_line "$envf" "AI_FEATURES=false"
+  check "Whisper's snapshot" test -f "$ROOT/home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/$(sed -n 's/^whisper_revision=//p' "$ORIGIN/scripts/linux/provision-manifest.conf")/model.bin"
+  check "the voices" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-kristin-medium.onnx"
+  run_prov --offline-kit "$KIT" --internet never --timezone Etc/UTC --no-ai-models
+  check "with --no-ai-models too" eq "$(final_field result)" '"ok"'
+  end_case
+}
+
+# The same kit with AI asked for: nothing to copy and nothing may be
+# pulled, so it is refused in plain words before anything runs.
+case_kit_without_ai_models_refuses_ai_models() {
+  kit_case kit_without_ai_models_refuses_ai_models noai || return 0
+  run_prov --offline-kit "$KIT" --internet never --ai-models
+  check "refused" eq "$RC" 1
+  check "in plain words" said "The kit has no AI models (it was made with \"AI chat and questions\" unticked), and --ai-models asks for them"
+  check "before anything ran" not_called "apt-get"
   end_case
 }
 
@@ -6287,7 +6315,8 @@ CASES=(
   case_gpu_runtime_helper_interface
   case_kit_full_install
   case_kit_second_run_skips_everything
-  case_kit_without_ai_models_says_how
+  case_kit_without_ai_models_installs_with_ai_off
+  case_kit_without_ai_models_refuses_ai_models
   case_kit_without_vision_goes_on
   case_kit_needs_ubuntu_26_04
   case_kit_for_another_machine_is_refused

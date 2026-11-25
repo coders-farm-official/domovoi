@@ -1512,6 +1512,11 @@ kit_env() {
 # changed, so a kit that doesn't fit stops the run at once, in plain words:
 # Ubuntu 26.04 only; a kit at all, of a format this script reads, for this
 # machine; its commit the one --ref names; and the parts this install needs.
+# Ollama is one of them whatever the kit's AI box said: a kit made with "AI
+# chat and questions" unticked has no models, but still Domovoi's Ollama
+# (kit_builder/parts.py puts it in the base group), so AI can be turned on
+# later. Whether AI is on is decide_ai's, after this (a kit without models
+# leaves it out); kit_ai_check then refuses only an explicit ask for it.
 kit_check() {
   local out id ver name target t missing=()
   [[ $OFFLINE_KIT == /* ]] || usage_error "--offline-kit takes the kit's folder as an absolute path (the stick, e.g. /media/alex/DOMOVOIKIT), not: $OFFLINE_KIT"
@@ -1574,9 +1579,6 @@ kit_check() {
   if [ ${#missing[@]} -gt 0 ]; then
     refuse 1 failed "This kit is missing what every install needs: $(printf '%s; ' "${missing[@]}" | sed 's/; $//'). Make the kit again."
   fi
-  if [ "$AI" = yes ] && [ "$SKIP_MODELS" = 0 ] && ! kit_includes ai; then
-    refuse 1 failed "The kit has no AI models. Install with --no-ai-models (AI chat and questions can be added later, with internet), or make a kit with AI chat ticked."
-  fi
   kit_env
   # What the installer's window says: nothing is downloaded.
   STEP_TITLE[models]="Copying the AI models from the offline kit"
@@ -1585,6 +1587,15 @@ kit_check() {
   STEP_TITLE[phone-app]="Copying the phone app and the rooms' files from the offline kit"
   STEP_TITLE[images]="Loading the container images from the offline kit"
   log "offline kit: Domovoi $KIT_VERSION ($KIT_TAG, commit ${KIT_COMMIT:0:12}) at $OFFLINE_KIT, for ${KIT_TARGETS// /, }; includes: ${KIT_INCLUDES:-nothing optional}; nothing is downloaded"
+}
+
+# kit_ai_check: after decide_ai. A kit without AI models with AI asked for
+# all the same (--ai-models, or AI_FEATURES=true in an existing
+# domovoi/.env): nothing can be copied, and nothing may be pulled.
+kit_ai_check() {
+  if [ "$AI" = yes ] && [ "$SKIP_MODELS" = 0 ] && ! kit_includes ai; then
+    refuse 1 failed "The kit has no AI models (it was made with \"AI chat and questions\" unticked), and $AI_WHY asks for them. Install with --no-ai-models, or without --ai-models (AI chat and questions can be turned on later, with internet), or make a kit with AI chat ticked."
+  fi
 }
 
 VENV_PY=$CHECKOUT/.venv/bin/python
@@ -6689,8 +6700,9 @@ ask_ai() {
 
 # decide_ai: settle AI and AI_WHY. The option given; else the answer a box
 # set up before has in its domovoi/.env (as the household left it: Settings
-# may have changed it), never asked again; else the question, when it can
-# be asked; else yes.
+# may have changed it), never asked again; else, from an offline kit made
+# without AI models, no (not asked: there is nothing to install); else the
+# question, when it can be asked; else yes.
 decide_ai() {
   local prev=""
   if [ -n "$AI_FLAG" ]; then
@@ -6705,6 +6717,11 @@ decide_ai() {
     true|1|yes|on) AI=yes; AI_WHY="AI_FEATURES=true in domovoi/.env"; AI_FROM_ENV=1; return 0 ;;
     false|0|no|off) AI=no; AI_WHY="AI_FEATURES=false in domovoi/.env"; AI_FROM_ENV=1; return 0 ;;
   esac
+  if kit && ! kit_includes ai; then
+    AI=no
+    AI_WHY="the offline kit has no AI models"
+    return 0
+  fi
   if ! dry && stdin_is_tty; then
     if ask_ai; then AI=yes; AI_WHY="answered yes"; else AI=no; AI_WHY="answered no"; fi
     return 0
@@ -6752,11 +6769,13 @@ fi
 
 SVC_HOME=$(svc_home) || SVC_HOME=""
 [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER
+# An offline kit that doesn't fit stops here, before anything is changed
+# (and before the AI question: a kit without AI models answers it).
+if kit; then kit_check; fi
 # Before the run lock: a run waiting at the question keeps no other one
 # waiting, and one stopped there (Ctrl-C) leaves result.json as it was.
 decide_ai
-# An offline kit that doesn't fit stops here, before anything is changed.
-if kit; then kit_check; fi
+if kit; then kit_ai_check; fi
 
 TMP_DIR=$(mktemp -d)
 

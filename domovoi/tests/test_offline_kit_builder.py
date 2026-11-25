@@ -678,6 +678,68 @@ def test_a_file_pin_without_a_size_stops_the_card(monkeypatch):
         fetch.fetch_file("https://example.org/f", Path("unused.bin"), sha256="0" * 64, size=None)
 
 
+# ─── Domovoi's Ollama on every kit (owner decision, 1.5.0) ──────────────
+# "AI chat and questions" unticked means no models, not no Ollama: every
+# install from a kit runs Domovoi's own Ollama (provision.sh's kit_check and
+# the Mac's Setup refuse a kit without it), so AI can be turned on later.
+
+def _runtime_source(part: Part, monkeypatch) -> Source:
+    """The part's file as the builder would copy it, the cache standing in
+    for the download (nothing is fetched)."""
+    monkeypatch.setattr(fetch, "matches", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "fetch_file", lambda *a, **k: pytest.fail("downloaded"))
+    [src] = part.acquire(Ctx(targets=part.targets))
+    return src
+
+
+@pytest.mark.parametrize("target, kit_path, kind", [
+    ("pc-x86_64", "ollama/ollama-linux-amd64.tar.zst", "ollama-runtime"),
+    ("mac-arm64", "mac/ollama-darwin.tgz", "mac-part"),
+])
+def test_ollama_goes_on_a_kit_with_ai_unticked(kit_home, monkeypatch, target, kit_path, kind):
+    p = pins.load(repo_read, COMMIT)
+    runtimes = parts.ollama_runtime_parts(p)
+    model = _part("model:qwen3:4b", group="ai", kind="ollama-model", size=2_500_000_000)
+    cat = _cat(*runtimes, model)
+    for includes in ((), ("vision", "rooms"), plan.INCLUDE_ORDER):
+        got = plan.selected(cat, plan.Selection(targets=(target,), includes=includes))
+        ollama = [x for x in got if x.id.startswith("ollama:")]
+        assert len(ollama) == 1, includes
+        assert (model in got) == ("ai" in includes)
+    rt = ollama[0]
+    assert rt.group == "base" and rt.kind == kind and rt.targets == (target,)
+    pin = p.ollama_linux if target == "pc-x86_64" else p.ollama_darwin
+    src = _runtime_source(rt, monkeypatch)
+    # Where provision.sh (ollama/<asset>) and the Mac's Setup (mac/<the
+    # OLLAMA_URL file name>) look, held to the release's own pin.
+    assert src.path == kit_path and src.sha256 == pin.sha256 and rt.pinned_by == pin.pinned_by
+    # Leaving AI out to fit a stick frees the models only.
+    assert plan._group_bytes(cat, plan.Selection(targets=(target,)), "ai") == model.size
+
+
+def test_a_kit_for_both_targets_carries_both_ollamas_with_ai_unticked(kit_home):
+    p = pins.load(repo_read, COMMIT)
+    cat = _cat(*parts.ollama_runtime_parts(p))
+    got = plan.selected(cat, plan.Selection(targets=("pc-x86_64", "mac-arm64"), includes=()))
+    assert {x.id for x in got} == {"ollama:linux", "ollama:darwin"}
+    # The Mac's tarball isn't listed again among the other Mac files.
+    assert not [x for x in parts.platform_parts(p) if x.name == p.ollama_darwin.name]
+
+
+def test_a_mac_kit_is_refused_when_the_release_pins_no_ollama_for_macos(kit_home, monkeypatch):
+    import dataclasses
+    p = dataclasses.replace(pins.load(repo_read, COMMIT), ollama_darwin=None)
+    assert [x.id for x in parts.ollama_runtime_parts(p)] == ["ollama:linux"]
+    cat = _cat(_part("rel"))
+    cat.target_problems = parts.target_problems(p)
+    monkeypatch.setattr(plan, "free_bytes", lambda path: 10 ** 13)
+    base = dict(tools_ok=lambda: True, store_problem=lambda: None)
+    why = plan.plan(cat, plan.Selection(targets=("pc-x86_64", "mac-arm64")), **base)["refusal"]
+    assert why["reason"] == "release" and "Ollama for macOS" in why["message"]
+    assert plan.plan(cat, plan.Selection(targets=("pc-x86_64",)), **base)["refusal"] is None
+    assert parts.target_problems(pins.load(repo_read, COMMIT)) == {}
+
+
 def test_every_file_pin_in_the_release_has_a_size():
     p = pins.load(repo_read, COMMIT)
     assert all(fp.size for fp in [p.ollama_linux, *p.windows, *p.mac])

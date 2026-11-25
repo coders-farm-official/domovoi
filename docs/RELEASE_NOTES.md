@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Offline kit: "AI chat" unticked still installs
+
+- **What changed.** Every offline kit carries Domovoi's own Ollama (Ollama
+  for Linux on a PC kit, `mac/ollama-darwin.tgz` on a Mac kit), whatever
+  the **AI chat and questions** box says; the box now decides only whether
+  the AI models go on. Before, a kit made with it unticked had no Ollama
+  and every install from it was refused ("This kit is missing what every
+  install needs: Ollama"). `provision.sh --offline-kit` (and `install.sh
+  --kit`) installs from a kit without models with AI chat and questions
+  off (`AI_FEATURES=false`), without asking, Ollama installed and running
+  and nothing pulled; only an explicit `--ai-models` with such a kit is
+  refused. The card refuses a Mac kit when the release pins no Ollama for
+  macOS.
+- **What to know.** A PC kit without AI is about 1.4 GB bigger than
+  before (still an 8 GB stick). AI chat can be turned on later, with
+  internet, in Settings → Models. OFFLINE_KIT.md, "Making a kit".
+
 ## 1.5.0 (unreleased) — Private chats on the home server
 
 - **Your existing server chats are now private to the phone or browser

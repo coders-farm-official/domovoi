@@ -434,10 +434,14 @@ before the next:
 
 A kit that doesn't fit is refused in plain words, before anything is
 changed: one made by a newer Domovoi, one for a Mac only, one missing a
-part the install needs ("The kit has no AI models. Install with
---no-ai-models, or make a kit with AI chat ticked."), an `install.sh` from
-another release, or a system other than Ubuntu 26.04. A computer that
-already runs Domovoi updates from a newer kit on the dashboard, not here.
+part the install needs (Ollama is one, on every kit), `--ai-models` with
+a kit made without AI chat ("The kit has no AI models (it was made with
+"AI chat and questions" unticked), and --ai-models asks for them…"), an
+`install.sh` from another release, or a system other than Ubuntu 26.04.
+Without `--ai-models`, a kit made without AI chat installs with AI chat
+and questions off, without asking (Ollama is still installed and running).
+A computer that already runs Domovoi updates from a newer kit on the
+dashboard, not here.
 
 **What is different afterwards.** The search helper is not on a kit (it
 needs internet anyway), and neither is Docker's GPU runtime for the

@@ -37,7 +37,7 @@ from domovoi.offline_kit import format as fmt
 from domovoi.offline_kit.sshsig import RELEASE_KEY, parse_public_key, sshsig_problem
 
 from . import apt_mirror, fetch, host, images, licences, ollama_store, wheels
-from .pins import LINUX_PYTHON, WINDOWS_RUNTIME, FilePin, Pins
+from .pins import LINUX_PYTHON, MAC_PINS, WINDOWS_RUNTIME, FilePin, Pins
 
 log = logging.getLogger(__name__)
 
@@ -382,17 +382,33 @@ def _have_image(pin) -> bool:
 
 
 def ollama_runtime_parts(p: Pins) -> list[Part]:
+    """Domovoi's own Ollama for each target: Linux's tarball for a PC (the
+    Windows installer's distro too), ``ollama-darwin.tgz`` for a Mac. Base,
+    not "ai": every kit install runs Domovoi's Ollama, and "AI chat and
+    questions" unticked leaves out the models only (owner decision, 1.5.0),
+    so the house can turn AI on later. Each is held to its pin like every
+    other upstream file. A Mac kit without the macOS pin can't be made
+    (:func:`target_problems`)."""
     miss, get = _pinned_file(p.ollama_linux, "ollama", f"ollama/{p.ollama_linux.name}")
-    out = [Part(id="ollama:linux", group="ai", targets=(PC,), kind="ollama-runtime",
+    out = [Part(id="ollama:linux", group="base", targets=(PC,), kind="ollama-runtime",
                 name="Ollama for Linux", version=p.ollama_linux.url.split("/")[-2], licence="MIT",
                 pinned_by=p.ollama_linux.pinned_by, size=p.ollama_linux.size_or_zero, exact=True,
                 download=miss, acquire=lambda ctx: [get(ctx)], label="Ollama")]
     if p.ollama_darwin:
         dm, dget = _pinned_file(p.ollama_darwin, "mac", f"mac/{p.ollama_darwin.name}")
-        out.append(Part(id="ollama:darwin", group="ai", targets=(MAC,), kind="mac-part",
+        out.append(Part(id="ollama:darwin", group="base", targets=(MAC,), kind="mac-part",
                         name="Ollama for macOS", version=p.ollama_darwin.url.split("/")[-2], licence="MIT",
                         pinned_by=p.ollama_darwin.pinned_by, size=p.ollama_darwin.size_or_zero, exact=True,
                         download=dm, acquire=lambda ctx: [dget(ctx)], label="the Mac parts"))
+    return out
+
+
+def target_problems(p: Pins) -> dict[str, str]:
+    """Targets a kit of these pins can't serve, with the card's reason."""
+    out = {}
+    if p.ollama_darwin is None:
+        out[MAC] = (f"This release's {MAC_PINS} doesn't pin Ollama for macOS, which every Mac "
+                    "install from a kit runs, so a kit for a Mac can't be made from it. Untick the Mac.")
     return out
 
 
