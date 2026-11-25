@@ -42,7 +42,7 @@ MAX_CHARS = 80
 #: overrides, zero-width joiners and spaces), private use, surrogates, and
 #: the line and paragraph separators.
 _REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs", "Zl", "Zp"})
-_ITEM_RE = re.compile(r"^- (\S.*)$")
+_ITEM_RE = re.compile(r"^- (\S.*)\Z")
 _SPACES_RE = re.compile(r" {2,}")
 #: What the release check refuses in an item: Markdown, or HTML.
 MARKDOWN_CHARS = "`*_[]<>|#\\"

@@ -371,6 +371,22 @@ const HomeUpdateRow = (notice, { admin = false, shared = false } = {}) => {
            text: `Domovoi ${version} is available`, canUpdate,
            sub: canUpdate ? null : 'An admin can install it.' };
 };
+/* That row added to whatever the problems show: after the rows, below a
+ * summary line, or on its own. */
+const HomeWithRow = (view, row) => {
+  if (!row) return view;
+  if (view.mode === 'rows') return { ...view, rows: [...view.rows, row] };
+  if (view.mode === 'summary') return { ...view, extra: [...(view.extra || []), row] };
+  return { mode: 'rows', rows: [row] };
+};
+
+/* Apps with friends (friend_apps.jsx fhAppsHomeRows): an admin's rows for
+ * paused mail, apps waiting to be allowed and a Docker problem, each
+ * linking to the Friend Houses page. Never on a shared screen. */
+const HOME_FH_APPS = '/api/friend-houses/apps/notices';
+const HomeAppsRows = (view, rows) => (rows || []).reduce((v, r) => HomeWithRow(v, r), view);
+
+/* ---- status line --------------------------------------------------- */
 /* Its row: the words (plain text), the muted line under them, and an
  * admin's Update. Below 420 px the button drops to its own line. */
 const HomeUpdateNoticeRow = ({ r, cls = 'home-att-row' }) => (
@@ -388,22 +404,6 @@ const HomeUpdateNoticeRow = ({ r, cls = 'home-att-row' }) => (
     )}
   </div>
 );
-/* That row added to whatever the problems show: after the rows, below a
- * summary line, or on its own. */
-const HomeWithRow = (view, row) => {
-  if (!row) return view;
-  if (view.mode === 'rows') return { ...view, rows: [...view.rows, row] };
-  if (view.mode === 'summary') return { ...view, extra: [...(view.extra || []), row] };
-  return { mode: 'rows', rows: [row] };
-};
-
-/* Apps with friends (friend_apps.jsx fhAppsHomeRows): an admin's rows for
- * paused mail, apps waiting to be allowed and a Docker problem, each
- * linking to the Friend Houses page. Never on a shared screen. */
-const HOME_FH_APPS = '/api/friend-houses/apps/notices';
-const HomeAppsRows = (view, rows) => (rows || []).reduce((v, r) => HomeWithRow(v, r), view);
-
-/* ---- status line --------------------------------------------------- */
 
 const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
   const [explain, setExplain] = React.useState(false);
