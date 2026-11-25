@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Rooms: diagnostics and support sessions per satellite
+
+- **A room with several satellites is checked one device at a time.** The
+  room drawer's Diagnostics tab shows a device picker when the room has
+  more than one device; every check goes to the chosen satellite, and the
+  Settings tab's support switch and support session follow the same
+  choice. A single-device room, and a dashboard talking to an older
+  server, show no picker and address the room's speaker as before.
+- **For API readers:** the open snapshot's `satellite_diagnostics` now
+  lists satellite ids (a device from before 1.5.0 has its room's id, so a
+  single-device room reads as before) and adds `active_satellites`, every
+  connected satellite by id. `GET /api/satellites` adds `devices`, the
+  room's satellites with each one's own diagnostics and support-session
+  facts; `diagnostics` is true when any of them offers checks. The core's
+  diagnostics routes take a satellite id, or a room id for its speaker.
+
 ## 1.5.0 (unreleased) — Rooms: mic presets per satellite, older rooms removable
 
 - **Every XVF3800 in a shared room gets its own Microphone DSP block** in

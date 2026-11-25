@@ -105,6 +105,7 @@ from web.backend.schemas import (
     RoomVoiceRequest,
     Satellite,
     SatelliteApproveRequest,
+    SatelliteDevice,
     SatelliteDisplay,
     SpareDeviceEnrolRequest,
     SatellitePairing,
@@ -2304,7 +2305,7 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
                 text(
                     "SELECT s.satellite_id, s.sat_type, NULLIF(r.name, r.room_id), "
                     "s.hardware, s.board, s.mac, s.adopted_at, r.voice, s.support_allowed, "
-                    "s.support_key IS NOT NULL, s.room_id "
+                    "s.support_key IS NOT NULL, s.room_id, s.name "
                     "FROM satellites s JOIN rooms r ON r.room_id = s.room_id"
                 )
             )
@@ -2320,6 +2321,7 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
                 "support_allowed": bool(r[8]),
                 "support_key_pinned": bool(r[9]),
                 "room_id": r[10],
+                "name": r[11],
             }
             for r in rows.all()
         }
@@ -2464,6 +2466,38 @@ def _battery_for(room_id: str, board: str | None, online: bool,
     )
 
 
+def _room_devices(room_id: str, online: bool, snapshot: dict[str, Any],
+                  meta: dict[str, dict[str, Any]] | None) -> list[SatelliteDevice]:
+    """The room's satellites from the inventory (``meta`` carries each
+    one's room), with what the snapshot says of each by its own id (1.5.0).
+    A snapshot from an older server has no ``active_satellites``: then the
+    device whose id is the room's counts as connected while the room is."""
+    sats = sorted(sid for sid, row in (meta or {}).items()
+                  if (row or {}).get("room_id") == room_id)
+    if "active_satellites" in snapshot:
+        live = set(snapshot.get("active_satellites") or ())
+    else:
+        live = {room_id} if online else set()
+    diag = set(snapshot.get("satellite_diagnostics") or ())
+    shell = set(snapshot.get("satellite_support_shell") or ())
+    changed = set(snapshot.get("satellite_support_key_changed") or ())
+    out = []
+    for sid in sats:
+        row = (meta or {}).get(sid) or {}
+        on = sid in live
+        out.append(SatelliteDevice(
+            satellite_id=sid,
+            name=row.get("name"),
+            connected=on,
+            diagnostics=on and sid in diag,
+            support_allowed=bool(row.get("support_allowed")),
+            support_shell=on and sid in shell,
+            support_key_pinned=bool(row.get("support_key_pinned")),
+            support_key_changed=on and sid in changed,
+        ))
+    return out
+
+
 async def _satellite_for(
     room: dict[str, Any],
     snapshot: dict[str, Any],
@@ -2489,6 +2523,7 @@ async def _satellite_for(
         sid for sid in (snapshot.get("satellite_mic_dsp") or ())
         if sid == room_id or ((meta or {}).get(sid) or {}).get("room_id") == room_id
     ) if online else []
+    devices = _room_devices(room_id, online, snapshot, meta)
     # Null ports = adopted but never connected ("waiting"): no MPD instance
     # exists yet, so there's nothing to read now-playing from.
     waiting = room["control_port"] is None or room["http_port"] is None
@@ -2634,7 +2669,10 @@ async def _satellite_for(
         timers_own_only=room_id in (own_only or {}),
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
-        diagnostics=online and room_id in (snapshot.get("satellite_diagnostics") or ()),
+        diagnostics=online and (
+            room_id in (snapshot.get("satellite_diagnostics") or ())
+            or any(d.diagnostics for d in devices)),
+        devices=devices,
         mic_dsp=bool(mic_dsp_satellites),
         mic_dsp_satellites=mic_dsp_satellites,
         support_allowed=bool(meta_row.get("support_allowed")),

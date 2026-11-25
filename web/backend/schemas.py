@@ -666,6 +666,23 @@ class SatellitePairing(BaseModel):
     last_seen_at: datetime | None = None
 
 
+class SatelliteDevice(BaseModel):
+    """One satellite of a room (1.5.0: a room may hold several), for the
+    drawer's device picker: its Diagnostics checks and support session are
+    addressed to it by ``satellite_id``. Every field but the id and name is
+    about the CONNECTED device (false while it is offline), except
+    ``support_allowed`` / ``support_key_pinned``, which are stored."""
+
+    satellite_id: str
+    name: str | None = None
+    connected: bool = False
+    diagnostics: bool = False
+    support_allowed: bool = False
+    support_shell: bool = False
+    support_key_pinned: bool = False
+    support_key_changed: bool = False
+
+
 class Satellite(BaseModel):
     room_id: str
     # "waiting" = adopted (satellites row exists) but never connected — no
@@ -782,6 +799,11 @@ class Satellite(BaseModel):
     # presets at /api/satellites/{satellite_id}/mic_dsp). ``mic_dsp`` is
     # whether this list is non-empty.
     mic_dsp_satellites: list[str] = Field(default_factory=list)
+    # The room's satellites (1.5.0), by id, each with its own diagnostics
+    # and support-session facts (SatelliteDevice). The drawer shows a device
+    # picker when there is more than one; empty from an older server, and
+    # then everything above is about the room's speaker, as before.
+    devices: list[SatelliteDevice] = Field(default_factory=list)
     # A code upgrade under way or just finished (SatelliteUpgrade), from the
     # Domovoi server snapshot; null when there is none. While ``state`` is
     # ``running`` the dashboard and the app keep the room's Upgrade button

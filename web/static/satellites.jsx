@@ -2636,12 +2636,57 @@ const RoomDiagnosticsBody = ({ room, fire }) => {
   );
 };
 
+/* ---- Device picker (1.5.0) ------------------------------------
+ * A room may hold several satellites (s.devices, by satellite id). Its
+ * Diagnostics checks and support session are per device: with more than one
+ * device the drawer shows a picker, and every check, the support switch and
+ * the support session are addressed to the chosen satellite. From an older
+ * server (no s.devices) everything is about the room's speaker, as before. */
+const satPickDevice = (s, chosen) => {
+  const devs = Array.isArray(s && s.devices) ? s.devices : [];
+  if (devs.length < 2) return null;
+  return devs.find((d) => d.satellite_id === chosen)
+    || devs.find((d) => d.connected && d.diagnostics)
+    || devs.find((d) => d.connected)
+    || devs[0];
+};
+// The drawer's row with the chosen device's own facts in place of the
+// room's: what the Diagnostics body and the support control read.
+const satDeviceView = (s, dev) => (!dev ? s : {
+  ...s,
+  room_id: dev.satellite_id,
+  status: dev.connected ? 'online' : 'offline',
+  diagnostics: !!dev.diagnostics,
+  support_allowed: !!dev.support_allowed,
+  support_shell: !!dev.support_shell,
+  support_key_pinned: !!dev.support_key_pinned,
+  support_key_changed: !!dev.support_key_changed,
+});
+const SatDevicePicker = ({ s, dev, onPick }) => {
+  if (!dev) return null;
+  return (
+    <div style={{ padding: '12px 16px 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 13 }}>
+      <label htmlFor={`satdev-${s.room_id}`} style={{ color: 'var(--fg-muted)' }}>Device</label>
+      <select id={`satdev-${s.room_id}`} value={dev.satellite_id} onChange={(e) => onPick(e.target.value)}
+              style={{ flex: '1 1 200px', minWidth: 0, maxWidth: '100%', font: 'inherit', fontSize: 13, padding: '4px 6px',
+                       borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}>
+        {s.devices.map((d) => (
+          <option key={d.satellite_id} value={d.satellite_id}>
+            {(d.name || d.satellite_id) + (d.connected ? '' : ' (offline)')}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+};
+
 /* ---- Drawer ----------------------------------------------- */
 const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
   const [tab, setTab] = React.useState('overview');
+  const [deviceId, setDeviceId] = React.useState(null);
   // The mic DSP block is admin-only: hidden without the sign-in.
   const adminSignedIn = useAdminSignedIn();
-  React.useEffect(() => { setTab('overview'); }, [s?.room_id]);
+  React.useEffect(() => { setTab('overview'); setDeviceId(null); }, [s?.room_id]);
   React.useEffect(() => {
     if (!s) return;
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -2649,6 +2694,8 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
     return () => window.removeEventListener('keydown', onKey);
   }, [s, onClose]);
   if (!s) return null;
+  const dev = satPickDevice(s, deviceId);
+  const target = satDeviceView(s, dev);
 
   // Icon-only tabs (label shows as a hover tooltip) — 7 text labels
   // overflowed the 560px drawer and clipped "Settings".
@@ -2693,7 +2740,11 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
           {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
-          {tab === 'diagnostics'   && s.diagnostics && <RoomDiagnosticsBody room={s.room_id} fire={fire}/>}
+          {tab === 'diagnostics'   && s.diagnostics && <SatDevicePicker s={s} dev={dev} onPick={setDeviceId}/>}
+          {tab === 'diagnostics'   && s.diagnostics && (target.diagnostics
+            ? <RoomDiagnosticsBody room={target.room_id} fire={fire}/>
+            : <Empty glyph="sleeping" title="no checks for this device"
+                     sub={target.status === 'online' ? 'this device didn’t offer diagnostics' : 'this device isn’t connected'}/>)}
           {tab === 'settings'      && <SatHealthCard room={s.room_id} online={s.status === 'online'}/>}
           {tab === 'settings'      && <RoomQuietHoursSettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && s.board === 'android_room' && <RoomBatterySettings room={s.room_id} fire={fire}/>}
@@ -2708,7 +2759,8 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
                        sub={`${satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device'} didn't offer remote settings — change them on the device itself`}/>)}
           {tab === 'settings'      && <SatCaptureControl s={s} fire={fire} refresh={refresh}/>}
           {/* support_session.jsx (1.5.0); a page that didn't load it has no control. */}
-          {tab === 'settings'      && typeof SatSupportControl !== 'undefined' && <SatSupportControl s={s} fire={fire} refresh={refresh}/>}
+          {tab === 'settings'      && typeof SatSupportControl !== 'undefined' && <SatDevicePicker s={s} dev={dev} onPick={setDeviceId}/>}
+          {tab === 'settings'      && typeof SatSupportControl !== 'undefined' && <SatSupportControl s={target} fire={fire} refresh={refresh}/>}
         </div>
       </aside>
     </>
