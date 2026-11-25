@@ -113,7 +113,6 @@ import struct
 import sys
 import tarfile
 import time
-import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -879,23 +878,14 @@ def check_pixels(data: bytes) -> tuple[int, int, int, bytes]:
     return width, height, channels, bytes(pixels)
 
 
-def _chunk(ctype: bytes, body: bytes) -> bytes:
-    return struct.pack(">I", len(body)) + ctype + body + struct.pack(">I", zlib.crc32(ctype + body) & 0xFFFFFFFF)
-
-
 def encode_png(width: int, height: int, channels: int, pixels: bytes) -> bytes:
-    """A plain PNG of the pixels, written by the core: a header, the pixels,
-    the end. No other chunk exists to carry anything."""
-    stride = width * channels
-    if len(pixels) != stride * height or channels not in (3, 4):
-        raise ValueError("the pixels don't match the size")
-    view = memoryview(pixels)
-    raw = bytearray()
-    for y in range(height):
-        raw += b"\x00"
-        raw += view[y * stride:(y + 1) * stride]
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6 if channels == 4 else 2, 0, 0, 0)
-    out = PNG_MAGIC + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", zlib.compress(bytes(raw), 6)) + _chunk(b"IEND", b"")
+    """A plain PNG of the pixels, written by the core: a header, a palette
+    when there is one, the pixels, the end. No other chunk exists to carry
+    anything. Compact and lossless (exact palette at 256 colours or fewer,
+    filtering, zlib level 9: :mod:`domovoi.plugins_runtime.png_compact`)."""
+    from domovoi.plugins_runtime import png_compact
+
+    out = png_compact.encode_png(width, height, channels, pixels)
     if len(out) > IMAGE_OUT_MAX:
         raise ValueError("the image is too large")
     return out

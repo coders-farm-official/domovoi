@@ -215,7 +215,9 @@ class StubSDK:
         self.http = HttpFactory(self.version)
         # SDK 1.18: friends() answers ``friend_houses.friends_list`` (set
         # it), send_mail / send_image check their arguments as the core
-        # does and record what they would queue in ``friend_houses.sent``;
+        # does (send_image writes the core's compact PNG, so a picture too
+        # big even scaled down raises TooLarge) and record what they would
+        # queue in ``friend_houses.sent``;
         # on_mail records its handler and schema.
         self.friend_houses = RecordingFriendHouses(slug)
 
@@ -254,17 +256,18 @@ class RecordingFriendHouses(FriendHousesAPI):
         import secrets
 
         from domovoi.friend_houses import envelope as fe
-        from domovoi.sdk.friend_houses import PAYLOAD_MAX, FriendImage, TooLarge
+        from domovoi.sdk.friend_houses import _image_bytes, _mail_png
 
         self._need_permission()
         self._check_send(house_id, ttl_s, replace_key)
-        raw = image.png if isinstance(image, FriendImage) else image
-        if not isinstance(raw, (bytes, bytearray)) or not raw:
-            raise TypeError("an image is a FriendImage or this plugin's own image bytes")
-        if len(fe.image_payload(tag, bytes(raw))) > PAYLOAD_MAX:
-            raise TooLarge("the tag and image are over 16,384 bytes")
+        raw, core_png = _image_bytes(image)
+        if not isinstance(tag, str) or not fe.IMAGE_TAG_RE.match(tag):
+            raise ValueError("tag is up to 64 of a-z 0-9 _ . : -")
+        # The core's own compact PNG, as send_image writes it (TooLarge when
+        # even 128 px doesn't fit); options["png"] is what would be sent.
+        png = await _mail_png(raw, tag, core_png)
         self.sent.append(("image", house_id, image,
-                          {"tag": tag, "ttl_s": ttl_s, "replace_key": replace_key}))
+                          {"tag": tag, "ttl_s": ttl_s, "replace_key": replace_key, "png": png}))
         return secrets.token_hex(16)
 
 
