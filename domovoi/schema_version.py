@@ -25,7 +25,7 @@ CACHE_SEC = 60.0
 
 _cache: tuple[float, int | None] | None = None
 
-_DIGITS = re.compile(r"^\d+$")
+_DIGITS = re.compile(r"^\d+\Z")
 
 
 def label(version: int | None) -> str | None:

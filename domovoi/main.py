@@ -3788,7 +3788,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
     # service user.
     dependencies=[Depends(require_device_read)],
 )
-async def admin_version(request: Request) -> dict[str, Any]:
+async def admin_version(request: Request = None) -> dict[str, Any]:  # type: ignore[assignment]
     """What this process is RUNNING, and what's checked out on disk.
 
     ``sha``/``running_sha`` is captured at boot, so it reflects the code
@@ -3852,6 +3852,8 @@ async def admin_version(request: Request) -> dict[str, Any]:
 async def _admin_reads(request: Request) -> bool:
     """An admin's read: a live Bearer, or the admin cookie (renders only).
     Not "no admin set up yet". False when the check can't run."""
+    if request is None:  # a direct call from code (no HTTP request): never an admin read
+        return False
     try:
         return await admin_auth_mod.check_admin_request(request) in ("ok", "cookie-only")
     except Exception:  # noqa: BLE001 — can't tell: not an admin
