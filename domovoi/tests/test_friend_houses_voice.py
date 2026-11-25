@@ -27,6 +27,10 @@ from domovoi.tests.friend_houses_testkit import no_tasks_left_behind  # noqa: F4
     ("read me the messages from the smiths", "friend_houses"),
     ("message the smiths dinners at six", "friend_houses"),
     ("send a message to the smiths saying hi", "friend_houses"),
+    ("did my message send", "friend_houses"),
+    ("has my message gone through", "friend_houses"),
+    ("was my message to the smiths delivered", "friend_houses"),
+    ("did my last message get delivered", "friend_houses"),
     ("tell everyone dinners ready", "intercom"),
     ("tell the house dinners ready", "intercom"),
 ])
@@ -157,6 +161,7 @@ async def house(tmp_path, monkeypatch, db_session):
     monkeypatch.setattr(settings, "friend_houses_enabled", True, raising=False)
     fake = SimpleNamespace(spawn=lambda coro, name: coro.close())
     monkeypatch.setattr(fm, "_service", lambda: fake)
+    monkeypatch.setattr(fm, "SEND_WAIT_SEC", 0.0)  # nothing delivers here: no waiting for it
 
     async def phrases():
         return ["hey jarvis", "domovoi"]
@@ -201,7 +206,7 @@ async def test_message_reads_it_back_and_sends_only_on_yes(house) -> None:
     no = await h.handle_confirmation(fhv.SEND_KIND, parked, False, house.ctx, house.session)
     assert "won't" in no.text and await fm.conversations() == []
     yes = await h.handle_confirmation(fhv.SEND_KIND, parked, True, house.ctx, house.session)
-    assert yes.text == "Sent to The Smiths."
+    assert yes.text == "Queued for The Smiths. It'll go when their house is reachable."
     msgs = await fm.conversation(house.them.house_key)
     assert msgs[0]["body"] == "dinners at six" and msgs[0]["direction"] == "out"
 
@@ -218,7 +223,7 @@ async def test_send_the_name_a_message_saying_reads_it_back(house) -> None:
     r = await h._send(_m(fhv._TEXT_ASK_RE, "ask the smiths if theyre coming"), house.ctx, house.session)
     assert r.text == "Your message to The Smiths says: if theyre coming. Should I send it?"
     yes = await h.handle_confirmation(fhv.SEND_KIND, house.parked[0], True, house.ctx, house.session)
-    assert yes.text == "Sent to The Smiths."
+    assert yes.text == "Queued for The Smiths. It'll go when their house is reachable."
 
 
 @requires_db
@@ -248,6 +253,70 @@ async def test_an_old_yes_sends_nothing(house) -> None:
     stale = {**house.parked[0], "expires_at": time.time() - 1}
     r = await h.handle_confirmation(fhv.SEND_KIND, stale, True, house.ctx, house.session)
     assert "didn't send" in r.text and await fm.conversations() == []
+
+
+async def _set_out_state(state: str) -> None:
+    from sqlalchemy import text
+
+    async with fm._db() as s:
+        await s.execute(text("UPDATE friend_houses_messages SET state = :st, "
+                             "delivered_at = CASE WHEN :st = 'sent' THEN now() END "
+                             "WHERE direction = 'out'"), {"st": state})
+
+
+@requires_db
+async def test_sent_only_when_the_friend_acknowledged_it(house, monkeypatch) -> None:
+    # N6: the send's own delivery try lands (the row turns 'sent') while
+    # the reply waits: only then "Sent to".
+    import asyncio
+
+    tasks: list[asyncio.Task] = []
+
+    def spawn(coro, name):
+        coro.close()
+        tasks.append(asyncio.ensure_future(_set_out_state("sent")))
+
+    monkeypatch.setattr(fm, "_service", lambda: SimpleNamespace(spawn=spawn))
+    monkeypatch.setattr(fm, "SEND_WAIT_SEC", 5.0)
+    h = fhv.FriendHousesHandler()
+    await h._send(_m(fhv._MESSAGE_RE, "message the smiths dinners at six"), house.ctx, house.session)
+    yes = await h.handle_confirmation(fhv.SEND_KIND, house.parked[0], True, house.ctx, house.session)
+    await asyncio.gather(*tasks)
+    assert yes.text == "Sent to The Smiths."
+
+
+@requires_db
+async def test_did_my_message_send_says_exactly_where_it_is(house) -> None:
+    h = fhv.FriendHousesHandler()
+
+    async def ask(said: str) -> str | None:
+        r = await h._status(_m(fhv._STATUS_RE, said), house.ctx, house.session)
+        return None if r is None else r.text
+
+    assert await ask("did my message send") == "You haven't sent any friend house messages."
+    assert await ask("was my message to the smiths delivered") == "You haven't sent The Smiths any messages."
+    assert await ask("did my message to the joneses send") is None  # not a friend: route on
+    await h._send(_m(fhv._MESSAGE_RE, "message the smiths dinners at six"), house.ctx, house.session)
+    await h.handle_confirmation(fhv.SEND_KIND, house.parked[0], True, house.ctx, house.session)
+    waiting = ("Not yet. Your last message to The Smiths is waiting to send. "
+               "It'll go when their house is reachable.")
+    assert await ask("did my message send") == waiting
+    assert await ask("has my message to the smiths gone through") == waiting
+    await _set_out_state("sent")
+    assert await ask("did my message send") == "Yes. Your last message to The Smiths was delivered."
+    await _set_out_state("failed")
+    assert await ask("was my last message delivered") == (
+        "No. Your last message to The Smiths wasn't delivered: their house was offline too long.")
+
+
+@requires_db
+async def test_did_my_message_send_when_off(house, monkeypatch) -> None:
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "friend_houses_enabled", False, raising=False)
+    r = await fhv.FriendHousesHandler()._status(_m(fhv._STATUS_RE, "did my message send"),
+                                                house.ctx, house.session)
+    assert "isn't turned on" in r.text
 
 
 @requires_db
