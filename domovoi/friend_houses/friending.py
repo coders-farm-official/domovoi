@@ -41,6 +41,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from domovoi import off_answers
 from domovoi.friend_houses import connect as fc
 from domovoi.friend_houses import friend_file as ff
 from domovoi.friend_houses import identity as fid
@@ -90,11 +91,16 @@ def _require_on() -> fid.HouseKeys:
     from domovoi.config import settings
 
     if not getattr(settings, "friend_houses_enabled", False):
-        raise FriendingError("Friend Houses is off. Turn it on first.")
+        raise FriendingError(
+            off_answers.with_turn_on("Friend Houses is off.", off_answers.FRIEND_HOUSES)
+        )
     from domovoi import egress
 
     if egress.policy() == "never":
-        raise FriendingError("The internet answer is \"never\", so Friend Houses can't connect.")
+        raise FriendingError(off_answers.with_turn_on(
+            "The internet answer is \"never\", so Friend Houses can't connect.",
+            off_answers.INTERNET,
+        ))
     return fid.load() or fid.create()
 
 

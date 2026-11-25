@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator, Mapping
 from urllib.parse import urlsplit
 
-from domovoi import config_env_writer, net_safety
+from domovoi import config_env_writer, net_safety, off_answers
 
 if TYPE_CHECKING:  # pragma: no cover
     import fastapi
@@ -449,6 +449,17 @@ def spoken_offline_phrase() -> str:
     if internet_turned_off():
         return "I'm set to stay off the internet"
     return "I don't have internet right now"
+
+
+def spoken_offline_reply(cant: str) -> str:
+    """The whole spoken "no internet" reply: "<phrase>, so I can't
+    <cant>." and, when the household set the internet answer to never,
+    who can change that and where (owner, Q2: domovoi/off_answers.py).
+    A dropped connection gets no such line: nothing was switched off."""
+    line = f"{spoken_offline_phrase()}, so I can't {cant}."
+    if internet_turned_off():
+        line = off_answers.with_turn_on(line, off_answers.INTERNET)
+    return line
 
 
 def apply_process_env() -> bool:

@@ -83,7 +83,7 @@ def _offline_reply() -> str:
     """The can't-check reply while there's no internet: today's wording,
     or the turned-off one when the box is set to stay off the internet."""
     if egress.internet_turned_off():
-        return f"{egress.spoken_offline_phrase()}, so I can't check that."
+        return egress.spoken_offline_reply("check that")
     return _OFFLINE_REPLY
 
 
@@ -91,7 +91,7 @@ def _unsearched_reply(status: str) -> str | None:
     """The reply for a search that never ran, or None when it did run
     (``ok`` / ``no_results``: the caller's own wording applies)."""
     if status == "internet_off":
-        return f"{egress.spoken_offline_phrase()}, so I can't check that."
+        return egress.spoken_offline_reply("check that")
     if status == "unreachable":
         return _UNREACHABLE_REPLY
     if status == "error":

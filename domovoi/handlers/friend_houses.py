@@ -42,6 +42,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import off_answers
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
@@ -215,6 +216,11 @@ def _on() -> bool:
     return bool(getattr(settings, "friend_houses_enabled", False))
 
 
+#: "Any messages?" while Friend Houses is off, and where it is turned on.
+_OFF_NO_MESSAGES = off_answers.with_turn_on(
+    "Friend Houses isn't turned on, so there are no messages.", off_answers.FRIEND_HOUSES
+)
+
 #: The longest read-back ("Your message to … says: …. Should I send it?").
 PROMPT_MAX = 200
 
@@ -349,7 +355,7 @@ class FriendHousesHandler(Handler):
     # ─── check ────────────────────────────────────────────────────────
     async def _check(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         if not _on():
-            return self._reply(ctx, "Friend Houses isn't turned on, so there are no messages.")
+            return self._reply(ctx, _OFF_NO_MESSAGES)
         from domovoi.friend_houses import messages
 
         convos = [c for c in await messages.conversations() if c["unread"]]
@@ -369,7 +375,7 @@ class FriendHousesHandler(Handler):
     # ─── read ─────────────────────────────────────────────────────────
     async def _read(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         if not _on():
-            return self._reply(ctx, "Friend Houses isn't turned on, so there are no messages.")
+            return self._reply(ctx, _OFF_NO_MESSAGES)
         from domovoi.friend_houses import messages
 
         convos = [c for c in await messages.conversations() if c["unread"]]
