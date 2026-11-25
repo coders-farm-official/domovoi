@@ -187,7 +187,7 @@ class ChatModeHandler(Handler):
             # local Ollama); with AI features off there is none to have.
             return Response(
                 text=off_answers.with_turn_on(
-                    "Chat mode needs AI, which is turned off.", off_answers.AI
+                    "Chat mode needs AI, which is turned off.", off_answers.AI, admin=ctx.proven_admin,
                 ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,

@@ -104,6 +104,7 @@ from sqlalchemy import text
 from domovoi import ai_features, chat_titles, egress, executors, house_facts, image_safety, live_env, lookup_answer, uncertainty
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
+from domovoi.help_desk import admin_tasks as help_admin_tasks
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery as help_delivery
 from domovoi.config import settings as core_settings
@@ -933,12 +934,26 @@ async def _help_turn(
 
     help_thread = (thread_title or "").startswith(help_delivery.TITLE_PREFIX)
     try:
-        if not help_thread and not help_answer.looks_like_help(content):
+        if (not help_thread and not help_answer.looks_like_help(content)
+                and help_admin_tasks.match(content) is None):
             return None
         extra = await _describe_screenshot(history, model) if vision_call else ""
-        # The household view, even for an admin: this chat is shared.
+        # Who is asking, checked by the server on THIS request, every turn,
+        # never cached (N1): a live admin sign-in (the Bearer) is a proven
+        # admin; the dashboard cookie alone, a box with no admin yet, or a
+        # check that can't run is a member. A session that ended mid-thread
+        # gets the member answer from its next turn. Words only.
+        proven_admin = await help_api.request_is_proven_admin(request)
+        # This chat is shared with every paired device (owner D1,
+        # 2026-11-25): (a) the steps of an admin's job (add a room, update,
+        # install a plugin, the admin password; the public manual's words)
+        # are shown to a proven admin here; (b) what Home shows only to an
+        # admin (an update's failure details, the internet question,
+        # approvals) never is, even to a proven admin: help_turn_for keeps
+        # the household view of the records.
         return await help_api.help_turn_for(
-            content, help_thread=help_thread, has_screenshot=vision_call, extra_query=extra,
+            content, help_thread=help_thread, admin=proven_admin, has_screenshot=vision_call,
+            extra_query=extra,
         )
     except Exception as e:  # noqa: BLE001
         log.warning("chat help: the help could not be read: %s: %s", type(e).__name__, str(e)[:200])
@@ -999,7 +1014,11 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
     question the help doesn't cover is answered "The manual doesn't cover
     that." with no model asked. A screenshot in a help turn is read by the
     vision model first (which page, what error), and that reading is
-    searched too.
+    searched too. A question about an admin's job ("how do I add a room?",
+    "can you update yourself?": domovoi/help_desk/admin_tasks.py), in any
+    thread, gets a fixed answer with no model asked: the steps when THIS
+    request carries a live admin sign-in (``help.request_is_proven_admin``,
+    checked every turn), else who can do it and where. Words only.
     """
     images = [
         {"token": i.get("token", ""), "name": str(i.get("name", ""))[:200]}
@@ -1128,7 +1147,7 @@ def _retry_refused(code: str, detail: str) -> JSONResponse:
                                     "writer's reply, not the chat model's), `already_retried` (another try again "
                                     "on this reply is running, or has replaced it)"}},
 )
-async def retry_reply(thread_id: int) -> StreamingResponse:
+async def retry_reply(thread_id: int, request: Request) -> StreamingResponse:
     """"Try again": a new reply to the thread's last question, in place of
     the reply it got. Streams as ``POST .../messages`` does; the old row is
     deleted and the new one written in one transaction once the new reply
@@ -1175,6 +1194,8 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
     return await _answer(
         thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id,
         question=last[1].content or "", thread_title=thread.title,
+        # Who is asking is checked again for the new reply (N1).
+        request=request,
     )
 
 
@@ -1415,6 +1436,10 @@ async def _answer(
             }
             if not help_turn.covered:
                 fixed_reply = help_answer.not_covered_answer(help_turn)
+            elif help_turn.task_answer is not None:
+                # An admin's job: its fixed answer, by who is asking (the
+                # steps for a proven admin, else who and where); no model.
+                fixed_reply = help_turn.task_answer
     if plan is not None and plan.immediate is None:
         system["content"] += "\n\n" + plan.rules
     if (refusal is None and plan is None and dturn is None and fixed_reply is None
@@ -1557,7 +1582,8 @@ async def _answer(
             code, error = refusal
             log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
         elif fixed_reply is not None:
-            # Help that found nothing: the honest line, no model asked.
+            # Help that found nothing, or an admin's job (admin_tasks): the
+            # fixed line, no model asked.
             chunks.append(fixed_reply)
             yield f"event: delta\ndata: {json.dumps({'text': fixed_reply})}\n\n"
         elif proposal is not None:
@@ -1688,6 +1714,11 @@ async def _answer(
                 "sources": [src.as_dict() for src in help_turn.sources],
                 "model_asked": fixed_reply is None,
             }
+            if help_turn.task is not None:
+                # For debugging only (N1): which admin job, and whether the
+                # steps (a proven admin) or the member line was given.
+                stats["help"]["admin_task"] = help_turn.task.key
+                stats["help"]["admin_steps"] = help_turn.admin
         if replace_id is not None:
             async for event in _finish_retry(replace_id, content, error, code, stats):
                 yield event

@@ -159,11 +159,12 @@ class PodcastDirectoryUnreachable(Exception):
     HTTP error) — as opposed to answering with no match."""
 
 
-def _subscribe_offline_text() -> str:
+def _subscribe_offline_text(*, admin: bool = False) -> str:
     """The reply to "subscribe to X" with no internet: today's sentence,
-    or the internet-off phrase when internet access is turned off."""
+    or the internet-off phrase when internet access is turned off
+    (``admin``: the turn's ``Context.proven_admin``, words only)."""
     if egress.internet_turned_off():
-        return egress.spoken_offline_reply("subscribe to a new podcast")
+        return egress.spoken_offline_reply("subscribe to a new podcast", admin=admin)
     return "I need an internet connection to subscribe to a new podcast."
 
 
@@ -365,7 +366,7 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
         give subscribe a clear offline message."""
         transcript = intent.transcript.strip().lower()
         if _SUBSCRIBE_RE.match(transcript):
-            return self._reply(ctx, _subscribe_offline_text())
+            return self._reply(ctx, _subscribe_offline_text(admin=ctx.proven_admin))
         for pattern, method in self.fast_paths:
             m = pattern.match(transcript)
             if m:
@@ -709,7 +710,7 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
         if not show:
             return self._reply(ctx, "Which podcast should I subscribe to?")
         if egress.internet_turned_off():
-            return self._reply(ctx, _subscribe_offline_text())
+            return self._reply(ctx, _subscribe_offline_text(admin=ctx.proven_admin))
         try:
             feed_url, title, artwork = await self._itunes_lookup(show)
         except PodcastDirectoryUnreachable:

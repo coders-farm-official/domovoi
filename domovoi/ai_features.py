@@ -54,9 +54,17 @@ OFF_LINE = (
 # The weather, scores, prices, the news of the day, "are you sure?": things
 # only a web answer summarised by the model could give.
 # Says how to turn AI back on (owner, Q2: domovoi/off_answers.py).
-OFF_LOOKUP_LINE = off_answers.with_turn_on(
-    "I can't look that up with AI turned off.", off_answers.AI
-)
+_OFF_LOOKUP_LEAD = "I can't look that up with AI turned off."
+
+
+def off_lookup_line(*, admin: bool = False) -> str:
+    """:data:`OFF_LOOKUP_LINE`, with the steps for a proven admin
+    (``Context.proven_admin``; off_answers.turn_on_line)."""
+    return off_answers.with_turn_on(_OFF_LOOKUP_LEAD, off_answers.AI, admin=admin)
+
+
+#: The member wording, which every turn but a proven admin's hears.
+OFF_LOOKUP_LINE = off_lookup_line()
 
 # The one sentence an API refusal carries (HTTP detail, the SDK's
 # exception text, the dashboard's toast).
@@ -276,12 +284,13 @@ KNOWN_AI_CAPABILITIES: dict[str, PluginAI] = {
 }
 
 
-def off_feature_line(does: str | None = None) -> str:
+def off_feature_line(does: str | None = None, *, admin: bool = False) -> str:
     """What a turn hears when AI is off and it asked for something only a
     model makes: "AI is off on this house, so I can't make pictures." and
-    how to turn it on. Never the plugin's name."""
+    how to turn it on (the steps when ``admin``: the turn's
+    ``Context.proven_admin``). Never the plugin's name."""
     what = " ".join(str(does or "").split()) or "do that"
-    return off_answers.with_turn_on(f"{AI_OFF_LEAD}, so I can't {what}.", off_answers.AI)
+    return off_answers.with_turn_on(f"{AI_OFF_LEAD}, so I can't {what}.", off_answers.AI, admin=admin)
 
 
 def plugin_ai_from_manifest(raw: Mapping[str, Any] | None) -> PluginAI | None:
@@ -377,7 +386,7 @@ _AI_MAKE_REQUEST_RE = re.compile(
 _AI_MADE = {"story": "tell stories", "joke": "tell jokes", "poem": "write poems", "riddle": "tell riddles"}
 
 
-def off_request_line(transcript: str) -> str | None:
+def off_request_line(transcript: str, *, admin: bool = False) -> str | None:
     """The AI-off answer for a request only the model answers (a chat, a
     story, a joke, a poem), or None for anything else. Says AI is off, that
     home commands still work, and how to turn it on."""
@@ -385,12 +394,12 @@ def off_request_line(transcript: str) -> str | None:
     if _AI_CHAT_REQUEST_RE.search(text):
         return off_answers.with_turn_on(
             "AI chat is off on this house, but home commands like timers and music still work.",
-            off_answers.AI,
+            off_answers.AI, admin=admin,
         )
     m = _AI_MAKE_REQUEST_RE.search(text)
     if m:
         what = _AI_MADE[m.group("what").rstrip("s")]
-        return off_answers.with_turn_on(f"{AI_OFF_LEAD}, so I can't {what}.", off_answers.AI)
+        return off_answers.with_turn_on(f"{AI_OFF_LEAD}, so I can't {what}.", off_answers.AI, admin=admin)
     return None
 
 

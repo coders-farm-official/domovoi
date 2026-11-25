@@ -480,7 +480,7 @@ class LibraryHandler(Handler):
 
         if egress.internet_turned_off():
             return self._enrich_reply(
-                ctx, egress.spoken_offline_reply("identify songs")
+                ctx, egress.spoken_offline_reply("identify songs", admin=ctx.proven_admin)
             )
         if not ctx.online:
             return self._enrich_reply(

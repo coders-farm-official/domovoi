@@ -627,7 +627,7 @@ def transport(monkeypatch, no_player_starts):
 
     routed: list[tuple[str, str]] = []
 
-    async def _route(transcript, room_id):
+    async def _route(transcript, room_id, *, request=None):
         routed.append((transcript, room_id))
         return Response(text="ok", matched_handler="music")
 
