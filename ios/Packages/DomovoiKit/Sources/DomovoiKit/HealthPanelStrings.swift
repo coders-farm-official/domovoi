@@ -101,11 +101,12 @@ public enum HealthPanelStrings {
     /// `:266`. Monospaced, like the meta line.
     public static let resolvedLabel = "last 24 hours · resolved and cleared"
 
-    /// `:275`. The arrow is **U+2192**. This is the sentence that stands in
-    /// for the acknowledge and clear buttons neither app draws: both routes
-    /// are admin-tier at both hops (`containers.py:133`, `:146`).
-    public static let adminClearsThese =
-        "an admin acknowledges or clears these on the dashboard's Settings → Health"
+    /// `IncidentAdminWords.DASHBOARD_OR_PHONE` (`IncidentAdmin.kt`). The
+    /// arrow is **U+2192**. Under the incidents while this phone holds no
+    /// admin: acknowledge and clear are admin-tier at both hops
+    /// (`containers.py:133`, `:146`), so they are the dashboard's or this
+    /// phone's own admin sign-in's (1.5.0, ``HealthIncidentAdminModel``).
+    public static let adminClearsThese = HealthIncidentAdminWords.dashboardOrPhone
 
     // MARK: - the dashboard foot (`:160-172`)
 
