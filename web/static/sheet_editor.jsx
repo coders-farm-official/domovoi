@@ -876,7 +876,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
       clearTimeout(checkRef.current);
       if (await onSave()) { onClose(); return; }
     }
-    if (dirty && !window.confirm('You have unsaved changes. Discard them and close?')) return;
+    if (dirty && !await askConfirm('You have unsaved changes. Discard them and close?')) return;
     onClose();
   };
 

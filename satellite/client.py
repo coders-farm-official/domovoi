@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import itertools
 import json
 import logging
@@ -47,12 +48,14 @@ from websockets.exceptions import ConnectionClosed
 
 from satellite import (
     _volume,
+    adaptive_gate,
     base_packages,
     chime,
     code_sync,
     config_writer,
     debug_audio,
     devices,
+    diagnostics,
     discovery,
     display_power,
     engine_platform,
@@ -60,10 +63,13 @@ from satellite import (
     health,
     log_buffer,
     log_spool,
+    mic_dsp,
     net_settings,
     pc_engine,
     remote_config,
     sound_sync,
+    support_shell,
+    wake_claim,
     wake_gate,
     wake_model_sync,
     wake_words,
@@ -161,6 +167,20 @@ REPLY_DEADLINE_ERROR_HOLD_SEC = 1.5
 # the satellite then plays nothing rather than the network clip, which says
 # to move the unit closer to the router, wrong advice here.
 NO_ANSWER_CLIP = "server_no_answer.mp3"
+# "My server changed" (1.5.0, S3-4): the server at this room's address
+# proved a DIFFERENT identity from the one the room was set up for (the
+# house was reinstalled without keeping its identity, or another house took
+# the address). The room keeps refusing it (no re-pin, ever) and says so:
+# this clip, which the core renders per voice like the two above and this
+# device synced while it was still connected, and the teal LED pattern
+# (satellite/leds.py, "server_changed") instead of the no-server orange.
+SERVER_CHANGED_CLIP = "server_changed.mp3"
+# Said once when the change is first seen, then at most this often, so it
+# doesn't nag all night. When it was last said is kept on disk, so a
+# restart (or a crash loop) doesn't say it again either. A wake word heard
+# meanwhile is someone asking: that is answered with the clip every time.
+SERVER_CHANGED_SAY_EVERY_SEC = 12 * 3600.0
+SERVER_CHANGED_SAID_SIDECAR = Path("~/.domovoi/server-changed-said").expanduser()
 
 # openWakeWord's `Model.reset()` refills its feature buffer by running the
 # speech-embedding model over 4 s of random noise: 41 embedding windows, the
@@ -193,6 +213,8 @@ LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 # handler BEFORE the client is constructed — a startup failure is exactly
 # the thing you want to be able to read back afterwards.
 LOG_RING = log_buffer.RingLogBuffer()
+# When this process started (wall clock), for the diagnostics probes.
+_PROCESS_STARTED_WALL = time.time()
 
 # Characters of log text per `logs_chunk` frame. Small on purpose: one 10 MB
 # frame is a bad bet at both ends (uvicorn caps inbound WS messages, and JSON
@@ -557,6 +579,20 @@ def _effective_voice(cfg: "Config") -> str | None:
     return cfg.voice_name
 
 
+# A pushed wake word's slug, as a file name: the stem of `<slug>.onnx` in
+# WAKE_MODELS_DIR. The words-list rule (wake_words.clean_slug), with room
+# for the core's longest trained-model slug (wake_model_card: 80). No path
+# separator, so it never names a file outside the cache.
+_WAKE_FILE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\Z")
+
+
+def _safe_wake_slug(raw: object) -> str | None:
+    """``raw`` stripped when it is a wake-word slug, else None."""
+    if isinstance(raw, str) and _WAKE_FILE_SLUG_RE.match(raw.strip()):
+        return raw.strip()
+    return None
+
+
 def _effective_wake_word(cfg: "Config") -> str:
     """The wake word this satellite should listen for: the runtime sidecar
     slug if present (a model pushed from the dashboard), else the configured
@@ -566,10 +602,10 @@ def _effective_wake_word(cfg: "Config") -> str:
     slug. Mirrors `_effective_voice`."""
     try:
         if WAKE_SIDECAR.is_file():
-            slug = WAKE_SIDECAR.read_text(encoding="utf-8").strip()
+            slug = _safe_wake_slug(WAKE_SIDECAR.read_text(encoding="utf-8"))
             if slug:
                 return slug
-    except OSError:
+    except (OSError, ValueError):
         pass
     return cfg.wake_word
 
@@ -583,12 +619,12 @@ def _effective_wake_model_path(cfg: "Config") -> str | None:
     precedence: a dashboard-pushed model overrides the TOML."""
     try:
         if WAKE_SIDECAR.is_file():
-            slug = WAKE_SIDECAR.read_text(encoding="utf-8").strip()
+            slug = _safe_wake_slug(WAKE_SIDECAR.read_text(encoding="utf-8"))
             if slug:
                 model = WAKE_MODELS_DIR / f"{slug}.onnx"
                 if model.is_file():
                     return str(model)
-    except OSError:
+    except (OSError, ValueError):
         pass
     if cfg.wake_word_model_path and cfg.wake_word_model_path.exists():
         return str(cfg.wake_word_model_path)
@@ -812,6 +848,29 @@ def _resolve_sound(relpath: str) -> Path:
     return Path(__file__).resolve().parent / "sounds" / relpath
 
 
+def _server_changed_say_due(now: float, path: Path | None = None) -> bool:
+    """Whether "my server changed" is due: never said, or said at least
+    SERVER_CHANGED_SAY_EVERY_SEC ago by the wall clock (a time in the
+    future, a clock set back, counts as due)."""
+    try:
+        last = float((path or SERVER_CHANGED_SAID_SIDECAR).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return True
+    return not (0 <= now - last < SERVER_CHANGED_SAY_EVERY_SEC)
+
+
+def _server_changed_said(now: float, path: Path | None = None) -> None:
+    target = path or SERVER_CHANGED_SAID_SIDECAR
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Whole seconds, rounded DOWN: rounded to nearest, a time up to half a
+        # second ahead of the clock read back as "in the future" (so due),
+        # and the room said it again on the next reconnect attempt.
+        target.write_text(f"{int(now)}\n", encoding="utf-8")
+    except OSError as e:
+        log.debug("could not record when the server change was said: %s", e)
+
+
 def _greetings_dir() -> Path:
     """Greetings dir to pick from — the synced cache if it has clips, else
     the bundled dir."""
@@ -959,6 +1018,11 @@ class Config:
     # 30 ms frames, SPEECH_PAUSE_FRAMES_MIN..MAX of them. Defaulted, like
     # early_commit, to what it has always been.
     speech_pause_ms: int = SPEECH_PAUSE_FRAMES * FRAME_MS
+    # [listen] adaptive_gate: each capture's own speech gate (noisy rooms,
+    # 1.5.0; satellite/adaptive_gate.py): the room's level just before the
+    # wake word + 6 dB, then the speaker's own level - 15 dB. Off: the
+    # fixed [noise_gate] dbfs alone, as before.
+    adaptive_gate: bool = True
     # [listen] response_deadline_sec: see RESPONSE_DEADLINE_SEC_DEFAULT.
     response_deadline_sec: float = RESPONSE_DEADLINE_SEC_DEFAULT
     # [listen] response_backstop_sec: see RESPONSE_BACKSTOP_SEC_DEFAULT.
@@ -993,6 +1057,10 @@ class Config:
     # [satellite] room_name: the name it was enrolled with (the tray shows
     # it; room_id is what it connects as).
     room_name: str = ""
+    # [satellite] requested_room (1.5.0): the existing room it was enrolled
+    # into ("Add a satellite to the Kitchen", the payload's `in=`); sent in
+    # the hello so the approval card pre-selects that room.
+    requested_room: str = ""
     # [pc] permissions: "automatic" (updates and restarts from the core run
     # on arrival, like a Pi) or "ask" (they wait for the person's OK).
     permissions: str = "automatic"
@@ -1311,6 +1379,7 @@ class Config:
             # turn off in a room where people pause mid-command.
             early_commit=bool(listen.get("early_commit", True)),
             speech_pause_ms=speech_pause_ms,
+            adaptive_gate=bool(listen.get("adaptive_gate", True)),
             response_deadline_sec=_response_deadline_sec(listen.get("response_deadline_sec")),
             response_backstop_sec=_seconds_setting(
                 listen.get("response_backstop_sec"), "response_backstop_sec",
@@ -1336,6 +1405,7 @@ class Config:
             health_heartbeat_stale_sec=float(healthc.get("heartbeat_stale_sec", 60.0)),
             health_wake_stall_sec=max(30.0, float(healthc.get("wake_stall_sec", 120.0))),
             room_name=str(sat.get("room_name", "") or ""),
+            requested_room=str(sat.get("requested_room", "") or ""),
             permissions=permissions,
             settings_ignored=tuple(ignored),
             volume_backend=volume_backend,
@@ -1609,6 +1679,15 @@ class _MusicRun:
     rc: int | None = None
     stderr_tail: str = ""
     supervised: bool = True
+    # Set by the watcher once the player says it decoded the stream's first
+    # frame (`_MUSIC_AUDIO_RE`): audio arrived, not just a connection.
+    audio: threading.Event = field(default_factory=threading.Event)
+
+
+# The line a stream player prints once audio has actually arrived: mpg123's
+# header for the first decoded frame ("MPEG 1.0 L III cbr192 44100 j-s"),
+# and the same word from the Windows player (satellite/win_player.py).
+_MUSIC_AUDIO_RE = re.compile(r"^MPEG\b")
 
 
 # What mpg123 prints when the stream is not up YET: the port refused (MPD's
@@ -1703,6 +1782,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
+        # The XVF3800's DSP presets (satellite/mic_dsp.py): None unless this
+        # is an XVF3800 with xvf_host installed; then the hello says
+        # `"mic_dsp": false` and the core never sends a preset.
+        self._mic_dsp = mic_dsp.XvfDsp.create(cfg)
 
         # Sanity-check the loaded threshold. If the user has 0.0 (or
         # anything tighter than ~-28 dBFS) in their config, no realistic
@@ -1992,6 +2075,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # cleared when each capture starts. See `_capture_utt`.
         self._end_capture = threading.Event()
         self._capture_lock = threading.Lock()
+        # One turn per wake word (1.5.0, satellite/wake_claim.py): the
+        # claims this device sends, shared by the mic thread and the
+        # receiver.
+        self._claims = wake_claim.ClaimBook()
 
         # State-indicator LEDs. Backend depends on the device profile:
         # APA102 over SPI on the ReSpeaker HAT, or the WS2812 ring driven
@@ -2005,6 +2092,20 @@ class Satellite(pc_engine.SpareDeviceEngine):
             backend=cfg.device.led_backend,
             xvf_host_path=cfg.leds_xvf_host_path,
         ))
+
+        # Support sessions (1.5.0, satellite/support_shell.py): an admin's
+        # shell as this account, declared only by a Pi on a prepared card
+        # whose account can't use sudo. Decided once, at start. Every open,
+        # input and allow frame must carry the server's signature for this
+        # satellite id and this connection.
+        self._support = support_shell.SupportShell(
+            declared=support_shell.should_declare(is_pc=pc_engine.is_pc(cfg)),
+            emit=self._emit_text,
+            on_open=self._support_opened,
+            on_end=self._support_ended,
+            busy=self._support_busy,
+            satellite_id=lambda: self.cfg.room_id,
+        )
 
         # WiFi self-heal state. The watcher thread polls
         # `iw dev wlan0 link` every `wifi_poll_interval_sec` and, ONLY
@@ -2310,6 +2411,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 data = bytes(indata)
             else:
                 data = devices.select_channel_int16(indata, dev.capture_dtype, channels, select)
+            # Speaker calibration listens on this stream (a no-op unless a
+            # calibration step armed its window): the block as captured,
+            # with its capture time, before the rate corrector touches it.
+            rp = self._room_player
+            if rp is not None:
+                rp.calibrator.on_mic(data, time_info, len(data) // 2, SAMPLE_RATE)
             # Everything the consumer sees goes through the corrector, which
             # is a pass-through on a healthy stream and the only thing that
             # makes an 8x-fast one usable.
@@ -2442,6 +2549,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         woke, self._woke_at = self._woke_at, None
         score, self._wake_score = self._wake_score, None
         fired, self._wake_fired = self._wake_fired, None
+        # The claim this device owns the turn by (1.5.0, `_claim_wake`):
+        # the core ties this capture to it. Taken once, like the wake time.
+        claim, self._owner_claim = getattr(self, "_owner_claim", None), None
+        self._capture_claim = claim if trigger in ("wake_word", "barge_in") else None
+        if self._capture_claim is not None:
+            msg["claim"] = claim
         if trigger == "wake_word" and woke is not None:
             msg["wake_ms"] = max(0, int(round((self._utt_started - woke) * 1000)))
             # Which of the room's words fired (1.4.0), so the room's history
@@ -2515,6 +2628,90 @@ class Satellite(pc_engine.SpareDeviceEngine):
             )
             self._offline_drop_last_log = now
 
+    def _support_busy(self) -> str | None:
+        """Why a support session can't open now, or None."""
+        if self.dropin_active.is_set():
+            return "the room is in a drop-in call"
+        if self.wake_recording.is_set():
+            return "the room is recording wake-word clips"
+        return None
+
+    def _screen_support_leds(self, changes: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        """A device that offers support sessions keeps its light: a remote
+        set_config can't turn it off or down to nothing
+        (support_shell.screen_led_changes)."""
+        support = getattr(self, "_support", None)
+        return support_shell.screen_led_changes(changes, bool(support and support.declared))
+
+    def _support_opened(self) -> None:
+        """A support session opened: the light, then the process is made
+        non-dumpable (the shell runs as this account and must not attach to
+        it) and the systemd watchdog is armed and fed from the event loop,
+        so a client stopped or frozen from inside the shell is killed with
+        its whole unit (satellite/support_shell.py)."""
+        self._leds.set_support(True)
+        support_shell.make_undumpable()
+        support_shell.sd_notify(
+            f"WATCHDOG_USEC={support_shell.WATCHDOG_SEC * 1_000_000}\nWATCHDOG=1")
+        loop = getattr(self, "loop", None)
+        if loop is not None and not loop.is_closed():
+            asyncio.run_coroutine_threadsafe(self._feed_support_watchdog(), loop)
+
+    async def _feed_support_watchdog(self) -> None:
+        """While a session is open, tell systemd the event loop is alive.
+        After the session it stops: the restart that follows replaces the
+        process, and if it doesn't come the watchdog restarts the unit."""
+        while self._support.active:
+            support_shell.sd_notify("WATCHDOG=1")
+            await asyncio.sleep(support_shell.WATCHDOG_FEED_SEC)
+
+    def _support_ended(self, reason: str, by_server: bool) -> None:
+        """A support session ended: the light goes back, then the service
+        restarts so nothing the shell started lives on (the unit's cgroup
+        kill takes every child). It waits up to 15 s for the room's end
+        line to be said first. If the restart can't be asked for, the
+        process exits non-zero, so systemd restarts the unit and clears
+        every process in it."""
+        self._leds.set_support(False)
+
+        def _restart() -> None:
+            time.sleep(2.0)
+            until = time.monotonic() + 15.0
+            while time.monotonic() < until and (
+                self.playback_active.is_set() or self._leds.state in ("speaking", "thinking")
+            ):
+                time.sleep(0.25)
+            log.info("support session ended (%s): restarting the service", reason)
+            if not self._restart_service():
+                log.error("support session ended: the restart could not be asked for; "
+                          "exiting so systemd restarts the unit")
+                os._exit(1)
+
+        threading.Thread(target=_restart, daemon=True, name="support-restart").start()
+
+    async def _answer_diag(self, probe: Any) -> None:
+        """Answer a `diag_request`: run the named probe on a worker thread
+        and send its `diag_result` (capped and scrubbed in
+        satellite/diagnostics.py). One probe at a time on this device."""
+        lock = getattr(self, "_diag_lock", None)
+        if lock is None:
+            lock = self._diag_lock = asyncio.Lock()
+        async with lock:
+            token = _effective_pairing_token()
+            ctx = diagnostics.Context(
+                server_url=self.cfg.domovoi_url,
+                log_tail=LOG_RING.tail,
+                synced_sha=_read_synced_sha(),
+                board=pc_engine.board_for(self.cfg) if pc_engine.is_pc(self.cfg) else "",
+                audio_devices=sd.query_devices,
+                started_at=_PROCESS_STARTED_WALL,
+                known_secrets=tuple(v for v in (token,) if v),
+                mic_dsp=getattr(self, "_mic_dsp", None),
+                hash_salt=_pinned_fingerprint(self.cfg)[0] or "",
+            )
+            result = await asyncio.to_thread(diagnostics.run_probe, probe, ctx)
+        self._emit_text({"type": "diag_result", **result})
+
     async def _send_logs(self, request_id: str, max_bytes: int | None) -> None:
         """Answer a `get_logs` frame: stream the log ring back in chunks.
 
@@ -2567,6 +2764,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # newer start bumps it too, so two starts in a row would cancel each
     # other.
     _music_stop_gen: int = 0
+    # `_music_stop_gen` as the core's last music_stop left it: a start
+    # dropped by that stop was dropped because the core asked, and is not
+    # reported back to it (`_report_dropped_start`).
+    _music_core_stop_gen: int = 0
+    # Bumped by every music_start frame the receiver hands on. A dropped
+    # start is reported only while it is the newest one: a newer start has
+    # taken over, and its own music_ready or report is what the core needs.
+    _music_start_seq: int = 0
     # The run `_music_proc` belongs to (exit status, who reports its exit).
     _music_run: _MusicRun | None = None
 
@@ -2591,6 +2796,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # with the wake-word model starts mpg123 slower, and a longer grace
     # costs nothing (a refusal inside it is retried, not reported).
     MUSIC_CONNECT_GRACE_SEC = 1.0
+    # How long a new player may take to decode the stream's first frame.
+    # Up for `music_prime_sec` used to count as playing, so a stream that
+    # connected and sent nothing got its music_ready, MPD resumed, and the
+    # room stayed silent (2026-11-22). Under the core's 5 s music_ready
+    # fallback, so the failure report cancels it. MPD's always-on stream
+    # sends silence frames while paused, so a working stream decodes at once.
+    MUSIC_AUDIO_TIMEOUT_SEC = 4.0
     # How long a music_start waits for the speaker once no turn holds it
     # (`_music_hold_reason`): the last sentence of an announcement still
     # playing. Past it the playback thread is taken to be stuck and the
@@ -2641,7 +2853,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 return what
         return None
 
-    def _start_music_when_idle(self, url: str, stop_gen: int | None = None) -> None:
+    def _start_music_when_idle(
+        self, url: str, stop_gen: int | None = None, start_seq: int | None = None,
+    ) -> None:
         """Wait until the turn is over and the playback thread releases the
         ALSA device, then spawn mpg123.
 
@@ -2679,6 +2893,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
         gets a reply (the core decides the music again at its end) and plays
         when it gets none — a follow-up nobody answered. A newer music_start
         does not count; it takes over instead.
+
+        A start dropped here is reported to the core (`music_failed`, see
+        `_report_dropped_start`) unless the core's own music_stop dropped
+        it: the core arms a fallback that resumes the room's MPD 5 s after
+        every music_start, and a start that never played, unreported, left
+        MPD playing to a silent room with the dashboard reading "playing"
+        (office, 2026-11-22). ``start_seq`` is `_music_start_seq` as the
+        receiver set it for this frame (None: not checked).
         """
         if stop_gen is None:
             stop_gen = self._music_stop_gen
@@ -2690,6 +2912,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 return
             if stop_gen != self._music_stop_gen:
                 log.info("music: not starting %s; it was stopped while it waited", url)
+                self._report_dropped_start(url, stop_gen, start_seq, "stopped_while_waiting")
                 return
             reason = self._music_hold_reason()
             if reason is not None:
@@ -2704,6 +2927,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         "playback thread didn't release output stream in %.0fs; "
                         "skipping music", self.MUSIC_SPEAKER_WAIT_SEC,
                     )
+                    self._report_dropped_start(url, stop_gen, start_seq, "speaker_busy")
                     return
                 t0 = time.monotonic()
                 self._playback_idle.wait(timeout=self.MUSIC_HOLD_POLL_SEC)
@@ -2722,13 +2946,42 @@ class Satellite(pc_engine.SpareDeviceEngine):
             break
         # None: nothing was spawned — the music was stopped while this
         # start waited, or the subprocess could not be spawned at all
-        # (mpg123 not installed). Nothing to supervise, and no point
-        # unpausing MPD; after a spawn failure the server's fallback timer
-        # resumes it eventually anyway and the failure logged out of
-        # `_start_music` is the diagnostic signal.
+        # (mpg123 not installed). Nothing to supervise; the core is told,
+        # so its fallback does not resume MPD into a silent room.
         if gen is None:
+            self._report_dropped_start(
+                url, stop_gen, start_seq,
+                "stopped_while_waiting" if stop_gen != self._music_stop_gen
+                else "player could not be started",
+            )
             return
         self._supervise_music(url, gen)
+
+    def _report_dropped_start(
+        self, url: str, stop_gen: int, start_seq: int | None, reason: str,
+    ) -> None:
+        """Tell the core a music_start it sent will not play (``music_failed``,
+        attempts 0), when its `ready.features` lists the frame. Not when the
+        core's own music_stop dropped it (it knows), not when a newer
+        music_start has arrived since (that one is the room's music now),
+        and not at shutdown. Under `_music_lock`, as every music frame is
+        sent, so no newer request's frames can precede it."""
+        with self._music_lock:
+            if self.shutdown_event.is_set():
+                return
+            if self._music_core_stop_gen > stop_gen:
+                return
+            if start_seq is not None and start_seq != self._music_start_seq:
+                return
+            if "music_failed" not in getattr(self, "_core_features", frozenset()):
+                return
+            log.info("music: telling the server %s will not play (%s)", url, reason)
+            self._emit_text({
+                "type": "music_failed",
+                "stream_url": url,
+                "reason": reason,
+                "attempts": 0,
+            })
 
     def _start_music(self, url: str, stop_gen: int | None = None) -> int | None:
         """Spawn mpg123 to consume MPD's HTTP stream and play through the HAT.
@@ -2787,6 +3040,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._music_url = None
             self._music_run = None
             return False
+        self._room_yield()
         if attempt == 1:
             log.info("starting music: %s (alsa=%s)", url, self.cfg.music_alsa_device)
         else:
@@ -2880,7 +3134,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
         Two windows per mpg123 run, both counted from when this request
         starts watching it: `music_prime_sec`, at the end of which a run
-        still up gets the request's one `music_ready`; and the connect
+        still up gets the request's one `music_ready` — once its first
+        frame has decoded (`run.audio`); a run with no audio within
+        `MUSIC_AUDIO_TIMEOUT_SEC` is stopped and given up on; and the connect
         grace, the longer of the prime and `MUSIC_CONNECT_GRACE_SEC`, for
         which an exit still means the stream was not up yet (retry) rather
         than a stream that played and dropped (the watcher's report). With
@@ -2906,9 +3162,26 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 return
             watched_from = time.monotonic()
             if ready_due:
-                # Wait out the prime window — or less, if mpg123 exits
-                # inside it.
-                run.exited.wait(timeout=prime)
+                # Ready means audio arrived: wait for the player to decode the
+                # first frame (or exit), then out the rest of the prime window.
+                deadline = watched_from + self.MUSIC_AUDIO_TIMEOUT_SEC
+                while not (run.audio.is_set() or run.exited.is_set()):
+                    left = deadline - time.monotonic()
+                    if left <= 0 or self.shutdown_event.is_set():
+                        break
+                    run.audio.wait(timeout=min(left, 0.05))
+                if not (run.audio.is_set() or run.exited.is_set()):
+                    if self.shutdown_event.is_set():
+                        return
+                    with self._music_lock:
+                        if self._music_gen == gen and self._music_run is run:
+                            _signal_player(run.proc, kill=True)
+                            self._give_up_music_locked(
+                                run, f"no audio from the stream within "
+                                f"{self.MUSIC_AUDIO_TIMEOUT_SEC:g}s", attempts,
+                            )
+                    return
+                run.exited.wait(timeout=max(0.0, watched_from + prime - time.monotonic()))
                 if self.shutdown_event.is_set():
                     return
                 with self._music_lock:
@@ -2996,12 +3269,20 @@ class Satellite(pc_engine.SpareDeviceEngine):
         watching the connection (it retries or gives up), else — the stream
         had been playing and nothing asked it to stop — report it here."""
         proc = run.proc
+        lines: collections.deque[str] = collections.deque(maxlen=10)
         try:
-            stderr_bytes = proc.stderr.read() if proc.stderr is not None else b""
+            # Line by line, as it comes: the first decoded frame's header
+            # line marks audio arriving (`run.audio`, `_supervise_music`).
+            for raw in iter(proc.stderr.readline, b"") if proc.stderr is not None else ():
+                line = raw.decode(errors="replace").rstrip()
+                if not run.audio.is_set() and _MUSIC_AUDIO_RE.match(line):
+                    run.audio.set()
+                if line.strip():
+                    lines.append(line)
         except Exception:
-            stderr_bytes = b""
+            pass
         rc = proc.wait()
-        tail = stderr_bytes.decode(errors="replace").strip().splitlines()[-10:]
+        tail = list(lines)
         if rc != 0:
             log.warning("mpg123 exited rc=%s; stderr tail:\n%s", rc, "\n".join(tail))
         with self._music_lock:
@@ -3020,14 +3301,91 @@ class Satellite(pc_engine.SpareDeviceEngine):
         abruptly following the music with a greeting clip (see
         `_acknowledge_wake`)."""
         with self._music_lock:
-            return self._music_proc is not None and self._music_proc.poll() is None
+            if self._music_proc is not None and self._music_proc.poll() is None:
+                return True
+        rp = getattr(self, "_room_player", None)
+        return rp is not None and rp.playing
 
-    def _stop_music(self) -> None:
+    # ── Room audio: the timed room player (1.5.0) ─────────────────────────
+
+    #: The room player (satellite/room_player.py) once a core accepted the
+    #: session; it keeps its own socket to /v1/room-audio and reconnects.
+    _room_player: Any = None
+
+    def _room_audio_enabled(self) -> bool:
+        """Whether this device plays room audio: everything but a test run
+        (``DOMOVOI_ROOM_AUDIO=0``, set by the satellite tests' conftest)."""
+        return os.environ.get("DOMOVOI_ROOM_AUDIO", "1") != "0"
+
+    def _room_device_free(self) -> bool:
+        """The speaker is not held by a reply, an acknowledgement or the
+        plain music stream. A Pi's ALSA card takes one stream at a time; a
+        PC's sound server (or WASAPI's shared mode) mixes, so it always is."""
+        if pc_engine.is_pc(self.cfg):
+            return True
+        if not self._playback_idle.is_set() or self._ack_proc is not None:
+            return False
+        with self._music_lock:
+            return self._music_proc is None or self._music_proc.poll() is not None
+
+    def _room_yield(self) -> None:
+        """A local sound is about to open the speaker: on a Pi the room
+        player gives it up first (it comes back once the speaker is free;
+        the server ducks the room for a turn, so little is lost)."""
+        rp = self._room_player
+        if rp is not None and not pc_engine.is_pc(self.cfg):
+            rp.release_output()
+
+    def _room_control_delay(self, at_us: Any) -> float:
+        """Seconds until the server time ``at_us`` of a timed room control
+        (0 when absent, or before the room player's clock has converged).
+        Capped at one second: a bad stamp never holds a change back long."""
+        if isinstance(at_us, bool) or not isinstance(at_us, (int, float)):
+            return 0.0
+        rp = self._room_player
+        try:
+            wait = rp.seconds_until(float(at_us)) if rp is not None else None
+        except Exception:  # noqa: BLE001 — a timing hint, never a failure
+            wait = None
+        return 0.0 if wait is None else max(0.0, min(1.0, wait))
+
+    def _apply_output_volume_at(self, level: int, delay: float) -> None:
+        if delay > 0:
+            time.sleep(delay)
+        self._apply_output_volume(level)
+
+    def _start_room_player(self) -> None:
+        """Once per process, after the first `ready`: the room player
+        connects to /v1/room-audio/{id} with the pairing token and plays the
+        room's synced sound. Imported here so an interrupted code sync that
+        lacks the module costs room audio, never the satellite."""
+        if self._room_player is not None or not self._room_audio_enabled():
+            return
+        url = self.cfg.domovoi_url.rstrip("/")
+        if not url.startswith(("ws://", "wss://")):
+            return
+        try:
+            from satellite import room_player
+        except Exception:  # noqa: BLE001
+            log.exception("room audio: player unavailable")
+            return
+        self._room_player = room_player.RoomPlayer(
+            f"{url}/v1/room-audio/{self.cfg.room_id}", self.cfg.room_id,
+            _effective_pairing_token, device=self.cfg.output_device,
+            device_free=self._room_device_free, stop_event=self.shutdown_event,
+            has_mic=lambda: bool(self.cfg.mic_enabled),
+        )
+        self._room_player.start()
+
+    def _stop_music(self, *, by_core: bool = False) -> None:
         with self._music_lock:
             # A stop, not a replacement (`_start_music` calls the locked
             # half directly): a music_start still waiting for the speaker
             # is cancelled by this too (see `_music_stop_gen`).
             self._music_stop_gen += 1
+            if by_core:
+                # The core's music_stop: a start it drops is not reported.
+                self._music_core_stop_gen = self._music_stop_gen
             self._stop_music_locked()
 
     def _stop_music_locked(self) -> None:
@@ -3234,6 +3592,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         frames with a "wake-word predict is falling behind" warning that
         would be false here."""
         self._stop_ack()  # never two at once
+        self._room_yield()
         t0 = time.monotonic()
         # A platform whose player is slow to start plays the acknowledgement
         # in-process instead (Windows: engine_platform.WindowsAudioOut).
@@ -3432,6 +3791,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # latency=0.4 once made TTS chop worse). Server-side
             # sentence pipelining handles the inter-sentence gap.
             rate = src_sr if device_rate is None else device_rate
+            self._room_yield()
             try:
                 out_stream = debug_audio.output_stream(
                     sd,
@@ -4656,6 +5016,49 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
     _last_relocate_at: float | None = None
 
+    # -- "my server changed" (1.5.0, S3-4) ----------------------------------
+
+    _server_changed_fp: str | None = None
+
+    def _server_changed(self, fingerprint: str) -> None:
+        """The server at this room's address proved a different identity.
+        Show it (teal, satellite/leds.py) for as long as it lasts, and say
+        it: once now, then at most every SERVER_CHANGED_SAY_EVERY_SEC.
+        Trust is untouched: the caller has already refused the server."""
+        first = self._server_changed_fp is None
+        self._server_changed_fp = fingerprint
+        if first:
+            log.warning(
+                "this room's server changed (now %s): showing it on the ring and "
+                "telling the room; set this room up again to use the new server",
+                fingerprint,
+            )
+        self._leds.set_state("server_changed")
+        if _server_changed_say_due(time.time()):
+            self._say_server_changed()
+
+    def _say_server_changed(self) -> bool:
+        """Play the "my server changed" clip, when this device has it.
+        Returns True when it was played (and records when)."""
+        clip = _resolve_sound(SERVER_CHANGED_CLIP)
+        if not clip.is_file():
+            log.info("no %s synced yet: the server change is shown on the ring only",
+                     SERVER_CHANGED_CLIP)
+            return False
+        _server_changed_said(time.time())
+        self._play_canned_mp3(clip, "server-changed")
+        if self._server_changed_fp:
+            self._leds.set_state("server_changed")
+        return True
+
+    def _server_changed_cleared(self) -> None:
+        """A session is up: whatever this room's server is, it is not a
+        different one any more."""
+        if self._server_changed_fp is None:
+            return
+        self._server_changed_fp = None
+        self._leds.set_state_if("server_changed", "idle")
+
     def _relocate_server(self) -> None:
         """The core has been unreachable for a while: look for it again, in
         the usual order (its name, this address, the sweep), and switch to
@@ -5015,6 +5418,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._health_exit(f"could not reopen the capture stream: {failed}")
             return
         log.warning("self-check: capture stream reopened (%s)", reason)
+        # The array may have been unplugged and come back with its firmware
+        # values: put the chosen preset back on it.
+        self._mic_dsp_reapply("mic reopened", only_active=True)
 
     def _health_reboot(self, reason: str) -> None:
         if not _reboot_helper_installed(self.cfg):
@@ -5164,6 +5570,43 @@ class Satellite(pc_engine.SpareDeviceEngine):
             "wifi.min_healthy_mbits": c.wifi_min_healthy_mbits,
         }
 
+    def _mic_dsp_run(self, fn, *args) -> None:
+        """Run a preset change on a worker thread and report the state
+        (``mic_dsp_state``) when it is done."""
+        def work() -> None:
+            try:
+                state = fn(*args)
+            except ValueError as e:
+                log.warning("mic_dsp: refused: %s", e)
+                return
+            except Exception:  # noqa: BLE001 — never take the client down
+                log.exception("mic_dsp: preset change failed")
+                return
+            if state is None:
+                return  # skipped: another change held the array
+            # Only to a core that knows the frame (an older one answers
+            # an unknown frame with `error`).
+            if "mic_dsp" in getattr(self, "_core_features", frozenset()):
+                self._emit_text(state)
+        threading.Thread(target=work, daemon=True, name="mic-dsp").start()
+
+    def _mic_dsp_set(self, preset: object) -> None:
+        if getattr(self, "_mic_dsp", None) is None:
+            log.warning("set_mic_dsp: this satellite has no XVF3800 DSP control; ignoring")
+            return
+        if not isinstance(preset, str) or preset not in mic_dsp.PRESETS:
+            log.warning("set_mic_dsp: refusing unknown preset %r", str(preset)[:40])
+            return
+        self._mic_dsp_run(self._mic_dsp.apply, preset)
+
+    def _mic_dsp_reapply(self, reason: str, *, only_active: bool = False) -> None:
+        """Put the preset back (and report it). ``only_active``: only when
+        a preset of ours is on the chip (a replug at factory needs nothing)."""
+        dsp = getattr(self, "_mic_dsp", None)
+        if dsp is None or (only_active and not dsp.active):
+            return
+        self._mic_dsp_run(dsp.reapply, reason)
+
     def _emit_config_status(self) -> None:
         """Report current config to the server so the web dashboard's
         per-satellite Settings tab can render real values. Sent on connect
@@ -5237,6 +5680,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
         changes, refused = remote_config.screen(
             changes, pc=pc_engine.is_pc(getattr(self, "cfg", None)),
             windows=engine_platform.is_windows_pc(getattr(self, "cfg", None)))
+        changes, dark = self._screen_support_leds(changes)
+        refused = refused + dark
         if refused:
             log.warning("set_config: refusing %s (not a setting the dashboard may change here)",
                         ", ".join(sorted(refused)))
@@ -6207,9 +6652,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
                             )
                             self._stop_music()
                             self._drain_mic()
-                            self._play_canned_mp3(
-                                _resolve_sound("network_issues.mp3"), "network-issues"
-                            )
+                            # A room whose server changed says THAT (no
+                            # network advice), every time it is asked.
+                            if not (self._server_changed_fp and self._say_server_changed()):
+                                self._play_canned_mp3(
+                                    _resolve_sound("network_issues.mp3"), "network-issues"
+                                )
                             # Reset the wake model so its internal state
                             # doesn't carry forward the canned playback's
                             # echo as primed wake context.
@@ -6221,6 +6669,34 @@ class Satellite(pc_engine.SpareDeviceEngine):
                                 g.quiet_for(time.monotonic())
                             cooldown_logged = gate.cooldown_sec <= 0
                             continue  # back to listening
+                    # The room just before the wake phrase (and the phrase):
+                    # the claim's floor and this capture's gate.
+                    pre_wake = list(ambient_samples[-_PRE_WAKE_FRAMES:])
+                    self._pre_wake_dbfs = pre_wake
+                    # A room with several satellites (1.5.0): one turn per
+                    # wake word. Claim it and wait for the core's answer
+                    # (at most 150 ms), holding the chime and the music
+                    # stop. Only the owner goes on to the acknowledgement
+                    # and the capture.
+                    if self._claims_active():
+                        claim, decision = self._claim_wake(
+                            fired_slug, gate.last_peak, pre_wake,
+                            barge_in=self._reply_playing_here(),
+                        )
+                        if decision.role != wake_claim.OWNER:
+                            self._pre_wake_dbfs = None
+                            self._woke_at = self._wake_score = self._wake_fired = None
+                            self._quiet_listen(claim, decision, pre_wake)
+                            if self.shutdown_event.is_set():
+                                return False
+                            # Back to listening after a second (owner Q5).
+                            self._turn_open = False
+                            _reset_wake_model(oww)
+                            pending = np.empty(0, dtype=np.int16)
+                            for g in gates.values():
+                                g.quiet_for(time.monotonic(), wake_claim.COOLDOWN_SEC)
+                            cooldown_logged = True
+                            continue
                     # Flip the LED to "listening" immediately so the
                     # user gets feedback the moment we detect them —
                     # before the housekeeping below, which can take
@@ -6265,6 +6741,135 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     _reset_wake_model(oww)
                     return True
         return False
+
+    # ── One turn per wake word (1.5.0, satellite/wake_claim.py) ────────
+
+    def _claim_book(self) -> "wake_claim.ClaimBook":
+        book = getattr(self, "_claims", None)
+        if book is None:
+            book = self._claims = wake_claim.ClaimBook()
+        return book
+
+    def _claims_active(self) -> bool:
+        """This wake is claimed: the core lists `wake_claim` in `ready` and
+        the room says `claim: true`. Otherwise the wake goes exactly as it
+        always did, with no added delay."""
+        return bool(getattr(self, "_room_claim", False)) and (
+            wake_claim.ABILITY in getattr(self, "_core_features", frozenset())
+        )
+
+    def _reply_playing_here(self) -> bool:
+        """This device's speaker is playing (or draining) a reply, or the
+        room's synced playout is speaking (1.5.0: an answer, a timer or an
+        announcement from every speaker): a wake word now is a barge-in."""
+        return (self.playback_active.is_set() or not self._playback_idle.is_set()
+                or self._room_speech_playing())
+
+    def _room_speech_playing(self) -> bool:
+        """The room player has a spoken sound playing or queued
+        (`speech` spans on /v1/room-audio)."""
+        rp = getattr(self, "_room_player", None)
+        if rp is None:
+            return False
+        try:
+            return bool(rp.speech_playing())
+        except Exception:  # noqa: BLE001 — a hint for the barge-in flag only
+            return False
+
+    def _claim_wake(
+        self, word: str, score: float | None, pre_wake: list[float], *, barge_in: bool = False,
+    ) -> "tuple[int, wake_claim.Decision]":
+        """Send `wake_claim` and wait for its `wake_grant`, at most
+        `wake_claim.FAIL_OPEN_SEC`; no answer is owning the turn (fail
+        open). The mic keeps filling `raw_q` meanwhile, so nothing said is
+        lost. An owner's claim goes on its `utterance_start`."""
+        book = self._claim_book()
+        claim = book.open()
+        floor = adaptive_gate.pre_wake_floor(pre_wake)
+        sent = self._emit_text(
+            wake_claim.claim_frame(claim, word, score, floor, barge_in=barge_in)
+        )
+        decision = wake_claim.decide(book.wait(claim) if sent else None)
+        if decision.role == wake_claim.OWNER:
+            book.own(claim)
+            self._owner_claim = claim
+        log.info(
+            "wake claim %d%s: %s%s (floor %s dBFS)",
+            claim, " (barge-in)" if barge_in else "", decision.role,
+            " — no answer in time, failing open" if decision.failed_open and sent else "",
+            "-" if floor is None else f"{floor:.1f}",
+        )
+        return claim, decision
+
+    def _capture_gate(self, pre_wake: list[float] | None) -> "adaptive_gate.CaptureGate | None":
+        """This capture's speech gate (noisy rooms, stage 1): the pre-wake
+        floor + 6 dB, then the speaker's own level - 15 dB
+        (satellite/adaptive_gate.py). None when `[listen] adaptive_gate`
+        is off: the fixed `[noise_gate] dbfs`, as before. A capture with no
+        pre-wake window (a follow-up, a barge-in) has no floor: only the
+        speaker's level applies."""
+        if not getattr(self.cfg, "adaptive_gate", False):
+            return None
+        return adaptive_gate.CaptureGate.from_pre_wake(pre_wake or [], self.cfg.noise_gate_dbfs)
+
+    def _quiet_listen(self, claim: int, decision: "wake_claim.Decision",
+                      pre_wake: list[float] | None) -> None:
+        """A claim answered `quiet`: no chime, no greeting, no music stop;
+        the LED only fades. Stream the command as heard, at most
+        `stream_ms` of it, or on to this device's own end of speech once
+        the core keeps it (`capture_keep`); `end_capture {claim}` stops it.
+        Then `quiet_end`. `stream_ms: 0` is a stand-down: nothing streamed,
+        nothing sent. The caller holds the wake word off for
+        `wake_claim.COOLDOWN_SEC` afterwards."""
+        self._leds.set_state("quiet")
+        if decision.role != wake_claim.QUIET:
+            return
+        book = self._claim_book()
+        book.start_quiet(claim)
+        gate = self._capture_gate(pre_wake)
+        vad = webrtcvad.Vad(self.cfg.vad_aggressiveness)
+        limit = decision.stream_frames
+        max_frames = int(self.cfg.max_record_seconds * 1000 / FRAME_MS)
+        silence_limit = int(self.cfg.silence_timeout * 1000 / FRAME_MS)
+        frames = silent = 0
+        speaking = False
+        reason = wake_claim.LIMIT
+        try:
+            while True:
+                if self.shutdown_event.is_set() or book.stopped:
+                    reason = wake_claim.STOPPED
+                    break
+                kept = book.kept
+                if not kept and frames >= limit:
+                    reason = wake_claim.LIMIT
+                    break
+                if kept and frames >= max_frames:
+                    reason = "max_record_seconds"
+                    break
+                try:
+                    frame = self.raw_q.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if not self._emit_audio(frame):
+                    reason = wake_claim.STOPPED
+                    break
+                frames += 1
+                d = _frame_dbfs(frame)
+                threshold = gate.threshold() if gate is not None else self.cfg.noise_gate_dbfs
+                is_speech = d >= threshold and vad.is_speech(frame, SAMPLE_RATE)
+                if gate is not None and is_speech:
+                    gate.observe(d, True)
+                if is_speech:
+                    speaking, silent = True, 0
+                elif speaking:
+                    silent += 1
+                    if kept and silent >= silence_limit:
+                        reason = "vad_silence_after_speech"
+                        break
+        finally:
+            book.end_quiet()
+        self._emit_text({"type": "quiet_end", "claim": claim, "frames": frames, "reason": reason})
+        log.info("quiet stream %d ended (%s) after %d frames", claim, reason, frames)
 
     def _stream_capture(
         self,
@@ -6450,6 +7055,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
             sent += 1
             capture_dbfs.append(_frame_dbfs(f))
 
+        # Noisy rooms, stage 1 (satellite/adaptive_gate.py): this capture's
+        # own gate, from the room's level just before the wake word and
+        # then the speaker's own level. None: the fixed gate, as before.
+        pre_wake, self._pre_wake_dbfs = getattr(self, "_pre_wake_dbfs", None), None
+        gate = self._capture_gate(pre_wake)
+        # The first frame the detector called speech: where a capped
+        # capture's command began (the log, and `utterance_end`).
+        first_voiced: int | None = 0 if prefix_frames else None
+
         # Tracks why the capture loop ended; surfaced in the stats log.
         # Default carries through if we exit via the `while` condition
         # going false (max_frames or shutdown_event without speech).
@@ -6466,10 +7080,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._stop_own_music_under_capture(utt)
             d = _frame_dbfs(frame)
             capture_dbfs.append(d)
-            loud = d >= self.cfg.noise_gate_dbfs
+            loud = d >= (gate.threshold() if gate is not None else self.cfg.noise_gate_dbfs)
             if loud:
                 gate_pass_count += 1
             is_speech = loud and vad.is_speech(frame, SAMPLE_RATE)
+            if is_speech and gate is not None:
+                gate.observe(d, True)
             if is_speech and pause_reported:
                 # BEFORE this frame's audio: the core counts every frame
                 # that reaches it while a reported pause stands as silence
@@ -6490,6 +7106,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 pre_speech_silent = 0
                 voiced_count += 1
                 last_voiced = sent - 1
+                if first_voiced is None:
+                    first_voiced = last_voiced
             elif speaking:
                 silent_frames += 1
                 if (
@@ -6559,6 +7177,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             sent, gate_pass_count, voiced_count,
             capture_dbfs, self.cfg.noise_gate_dbfs,
         )
+        if gate is not None:
+            g = gate.report()
+            stats += (
+                f"; capture gate {g['gate_dbfs']} dBFS (floor {g['floor_dbfs']}, "
+                f"speech {g['speech_dbfs']}), first voiced frame {first_voiced}"
+            )
 
         # Hit max without VAD ever finding silence — the most common
         # symptom of a misconfigured noise gate or wrong VAD level.
@@ -6636,6 +7260,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             "utt": utt,
             "frames": sent,
             "last_voiced_frame": last_voiced if last_voiced >= 0 else None,
+            # 1.5.0, noisy rooms: where speech began (0-based, null when the
+            # detector never heard any). For a capture cut off at its cap the
+            # core transcribes a few seconds from here: the command is said
+            # first, the room's chatter follows (domovoi/loud_room.py).
+            "first_voiced_frame": first_voiced,
             "exit_reason": exit_reason,
             "voiced_frames": voiced_count,
             "trailing_silent_frames": silent_frames,
@@ -6912,6 +7541,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
         OWW_CHUNK = 1280  # 80 ms @ 16 kHz — see _wait_for_wake
         pending = np.empty(0, dtype=np.int16)
         primed = False
+        # What the mic heard under the reply: a barge-in claim's floor.
+        levels: deque[float] = deque(maxlen=_PRE_WAKE_FRAMES)
 
         while not self.shutdown_event.is_set():
             if self.response_done.is_set():
@@ -6928,8 +7559,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # Stay armed through the deferred-drain tail (see the VAD-barge
             # monitor above) — short replies finish playing after response_end
             # clears playback_active, so also accept "audio still draining".
+            # 1.5.0: armed too while the answer plays on the room's synced
+            # playout (no PCM comes down this socket for it). Only the wake
+            # word barges in over it: the other speakers' sound is not in
+            # this device's echo reference, so the VAD barge stays off.
             if not self.cfg.barge_in or (
                 not self.playback_active.is_set() and self._playback_idle.is_set()
+                and not self._room_speech_playing()
             ):
                 pending = np.empty(0, dtype=np.int16)
                 primed = False
@@ -6942,6 +7578,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 _reset_wake_model(oww)
                 primed = True
 
+            levels.append(_frame_dbfs(frame))
             pending = np.concatenate([pending, np.frombuffer(frame, dtype=np.int16)])
             while pending.size >= OWW_CHUNK:
                 chunk, pending = pending[:OWW_CHUNK], pending[OWW_CHUNK:]
@@ -6950,8 +7587,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 except Exception as e:
                     log.warning("wake-barge predict failed: %s", e)
                     continue
-                if self._wake_hit(pred) is not None:
+                hit = self._wake_hit(pred)
+                if hit is not None:
                     log.info("barge-in detected (wake word)")
+                    if self._claims_active():
+                        # A room with several satellites (1.5.0): the barge-in
+                        # is a claim (`barge_in: true`), never a `barge_in`
+                        # frame; the core stops the answer on every speaker.
+                        return self._claim_barge(hit, pred, list(levels))
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
                     self._drain_playback_q()
@@ -6963,6 +7606,30 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     return "barge"
 
         return "shutdown"
+
+    def _claim_barge(self, word: str, pred: dict[str, Any], levels: list[float]) -> str:
+        """A wake word over the room's answer, in a room that claims: send
+        `wake_claim {barge_in: true}`. As owner (or failing open) stop the
+        reply here and capture the new command (`trigger: "barge_in"`, with
+        the claim); answered quiet, stream as a quiet listener and go back
+        to listening. Returns what `_await_response_with_barge` returns."""
+        try:
+            score: float | None = float(pred.get(word, 0.0))
+        except (TypeError, ValueError):
+            score = None
+        claim, decision = self._claim_wake(word, score, levels, barge_in=True)
+        self.stop_playback.set()
+        self._drain_playback_q()
+        self._stop_music()
+        if decision.role != wake_claim.OWNER:
+            self._owner_claim = None
+            # The answer this wake cut is not this device's to follow up.
+            self.expect_followup.clear()
+            self._quiet_listen(claim, decision, None)
+            return "shutdown" if self.shutdown_event.is_set() else "done"
+        self._begin_utterance("barge_in")
+        self._barge_prefix = []
+        return "barge"
 
     # ── Two-way drop-in / open-mic (Feature 4) ────────────────────────────
     # NOTE: this whole path is UNTESTED on the dev host — it needs real
@@ -7730,6 +8397,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 continue
             if not woke:
                 return
+            if self._claim_book().revoked(getattr(self, "_owner_claim", None)):
+                # Failed open, then the core's answer came after all: quiet.
+                # Another device owns the turn; this one goes idle.
+                log.info("wake claim %s answered quiet after failing open; not capturing",
+                         self._owner_claim)
+                self._owner_claim = None
+                self._pre_wake_dbfs = None
+                self._leds.set_state("idle")
+                continue
             self._begin_utterance("wake_word")
             prefix: list[bytes] = []
             # Set when this iteration is following up on the bot's own
@@ -7887,6 +8563,19 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # This connection's capture counter: each utterance_start carries the
     # next number (`utt`), and so does everything about that capture.
     _utt_seq: int = 0
+    # One turn per wake word (1.5.0, satellite/wake_claim.py). Whether this
+    # device's room says `claim` (`ready.room`, the `room` frame); false
+    # between sessions.
+    _room_claim: bool = False
+    # The claim this device owns the coming capture by, for its
+    # `utterance_start` (taken once), and the claim the running capture was
+    # opened by (a late `quiet` grant for it ends the capture).
+    _owner_claim: int | None = None
+    _capture_claim: int | None = None
+    # The room's frame levels (dBFS) over the ~2 s before the latest wake
+    # word and the phrase itself, for the claim's floor and the wake
+    # capture's gate (satellite/adaptive_gate.py). Taken once.
+    _pre_wake_dbfs: list[float] | None = None
     # When the latest utterance_start went out, on this satellite's
     # monotonic clock (the capture's `sat_ms` counts from it), and when the
     # wake word that opened the latest wake capture fired (its `wake_ms`).
@@ -7988,6 +8677,19 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     else frozenset()
                 )
                 self._session_ready_seen = True
+                # Whether this room claims its wakes (1.5.0): `ready.room`,
+                # updated later by the `room` frame. False on an older core.
+                self._room_claim = wake_claim.room_says_claim(payload.get("room"))
+                try:
+                    self._start_room_player()
+                except Exception:  # noqa: BLE001 — never keeps the mic shut
+                    log.exception("room audio: could not start the player")
+                # The mic DSP preset again (a reconnect may follow a USB
+                # replug or a restart), and its read-back for the dashboard.
+                try:
+                    self._mic_dsp_reapply("reconnect")
+                except Exception:  # noqa: BLE001 — nothing here may keep the mic shut
+                    log.exception("mic_dsp: re-apply on ready failed")
                 # The last-breath record is delivered, the offline spool
                 # goes to a core that lists `log_push`, and live log pushes
                 # start. Guarded: nothing here may keep the mic shut.
@@ -8256,16 +8958,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 # lands during that wait cancels the start. Read without the
                 # lock (a plain int read) so a stop busy terminating mpg123
                 # never stalls the receiver.
+                self._music_start_seq += 1
                 threading.Thread(
                     target=self._start_music_when_idle,
-                    args=(str(stream_url), self._music_stop_gen),
+                    args=(str(stream_url), self._music_stop_gen, self._music_start_seq),
                     daemon=True,
                     name="music-defer",
                 ).start()
             else:
                 log.warning("music_start missing stream_url")
         elif t == "music_stop":
-            self._stop_music()
+            self._stop_music(by_core=True)
             # Music ended → drop the ring back to idle, unless a capture is
             # already in progress (don't clobber a "listening" the mic
             # thread just set).
@@ -8277,9 +8980,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # spoken confirmation, which then plays at the new level.
             level = payload.get("level")
             if level is not None:
+                # 1.5.0: `at_us` (server playout clock) on a room's volume
+                # change, so every speaker of the room changes together.
+                delay = self._room_control_delay(payload.get("at_us"))
                 threading.Thread(
-                    target=self._apply_output_volume,
-                    args=(int(level),),
+                    target=self._apply_output_volume_at,
+                    args=(int(level), delay),
                     daemon=True,
                     name="set-volume",
                 ).start()
@@ -8312,6 +9018,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             if isinstance(changes, dict) and changes:
                 changes, refused = remote_config.screen(
                     changes, pc=pc_engine.is_pc(self.cfg), windows=engine_platform.is_windows_pc(self.cfg))
+                changes, dark = self._screen_support_leds(changes)
+                refused = refused + dark
                 if refused:
                     log.warning("set_config: refusing %s (not a setting the dashboard may "
                                 "change here)", ", ".join(sorted(refused)))
@@ -8516,7 +9224,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # mirror the model, and restart to load it. Run on a worker thread:
             # it does blocking HTTP + a service restart and must not stall the
             # asyncio receiver loop.
-            slug = payload.get("slug")
+            raw_slug = payload.get("slug")
+            slug = _safe_wake_slug(raw_slug)
+            if raw_slug and slug is None:
+                log.warning("set_wake_word: ignoring %r: not a wake-word slug", raw_slug)
+                return
             # `words` (1.4.0): the room's whole list, main word first, sent
             # only to a device whose hello gave `wake_words_max`.
             words = wake_words.parse_words(payload.get("words")) or None
@@ -8552,6 +9264,29 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 daemon=True,
                 name="set-display",
             ).start()
+        elif t == "diag_request":
+            # The dashboard runs one read-only probe by NAME
+            # (satellite/diagnostics.py): an unknown name is refused there
+            # and nothing runs. Off the receiver loop: a probe may wait on
+            # a subprocess or a TCP connect.
+            # The device's own limit too: a forged or runaway server can't
+            # queue probes without end.
+            bucket = getattr(self, "_diag_bucket", None)
+            if bucket is None:
+                bucket = self._diag_bucket = diagnostics.RequestBucket()
+            if bucket.take():
+                asyncio.create_task(self._answer_diag(payload.get("probe")))
+            else:
+                log.warning("diagnostics: too many probe requests; dropped one")
+        elif t == "set_mic_dsp":
+            # An admin picked a mic DSP preset: a NAME from the fixed table
+            # in satellite/mic_dsp.py, never parameters. Off the loop:
+            # each xvf_host call is a sudo subprocess.
+            self._mic_dsp_set(payload.get("preset"))
+        elif t == "mic_dsp_mark":
+            dsp = getattr(self, "_mic_dsp", None)
+            if dsp is not None:
+                dsp.mark(payload.get("text"))
         elif t == "get_logs":
             # The dashboard is asking for this satellite's recent log output.
             # Answered on a task, not inline: a multi-MB transfer would
@@ -8566,6 +9301,32 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 asyncio.create_task(self._send_logs(rid, want))
             else:
                 log.warning("get_logs: no request_id in payload; ignoring")
+        elif t == "room":
+            # This device's room changed (1.5.0): today only `claim` matters
+            # here — another satellite joined or left its group.
+            claim = wake_claim.room_says_claim(payload.get("room"))
+            if claim != self._room_claim:
+                log.info("room: wake claims %s", "on" if claim else "off")
+            self._room_claim = claim
+        elif t == "wake_grant":
+            # The answer to a wake_claim (1.5.0). The mic thread is waiting
+            # for it; one that comes after the device failed open and says
+            # `quiet` ends that capture (the core drops it anyway).
+            late = self._claim_book().on_grant(payload)
+            if late is not None:
+                log.info("wake claim %d answered quiet after failing open: ending its capture", late)
+                with self._capture_lock:
+                    if self._capture_utt is not None and getattr(self, "_capture_claim", None) == late:
+                        self._end_capture.set()
+        elif t == "capture_keep":
+            # Our quiet stream was picked: go on to this device's own end of
+            # speech (`_quiet_listen`).
+            if not self._claim_book().on_keep(payload):
+                log.debug("ignoring capture_keep for claim %r", payload.get("claim"))
+        elif t == "end_capture" and "claim" in payload and "utt" not in payload:
+            # A quiet stream not picked (or its turn ended): stop it now.
+            if not self._claim_book().on_end_capture(payload):
+                log.debug("ignoring end_capture for claim %r", payload.get("claim"))
         elif t == "end_capture":
             # The core has heard a whole command and is answering: stop
             # the capture it names — but only that one. A late end_capture
@@ -8581,6 +9342,16 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     self._end_capture.set()
                     return
             log.debug("ignoring end_capture for utt=%r (capturing %r)", utt, self._capture_utt)
+        elif t == "support_open" or t == "support_input" or t == "support_resize":
+            # A support session (satellite/support_shell.py): refused unless
+            # this device declared it and the server signed it for this
+            # satellite and this connection; its own limits hold whatever is
+            # asked. Input is only queued here: a worker checks and writes it.
+            self._support.handle(payload)
+        elif t == "support_close" or t == "support_allow":
+            # Hanging up the shell waits for its process group: off the loop.
+            threading.Thread(target=self._support.handle, args=(payload,), daemon=True,
+                             name="support-close").start()
         elif t == "pong":
             pass
         else:
@@ -8651,21 +9422,57 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # knows it holds the call's audio until then and marks the
             # dropin_start `await_ready`. An older core ignores the field.
             "dropin_ready": True,
+            # It answers `diag_request` (read-only named probes,
+            # satellite/diagnostics.py). An older core ignores the field.
+            "diagnostics": True,
+            # An XVF3800 whose DSP presets can be switched from the
+            # dashboard (`set_mic_dsp`). An older core ignores the field.
+            "mic_dsp": getattr(self, "_mic_dsp", None) is not None,
+            # Support sessions (1.5.0): only a Pi on a prepared card whose
+            # account can't use sudo says so. An older core ignores it.
+            "support_shell": bool(getattr(self, "_support", None) and self._support.declared),
         }
         # The previous life's last-health record, carried until a
         # core acknowledges it with `ready` (an older core ignores
         # the field: it is a new key on an existing message).
         if self._prev_health is not None:
             hello["prev_health"] = self._prev_health
+        # A fresh nonce per connection: the core signs it into every
+        # support frame, so none can be replayed onto another connection.
+        support = getattr(self, "_support", None)
+        if support is not None and support.declared:
+            hello["support_nonce"] = support.new_connection()
+            # The public half of this device's support key: the core pins it
+            # when an admin approves this device's pairing (a proof run binds
+            # it into the exchange, satellite/house_pairing.py) and checks
+            # every support frame this device sends against it.
+            hello["support_key"] = support.support_key
         # A spare computer says what it is and what it can do (its board and
         # its `supports` list), so the core never sends it a Pi-only frame.
-        # A Pi sends neither key: that is what keeps it exactly as before.
+        # A Pi sends no board. Since 1.5.0 it does send a list: `wake_claim`
+        # (one turn per wake word) can only be declared in one, so the Pi
+        # names everything a hello without a list was always taken to have
+        # (PI_SUPPORTS) and adds it.
         if pc_engine.is_pc(self.cfg):
             hello.update(pc_engine.hello_fields(self.cfg))
+        else:
+            hello["supports"] = list(PI_SUPPORTS)
+        hello["supports"].append(wake_claim.ABILITY)
+        # It plays the room's synced sound from /v1/room-audio (1.5.0): a
+        # boolean for a Pi (whose hello has no `supports`), the name in a
+        # spare computer's list.
+        if self._room_audio_enabled():
+            hello["room_audio"] = True
+            if isinstance(hello.get("supports"), list):
+                hello["supports"].append("room_audio")
         # A stored setting a Pi could not use (it runs on its profile's
         # default instead): the dashboard's row says so from the hello on.
         if getattr(self.cfg, "settings_ignored", ()):
             hello["settings_ignored"] = list(self.cfg.settings_ignored)
+        # The room it was enrolled into (`in=`), until it is approved: an
+        # older core ignores the key.
+        if getattr(self.cfg, "requested_room", ""):
+            hello["requested_room"] = self.cfg.requested_room
         return hello
 
     async def _run_session(self) -> None:
@@ -8681,6 +9488,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._set_conn(
                 "offline" if failure.startswith("could not reach") else "unpinned", failure
             )
+            changed = _LAST_IDENTITY_CHANGED
+            if changed:
+                await asyncio.to_thread(self._server_changed, changed)
             raise ConnectionError(
                 f"{url} did not prove it is this device's Domovoi server"
             )
@@ -8797,6 +9607,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         self._approval_code = None
         self._approval_pending = False
         self._set_conn("connected")
+        self._server_changed_cleared()
         # Before the opener, because this is the frame that says the core
         # accepts this device: if an earlier `awaiting_approval` tore
         # capture down because the refusal could not be recorded, this is
@@ -8859,6 +9670,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # The next core may be an older one; it says what it understands
         # in its own `ready`.
         self._core_features = frozenset()
+        # And whether this room claims its wakes. A claim waiting for its
+        # grant fails open now; a quiet stream stops.
+        self._room_claim = False
+        self._claim_book().abort()
         # Disconnected: every log line from here on also goes to the spool
         # file, for the next core that lists `log_push`.
         LOG_SPOOL_HANDLER.set_mode("offline")
@@ -8885,6 +9700,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         if self.wake_recording.is_set():
             self.wake_recording.clear()
             self._wake_rec_params = None
+        # A support session ends with its socket and never resumes; the
+        # service restarts (satellite/support_shell.py).
+        support = getattr(self, "_support", None)
+        if support is not None and support.active:
+            threading.Thread(target=support.connection_lost, daemon=True,
+                             name="support-close").start()
         # A dropped WS ends any open-mic sub-mode. The server re-derives mode on
         # reconnect (a fresh session has no conversational_mode), so a Pi that
         # kept chat_active / dropin_active would be stuck streaming a
@@ -9255,7 +10076,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     # Exactly at the threshold, not past it: the ring holds
                     # the colour on its own, and every call here is a sudo +
                     # process spawn this board cannot spare during an outage.
-                    if unreachable == _UNREACHABLE_AFTER:
+                    if unreachable == _UNREACHABLE_AFTER and self._server_changed_fp:
+                        # Not "no server": a different one, already shown
+                        # (teal) and said by _server_changed.
+                        pass
+                    elif unreachable == _UNREACHABLE_AFTER:
                         log.error(
                             "cannot reach %s after %d attempts - showing it on "
                             "the ring, which is the only surface left when the "
@@ -9319,6 +10144,26 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────
+
+#: What a Pi's hello lists in `supports` (1.5.0): everything the core has
+#: always assumed for a hello without the key (domovoi/satellite_abilities.py,
+#: ASSUMED_WITHOUT_SUPPORTS), so declaring `wake_claim` takes nothing away.
+#: The behaviours negotiated by their own boolean keys (speech_pause,
+#: capture_control, full_duplex, dropin_ready, room_audio, diagnostics,
+#: mic_dsp) stay booleans. satellite/tests/test_wake_claim.py holds the two
+#: lists together.
+PI_SUPPORTS: tuple[str, ...] = (
+    "restart", "code_sync", "plugin_payloads", "config", "wifi", "mic_gain",
+    "leds", "display", "logs", "wake_clips", "wake_models", "sounds", "voice",
+    "time_sync", "chat_mode", "announce_after_session_end", "turn_progress",
+)
+
+#: Frame levels the wake loop hands a wake's claim and capture: the floor
+#: window and the wake phrase itself (satellite/adaptive_gate.py).
+_PRE_WAKE_FRAMES = (
+    adaptive_gate.GateSettings().floor_window_frames + adaptive_gate.GateSettings().wake_skip_frames
+)
+
 
 def _ensure_config(path: Path) -> bool:
     """If config doesn't exist, write the example next to it. Returns True if the
@@ -10061,6 +10906,10 @@ _SERVER_HAS_NO_IDENTITY = False
 # Why the last identity check refused (for a spare computer's status), or
 # None after one that passed.
 _LAST_IDENTITY_FAILURE: str | None = None
+# The fingerprint of a DIFFERENT server that proved itself at this room's
+# own address in the last check (server_identity.DifferentServer), or None.
+# Only ever used to tell the room; never to trust anything.
+_LAST_IDENTITY_CHANGED: str | None = None
 
 
 class _SkipPayloads(Exception):
@@ -10088,10 +10937,11 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
     identity it meets and returns True, so a device prepared before
     identities keeps connecting exactly as it did. From then on the
     recorded fingerprint is the pin, and a different one is refused."""
-    global _SERVER_HAS_NO_IDENTITY, _LAST_IDENTITY_FAILURE
+    global _SERVER_HAS_NO_IDENTITY, _LAST_IDENTITY_FAILURE, _LAST_IDENTITY_CHANGED
     from satellite import server_identity, sound_sync
 
     _LAST_IDENTITY_FAILURE = None
+    _LAST_IDENTITY_CHANGED = None
 
     expected, source = _pinned_fingerprint(cfg)
     if not expected and _SERVER_HAS_NO_IDENTITY:
@@ -10117,6 +10967,23 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
         log.info("server identity not available at %s (%s)", http_base, e)
         _SERVER_HAS_NO_IDENTITY = True
         return True
+    except server_identity.DifferentServer as e:
+        # A complete, valid proof, over our nonce and this very address,
+        # for another key. Refused exactly like any other mismatch, nothing
+        # recorded and nothing re-pinned; the only difference is that the
+        # room can say so.
+        log.error(
+            "refusing to connect to %s: the server there is a different Domovoi "
+            "(%s; this room was set up for %s, pinned from %s). Set this room up "
+            "again for the new server; it will not trust it on its own",
+            http_base, e.fingerprint, expected, source,
+        )
+        _LAST_IDENTITY_FAILURE = (
+            f"the server changed: {http_base} is a different Domovoi ({e.fingerprint}). "
+            "Set this room up again for it"
+        )
+        _LAST_IDENTITY_CHANGED = e.fingerprint
+        return False
     except server_identity.IdentityError as e:
         if expected:
             log.error(
@@ -10405,7 +11272,8 @@ def _probe_one_house(cfg: "Config") -> tuple[str, Any]:
     if house.proof and house.fingerprint and (not expected or house.fingerprint == expected):
         _remember_proof_server(house.fingerprint)
         return "proof", discovery.House(url=url, fingerprint=house.fingerprint, proof=True,
-                                        name=house.name, via="address", identity="proved")
+                                        name=house.name, via="address", identity="proved",
+                                        proof_version=house.proof_version)
     if _proof_server_remembered(expected, house.fingerprint):
         log.error(
             "%s has proved before that it can prove an approval, and now says it "
@@ -10413,7 +11281,7 @@ def _probe_one_house(cfg: "Config") -> tuple[str, Any]:
             url,
         )
         return "unknown", None
-    if house.identity == "proved" or (house.identity == "absent" and not expected):
+    if house.identity == "proved" or (house.identity in ("absent", "unbound") and not expected):
         return "legacy", None
     return "unknown", None
 
@@ -10521,6 +11389,9 @@ def _adopt_approved_house(cfg: "Config", config_path: Path, house: Any, token: s
     # proof the core no longer runs (the room is bound), ignore its plain
     # `ready` as unproven, and stay half-paired until Reset pairing.
     _remember_approved()
+    # It just proved an approval, so it is a server that proves them: its
+    # hello never carries this device's code from here on (SAT-16).
+    _remember_proof_server(house.fingerprint)
     server_identity.clear_pending_server()
     log.info(
         "approved by the Domovoi server at %s (%s%s): it proved it knows this "

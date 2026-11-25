@@ -455,7 +455,9 @@ async def test_router_threads_profile_prefix_into_qa(db_session) -> None:
         person_id=person_id, body="I like jazz", source="explicit"
     )
 
-    intent = Intent(transcript="tell me about a song", room_id="kitchen")
+    # About the speaker: only those questions carry the profile
+    # (profile_context.about_the_speaker).
+    intent = Intent(transcript="tell me about a song I might like", room_id="kitchen")
     ctx = Context(room_id="kitchen", person_id=person_id, online=True)
     response = await route(intent, ctx, db_session)
     await db_session.commit()

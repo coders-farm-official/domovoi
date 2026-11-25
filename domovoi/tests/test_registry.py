@@ -24,6 +24,7 @@ from domovoi.handlers.base import (
 # pinned as data, not derived.
 CORE_BANDS = {
     "dismiss": 100,
+    "support_session": 101,
     "help": 105,
     "help_desk": 106,
     "voice_profile": 110,
@@ -53,6 +54,7 @@ CORE_BANDS = {
     "playlist": 290,
     "music_alias": 295,
     "music": 300,
+    "media_search": 305,
     "library": 310,
     # 900 reserved: a media-provider plugin's greedy `^find (.+)$` catch-all.
 }
@@ -255,6 +257,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
             "core.letter_author", "core.letter_dictation",
         },
+        "media_search": {"core.media_send"},
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds

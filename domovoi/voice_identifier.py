@@ -57,12 +57,18 @@ current sample isn't recognized until they say "my name is …" again. Every
 cosine setting (the threshold, the margins, the confident band) is on this
 model's scale (domovoi/config.py says how each was chosen).
 
-Rooms (job 3). A person with a sample from the turn's room
-is scored against their samples from that room alone, anyone else against
-all of theirs (:func:`room_person_scores`): each room's mic, distance and
-echo colour a voice their own way. The room's colour is in everybody's
-voice there, so a person held to this room's samples has to clear the
-threshold by ``voice_profile_same_room_margin`` more.
+Rooms (job 3). A person with a GOOD sample from the turn's room (one
+holding :data:`ROOM_SAMPLE_GOOD_SEC` of speech or more) is scored against
+their samples from that room alone, anyone else against all of theirs
+(:func:`room_person_scores`): each room's mic, distance and echo colour a
+voice their own way. The room's colour is in everybody's voice there, so a
+person held to this room's samples has to clear the threshold by
+``voice_profile_same_room_margin`` more. A room whose samples of a person
+are all short (a one-second "was that you?" clip, say) doesn't hold them
+to it (owner decision 2026-11-22): a second of speech embeds too loosely
+to stand in for the voice, and scored alone it hid the person's good
+samples from other rooms. Such a room still learns them (job 4), and
+replaces its short samples when it does.
 
 Music, a TV (``noisy``). A satellite turn whose speech stood less than
 ``voice_profile_noisy_snr_db`` above the rest of its recording is scored
@@ -315,11 +321,35 @@ def _rounded(value: float | None) -> float | None:
     return None if value is None else round(float(value), 3)
 
 
+#: A room sample holding at least this many seconds of speech (as the
+#: embedder measures it: ``voice_profiles.sample_seconds``) is "good": a
+#: person with one in the turn's room is held to that room's samples
+#: (:func:`room_person_scores`), and the room never learns them again
+#: (:func:`_learn_room`; handlers/voice_profile.py's "was that you?" and
+#: "my name is X" re-learning). A room whose samples of a person are all
+#: shorter (1.3.0's relearn clips, a "was that you?" yes: about a second,
+#: or unrecorded) counts as having none of theirs for those rules. Not a
+#: setting.
+ROOM_SAMPLE_GOOD_SEC = 4.0
+
+
+def is_good_sample(sample_seconds: float | None) -> bool:
+    """Whether a sample holds :data:`ROOM_SAMPLE_GOOD_SEC` of speech (an
+    unrecorded length counts as short)."""
+    return sample_seconds is not None and float(sample_seconds) >= ROOM_SAMPLE_GOOD_SEC
+
+
 # In-memory counter for learning a person's voice in a room. Keyed by
 # (person_id, room_id); value is consecutive confident matches there.
 # Reset on server restart, which is fine — the worst case is one
 # delayed learning cycle.
 _CONFIDENT_HITS: dict[tuple[int, str], int] = {}
+#: The voices of the current run of confident matches, by the same key
+#: (the last ``voice_profile_drift_reenroll_after``): a room whose samples
+#: of the person are all short learns from them together
+#: (:func:`_learn_room`). Only read while ``_CONFIDENT_HITS`` counts the
+#: same run.
+_CONFIDENT_VOICES: dict[tuple[int, str], list[VoicePrint]] = {}
 
 
 @dataclass(frozen=True)
@@ -396,27 +426,41 @@ def _person_scores(
     }
 
 
+def held_to_room(samples: list[tuple], room_id: str | None) -> set[int]:
+    """The people held to ``room_id``'s own samples: those with a GOOD
+    sample from it (:func:`is_good_sample`). ``samples`` are
+    ``(person_id, embedding_bytes, room_id[, sample_seconds])``; one
+    without its length counts as short."""
+    if room_id is None:
+        return set()
+    return {
+        s[0] for s in samples
+        if s[2] == room_id and len(s) > 3 and is_good_sample(s[3])
+    }
+
+
 def room_person_scores(
     embedding: np.ndarray,
-    samples: list[tuple[int, bytes, str | None]],
+    samples: list[tuple],
     *,
     room_id: str | None = None,
 ) -> dict[int, float]:
-    """``{person_id: score}`` for ``(person_id, embedding_bytes, room_id)``
-    samples, scored for a turn heard in ``room_id``.
+    """``{person_id: score}`` for ``(person_id, embedding_bytes, room_id[,
+    sample_seconds])`` samples, scored for a turn heard in ``room_id``.
 
-    A person with a sample from this room is scored against the centroid
-    of their samples from this room alone; anyone else against all of
-    theirs (:func:`_person_scores`). Each room's mic, distance and echo
-    colour a voice their own way, so the office's samples describe a voice
-    in the office, and a far-field room's samples describe it there. With
-    no room (or nobody with a sample from it) this is :func:`_person_scores`."""
-    if room_id is None:
-        return _person_scores(embedding, [(p, b) for p, b, _r in samples])
-    in_room = {p for p, _b, r in samples if r == room_id}
+    A person with a GOOD sample from this room (:func:`held_to_room`) is
+    scored against the centroid of their samples from this room alone;
+    anyone else against all of theirs (:func:`_person_scores`). Each room's
+    mic, distance and echo colour a voice their own way, so the office's
+    samples describe a voice in the office, and a far-field room's samples
+    describe it there — but only when there is enough of it: a person whose
+    samples here are all short is scored against all their samples, this
+    room's included (owner decision 2026-11-22). With no room (or nobody
+    held to it) this is :func:`_person_scores`."""
+    in_room = held_to_room(samples, room_id)
     chosen = [
-        (p, b) for p, b, r in samples
-        if p not in in_room or r == room_id
+        (s[0], s[1]) for s in samples
+        if s[0] not in in_room or s[2] == room_id
     ]
     return _person_scores(embedding, chosen)
 
@@ -672,22 +716,22 @@ class _Scored:
 
     scores: dict[int, float]
     bars: dict[int, float]
-    #: Rooms each person has a satellite sample from.
-    current_rooms: dict[int, set[str]]
+    #: Rooms each person has a GOOD satellite sample from
+    #: (:func:`is_good_sample`): the rooms that never learn them again.
+    good_rooms: dict[int, set[str]]
 
 
 def _score_turn(
     voice: VoicePrint,
-    rows: list[tuple[int, bytes, str | None]],
+    rows: list[tuple],
     *,
     room_id: str | None,
 ) -> _Scored:
-    """Score every person against their samples (room-aware: a person held
+    """Score every person against their samples, ``(person_id,
+    embedding_bytes, room_id[, sample_seconds])`` (room-aware: a person held
     to this room's samples has to clear ``voice_profile_same_room_margin``
     more). Pure."""
-    in_room = (
-        {p for p, _b, r in rows if r == room_id} if room_id is not None else set()
-    )
+    in_room = held_to_room(rows, room_id)
     scores = room_person_scores(voice.current, rows, room_id=room_id)
     bars = {
         p: settings.voice_profile_match_threshold
@@ -695,39 +739,83 @@ def _score_turn(
         for p in scores
     }
     rooms: dict[int, set[str]] = {}
-    for p, _b, r in rows:
-        if r is not None:
-            rooms.setdefault(p, set()).add(r)
+    for row in rows:
+        if row[2] is not None and len(row) > 3 and is_good_sample(row[3]):
+            rooms.setdefault(row[0], set()).add(row[2])
     return _Scored(scores, bars, rooms)
+
+
+async def scores_in_room(
+    session: Any, embedding: np.ndarray, room_id: str | None,
+) -> _Scored:
+    """How a satellite turn's ``embedding`` scores for every person in
+    ``room_id``, exactly as :func:`identify` scores it (the same samples,
+    the same room rule, the same bars), on the caller's session. Nothing
+    is learned or touched."""
+    repo = VoiceProfilesRepository(session)
+    rows = [
+        (p, b, r, secs)
+        for _id, p, b, r, secs in await repo.all_for_model(repo.EMBEDDING_MODEL_TAG)
+    ]
+    return _score_turn(VoicePrint(current=embedding), rows, room_id=room_id)
+
+
+def _forget_run(key: tuple[int, str]) -> None:
+    _CONFIDENT_HITS.pop(key, None)
+    _CONFIDENT_VOICES.pop(key, None)
 
 
 async def _learn_room(
     person_id: int,
     room_id: str | None,
     voice: VoicePrint | np.ndarray,
-    rooms_with_sample: set[str],
+    rooms_with_good_sample: set[str],
     decision: _Decision,
+    satellite_id: str | None = None,
 ) -> None:
     """Job 4: count a match towards learning ``person_id``'s voice in
     ``room_id``, and save the clip once the count is reached.
 
     Only a confident match counts; any other match of this person in
     this room resets the run, so "in a row" means in a row. Nothing is
-    learned without a room, or in a room the person already has a
-    sample from."""
-    if room_id is None or room_id in rooms_with_sample:
+    learned without a room, or in a room with a GOOD sample of the person
+    (:data:`ROOM_SAMPLE_GOOD_SEC`), which is never edited.
+
+    A room with no sample of them saves the latest clip, as it always did.
+    A room whose samples of them are all short (owner decision 2026-11-22)
+    learns the run's clips together, through the same step as the
+    "count from one to ten" re-learning (handlers/voice_profile.py,
+    ``_save_learned_room``): they replace that person's samples in that
+    room only, and only when they hold more speech than the best of
+    them."""
+    if room_id is None or room_id in rooms_with_good_sample:
         return
     voice = _as_print(voice)
     key = (person_id, room_id)
     if not decision.confident:
-        _CONFIDENT_HITS.pop(key, None)
+        _forget_run(key)
         return
-    _CONFIDENT_HITS[key] = _CONFIDENT_HITS.get(key, 0) + 1
-    if _CONFIDENT_HITS[key] < settings.voice_profile_drift_reenroll_after:
+    hits = _CONFIDENT_HITS.get(key, 0) + 1
+    _CONFIDENT_HITS[key] = hits
+    run = _CONFIDENT_VOICES.get(key, []) if hits > 1 else []
+    after = max(1, int(settings.voice_profile_drift_reenroll_after))
+    _CONFIDENT_VOICES[key] = (run + [voice])[-after:]
+    if hits < settings.voice_profile_drift_reenroll_after:
         return
     try:
         async with session_scope() as s:
             repo = VoiceProfilesRepository(s)
+            here = await repo.room_samples(person_id, room_id, repo.EMBEDDING_MODEL_TAG)
+            if any(is_good_sample(secs) for _id, secs in here):
+                # Learned since this turn's samples were read: never touched.
+                _forget_run(key)
+                return
+            if here:
+                await _relearn_short_room(
+                    s, person_id, room_id, here, _CONFIDENT_VOICES.get(key) or [voice],
+                )
+                _forget_run(key)
+                return
             # A voice recognized only through somebody's name claim (V029)
             # is not this person's own: the room learns it as part of that
             # claim, so "forget me" from that voice takes it away too.
@@ -742,6 +830,10 @@ async def _learn_room(
                 room_id=room_id,
                 sample_seconds=voice.speech_sec,
                 claim_of=claim_of,
+                # The mic that learned it (V073), and marked learned
+                # (V076): a device moved to another room drops it.
+                satellite_id=satellite_id,
+                learned=True,
             )
     except Exception as e:
         log.warning("voice sample for a new room: DB write failed: %s", e)
@@ -754,7 +846,54 @@ async def _learn_room(
         person_id, room_id, _CONFIDENT_HITS[key], decision.best,
         "none" if decision.runner_up is None else f"{decision.runner_up:.3f}",
     )
-    _CONFIDENT_HITS.pop(key, None)
+    _forget_run(key)
+
+
+async def _relearn_short_room(
+    session: Any,
+    person_id: int,
+    room_id: str,
+    here: list[tuple[int, float | None]],
+    voices: list[VoicePrint],
+) -> None:
+    """A run of confident matches in a room whose samples of ``person_id``
+    (``here``) are all short: hand the run's clips to the room-learning
+    collection's save (handlers/voice_profile.py,
+    ``VoiceProfileHandler._save_learned_room``), which replaces exactly
+    ``here`` when the clips together hold more speech than the best of
+    them, and otherwise keeps them. Like every sample that replaces
+    another there, it is marked as claimed for the room; the voice was
+    this person's, recognized (``claimed_by``)."""
+    import base64
+
+    # Imported here: the handler imports this module.
+    from domovoi.handlers.voice_profile import (
+        _CLAIMED_BY_KEY,
+        _LEARN_ROOM_KEY,
+        VoiceProfileHandler,
+    )
+
+    clips = [
+        [
+            base64.b64encode(np.asarray(v.current, dtype=np.float32).tobytes()).decode("ascii"),
+            float(v.speech_sec or 0.0),
+        ]
+        for v in voices
+    ]
+    data = {
+        _LEARN_ROOM_KEY: room_id,
+        "replace_ids": [int(i) for i, _s in here],
+        "have_secs": max([float(s or 0.0) for _i, s in here], default=0.0),
+        _CLAIMED_BY_KEY: int(person_id),
+    }
+    saved = await VoiceProfileHandler()._save_learned_room(data, person_id, clips, session)
+    log.info(
+        "voice sample for a short room: person_id=%d room=%s after %d confident "
+        "matches: %s (%.1f s heard, the room's best had %.1f s)",
+        person_id, room_id, len(voices),
+        "replaced its short sample(s)" if saved is not None else "kept its sample(s)",
+        sum(c[1] for c in clips), data["have_secs"],
+    )
 
 
 async def _denylisted(voice: VoicePrint) -> float | None:
@@ -781,6 +920,7 @@ async def identify(
     embedding: Any = _EMBED_HERE,
     room_id: str | None = None,
     samples: str = SATELLITE_SAMPLES,
+    satellite_id: str | None = None,
 ) -> IdentificationResult:
     """Embed + match + compute presence. Best-effort — failures degrade
     to ``person_id=None, presence_tier="high"`` so the core
@@ -793,7 +933,9 @@ async def identify(
     counter.
 
     ``room_id``: the room the audio came from. Without one, nothing is
-    learned (job 4).
+    learned (job 4). ``satellite_id``: the device whose mic heard it (a
+    learned sample is that mic's; default: the device whose id is the
+    room's).
 
     ``samples``: :data:`SATELLITE_SAMPLES` (a satellite's turn: satellite
     samples only) or :data:`PHONE_SAMPLES` (the app's chat mic: a person's
@@ -866,8 +1008,8 @@ async def identify(
                 ]
             else:
                 rows = [
-                    (p, b, r)
-                    for _id, p, b, r in await repo.all_for_model(repo.EMBEDDING_MODEL_TAG)
+                    (p, b, r, secs)
+                    for _id, p, b, r, secs in await repo.all_for_model(repo.EMBEDDING_MODEL_TAG)
                 ]
             last_seen = await PeopleRepository(s).latest_seen()
 
@@ -919,13 +1061,14 @@ async def identify(
                     matched_person,
                     room_id,
                     voice,
-                    scored.current_rooms.get(matched_person, set()),
+                    scored.good_rooms.get(matched_person, set()),
                     decision,
+                    satellite_id,
                 )
         elif decision.best_person is not None and room_id is not None and not phone:
             # Top candidate but not named: a run of confident matches
             # for them in this room is broken.
-            _CONFIDENT_HITS.pop((decision.best_person, room_id), None)
+            _forget_run((decision.best_person, room_id))
     except Exception as e:
         log.warning("voice identification DB lookup failed: %s", e)
         matched_person = None

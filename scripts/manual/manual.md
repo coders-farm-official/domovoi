@@ -328,9 +328,13 @@ two-way call into a room.
 - "any messages"
 - "read my messages"
 
-**Friend Houses** (serverless messaging and friend system between
-households): friends are other Domovoi houses, made on the dashboard
-*(admin)*: [Settings → Household → Friend Houses](#settings/friend-houses).
+**Friend Houses** (message and share lists with friends’ houses, house
+to house, with no company server in between): friends are other Domovoi houses. On the dashboard,
+[Settings → Household → Friend Houses](#settings/friend-houses) shows the messages and shared lists to
+everyone in the household; making and managing friends is under **Friends and connections** *(admin)*.
+Both houses then show the same 6-digit code: call them and check it
+matches, if you like. Adding a friend needs Domovoi 1.5.0 or later on both
+houses; friends you already have keep working either way.
 To send one a message, say "message" and its name with the message, like
 "message the Smiths dinner's at six" (or "tell the Smiths …" when AI
 features are on): Domovoi reads it back and sends it when you say yes. Messages are read aloud only when you ask, and anyone in the
@@ -1300,8 +1304,29 @@ Podcasts, Audiobooks, and plugged-in drives.
   from Chat.
 - **App:** **Chat documents** holds drafts saved in a phone chat. Files
   shows it once it holds one.
+- **Dashboard:** [Photos](#photos) shows every photo and video, newest
+  first, and finds them by what is in them and when: "dog at the beach",
+  "christmas 2023", "snow last winter". A video found by a moment opens
+  there. A description reads "Might show: …": it's a computer's guess,
+  sometimes wrong. Domovoi looks at your photos on this server, at night,
+  once **Understand photos and videos** is on in
+  [Settings → Chat & AI → Photos and videos](#settings/photos-and-videos);
+  until it has looked at some, Photos says so.
+- With **Understand photos and videos** on
+  ([Settings → Chat & AI → Photos and videos](#settings/photos-and-videos)), ask for them by voice or in a chat. The answer says
+  how many it found and that they're on the Photos page; a chat also
+  shows them. By voice, when it knows your voice and a phone is marked as
+  yours, it asks "Want them on your phone?" and a yes sends them there as
+  a chat. With **Recognize faces** on, a name finds that person's
+  photos, for a voice Domovoi recognizes, never a guest's.
 
 [More detail](docs/FAQ.md#can-i-move-files-around-without-the-command-line)
+· [Photos and videos](docs/PHOTOS_AND_VIDEOS.md)
+
+**Try saying**
+
+- "show me photos of the beach from last summer"
+- "find the video where we sang happy birthday"
 
 ### Documents and spreadsheets
 
@@ -1807,9 +1832,9 @@ chat can answer about a photo, in airplane mode too.
 [live slot: rooms]
 
 A room is a place in the house: its name, voice, music queue, wake
-words, timers and quiet hours. Each room has one satellite, the device
-that listens and plays there: a Raspberry Pi, a spare laptop, or a phone
-in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
+words, timers and quiet hours. A room has one or more satellites, the
+devices that listen and play there: a Raspberry Pi, a spare laptop, or a
+phone in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
 rooms. Each card shows:
 
 - online or offline;
@@ -1839,6 +1864,28 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
   room**, in the same place.
 - A room's satellite replaced with new hardware: **Reset pairing** (also
   under **maintenance**), then approve the new device.
+- A second satellite in a room: open the room and press **Add a
+  satellite to the Kitchen** for its setup code; its approval then has
+  the room picked already. A device set up any other way: answer **Which
+  room is it in?** with that room when you approve it. Later, open the
+  room and use the satellite's **Move to another room**.
+
+**Several satellites in one room**
+
+- One wake word is one turn: the first satellite to hear it answers, the
+  others stay quiet, and Domovoi transcribes the microphone that heard you
+  best.
+- Music, answers, timers, alarms and announcements play from every
+  speaker in the room at the same moment. The speakers tune themselves
+  with a short chirp when a satellite joins the room (never in quiet
+  hours). If they sound slightly apart, open the room and press **Tune
+  the speakers** (nothing may be playing).
+- Two rooms that hear each other's wake word: open one and add the other
+  under **Rooms that can hear this one**, so it is one answer, not two.
+  The Rooms page suggests this when it notices.
+- A satellite or app from before 1.5.0 can't join in: it plays only when
+  it is the room's only satellite, and its room says **Update the app on
+  this phone.**
 
 **Quiet hours**
 
@@ -1906,6 +1953,17 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 
 **If something's wrong:** **show setup details** on the card lists the
 setup network and its page. [More detail](README.md#3-add-your-first-satellite)
+
+**A support session** *(admin)*: for a fault the room's **Diagnostics**
+tab can't explain, turn on **Allow support sessions** in the room's
+**Settings** tab, then **Open support session** and type the admin
+password: a shell on the Pi, as its own account, for up to 30 minutes.
+The room says it started, its light breathes magenta, and every dashboard
+shows a banner with **End**. Anyone can end it.
+
+**Try saying**
+
+- "end support session"
 
 ### A spare laptop or PC
 
@@ -2135,6 +2193,33 @@ can be too little voice to tell; ask with a few more words ("who am I,
 Domovoi?"). It doesn't mean Domovoi has forgotten you.
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
+
+### Faces in photos
+
+With **Recognize faces** on *(admin)*, Domovoi groups the same face across
+your photos and videos, on this server, so you can name the people you
+know. It's off until an admin turns it on in
+[Settings → Chat & AI → Photos and videos](#settings/photos-and-videos);
+turning it off deletes every face.
+
+**How to**
+
+- **Dashboard:** open [Faces](#faces). It's only there while faces are
+  on, and never for a guest or on a shared screen.
+- Name a group: open it, type a name (someone from People, or a new name)
+  and press **add name**.
+- Check a person's faces: on their page, **yes, Sarah** or **not this
+  person** on each face Domovoi suggested.
+- **hide this group** for a stranger. Groups of only a face or two stay
+  under **show more**, and Domovoi never asks who someone is.
+- *(admin)* merge two groups, split faces into a new group, move a
+  person's faces to someone else, and show a hidden group again.
+- **Forget my face**: on your own page, from the phone or browser that's
+  yours (**this is me**), or by an admin. It deletes every saved face of
+  you and keeps a pattern tied to nobody, so new photos of you aren't
+  grouped again. Your photos stay, and so do your voice and memories.
+
+[More detail](docs/PHOTOS_AND_VIDEOS.md#faces)
 
 ### Guests, household and admin
 

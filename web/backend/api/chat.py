@@ -77,7 +77,9 @@ times, how much of the thread was sent as context and which model setting
 answered (:func:`_reply_stats`). A user row keeps the ``device_id`` of the
 install that sent it — self-asserted, like queue provenance, and kept only
 when it is a well-formed id (``devices.valid_device_id``) — and reads join
-``devices`` for its current name.
+``devices`` for its current name. Reads never return the stored id (1.5.0,
+L39 of the 2026-11 review): a row says ``mine`` instead — true when it was
+sent with the id the caller names in ``X-Device-Id`` (:func:`caller_id`).
 """
 
 from __future__ import annotations
@@ -101,7 +103,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import ai_features, chat_titles, egress, executors, image_safety, live_env, lookup_answer
+from domovoi import ai_features, chat_titles, egress, executors, image_safety, live_env, lookup_answer, uncertainty
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.help_desk import answer as help_answer
@@ -116,6 +118,8 @@ from web.backend.api import chat_letters as _letters
 from domovoi.doc_qa import letter as _letter
 from web.backend.api import chat_drafts as _drafts
 from web.backend.api import chat_videos as _videos
+from web.backend.api import chat_media as _media
+from domovoi.media_understanding import ask as _ask
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url
@@ -415,12 +419,34 @@ _MSG_COLUMNS = (
 )
 
 
-def _msg_dict(r: Any) -> dict[str, Any]:
+def caller_id(request: Request | None) -> str | None:
+    """The device id a chat read compares rows with: the caller's own
+    ``X-Device-Id`` header, when it is a well-formed id. Self-asserted,
+    and only ever used for the ``mine`` display hint."""
+    if request is None:
+        return None
+    try:
+        return valid_device_id(request.headers.get("X-Device-Id"))
+    except Exception:  # noqa: BLE001 — no header, no "mine"
+        return None
+
+
+def _msg_dict(r: Any, me: str | None = None) -> dict[str, Any]:
+    """A message row as clients read it. The sender's device id stays in
+    the database: the row says ``mine`` (sent with ``me``, the caller's own
+    id) and ``device_name`` instead."""
     d = dict(r)
+    stored = d.pop("device_id", None)
+    d["mine"] = bool(me) and stored == me
     d["created_at"] = d["created_at"].isoformat()
     for key in ("stats", "documents", "doc", "draft"):
         if isinstance(d.get(key), str):
             d[key] = json.loads(d[key])
+    if isinstance(d.get("stats"), dict) and d["stats"].get("print_attachment"):
+        d["print_attachment"] = d["stats"]["print_attachment"]
+    # A photo and video search's results (chat_media.py): the cards.
+    if isinstance(d.get("stats"), dict) and isinstance(d["stats"].get("media"), dict):
+        d["media"] = d["stats"]["media"]
     if d.get("speaker_confidence") is not None:
         d["speaker_confidence"] = round(float(d["speaker_confidence"]), 4)
     # The same judgement the core made when the turn came in
@@ -608,7 +634,11 @@ def _reply_stats(
 
 
 @router.get("/threads/{thread_id}/messages", dependencies=READ)
-async def list_messages(thread_id: int) -> dict[str, Any]:
+async def list_messages(thread_id: int, request: Request = None) -> dict[str, Any]:  # type: ignore[assignment]
+    """The thread's messages, oldest first. No device ids: a user row says
+    ``mine`` (sent from the ``X-Device-Id`` the caller names) and
+    ``device_name``."""
+    me = caller_id(request)
     async with session_scope() as s:
         exists = (
             await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})
@@ -643,7 +673,7 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — the messages still show
         log.warning("chat: the videos of thread %s are unreadable: %s", thread_id, type(e).__name__)
         videos = []
-    return {"messages": [_msg_dict(r) for r in rows], "jobs": jobs, "videos": videos}
+    return {"messages": [_msg_dict(r, me) for r in rows], "jobs": jobs, "videos": videos}
 
 
 class SendBody(BaseModel):
@@ -1258,10 +1288,23 @@ async def _answer(
     # resume, cover letter or letter, a revision of the thread's draft
     # ("shorter"), or "print it". Ahead of the documents' find-then-answer.
     dturn: Any = None
-    if not has_images and replace_id is None and not documents:
+    if replace_id is None and revise_draft is None:
+        # "print this" with an attachment: the print card, no model asked.
+        dturn = await _drafts.attachment_print_turn(thread_id, question, current=bool(has_images or documents))
+        if dturn is not None:
+            model_role = "draft"
+    if dturn is None and not has_images and replace_id is None and not documents:
         dturn = await _drafts.plan_turn(thread_id, question, revise_draft=revise_draft, device_id=device_id)
         if dturn is not None:
             model_role = "draft"
+    if dturn is None and not has_images and replace_id is None and not documents and revise_draft is None:
+        # "show me photos of the dog" (chat_media.py, media slice 6): the
+        # household's photos and videos, answered by the app with result
+        # cards, no model asked. Ahead of a documents thread's find.
+        mreq = _media.fast_request(question)
+        if mreq is not None:
+            mturn = await _media.answer(mreq.q, request, mreq)
+            return await _immediate_reply(thread_id, mturn.text, {"model_role": "media", "media": mturn.media})
     if not has_images and replace_id is None and dturn is None:
         previous = await _docs.previous_question(thread_id, before_id=user_row_id)
         plan = await _docs.plan_reply(thread_id, question, documents or [], previous, heads_up)
@@ -1389,6 +1432,18 @@ async def _answer(
             video_rules = None
         if video_rules:
             system["content"] += "\n\n" + video_rules
+    # A chat that searched its photos and videos (chat_media.py): a later
+    # plain text turn is given the latest results, fenced as untrusted
+    # data (captions, tags and text from the pictures).
+    media_rules: str | None = None
+    if refusal is None and plan is None and dturn is None and help_turn is None and not vision_call:
+        try:
+            media_rules = await _media.rules(thread_id)
+        except Exception as e:  # noqa: BLE001 — the question is still answered
+            log.warning("chat: the photo results of thread %s are unreadable: %s", thread_id, type(e).__name__)
+            media_rules = None
+        if media_rules:
+            system["content"] += "\n\n" + media_rules
     # Lookups (part 5, W1): a plain text turn (not help, documents,
     # pictures, a draft or a retry) is told about LOOK_UP / READ_PAGE, and a
     # "look up …" or "what does this page say: …" needs no model to say so.
@@ -1403,17 +1458,29 @@ async def _answer(
     # about LOOK_UP / READ_PAGE and its reply is never read as a proposal,
     # so words from a video (its speech, a sign in a frame, its name) can't
     # send a search out, as on a document or picture turn.
-    model_lookups = lookups_offered and not video_rules
+    # The same for a turn carrying photo results (words in a picture).
+    model_lookups = lookups_offered and not video_rules and not media_rules
     proposal: lookup_answer.Proposal | None = None
     thread_allowed = False
     if lookups_offered:
         proposal = lookup_answer.fast_path(question)
+        if proposal is None and lookup_answer.is_bare_followup(question):
+            # "how about now?" after a lookup: the same words again (the
+            # chat's internet may have been turned on since).
+            earlier = await _previous_lookup_query(thread_id)
+            if earlier:
+                proposal = lookup_answer.Proposal("search", earlier)
         if model_lookups:
             system["content"] += "\n\n" + lookup_answer.tool_prompt(internet=not egress.internet_turned_off())
         async with session_scope() as s:
             thread_allowed = bool((await s.execute(
                 text("SELECT internet_allowed FROM chat_threads WHERE id = :id"), {"id": thread_id},
             )).scalar_one_or_none())
+    # The photo and video search (chat_media.py): offered to the model only
+    # when the message talks about photos or videos, as the voice tool gate.
+    media_tool = lookups_offered and proposal is None and _ask.mentions_media(question)
+    if media_tool:
+        system["content"] += "\n\n" + _ask.TOOL_PROMPT
     num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
     stream_knobs: dict[str, Any] = (
         {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
@@ -1465,6 +1532,8 @@ async def _answer(
         first_token_ms: float | None = None
         doc: dict[str, Any] | None = None
         draft: dict[str, Any] | None = None
+        media_q: str | None = None
+        media_card: dict[str, Any] | None = None
         if dturn is not None and dturn.immediate is not None:
             # "print it": the print card, with no model asked.
             first_token_ms = 0.0
@@ -1474,6 +1543,8 @@ async def _answer(
         elif dturn is not None:
             # The draft streams as the model writes it; the done row is the
             # card (its one line, and the version it wrote).
+            async for ev in _voice_first_events():
+                yield ev
             yield f"event: status\ndata: {json.dumps({'state': 'drafting', 'action': dturn.action})}\n\n"
             try:
                 async for delta in dturn.stream(model=model, stats=ollama_stats):
@@ -1513,6 +1584,8 @@ async def _answer(
             # A document turn shows nothing until the app has checked the
             # reply (review round 1): the client gets "checking" now and
             # the checked text, once, at the end.
+            async for ev in _voice_first_events():
+                yield ev
             checking = plan is not None
             if checking:
                 yield f"event: status\ndata: {json.dumps({'state': 'checking'})}\n\n"
@@ -1520,7 +1593,7 @@ async def _answer(
             # its first characters are held back, so a proposal never
             # reaches the screen as text.
             held = ""
-            holding = model_lookups
+            holding = model_lookups or media_tool
             proposing = False
             try:
                 async with contextlib.aclosing(ollama_client.chat_stream(
@@ -1533,9 +1606,12 @@ async def _answer(
                         if holding:
                             held += delta
                             head = held.lstrip()
-                            if not proposing and len(head) < 12 and lookup_answer.may_be_proposal(head):
+                            maybe = ((model_lookups and lookup_answer.may_be_proposal(head))
+                                     or (media_tool and _ask.may_be_tool(head)))
+                            if not proposing and len(head) < 12 and maybe:
                                 continue
-                            if proposing or _PROPOSAL_START.match(head):
+                            if (proposing or (model_lookups and _PROPOSAL_START.match(head))
+                                    or (media_tool and _ask.TOOL_START.match(head))):
                                 proposing = True
                                 first_line = head.split("\n", 1)
                                 if (len(first_line) > 1 and first_line[0].strip()) or len(head) > 400:
@@ -1547,11 +1623,13 @@ async def _answer(
                         if not checking:
                             yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
                 if held:
-                    proposal = lookup_answer.parse_proposal(held) if proposing else None
-                    if proposal is None:
+                    media_q = _ask.parse_tool(held) if (proposing and media_tool) else None
+                    proposal = (lookup_answer.parse_proposal(held)
+                                if (proposing and model_lookups and media_q is None) else None)
+                    if proposal is None and media_q is None:
                         chunks.append(held)
                         yield f"event: delta\ndata: {json.dumps({'text': held})}\n\n"
-                if chunks and proposal is None and ollama_stats.get("done_reason") == "length":
+                if chunks and proposal is None and media_q is None and ollama_stats.get("done_reason") == "length":
                     # The cap stopped it (a loop, or an answer that long):
                     # end it visibly, the same in the stream and the row.
                     tail = "…" + CUT_OFF_NOTE
@@ -1566,6 +1644,13 @@ async def _answer(
                     "chat stream failed (thread %s, model %s, %s): %s: %s",
                     thread_id, model, code, type(e).__name__, str(e)[:500],
                 )
+
+        if media_q is not None and error is None:
+            # The model asked for the photo and video search: the app
+            # answers with the results (chat_media.py), never the model.
+            mturn = await _media.answer(media_q, request)
+            chunks, media_card = [mturn.text], mturn.media
+            yield f"event: delta\ndata: {json.dumps({'text': mturn.text})}\n\n"
 
         if proposal is not None and error is None:
             # A lookup: local sources answer at once; anything that would
@@ -1620,6 +1705,9 @@ async def _answer(
                 stats["window_from_id"] = window["from_id"]
         if code is not None:
             stats["error_code"] = code
+        if media_card is not None:
+            stats["model_role"] = "media"
+            stats["media"] = media_card
         if help_turn is not None:
             stats["help"] = {
                 "covered": help_turn.covered,
@@ -1630,6 +1718,11 @@ async def _answer(
             async for event in _finish_retry(replace_id, content, error, code, stats):
                 yield event
             return
+        if draft is not None and draft.get("print_attachment"):
+            # An attachment's print card is its own key, never a draft's
+            # (apps from before it would draw a broken draft card).
+            stats["print_attachment"] = draft.pop("print_attachment")
+            draft = None
         async with session_scope() as s:
             row = (
                 await s.execute(
@@ -1803,12 +1896,15 @@ class _LookupFailed(Exception):
         self.code = code
 
 
-async def _core_lookup(request: Request | None, proposal: lookup_answer.Proposal, *, internet: bool) -> dict[str, Any]:
+async def _core_lookup(request: Request | None, proposal: lookup_answer.Proposal, *, internet: bool,
+                       web_only: bool = False) -> dict[str, Any]:
     """The core's lookup with the caller's own credentials: the payload of
     ``POST /v1/phone/lookup``. Raises :class:`_LookupFailed`."""
     body: dict[str, Any] = (
         {"url": proposal.query} if proposal.kind == "page" else {"query": proposal.query, "internet": internet}
     )
+    if web_only and proposal.kind == "search":
+        body["web_only"] = True
     url = f"{domovoi_url().rstrip('/')}/v1/phone/lookup"
     headers = auth_forward_headers(request) if request is not None else {}
     try:
@@ -1877,22 +1973,40 @@ async def _lookup_turn(
     """What a proposal becomes: an answer from this server's own sources
     (no question asked), the permission card, or, with the person's allow
     (``decided``, the chat's own, or the household's), an answer from what
-    the internet sources found. Under internet "never" nothing leaves."""
+    the internet sources found. Under internet "never" nothing leaves.
+
+    A question only the live web can answer (a business, "near me", news,
+    weather, prices: :func:`uncertainty.needs_internet`) never gets an
+    offline-library answer: it is looked up online (asking first, as any
+    lookup), or, under "never", answered plainly that it needs the
+    internet. Library results that don't cover the question don't stand
+    in for the internet: the card is shown, as when nothing was found."""
     internet_on = not egress.internet_turned_off()
     allowed = decided or thread_allowed or always_allow()
+    if proposal.kind == "search" and lookup_answer.is_bare_followup(proposal.query):
+        earlier = await _previous_lookup_query(thread_id)
+        if earlier:
+            proposal = lookup_answer.Proposal("search", earlier)
+    live_only = proposal.kind == "search" and (
+        uncertainty.needs_internet(question) or uncertainty.needs_internet(proposal.query))
+    if live_only and not internet_on:
+        async for ev in _fixed(thread_id, lookup_answer.NEEDS_INTERNET, proposal, {"internet_used": False},
+                               reason="needs_internet"):
+            yield ev
+        return
     if allowed and not decided and from_model and proposal.kind == "page":
         # A page the MODEL wants to read: a chat's (or the house's) allow
         # covers the sites already allowed in it and the ones the person
         # typed, not a new site a page or an answer suggested.
         if _site_of(proposal.query) not in await _allowed_sites(thread_id):
             allowed = False
-    if proposal.kind == "search" and not (allowed and internet_on):
+    if proposal.kind == "search" and not (allowed and internet_on) and not live_only:
         try:
             local = await _core_lookup(request, proposal, internet=False)
         except _LookupFailed as e:
             local = {}
             log.info("chat lookup (local): %s %s", e.status, e.code)
-        if local.get("results"):
+        if local.get("results") and (not internet_on or _covered(proposal, question, local)):
             async for ev in _answer_from(thread_id, question, proposal, local, model, history):
                 yield ev
             return
@@ -1922,7 +2036,8 @@ async def _lookup_turn(
         yield f"event: done\ndata: {json.dumps(_msg_dict(row))}\n\n"
         return
     try:
-        found = await _core_lookup(request, proposal, internet=True)
+        # A question only the web can answer asks the web alone.
+        found = await _core_lookup(request, proposal, internet=True, web_only=live_only)
     except _LookupFailed as e:
         if e.code == "internet_off":
             async for ev in _fixed(thread_id, lookup_answer.NEVER_REPLY, proposal, {"internet_used": False},
@@ -1935,8 +2050,51 @@ async def _lookup_turn(
                                reason=e.code or "lookup_failed"):
             yield ev
         return
-    async for ev in _answer_from(thread_id, question, proposal, found, model, history):
+    async def web_round() -> dict[str, Any] | None:
+        try:
+            return await _core_lookup(request, proposal, internet=True, web_only=True)
+        except _LookupFailed as e:
+            log.info("chat lookup (web round): %s %s", e.status, e.code)
+            return None
+
+    second = web_round if proposal.kind == "search" and not live_only and not _all_web(found) else None
+    async for ev in _answer_from(thread_id, question, proposal, found, model, history, web_round=second):
         yield ev
+
+
+def _all_web(payload: dict[str, Any]) -> bool:
+    results = [d for d in (payload.get("results") or []) if isinstance(d, dict)]
+    return bool(results) and all(d.get("source_class") == "web" for d in results)
+
+
+def _covered(proposal: lookup_answer.Proposal, question: str, payload: dict[str, Any]) -> bool:
+    """Whether what was found holds enough of the question to answer it."""
+    results = [_Result(d) for d in (payload.get("results") or []) if isinstance(d, dict)][:3]
+    ask = proposal.query if proposal.kind == "search" else question
+    return bool(results) and lookup_answer.covers(ask, lookup_answer.rank_passages(ask, results))
+
+
+async def _previous_lookup_query(thread_id: int) -> str | None:
+    """The words of this chat's last lookup, when the last reply was one
+    (its answer or its card): what a bare follow-up looks up again."""
+    async with session_scope() as s:
+        stats = (await s.execute(
+            text("SELECT stats FROM chat_messages WHERE thread_id = :t AND role = 'assistant' "
+                 "ORDER BY id DESC LIMIT 1"),
+            {"t": thread_id},
+        )).scalar_one_or_none()
+    if isinstance(stats, str):
+        try:
+            stats = json.loads(stats)
+        except ValueError:
+            return None
+    if not isinstance(stats, dict):
+        return None
+    for key in ("lookup", "lookup_card"):
+        got = stats.get(key)
+        if isinstance(got, dict) and got.get("kind") == "search" and str(got.get("query") or "").strip():
+            return str(got["query"]).strip()[:200]
+    return None
 
 
 _URL_IN_TEXT_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
@@ -2018,10 +2176,13 @@ async def _fixed(thread_id: int, text_: str, proposal: lookup_answer.Proposal, p
 
 async def _answer_from(
     thread_id: int, question: str, proposal: lookup_answer.Proposal, payload: dict[str, Any], model: str,
-    history: list[dict[str, Any]],
+    history: list[dict[str, Any]], web_round: Any = None,
 ) -> AsyncIterator[str]:
     """Answer ``question`` from what the lookup found: a few ranked
-    passages, fenced, no tools; the sources line written here."""
+    passages, fenced, no tools; the sources line written here. Results
+    that don't answer it are never cited. ``web_round`` (the chat allows
+    the internet): when they don't, one more lookup, the web sources only,
+    and the answer is from that."""
     results = [_Result(d) for d in (payload.get("results") or []) if isinstance(d, dict)][:3]
     lines = lookup_answer.source_lines(results)
     if not results:
@@ -2032,8 +2193,12 @@ async def _answer_from(
     ask = proposal.query if proposal.kind == "search" else question
     passages = lookup_answer.rank_passages(ask, results)
     if proposal.kind == "search" and not lookup_answer.covers(ask, passages):
-        async for ev in _fixed(thread_id, lookup_answer.COULDNT_FIND, proposal, payload, reason="not_covered",
-                               lines=lines):
+        again = await web_round() if web_round is not None else None
+        if again and again.get("results"):
+            async for ev in _answer_from(thread_id, question, proposal, again, model, history):
+                yield ev
+            return
+        async for ev in _fixed(thread_id, lookup_answer.COULDNT_FIND, proposal, payload, reason="not_covered"):
             yield ev
         return
     system = {"role": "system", "content": lookup_answer.system_prompt(question, passages, bot=core_settings.bot_name)}
@@ -2045,6 +2210,8 @@ async def _answer_from(
     started = time.monotonic()
     first_token_ms: float | None = None
     error = code = None
+    async for ev in _voice_first_events():
+        yield ev
     try:
         async with contextlib.aclosing(ollama_client.chat_stream(
             [system, *[{"role": t["role"], "content": t["content"]} for t in turns]], model=model,
@@ -2059,6 +2226,14 @@ async def _answer_from(
         code, error = _failure(e, model, "chat")
         log.warning("chat lookup answer failed (thread %s, %s): %s", thread_id, code, type(e).__name__)
     reply = "".join(chunks)
+    if web_round is not None and error is None and lookup_answer.couldnt_find(reply):
+        again = await web_round()
+        if again and again.get("results"):
+            # What was read didn't answer it: the web's answer replaces it.
+            yield f"event: replace\ndata: {json.dumps({'text': ''})}\n\n"
+            async for ev in _answer_from(thread_id, question, proposal, again, model, history):
+                yield ev
+            return
     content = lookup_answer.finish(reply, lines, notice=payload.get("notice")) if reply else ""
     if reply and content.startswith(reply) and len(content) > len(reply):
         yield f"event: delta\ndata: {json.dumps({'text': content[len(reply):]})}\n\n"
@@ -2233,6 +2408,8 @@ async def _declined_answer(thread_id: int, history: list[dict[str, Any]], model:
     ollama_stats: dict[str, Any] = {}
     started = time.monotonic()
     error = code = None
+    async for ev in _voice_first_events():
+        yield ev
     try:
         async with contextlib.aclosing(ollama_client.chat_stream(
             [system, *history], model=model, stats=ollama_stats, num_predict=_reply_cap(),
@@ -2336,8 +2513,9 @@ async def _title_loop() -> None:
         await asyncio.sleep(TITLE_DELAY_SEC)
         while _replies_busy > 0:
             await asyncio.sleep(0.2)
-        if not _title_queue:
-            return
+        await _jobs.wait_for_voice()
+        if not _title_queue or _replies_busy > 0:
+            continue
         thread_id = _title_queue.pop(0)
         _title_running = thread_id
         try:
@@ -2351,6 +2529,15 @@ def stop_title_jobs() -> None:
     """A message, try again or voice turn is coming: the title being
     written stops (and is written later); the queue waits for the reply."""
     _stop_worker()
+
+
+async def _voice_first_events() -> AsyncIterator[str]:
+    """Before a reply asks the model: while the core answers a voice turn,
+    a ``status`` of ``waiting_for_voice`` and a wait (at most 30 s), so the
+    spoken answer isn't held up behind this reply (S3-7)."""
+    if await _jobs.voice_busy():
+        yield f"event: status\ndata: {json.dumps({'state': 'waiting_for_voice'})}\n\n"
+        await _jobs.wait_for_voice()
 
 
 def _reply_started() -> None:

@@ -216,6 +216,37 @@ async def test_list_rows_carry_the_server_path_never_the_publisher_url(db_sessio
 
 @requires_db
 @pytest.mark.asyncio
+async def test_an_open_caller_sees_feed_urls_without_their_token(db_session, internet, monkeypatch) -> None:
+    """A private feed's URL carries a per-subscriber token: a caller with no
+    household credential sees the URL without it and can't search in it."""
+    url = "https://user:pw@feeds.example.com/private.xml?token=s3cr3t"
+    await _sub(db_session, url, None)
+
+    async def _open(request, session=None):
+        return "no-auth"
+
+    async def _household(request, session=None):
+        return "ok"
+
+    monkeypatch.setattr(pc, "check_device_request", _open)
+    async with _client() as c:
+        rows = (await c.get("/api/podcasts/subscriptions")).json()
+        found = (await c.get("/api/podcasts/subscriptions", params={"q": "s3cr3t"})).json()
+        page = (await c.get("/api/podcasts/subscriptions", params={"limit": 10})).json()
+    assert [r["feed_url"] for r in rows] == ["https://feeds.example.com/private.xml"]
+    assert found == []
+    assert "s3cr3t" not in json.dumps(page) and "pw@" not in json.dumps(page)
+
+    monkeypatch.setattr(pc, "check_device_request", _household)
+    async with _client() as c:
+        rows = (await c.get("/api/podcasts/subscriptions")).json()
+        found = (await c.get("/api/podcasts/subscriptions", params={"q": "s3cr3t"})).json()
+    assert [r["feed_url"] for r in rows] == [url]
+    assert len(found) == 1
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_list_under_never_schedules_no_fetch(db_session, internet) -> None:
     await _sub(db_session, "https://feeds.example.com/a.xml", "https://art.example.com/a.jpg")
     with egress.override_policy("never"):

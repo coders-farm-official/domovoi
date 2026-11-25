@@ -107,12 +107,30 @@ def house(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "spawn", no_spawn)
     monkeypatch.setattr(svc, "_wait_for_onion", fake_onion)
     monkeypatch.setattr(svc, "current_epoch", fake_epoch)
+
+    async def fake_epoch_locked(**kw):
+        return b"" * 8
+
+    async def no_apps(s):
+        return {}
+
+    from domovoi.friend_houses import plugin_mail
+
+    # The listener files' single writer (M2) reads the apps and the epoch
+    # under its own lock: no database here.
+    monkeypatch.setattr(svc, "_current_epoch_locked", fake_epoch_locked)
+    monkeypatch.setattr(plugin_mail, "listener_apps", no_apps)
     monkeypatch.setattr(svc, "_ensure_listener", fake_ensure)
     monkeypatch.setattr(svc, "_stop_listener", fake_stop)
     monkeypatch.setattr(svc, "RELOAD_MIN_INTERVAL_SEC", 0.0)
     monkeypatch.setattr(svc, "firewall_state", lambda: "in_place")
     monkeypatch.setitem(svc._STATE, "applied", None)
     monkeypatch.setitem(svc._STATE, "last_reload", 0.0)
+    # "Came online" is read from was_on: a test that ran earlier in this
+    # worker (any order under xdist) must not leave the house already on.
+    monkeypatch.setitem(svc._STATE, "was_on", False)
+    monkeypatch.setitem(svc._STATE, "onion", None)
+    monkeypatch.setitem(svc._STATE, "pairing", None)
     monkeypatch.setattr(settings, "friend_houses_enabled", False, raising=False)
     policy = {"value": "always"}
     monkeypatch.setattr(egress, "policy", lambda: policy["value"])
@@ -178,6 +196,22 @@ async def test_never_stops_the_container_and_the_listener(house) -> None:
 
 
 @linux_only
+async def test_never_stops_tor_even_when_the_database_is_down(house, monkeypatch) -> None:
+    house.enable()
+    house.friends.append(_friend(1))
+    await svc.reconcile()
+
+    async def db_down():
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(svc, "_inputs", db_down)
+    house.policy["value"] = "never"
+    await svc.reconcile()
+    assert house.docker.calls == ["start", "stop"]
+    assert not svc.tor_wanted()
+
+
+@linux_only
 async def test_turning_it_off_stops_everything_but_keeps_the_keys(house) -> None:
     house.enable()
     house.friends.append(_friend(1))
@@ -213,7 +247,7 @@ async def test_friend_changes_reload_and_rewrite_the_key_files(house) -> None:
     assert sorted(p.name for p in auth.iterdir()) == ["f2.auth"]
     listed = json.loads((house.root / "friend-houses" / "listener" / "friends.json").read_text())
     assert list(listed) == [bytes([3]).hex() * 32]  # only friend 2's session key
-    assert listed[bytes([3]).hex() * 32] == {"house": bytes([2]).hex() * 32, "pending": False}
+    assert listed[bytes([3]).hex() * 32] == {"house": bytes([2]).hex() * 32, "pending": False, "apps": []}
 
 
 @linux_only
@@ -256,6 +290,37 @@ def test_dockers_created_time_parses() -> None:
     parsed = rt._parse_created("2026-11-17T14:25:30.123456789Z")
     assert parsed == datetime(2026, 11, 17, 14, 25, 30, 123456, tzinfo=timezone.utc)
     assert rt._parse_created("") is None
+
+
+@pytest.mark.parametrize("text", [
+    "2026-11-17T09:25:30.123456789-05:00",          # local time with an offset
+    "2026-11-17T14:25:30.123456789+00:00",
+    "2026-11-17T09:25:30-05:00",                    # no fraction
+    "2026-11-17 09:25:30.123456789 -0500 EST",      # Go's own form
+    "2026-11-17T14:25:30.123456",                   # no zone at all: taken as UTC
+])
+def test_every_created_form_parses_to_the_same_aware_instant(text) -> None:
+    # The offset's digits used to be counted into the fraction, which made
+    # an offset time naive, and every reconcile then failed with "can't
+    # subtract offset-naive and offset-aware datetimes" (a house,
+    # 2026-11-22).
+    parsed = rt._parse_created(text)
+    assert parsed is not None and parsed.tzinfo is not None
+    assert parsed.replace(microsecond=0) == datetime(2026, 11, 17, 14, 25, 30, tzinfo=timezone.utc)
+
+
+def test_an_offset_created_time_never_breaks_the_age_check() -> None:
+    now = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    info = rt.ImageInfo("sha256:x", rt.dockerfile_sha(),
+                        rt._parse_created("2026-11-28T10:00:00.5-05:00"))
+    assert info.stale(now=now) is None
+    old = rt.ImageInfo("sha256:x", rt.dockerfile_sha(),
+                       rt._parse_created("2026-01-01T10:00:00.5-05:00"))
+    assert "days old" in old.stale(now=now)
+
+
+def test_an_unreadable_created_time_is_unknown_not_an_error() -> None:
+    assert rt._parse_created("yesterday") is None
 
 
 def test_the_dockerfile_pins_its_base_by_digest() -> None:

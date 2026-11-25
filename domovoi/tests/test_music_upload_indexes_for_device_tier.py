@@ -382,7 +382,7 @@ def test_the_upload_route_itself_is_still_device_tier() -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_a_phone_uploads_and_the_track_is_in_the_library(
-    _db, music_dir, monkeypatch
+    db_session, _db, music_dir, monkeypatch
 ) -> None:
     """The card, end to end: a caller holding ONLY the household token
     uploads a file and then sees it in ``GET /api/music/library``.
@@ -398,6 +398,12 @@ async def test_a_phone_uploads_and_the_track_is_in_the_library(
     file and still indexed nothing in a real ft run, since the guard
     refuses a ``domovoi.*`` import the web process has not preloaded
     (§5.1). Pytest does not install it; the web process does.
+
+    ``db_session`` truncates the library first (RESTART IDENTITY): the
+    listing below must hold this upload alone, and an earlier test on the
+    same worker that inserted tracks with explicit ids would otherwise
+    leave the id sequence behind its rows (the indexer's insert then hits
+    ``library_tracks_pkey``).
     """
     import sys
 

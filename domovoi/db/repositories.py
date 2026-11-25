@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.clients.speaker_encoder import MODEL_TAG
+from domovoi.models import PHONE_ROOM_PREFIX
 
 log = logging.getLogger(__name__)
 
@@ -318,19 +319,20 @@ class ConversationLogRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
 
-    async def latest_assistant_text_in_room(
+    async def latest_assistant_turn_in_room(
         self, *, room_id: str | None, within_seconds: int
-    ) -> str | None:
+    ) -> tuple[str, str | None] | None:
         """Most recent non-empty assistant_text spoken in ``room_id`` within
-        the trailing ``within_seconds`` window. Used by RepeatHandler as a
-        fallback when ``sessions.context.last_assistant_response`` is empty
-        (typically because the prior session aged out between turns).
-        Returns None if no qualifying row exists.
+        the trailing ``within_seconds`` window, with the handler that said
+        it. Used by RepeatHandler as a fallback when
+        ``sessions.context.last_assistant_response`` is empty (typically
+        because the prior session aged out between turns). Returns None if
+        no qualifying row exists.
         """
         result = await self.s.execute(
             text(
                 """
-                SELECT assistant_text
+                SELECT assistant_text, matched_handler
                 FROM conversation_log
                 WHERE room_id IS NOT DISTINCT FROM :room_id
                   AND assistant_text IS NOT NULL
@@ -348,7 +350,7 @@ class ConversationLogRepository:
         value = row[0]
         if not isinstance(value, str) or not value.strip():
             return None
-        return value
+        return value, row[1]
 
     async def record_turn(
         self,
@@ -592,7 +594,12 @@ class PeopleRepository:
         """Cascades through voice_profiles via FK; intents_log.person_id
         becomes NULL via the FK's ON DELETE SET NULL. Forgetting a person
         deletes their turns FIRST (voice_history.delete_person_history):
-        after this, they can no longer be found."""
+        after this, they can no longer be found. Their faces become
+        unnamed (``faces.unname_faces``), not kept as confirmed faces of
+        nobody."""
+        from domovoi.media_understanding.faces import unname_faces
+
+        await unname_faces(self.s, person_id)
         result = await self.s.execute(
             text("DELETE FROM people WHERE id = :id"),
             {"id": person_id},
@@ -835,6 +842,15 @@ class MemoriesRepository:
         )
         return [(int(r[0]), r[1], r[2], r[3]) for r in row.all()]
 
+    async def list_active_household(self) -> list[tuple[int, str]]:
+        """``(person_id, body)`` for every active memory in the house: the
+        food-safety note after a meal suggestion reads everyone's
+        allergies and diets (domovoi/food_safety.py)."""
+        row = await self.s.execute(
+            text("SELECT person_id, body FROM memories WHERE status = 'active'")
+        )
+        return [(int(r[0]), r[1]) for r in row.all()]
+
     async def list_all(
         self, person_id: int, limit: int = 200
     ) -> list[tuple[int, str, str | None, str, str, datetime]]:
@@ -902,40 +918,41 @@ class MemoriesRepository:
         )
         return result.rowcount or 0
 
-    async def next_pending_for_offer(
+    async def pending_for_offer(
         self,
         person_id: int,
         offer_cooldown_sec: int,
-    ) -> tuple[int, str, str | None] | None:
-        """Pick the oldest pending memory eligible to surface.
+        limit: int = 10,
+    ) -> list[tuple[int, str, str | None]]:
+        """The pending memories eligible to surface, oldest first.
 
-        Eligibility: ``status='pending'`` AND
-        ``last_offered_at IS NULL OR last_offered_at < NOW() -
-        cooldown``. Returns ``(id, body, topic)`` or None.
-
-        Ordered by created_at so memories the extractor surfaced first
-        get asked about first — keeps the conversational ordering
-        sensible when several have piled up across a long session.
+        At most one offer per person per cooldown: nothing is eligible
+        while ANY of the person's memories was offered within
+        ``offer_cooldown_sec``, so several pending facts don't take
+        turns being tacked onto every answer. Returns ``(id, body,
+        topic)`` rows, oldest first, so memories the extractor surfaced
+        first get asked about first.
         """
-        row = await self.s.execute(
+        rows = await self.s.execute(
             text(
                 """
                 SELECT id, body, topic
                 FROM memories
                 WHERE person_id = :pid
                   AND status = 'pending'
-                  AND (last_offered_at IS NULL
-                       OR last_offered_at < NOW() - make_interval(secs => :cooldown))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM memories recent
+                      WHERE recent.person_id = :pid
+                        AND recent.last_offered_at
+                            >= NOW() - make_interval(secs => :cooldown)
+                  )
                 ORDER BY created_at
-                LIMIT 1
+                LIMIT :limit
                 """
             ),
-            {"pid": person_id, "cooldown": offer_cooldown_sec},
+            {"pid": person_id, "cooldown": offer_cooldown_sec, "limit": limit},
         )
-        result = row.first()
-        if result is None:
-            return None
-        return int(result[0]), result[1], result[2]
+        return [(int(r[0]), r[1], r[2]) for r in rows.all()]
 
     async def mark_offered(self, memory_id: int) -> None:
         await self.s.execute(
@@ -993,8 +1010,9 @@ class MemoriesRepository:
                 SELECT user_text,
                        -- Answers that read out words from outside the
                        -- house (a friend house's messages or list items)
-                       -- never feed the memory extractor (R6 FH-15).
-                       CASE WHEN matched_handler IN ('friend_houses', 'lists')
+                       -- never feed the memory extractor (R6 FH-15), nor
+                       -- does a repeat (it only says an earlier answer again).
+                       CASE WHEN matched_handler IN ('friend_houses', 'lists', 'repeat')
                             THEN NULL ELSE assistant_text END
                 FROM conversation_log
                 WHERE person_id = :pid
@@ -1009,7 +1027,8 @@ class MemoriesRepository:
     async def has_similar_active_or_pending(
         self, person_id: int, fragment: str
     ) -> bool:
-        """Cheap dedup gate before inserting a pending memory.
+        """Cheap dedup gate before inserting a pending memory. A rejected
+        row counts too: a fact the person said no to isn't offered again.
 
         Substring ILIKE comparison both directions — catches the
         common "I have a dog named Max" vs "user has a dog named
@@ -1024,7 +1043,7 @@ class MemoriesRepository:
                 SELECT 1
                 FROM memories
                 WHERE person_id = :pid
-                  AND status IN ('active', 'pending')
+                  AND status IN ('active', 'pending', 'rejected')
                   AND (
                        body ILIKE :pat
                        OR :fragment ILIKE '%' || body || '%'
@@ -1145,21 +1164,31 @@ class VoiceProfilesRepository:
         claim_room: str | None = None,
         claimed_by: int | None = None,
         claim_of: int | None = None,
+        satellite_id: str | None = None,
+        learned: bool = False,
     ) -> int:
-        """One sample. ``claimed``: it is being added because the speaker
+        """One sample. ``satellite_id``: the mic that heard it (V073;
+        default: the device whose id is ``room_id``, as every device's
+        was until rooms held several). ``claimed``: it is being added because the speaker
         said this person's name and "yes" (V029), in ``claim_room``, by a
         voice recognized as ``claimed_by`` (None: an unknown voice).
-        ``claim_of``: a learned sample that rests on that claim."""
+        ``claim_of``: a learned sample that rests on that claim.
+        ``learned``: saved by the identifier on its own after confident
+        matches (job 4), not enrolled on purpose (V076); a device moved to
+        another room drops its learned samples."""
         row = await self.s.execute(
             text(
                 """
                 INSERT INTO voice_profiles
-                    (person_id, embedding, model, room_id, sample_seconds, source,
-                     claimed_at, claim_room, claimed_by_person_id, claim_of)
+                    (person_id, embedding, model, room_id, satellite_id, sample_seconds,
+                     source, claimed_at, claim_room, claimed_by_person_id, claim_of,
+                     learned)
                 VALUES
-                    (:person_id, :embedding, :model, :room_id, :sample_seconds, :source,
+                    (:person_id, :embedding, :model, :room_id, :satellite_id,
+                     :sample_seconds, :source,
                      CASE WHEN :claimed THEN NOW() END, :claim_room,
-                     (SELECT id FROM people WHERE id = :claimed_by), :claim_of)
+                     (SELECT id FROM people WHERE id = :claimed_by), :claim_of,
+                     :learned)
                 RETURNING id
                 """
             ),
@@ -1168,15 +1197,28 @@ class VoiceProfilesRepository:
                 "embedding": embedding,
                 "model": model,
                 "room_id": room_id,
+                "satellite_id": satellite_id
+                or (room_id if source == self.SATELLITE else None),
                 "sample_seconds": sample_seconds,
                 "source": source,
                 "claimed": bool(claimed),
                 "claim_room": claim_room if claimed else None,
                 "claimed_by": claimed_by if claimed else None,
                 "claim_of": claim_of,
+                "learned": bool(learned),
             },
         )
         return int(row.scalar_one())
+
+    async def drop_learned_by(self, satellite_id: str) -> int:
+        """Delete the samples a device's mic learned on its own (V076),
+        when it moves to another room: they carry the old room's sound.
+        Enrolled samples stay. Returns how many went."""
+        result = await self.s.execute(
+            text("DELETE FROM voice_profiles WHERE satellite_id = :s AND learned"),
+            {"s": satellite_id},
+        )
+        return int(result.rowcount or 0)
 
     async def add_phone_sample(
         self,
@@ -1307,11 +1349,14 @@ class VoiceProfilesRepository:
 
     async def all_for_model(
         self, model: str
-    ) -> list[tuple[int, int, bytes, str | None]]:
-        """Return ``(profile_id, person_id, embedding_bytes, room_id)``
-        for every SATELLITE profile matching ``model`` — what a satellite's
-        turn is matched against. Phone samples are never in it, so they
-        cannot move a satellite centroid.
+    ) -> list[tuple[int, int, bytes, str | None, float | None]]:
+        """Return ``(profile_id, person_id, embedding_bytes, room_id,
+        sample_seconds)`` for every SATELLITE profile matching ``model`` —
+        what a satellite's turn is matched against. Phone samples are never
+        in it, so they cannot move a satellite centroid. ``sample_seconds``
+        (the speech the sample holds, None when unrecorded) decides whether
+        a room's samples are long enough to hold a person to them
+        (``voice_identifier.ROOM_SAMPLE_GOOD_SEC``).
 
         Pulls every row on every match call. At household scale (a few
         dozen samples max) this is microseconds; if it ever becomes hot
@@ -1320,7 +1365,7 @@ class VoiceProfilesRepository:
         result = await self.s.execute(
             text(
                 """
-                SELECT id, person_id, embedding, room_id
+                SELECT id, person_id, embedding, room_id, sample_seconds
                 FROM voice_profiles
                 WHERE model = :model AND source = 'satellite'
                 """
@@ -1328,7 +1373,8 @@ class VoiceProfilesRepository:
             {"model": model},
         )
         return [
-            (int(r[0]), int(r[1]), bytes(r[2]), r[3]) for r in result.all()
+            (int(r[0]), int(r[1]), bytes(r[2]), r[3], None if r[4] is None else float(r[4]))
+            for r in result.all()
         ]
 
     async def phone_matching_rows(
@@ -1494,6 +1540,9 @@ class SessionRepository:
 
         ctx["recent_turns"] = recent
         ctx["last_assistant_response"] = last_response if last_response is not None else assistant_text
+        # A reply the history keeps a stand-in for carries text that must not
+        # reach a model (a friend house's words): "double check that" asks.
+        ctx["last_response_kept_out"] = last_response is not None
 
         await self.s.execute(
             text(
@@ -2427,13 +2476,16 @@ class SatellitePairingRepository:
 
     Only the sha256 of a satellite's pairing token is stored (``token_hash``);
     the raw token lives solely in the Pi's ``~/.domovoi/pairing_token`` sidecar.
-    The streaming layer's hello-frame validation drives every method here."""
+    The streaming layer's hello-frame validation drives every method here.
+    Keyed by the DEVICE (V073: ``satellite_id``, the WebSocket path), never
+    by its room: room playout's auth (domovoi/room_playout/session.py)
+    reads it the same way."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
 
     async def get_pairing(
-        self, room_id: str
+        self, satellite_id: str
     ) -> tuple[str, datetime, datetime | None] | None:
         """The (token_hash, paired_at, last_seen_at) for a room, or None when
         the room has never paired."""
@@ -2441,50 +2493,52 @@ class SatellitePairingRepository:
             await self.s.execute(
                 text(
                     "SELECT token_hash, paired_at, last_seen_at "
-                    "FROM satellite_pairings WHERE room_id = :r"
+                    "FROM satellite_pairings WHERE satellite_id = :r"
                 ),
-                {"r": room_id},
+                {"r": satellite_id},
             )
         ).first()
         if row is None:
             return None
         return row.token_hash, row.paired_at, row.last_seen_at
 
-    async def pair(self, room_id: str, token_hash: str) -> None:
+    async def pair(self, satellite_id: str, token_hash: str) -> None:
         """Claim a room for a token (trust-on-first-use). Idempotent on the
         (room_id, token_hash) pair: a re-pair with the SAME hash refreshes
         paired_at/last_seen_at rather than erroring; a DIFFERENT hash would
-        only reach here after the row was reset, so ON CONFLICT overwrites."""
+        only reach here after the row was reset, so ON CONFLICT overwrites.
+        The device gets an inventory row and, when new, a room (V073)."""
+        await ensure_satellite(self.s, satellite_id)
         await self.s.execute(
             text(
-                "INSERT INTO satellite_pairings (room_id, token_hash, last_seen_at) "
+                "INSERT INTO satellite_pairings (satellite_id, token_hash, last_seen_at) "
                 "VALUES (:r, :h, now()) "
-                "ON CONFLICT (room_id) DO UPDATE SET "
+                "ON CONFLICT (satellite_id) DO UPDATE SET "
                 "token_hash = EXCLUDED.token_hash, paired_at = now(), "
                 "last_seen_at = now()"
             ),
-            {"r": room_id, "h": token_hash},
+            {"r": satellite_id, "h": token_hash},
         )
 
-    async def touch_last_seen(self, room_id: str) -> None:
+    async def touch_last_seen(self, satellite_id: str) -> None:
         """Stamp last_seen_at=now() for an accepted, already-paired room."""
         await self.s.execute(
             text(
                 "UPDATE satellite_pairings SET last_seen_at = now() "
-                "WHERE room_id = :r"
+                "WHERE satellite_id = :r"
             ),
-            {"r": room_id},
+            {"r": satellite_id},
         )
 
-    async def reset_pairing(self, room_id: str) -> bool:
+    async def reset_pairing(self, satellite_id: str) -> bool:
         """Delete a room's pairing row so the next connect re-pairs (after a
         re-flash / new device). True when a row was actually removed."""
         row = (
             await self.s.execute(
                 text(
-                    "DELETE FROM satellite_pairings WHERE room_id = :r RETURNING 1"
+                    "DELETE FROM satellite_pairings WHERE satellite_id = :r RETURNING 1"
                 ),
-                {"r": room_id},
+                {"r": satellite_id},
             )
         ).first()
         return row is not None
@@ -2502,6 +2556,9 @@ _CODE_DECOY = "\x00no-code-on-file"
 #: elsewhere, or approved by another house and could not withdraw here
 #: expires — and with it the room name it was holding.
 APPROVAL_EXPIRY_SEC = 900.0
+#: The most requests that may wait on a human at once. A new room name past
+#: it is told to try again later; a device already waiting still refreshes.
+MAX_PENDING_APPROVALS = 32
 #: How long a code typed for a proof request waits for its device to come
 #: back and run the exchange (V062).
 ENTERED_CODE_TTL_SEC = 600.0
@@ -2530,6 +2587,8 @@ class SatelliteApprovalRepository:
         sat_type: str = "voice",
         takeover_after_sec: float | None = None,
         proof: bool = False,
+        requested_room: str | None = None,
+        support_key: str | None = None,
     ) -> tuple[str, str | None]:
         """Record (or refresh) a pending approval.
 
@@ -2566,8 +2625,39 @@ class SatelliteApprovalRepository:
 
         A request nobody refreshed for :data:`APPROVAL_EXPIRY_SEC` is
         deleted first, so it holds its room name against nobody.
+
+        ``requested_room`` (V073): the room the device asked to join. The
+        first one on file stays while the same device refreshes (an
+        operator's choice made meanwhile is kept); a takeover replaces it.
+        ``mac`` and ``sat_type`` are the device's own words and are bounded
+        here. Returns ``("full", None)`` when :data:`MAX_PENDING_APPROVALS`
+        requests already wait and none of them is this room's.
+
+        ``support_key`` (V083): the support key the parked hello presented
+        (canonical, or None), pinned for the device when an operator
+        approves this request by its code (:meth:`approve`). The latest
+        hello's key is kept, like its other metadata. A proof request
+        keeps none: its key is bound into the exchange that approves it
+        and passed to :meth:`promote_proven` from that run's hello.
         """
+        from domovoi.satellite_abilities import clean_mac, clean_sat_type
+        from domovoi.support_sessions import clean_key
+
         await self.purge_expired()
+        mac = clean_mac(mac)
+        sat_type = clean_sat_type(sat_type)
+        waiting = (
+            await self.s.execute(
+                text(
+                    "SELECT count(*) AS n, "
+                    "count(*) FILTER (WHERE satellite_id = :r) AS mine "
+                    "FROM satellite_approvals"
+                ),
+                {"r": room_id},
+            )
+        ).one()
+        if not waiting.mine and waiting.n >= MAX_PENDING_APPROVALS:
+            return "full", None
         # Every SET expression reads the row as it was before this
         # statement, so "same device" below is the parked device's hash.
         same = "satellite_approvals.token_hash = EXCLUDED.token_hash"
@@ -2575,9 +2665,10 @@ class SatelliteApprovalRepository:
             await self.s.execute(
                 text(
                     "INSERT INTO satellite_approvals "
-                    "(room_id, token_hash, code, mac, board, sat_type, proof) "
-                    "VALUES (:r, :h, :c, :m, :b, :t, :p) "
-                    "ON CONFLICT (room_id) DO UPDATE SET "
+                    "(satellite_id, token_hash, code, mac, board, sat_type, proof, "
+                    "requested_room, support_key) "
+                    "VALUES (:r, :h, :c, :m, :b, :t, :p, :room, :k) "
+                    "ON CONFLICT (satellite_id) DO UPDATE SET "
                     "code = CASE WHEN EXCLUDED.proof THEN NULL "
                     f"WHEN {same} "
                     "THEN COALESCE(satellite_approvals.code, EXCLUDED.code) "
@@ -2595,9 +2686,13 @@ class SatelliteApprovalRepository:
                     "THEN satellite_approvals.first_seen_at ELSE now() END, "
                     f"attempts = CASE WHEN {same} "
                     "THEN satellite_approvals.attempts + 1 ELSE 1 END, "
+                    f"requested_room = CASE WHEN {same} THEN "
+                    "COALESCE(satellite_approvals.requested_room, EXCLUDED.requested_room) "
+                    "ELSE EXCLUDED.requested_room END, "
                     "token_hash = EXCLUDED.token_hash, "
                     "mac = EXCLUDED.mac, board = EXCLUDED.board, "
-                    "sat_type = EXCLUDED.sat_type, last_seen_at = now() "
+                    "sat_type = EXCLUDED.sat_type, support_key = EXCLUDED.support_key, "
+                    "last_seen_at = now() "
                     f"WHERE {same} "
                     "OR (CAST(:takeover AS double precision) IS NOT NULL "
                     "AND satellite_approvals.first_seen_at <= now() - "
@@ -2608,6 +2703,8 @@ class SatelliteApprovalRepository:
                     "r": room_id, "h": token_hash,
                     "c": None if proof else code,
                     "m": mac, "b": board, "t": sat_type, "p": bool(proof),
+                    "room": requested_room,
+                    "k": None if proof else clean_key(support_key),
                     "takeover": (
                         None if takeover_after_sec is None
                         else float(takeover_after_sec)
@@ -2634,20 +2731,28 @@ class SatelliteApprovalRepository:
         ``waiting_for_device`` says a typed code is waiting for the device's
         next visit, and ``code_rejected`` says the last code typed for it was
         not the device's (the device did not confirm it). Expired requests
-        are deleted before the list is read."""
+        are deleted before the list is read.
+
+        1.5.0: ``satellite_id`` is the device (``room_id`` repeats it for
+        older readers); ``requested_room`` is the room it asked for (or an
+        operator chose) and ``requested_room_name`` that room's name (None
+        when no such room exists yet)."""
         await self.purge_expired()
         rows = (
             await self.s.execute(
                 text(
-                    "SELECT room_id, (code IS NOT NULL OR proof) AS has_code, "
-                    "mac, board, sat_type, first_seen_at, last_seen_at, attempts, "
-                    "proof, "
-                    "(entered_code IS NOT NULL AND entered_at > now() - "
+                    "SELECT a.satellite_id AS room_id, a.satellite_id, "
+                    "(a.code IS NOT NULL OR a.proof) AS has_code, "
+                    "a.mac, a.board, a.sat_type, a.first_seen_at, a.last_seen_at, a.attempts, "
+                    "a.proof, a.requested_room, r.name AS requested_room_name, "
+                    "(a.entered_code IS NOT NULL AND a.entered_at > now() - "
                     "make_interval(secs => CAST(:ttl AS double precision))) "
                     "AS waiting_for_device, "
-                    "(last_proof_failure_at IS NOT NULL AND entered_code IS NULL) "
-                    "AS code_rejected, proof_failures "
-                    "FROM satellite_approvals ORDER BY first_seen_at"
+                    "(a.last_proof_failure_at IS NOT NULL AND a.entered_code IS NULL) "
+                    "AS code_rejected, a.proof_failures "
+                    "FROM satellite_approvals a "
+                    "LEFT JOIN rooms r ON r.room_id = a.requested_room "
+                    "ORDER BY a.first_seen_at"
                 ),
                 {"ttl": float(ENTERED_CODE_TTL_SEC)},
             )
@@ -2658,15 +2763,15 @@ class SatelliteApprovalRepository:
         row = (
             await self.s.execute(
                 text(
-                    "SELECT room_id, token_hash, code, mac, board, sat_type "
-                    "FROM satellite_approvals WHERE room_id = :r"
+                    "SELECT satellite_id AS room_id, token_hash, code, mac, board, sat_type "
+                    "FROM satellite_approvals WHERE satellite_id = :r"
                 ),
                 {"r": room_id},
             )
         ).mappings().first()
         return dict(row) if row else None
 
-    async def approve(self, room_id: str, code: str) -> str:
+    async def approve(self, room_id: str, code: str, *, into: str | None = None) -> str:
         """Promote a pending request into a real pairing, atomically, once
         the operator has typed back the code the device showed them.
 
@@ -2694,32 +2799,46 @@ class SatelliteApprovalRepository:
         * ``"entered"`` — kept; the device runs the exchange on its next
           visit and the room is bound only if it confirms the code;
         * ``"malformed"`` — not six digits, which no such device holds.
+
+        ``into`` (1.5.0): the room the operator put the device in (an
+        existing room's id). Kept on the request for the binding, so a
+        proof request that binds later still lands there.
         """
         await self.purge_expired()
         pending = (
             await self.s.execute(
                 text(
                     "SELECT token_hash, code, proof FROM satellite_approvals "
-                    "WHERE room_id = :r"
+                    "WHERE satellite_id = :r"
                 ),
                 {"r": room_id},
             )
         ).first()
         if pending is None:
             return "not_pending"
+        if into is not None:
+            await self.s.execute(
+                text("UPDATE satellite_approvals SET requested_room = :i WHERE satellite_id = :r"),
+                {"r": room_id, "i": into},
+            )
         if pending.proof:
             from satellite import pairing_proof
 
             candidate = (code or "").strip()
             if not pairing_proof.valid_code(candidate):
                 return "malformed"
-            await self.s.execute(
+            # Only for the device that was read: a takeover in between
+            # parked another one, which this code was not typed for.
+            entered = await self.s.execute(
                 text(
                     "UPDATE satellite_approvals SET entered_code = :c, "
-                    "entered_at = now() WHERE room_id = :r"
+                    "entered_at = now() WHERE satellite_id = :r AND token_hash = :h "
+                    "AND proof"
                 ),
-                {"r": room_id, "c": candidate},
+                {"r": room_id, "c": candidate, "h": pending.token_hash},
             )
+            if not entered.rowcount:
+                return "not_pending"
             return "entered"
         stored = pending.code
         candidate = (code or "").strip()
@@ -2740,30 +2859,64 @@ class SatelliteApprovalRepository:
         row = (
             await self.s.execute(
                 text(
-                    "DELETE FROM satellite_approvals WHERE room_id = :r "
-                    "RETURNING token_hash, board, sat_type"
+                    "DELETE FROM satellite_approvals WHERE satellite_id = :r "
+                    "AND token_hash = :h AND code = :c "
+                    "RETURNING token_hash, board, sat_type, requested_room, support_key"
                 ),
-                {"r": room_id},
+                {"r": room_id, "h": pending.token_hash, "c": stored},
             )
         ).first()
         if row is None:
-            # Raced a reject between the read and the delete.
+            # Raced a reject between the read and the delete, or a takeover
+            # parked another device under the name: the code checked was
+            # not that device's, so nothing is bound.
             return "not_pending"
-        await self._bind(room_id, row)
+        await self._bind(room_id, row, support_key=row.support_key)
         return "approved"
 
-    async def _bind(self, room_id: str, row: Any) -> None:
+    async def _bind(self, room_id: str, row: Any, *, support_key: str | None) -> None:
         """Write the pairing for a request just taken off the list (``row``:
-        its token_hash, board and sat_type)."""
+        its token_hash, board, sat_type and requested_room). The device gets
+        an inventory row and, when new, a room of its own (V073), unless
+        the request names an existing room: then it goes there (1.5.0), and
+        a room of its own made a moment ago for it is not kept.
+
+        ``support_key`` (1.5.0): the support key the approved device
+        presented, pinned now (``satellites.support_key``) — or None, which
+        drops a pin left by an earlier pairing: an approval is a new
+        decision about which device this is, and an old device's key must
+        not outlive it. The "Allow support sessions" switch is left as it
+        was; only the pinned key is ever trusted under it."""
+        sats = SatellitesRepository(self.s)
+        fresh = await sats.room_of(room_id) is None
+        made_own = fresh and await RoomsRepository(self.s).get(room_id) is None
+        await ensure_satellite(self.s, room_id)
+        target = getattr(row, "requested_room", None)
+        if target and target != await sats.room_of(room_id):
+            if await sats.move(room_id, target) and made_own:
+                await self.s.execute(
+                    text(
+                        "DELETE FROM rooms WHERE room_id = :r AND NOT EXISTS "
+                        "(SELECT 1 FROM satellites WHERE room_id = :r)"
+                    ),
+                    {"r": room_id},
+                )
         await self.s.execute(
             text(
-                "INSERT INTO satellite_pairings (room_id, token_hash, last_seen_at) "
+                "INSERT INTO satellite_pairings (satellite_id, token_hash, last_seen_at) "
                 "VALUES (:r, :h, now()) "
-                "ON CONFLICT (room_id) DO UPDATE SET "
+                "ON CONFLICT (satellite_id) DO UPDATE SET "
                 "token_hash = EXCLUDED.token_hash, paired_at = now(), "
                 "last_seen_at = now()"
             ),
             {"r": room_id, "h": row.token_hash},
+        )
+        await self.s.execute(
+            text(
+                "UPDATE satellites SET support_key = :k, updated_at = now() "
+                "WHERE satellite_id = :r"
+            ),
+            {"r": room_id, "k": support_key},
         )
         if row.board:
             # The board the parked hello named (S0): kept on approval, so the
@@ -2772,13 +2925,13 @@ class SatelliteApprovalRepository:
             # so an approved Pi's inventory row is left exactly as it was.
             await self.s.execute(
                 text(
-                    "INSERT INTO satellites (room_id, sat_type, board, adopted_via) "
-                    "VALUES (:r, :t, :b, 'hello') "
-                    "ON CONFLICT (room_id) DO UPDATE SET "
-                    "board = EXCLUDED.board, updated_at = now()"
+                    "UPDATE satellites SET board = :b, updated_at = now(), "
+                    "sat_type = CASE WHEN :fresh THEN :t ELSE sat_type END "
+                    "WHERE satellite_id = :r"
                 ),
                 {
                     "r": room_id,
+                    "fresh": fresh,
                     "t": row.sat_type if row.sat_type in ("voice", "video") else "voice",
                     "b": row.board,
                 },
@@ -2799,7 +2952,7 @@ class SatelliteApprovalRepository:
                 text(
                     "SELECT entered_code AS code, entered_at, (entered_at > now() - "
                     "make_interval(secs => CAST(:ttl AS double precision))) AS fresh "
-                    "FROM satellite_approvals WHERE room_id = :r AND token_hash = :h "
+                    "FROM satellite_approvals WHERE satellite_id = :r AND token_hash = :h "
                     "AND proof AND entered_code IS NOT NULL FOR UPDATE"
                 ),
                 {"r": room_id, "h": token_hash, "ttl": float(ttl_sec)},
@@ -2810,7 +2963,7 @@ class SatelliteApprovalRepository:
         await self.s.execute(
             text(
                 "UPDATE satellite_approvals SET entered_code = NULL, entered_at = NULL "
-                "WHERE room_id = :r"
+                "WHERE satellite_id = :r"
             ),
             {"r": room_id},
         )
@@ -2836,7 +2989,7 @@ class SatelliteApprovalRepository:
                 text(
                     "UPDATE satellite_approvals SET entered_code = :c, "
                     "entered_at = COALESCE(CAST(:t AS timestamptz), now()) "
-                    "WHERE room_id = :r AND token_hash = :h AND proof "
+                    "WHERE satellite_id = :r AND token_hash = :h AND proof "
                     "AND entered_code IS NULL RETURNING 1"
                 ),
                 {"r": room_id, "h": token_hash, "c": code, "t": entered_at},
@@ -2852,29 +3005,34 @@ class SatelliteApprovalRepository:
             text(
                 "UPDATE satellite_approvals SET proof_failures = proof_failures + 1, "
                 "last_proof_failure_at = now() "
-                "WHERE room_id = :r AND token_hash = :h"
+                "WHERE satellite_id = :r AND token_hash = :h"
             ),
             {"r": room_id, "h": token_hash},
         )
 
-    async def promote_proven(self, room_id: str, token_hash: str) -> str:
+    async def promote_proven(self, room_id: str, token_hash: str, *,
+                             support_key: str | None = None) -> str:
         """Bind the room to the device whose proof request this is, once
         the device has confirmed the code the operator typed (the exchange
         in domovoi/streaming.py). ``"approved"`` or ``"not_pending"`` (the
-        request was rejected, expired or taken over meanwhile)."""
+        request was rejected, expired or taken over meanwhile).
+
+        ``support_key``: the key that run's transcript bound (version 3),
+        pinned for the device; None for an older exchange, which binds
+        none."""
         row = (
             await self.s.execute(
                 text(
-                    "DELETE FROM satellite_approvals WHERE room_id = :r "
+                    "DELETE FROM satellite_approvals WHERE satellite_id = :r "
                     "AND token_hash = :h AND proof "
-                    "RETURNING token_hash, board, sat_type"
+                    "RETURNING token_hash, board, sat_type, requested_room"
                 ),
                 {"r": room_id, "h": token_hash},
             )
         ).first()
         if row is None:
             return "not_pending"
-        await self._bind(room_id, row)
+        await self._bind(room_id, row, support_key=support_key)
         return "approved"
 
     async def withdraw(self, room_id: str, token_hash: str) -> bool:
@@ -2884,7 +3042,7 @@ class SatelliteApprovalRepository:
         row = (
             await self.s.execute(
                 text(
-                    "DELETE FROM satellite_approvals WHERE room_id = :r "
+                    "DELETE FROM satellite_approvals WHERE satellite_id = :r "
                     "AND token_hash = :h RETURNING 1"
                 ),
                 {"r": room_id, "h": token_hash},
@@ -2922,7 +3080,7 @@ class SatelliteApprovalRepository:
         row = (
             await self.s.execute(
                 text(
-                    "DELETE FROM satellite_approvals WHERE room_id = :r RETURNING 1"
+                    "DELETE FROM satellite_approvals WHERE satellite_id = :r RETURNING 1"
                 ),
                 {"r": room_id},
             )
@@ -2930,146 +3088,241 @@ class SatelliteApprovalRepository:
         return row is not None
 
 
+# ─── rooms and satellites (V073) ────────────────────────────────────────────
+#
+# A room is the place (`rooms`); a satellite is a device in exactly one room
+# (`satellites`, keyed by `satellite_id`). Every device that existed before
+# 1.5.0 has satellite_id = its room's id, so code that still passes a "room
+# id" for a device reaches the right row while each room has one device.
+# A device the house has never seen gets a room of its own, named by its id.
+
+#: The room a device the house hasn't seen yet lands in: its own, by its id.
+_ENSURE_OWN_ROOM = (
+    "INSERT INTO rooms (room_id, name) SELECT CAST(:r AS text), CAST(:r AS text) "
+    "WHERE NOT EXISTS (SELECT 1 FROM satellites WHERE satellite_id = :r) "
+    "ON CONFLICT (room_id) DO NOTHING"
+)
+
+#: A room's display label as the pre-1.5.0 callers read it: None when the
+#: room has no name of its own (its name is its id).
+ROOM_LABEL_SQL = "NULLIF(r.name, r.room_id)"
+
 _SATELLITE_COLS = (
-    "room_id, sat_type, room_label, hardware, board, mac, "
-    "adopted_via, adopted_at, created_at, updated_at"
+    "s.satellite_id, s.room_id, s.name, s.sat_type, "
+    f"{ROOM_LABEL_SQL} AS room_label, r.name AS room_name, "
+    "s.hardware, s.board, s.mac, s.wake_max, s.output_latency_us, s.calibrated_at, "
+    "s.adopted_via, s.adopted_at, s.created_at, s.updated_at"
+)
+_SATELLITE_FROM = "FROM satellites s JOIN rooms r ON r.room_id = s.room_id"
+
+_ROOM_COLS = (
+    "r.room_id, r.name, r.voice, r.quiet_mode, r.quiet_start, r.quiet_end, "
+    "r.playout_ms, r.created_at, r.updated_at, "
+    "(SELECT count(*) FROM satellites s WHERE s.room_id = r.room_id) AS satellites"
 )
 
 
-class SatellitesRepository:
-    """CRUD for `satellites` — the inventory/metadata rows (V003).
+async def ensure_satellite(
+    session: AsyncSession, satellite_id: str, *, adopted_via: str = "hello"
+) -> None:
+    """Make sure a device has an inventory row and a room. A new device
+    gets a room of its own named by its id; a known one stays where it is.
+    The phone app's chat mic (``phone-...``) is not a room: left alone."""
+    if satellite_id.startswith(PHONE_ROOM_PREFIX):
+        return
+    await session.execute(text(_ENSURE_OWN_ROOM), {"r": satellite_id})
+    await session.execute(
+        text(
+            "INSERT INTO satellites (satellite_id, room_id, adopted_via) "
+            "VALUES (:r, :r, :v) ON CONFLICT (satellite_id) DO NOTHING"
+        ),
+        {"r": satellite_id, "v": adopted_via},
+    )
 
-    A row means "this satellite is known": preseeded by the USB-adoption flow
-    (before the device's first WS connect) or self-registered by a `hello`
-    frame carrying an explicit ``sat_type``. `room_id` is the satellite's
-    identity; `room_label` is optional display grouping for satellites that
-    share a physical room. sat_type / adopted_via are app-validated open
-    enums (registered_values domains)."""
+
+class RoomsRepository:
+    """`rooms` (V073): the places of the house. A room keeps its id for
+    life; its ``name`` is what people call it. Empty rooms are kept until
+    an admin deletes them. Room-level settings (voice, quiet hours,
+    playout) live here; device facts live in :class:`SatellitesRepository`."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
 
-    async def preseed_upsert(
-        self,
-        room_id: str,
-        *,
-        sat_type: str = "voice",
-        room_label: str | None = None,
-        hardware: str | None = None,
-        board: str | None = None,
-        mac: str | None = None,
-        adopted_via: str = "usb",
-    ) -> None:
-        """Full-row upsert from the adoption flow; stamps adopted_at=now()."""
-        await self.s.execute(
-            text(
-                "INSERT INTO satellites "
-                "(room_id, sat_type, room_label, hardware, board, mac, "
-                " adopted_via, adopted_at) "
-                "VALUES (:r, :t, :l, :h, :b, :m, :v, now()) "
-                "ON CONFLICT (room_id) DO UPDATE SET "
-                "sat_type = EXCLUDED.sat_type, room_label = EXCLUDED.room_label, "
-                "hardware = EXCLUDED.hardware, board = EXCLUDED.board, "
-                "mac = EXCLUDED.mac, adopted_via = EXCLUDED.adopted_via, "
-                "adopted_at = now(), updated_at = now()"
-            ),
-            {
-                "r": room_id,
-                "t": sat_type,
-                "l": room_label,
-                "h": hardware,
-                "b": board,
-                "m": mac,
-                "v": adopted_via,
-            },
-        )
-
-    async def upsert_type(self, room_id: str, sat_type: str) -> None:
-        """Self-registration from a `hello` frame that EXPLICITLY carried
-        sat_type. Only ever called for explicit frames — an old client that
-        omits the field must never funnel through here and reset an adopted
-        row back to 'voice'."""
-        await self.s.execute(
-            text(
-                "INSERT INTO satellites (room_id, sat_type, adopted_via) "
-                "VALUES (:r, :t, 'hello') "
-                "ON CONFLICT (room_id) DO UPDATE SET "
-                "sat_type = EXCLUDED.sat_type, updated_at = now()"
-            ),
-            {"r": room_id, "t": sat_type},
-        )
-
-    async def upsert_board(self, room_id: str, board: str) -> None:
-        """Self-registration of the board slug an accepted `hello` named
-        (S0, spare-device satellites). Same rule as :meth:`upsert_type`:
-        only for a hello that carried one, so a hello without it never
-        clears what USB adoption or an earlier hello stored. The caller
-        bounds the value (``satellite_abilities.clean_board``)."""
-        await self.s.execute(
-            text(
-                "INSERT INTO satellites (room_id, board, adopted_via) "
-                "VALUES (:r, :b, 'hello') "
-                "ON CONFLICT (room_id) DO UPDATE SET "
-                "board = EXCLUDED.board, updated_at = now() "
-                "WHERE satellites.board IS DISTINCT FROM EXCLUDED.board"
-            ),
-            {"r": room_id, "b": board},
-        )
-
-    async def room_voice(self, room_id: str) -> str | None:
-        """The voice the server keeps for this room (V031), or None (the
-        server's own voice). Only a device that keeps no voice of its own
-        is read for it: see domovoi/room_voice.py."""
-        row = (
-            await self.s.execute(
-                text("SELECT voice FROM satellites WHERE room_id = :r"), {"r": room_id}
-            )
-        ).first()
-        return row[0] if row is not None and row[0] else None
-
-    async def set_room_voice(self, room_id: str, voice: str | None) -> None:
-        """Keep (or clear, with None) the voice the server renders this
-        room's speech in (V031). Upserts, like :meth:`set_room_label`."""
-        await self.s.execute(
-            text(
-                "INSERT INTO satellites (room_id, voice, adopted_via) "
-                "VALUES (:r, :v, 'hello') "
-                "ON CONFLICT (room_id) DO UPDATE SET "
-                "voice = EXCLUDED.voice, updated_at = now()"
-            ),
-            {"r": room_id, "v": voice},
-        )
-
-    async def set_room_label(self, room_id: str, room_label: str | None) -> None:
-        """Set (or clear, with None) a satellite's display room label.
-        Upserts so pre-V003 satellites (mpd_rooms row only) can be labeled."""
-        await self.s.execute(
-            text(
-                "INSERT INTO satellites (room_id, room_label, adopted_via) "
-                "VALUES (:r, :l, 'manual') "
-                "ON CONFLICT (room_id) DO UPDATE SET "
-                "room_label = EXCLUDED.room_label, updated_at = now()"
-            ),
-            {"r": room_id, "l": room_label},
-        )
+    async def list(self) -> list[dict]:
+        rows = (
+            await self.s.execute(text(f"SELECT {_ROOM_COLS} FROM rooms r ORDER BY r.room_id"))
+        ).mappings()
+        return [dict(r) for r in rows]
 
     async def get(self, room_id: str) -> dict | None:
         row = (
             await self.s.execute(
-                text(f"SELECT {_SATELLITE_COLS} FROM satellites WHERE room_id = :r"),
+                text(f"SELECT {_ROOM_COLS} FROM rooms r WHERE r.room_id = :r"), {"r": room_id}
+            )
+        ).mappings().first()
+        return dict(row) if row is not None else None
+
+    async def create(self, room_id: str, name: str | None = None) -> bool:
+        """Add a room. False when the id is taken (nothing changes)."""
+        row = (
+            await self.s.execute(
+                text(
+                    "INSERT INTO rooms (room_id, name) VALUES (:r, :n) "
+                    "ON CONFLICT (room_id) DO NOTHING RETURNING 1"
+                ),
+                {"r": room_id, "n": (name or "").strip() or room_id},
+            )
+        ).first()
+        return row is not None
+
+    async def rename(self, room_id: str, name: str | None) -> bool:
+        """Set the room's name; None or blank goes back to its id."""
+        row = (
+            await self.s.execute(
+                text(
+                    "UPDATE rooms SET name = :n, updated_at = now() "
+                    "WHERE room_id = :r RETURNING 1"
+                ),
+                {"r": room_id, "n": (name or "").strip() or room_id},
+            )
+        ).first()
+        return row is not None
+
+    async def delete(self, room_id: str) -> str:
+        """Delete an EMPTY room: "deleted", "missing", or "has_satellites"
+        (move or remove its satellites first). History rows keep its id."""
+        busy = (
+            await self.s.execute(
+                text("SELECT 1 FROM satellites WHERE room_id = :r LIMIT 1"), {"r": room_id}
+            )
+        ).first()
+        if busy is not None:
+            return "has_satellites"
+        row = (
+            await self.s.execute(
+                text("DELETE FROM rooms WHERE room_id = :r RETURNING 1"), {"r": room_id}
+            )
+        ).first()
+        return "deleted" if row is not None else "missing"
+
+    async def merge(self, into: str, others: list[str]) -> list[str]:
+        """Move every satellite of ``others`` into ``into`` and delete those
+        rooms (the Rooms page's merge for rooms that shared a label; never
+        done on its own). Returns the satellite ids moved. History stays
+        under the old room ids; the merged rooms' wake-word rows go, so the
+        devices take ``into``'s."""
+        others = [o for o in dict.fromkeys(others) if o != into]
+        if not others or await self.get(into) is None:
+            return []
+        moved = [
+            r[0]
+            for r in (
+                await self.s.execute(
+                    text(
+                        "UPDATE satellites SET room_id = :into, updated_at = now() "
+                        "WHERE room_id = ANY(:o) RETURNING satellite_id"
+                    ),
+                    {"into": into, "o": others},
+                )
+            ).all()
+        ]
+        await self.s.execute(
+            text("DELETE FROM room_wake_words WHERE room_id = ANY(:o)"), {"o": others}
+        )
+        await self.s.execute(text("DELETE FROM rooms WHERE room_id = ANY(:o)"), {"o": others})
+        return sorted(moved)
+
+    async def voice(self, room_id: str) -> str | None:
+        row = (
+            await self.s.execute(text("SELECT voice FROM rooms WHERE room_id = :r"), {"r": room_id})
+        ).first()
+        return row[0] if row is not None and row[0] else None
+
+    async def set_voice(self, room_id: str, voice: str | None) -> None:
+        """Keep (or clear) the voice the server speaks this room in. Upserts:
+        a room known only by its music player can be given one."""
+        await self.s.execute(
+            text(
+                "INSERT INTO rooms (room_id, name, voice) VALUES (:r, :r, :v) "
+                "ON CONFLICT (room_id) DO UPDATE SET voice = EXCLUDED.voice, updated_at = now()"
+            ),
+            {"r": room_id, "v": voice},
+        )
+
+    async def linked(self, room_id: str) -> list[str]:
+        """The rooms marked as hearing this one (`room_hear_links`)."""
+        rows = (
+            await self.s.execute(
+                text(
+                    "SELECT CASE WHEN room_a = :r THEN room_b ELSE room_a END "
+                    "FROM room_hear_links WHERE room_a = :r OR room_b = :r ORDER BY 1"
+                ),
                 {"r": room_id},
+            )
+        ).all()
+        return [r[0] for r in rows]
+
+    async def link(self, a: str, b: str) -> bool:
+        """Mark two rooms as hearing each other. False when already linked
+        or the same room."""
+        if a == b:
+            return False
+        lo, hi = sorted((a, b))
+        row = (
+            await self.s.execute(
+                text(
+                    "INSERT INTO room_hear_links (room_a, room_b) VALUES (:a, :b) "
+                    "ON CONFLICT DO NOTHING RETURNING 1"
+                ),
+                {"a": lo, "b": hi},
+            )
+        ).first()
+        return row is not None
+
+    async def unlink(self, a: str, b: str) -> bool:
+        lo, hi = sorted((a, b))
+        row = (
+            await self.s.execute(
+                text("DELETE FROM room_hear_links WHERE room_a = :a AND room_b = :b RETURNING 1"),
+                {"a": lo, "b": hi},
+            )
+        ).first()
+        return row is not None
+
+
+class SatellitesRepository:
+    """`satellites` (V003, re-keyed by V073): the device table. A row is a
+    known device: preseeded by USB adoption, written by an accepted
+    `hello`, or by a pairing. ``satellite_id`` is the device's identity
+    (the WebSocket path); ``room_id`` the room it is in. sat_type /
+    adopted_via are app-validated open enums (registered_values domains).
+
+    Rows come back as dicts with the device columns plus ``room_name``
+    and ``room_label`` (the room's name, None when it is just its id)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.s = session
+
+    # ── reads ──────────────────────────────────────────────────────────────
+
+    async def get(self, satellite_id: str) -> dict | None:
+        row = (
+            await self.s.execute(
+                text(f"SELECT {_SATELLITE_COLS} {_SATELLITE_FROM} WHERE s.satellite_id = :r"),
+                {"r": satellite_id},
             )
         ).mappings().first()
         return dict(row) if row is not None else None
 
     async def get_by_mac(self, mac: str) -> dict | None:
-        """The satellite previously seen with this wlan MAC (lowercased) —
+        """The device previously seen with this wlan MAC (lowercased) —
         correlates a re-plugged device with its existing adoption row."""
         row = (
             await self.s.execute(
                 text(
-                    f"SELECT {_SATELLITE_COLS} FROM satellites "
-                    "WHERE mac = :m ORDER BY room_id LIMIT 1"
+                    f"SELECT {_SATELLITE_COLS} {_SATELLITE_FROM} "
+                    "WHERE s.mac = :m ORDER BY s.satellite_id LIMIT 1"
                 ),
                 {"m": mac.lower()},
             )
@@ -3079,40 +3332,222 @@ class SatellitesRepository:
     async def all(self) -> list[dict]:
         rows = (
             await self.s.execute(
-                text(f"SELECT {_SATELLITE_COLS} FROM satellites ORDER BY room_id")
+                text(f"SELECT {_SATELLITE_COLS} {_SATELLITE_FROM} ORDER BY s.satellite_id")
             )
         ).mappings()
         return [dict(r) for r in rows]
 
-    async def delete(self, room_id: str) -> bool:
-        """Remove an inventory row (adopt rollback / remove a never-connected
-        satellite). True when a row was actually removed."""
-        row = (
+    async def in_room(self, room_id: str) -> list[dict]:
+        """The room's satellites, by id."""
+        rows = (
             await self.s.execute(
-                text("DELETE FROM satellites WHERE room_id = :r RETURNING 1"),
+                text(
+                    f"SELECT {_SATELLITE_COLS} {_SATELLITE_FROM} "
+                    "WHERE s.room_id = :r ORDER BY s.satellite_id"
+                ),
                 {"r": room_id},
             )
+        ).mappings()
+        return [dict(r) for r in rows]
+
+    async def room_of(self, satellite_id: str) -> str | None:
+        """The room a device is in, or None for a device the house has no
+        row for."""
+        row = (
+            await self.s.execute(
+                text("SELECT room_id FROM satellites WHERE satellite_id = :r"),
+                {"r": satellite_id},
+            )
         ).first()
-        return row is not None
+        return row[0] if row is not None else None
 
     async def room_is_known(self, room_id: str) -> bool:
-        """Whether ``room_id`` is a room this house already has: an MPD row
-        (a satellite's hello provisioned it), a pairing, or an inventory
-        row (adopted, or labelled). An HTTP route that is about to start a
-        room's music player asks this first, so a name somebody merely
+        """Whether ``room_id`` is a room this house already has: a `rooms`
+        row, an MPD row, or a pairing. An HTTP route that is about to start
+        a room's music player asks this first, so a name somebody merely
         typed into a URL never provisions a new one (CORE-13)."""
         row = (
             await self.s.execute(
                 text(
-                    "SELECT 1 FROM mpd_rooms WHERE room_id = :r "
-                    "UNION ALL SELECT 1 FROM satellite_pairings WHERE room_id = :r "
-                    "UNION ALL SELECT 1 FROM satellites WHERE room_id = :r "
+                    "SELECT 1 FROM rooms WHERE room_id = :r "
+                    "UNION ALL SELECT 1 FROM mpd_rooms WHERE room_id = :r "
+                    "UNION ALL SELECT 1 FROM satellite_pairings WHERE satellite_id = :r "
                     "LIMIT 1"
                 ),
                 {"r": room_id},
             )
         ).first()
         return row is not None
+
+    # ── writes ─────────────────────────────────────────────────────────────
+
+    async def preseed_upsert(
+        self,
+        satellite_id: str,
+        *,
+        sat_type: str = "voice",
+        room_label: str | None = None,
+        hardware: str | None = None,
+        board: str | None = None,
+        mac: str | None = None,
+        adopted_via: str = "usb",
+    ) -> None:
+        """Full-row upsert from the adoption flow; stamps adopted_at=now().
+        ``room_label`` names the device's room (None: the room's id)."""
+        await ensure_satellite(self.s, satellite_id, adopted_via=adopted_via)
+        await self.s.execute(
+            text(
+                "UPDATE satellites SET sat_type = :t, hardware = :h, board = :b, "
+                "mac = :m, adopted_via = :v, adopted_at = now(), updated_at = now() "
+                "WHERE satellite_id = :r"
+            ),
+            {
+                "r": satellite_id,
+                "t": sat_type,
+                "h": hardware,
+                "b": board,
+                "m": mac,
+                "v": adopted_via,
+            },
+        )
+        await self._name_room_of(satellite_id, room_label)
+
+    async def upsert_type(self, satellite_id: str, sat_type: str) -> None:
+        """Self-registration from a `hello` frame that EXPLICITLY carried
+        sat_type. Only ever called for explicit frames — an old client that
+        omits the field must never funnel through here and reset an adopted
+        row back to 'voice'."""
+        await ensure_satellite(self.s, satellite_id)
+        await self.s.execute(
+            text(
+                "UPDATE satellites SET sat_type = :t, updated_at = now() "
+                "WHERE satellite_id = :r"
+            ),
+            {"r": satellite_id, "t": sat_type},
+        )
+
+    async def upsert_board(self, satellite_id: str, board: str) -> None:
+        """Self-registration of the board slug an accepted `hello` named
+        (S0, spare-device satellites). Same rule as :meth:`upsert_type`:
+        only for a hello that carried one, so a hello without it never
+        clears what USB adoption or an earlier hello stored. The caller
+        bounds the value (``satellite_abilities.clean_board``)."""
+        await ensure_satellite(self.s, satellite_id)
+        await self.s.execute(
+            text(
+                "UPDATE satellites SET board = :b, updated_at = now() "
+                "WHERE satellite_id = :r AND board IS DISTINCT FROM :b"
+            ),
+            {"r": satellite_id, "b": board},
+        )
+
+    async def set_name(self, satellite_id: str, name: str | None) -> bool:
+        """The device's own display name ("Kitchen phone"); None clears it."""
+        row = (
+            await self.s.execute(
+                text(
+                    "UPDATE satellites SET name = :n, updated_at = now() "
+                    "WHERE satellite_id = :r RETURNING 1"
+                ),
+                {"r": satellite_id, "n": (name or "").strip() or None},
+            )
+        ).first()
+        return row is not None
+
+    async def set_wake_max(self, satellite_id: str, wake_max: int | None) -> None:
+        """How many wake words the device can run at once (its hello's
+        ``wake_max``; was ``room_wake_words.device_max`` before V073)."""
+        await self.s.execute(
+            text(
+                "UPDATE satellites SET wake_max = :m "
+                "WHERE satellite_id = :r AND wake_max IS DISTINCT FROM :m"
+            ),
+            {"r": satellite_id, "m": wake_max},
+        )
+
+    async def set_calibration(self, satellite_id: str, output_latency_us: int) -> bool:
+        """Store a speaker calibration (domovoi/room_calibration.py): the
+        device's output latency, relative within its room, stamped now."""
+        row = (
+            await self.s.execute(
+                text(
+                    "UPDATE satellites SET output_latency_us = :us, calibrated_at = now() "
+                    "WHERE satellite_id = :r RETURNING 1"
+                ),
+                {"r": satellite_id, "us": int(output_latency_us)},
+            )
+        ).first()
+        return row is not None
+
+    async def move(self, satellite_id: str, room_id: str) -> bool:
+        """Put the device in another (existing) room. Its id never changes;
+        its calibration is cleared (the room around it changed). False when
+        the device or the room is missing."""
+        row = (
+            await self.s.execute(
+                text(
+                    "UPDATE satellites SET room_id = :room, output_latency_us = NULL, "
+                    "calibrated_at = NULL, updated_at = now() "
+                    "WHERE satellite_id = :r AND EXISTS "
+                    "(SELECT 1 FROM rooms WHERE room_id = :room) RETURNING 1"
+                ),
+                {"r": satellite_id, "room": room_id},
+            )
+        ).first()
+        return row is not None
+
+    async def delete(self, satellite_id: str) -> bool:
+        """Remove a device's inventory row (adopt rollback / remove a
+        device). A room left empty that was only this device's own room
+        (same id) goes with it, as removing a one-device room always did;
+        any other room is kept. True when a row was actually removed."""
+        row = (
+            await self.s.execute(
+                text("DELETE FROM satellites WHERE satellite_id = :r RETURNING room_id"),
+                {"r": satellite_id},
+            )
+        ).first()
+        if row is None:
+            return False
+        if row[0] == satellite_id:
+            await self.s.execute(
+                text(
+                    "DELETE FROM rooms WHERE room_id = :r "
+                    "AND NOT EXISTS (SELECT 1 FROM satellites WHERE room_id = :r)"
+                ),
+                {"r": satellite_id},
+            )
+        return True
+
+    # ── room settings, by the room's id (pre-1.5.0 callers) ────────────────
+
+    async def room_voice(self, room_id: str) -> str | None:
+        """The voice the server keeps for this room (V031, on `rooms` since
+        V073), or None (the server's own voice). See domovoi/room_voice.py."""
+        return await RoomsRepository(self.s).voice(room_id)
+
+    async def set_room_voice(self, room_id: str, voice: str | None) -> None:
+        await RoomsRepository(self.s).set_voice(room_id, voice)
+
+    async def set_room_label(self, room_id: str, room_label: str | None) -> None:
+        """Set (or clear, with None) a room's display name. Upserts so a
+        room known only by its music player can be named."""
+        await self.s.execute(
+            text(
+                "INSERT INTO rooms (room_id, name) VALUES (:r, :n) "
+                "ON CONFLICT (room_id) DO UPDATE SET name = EXCLUDED.name, updated_at = now()"
+            ),
+            {"r": room_id, "n": (room_label or "").strip() or room_id},
+        )
+
+    async def _name_room_of(self, satellite_id: str, room_label: str | None) -> None:
+        await self.s.execute(
+            text(
+                "UPDATE rooms r SET name = :n, updated_at = now() "
+                "FROM satellites s WHERE s.satellite_id = :sid AND r.room_id = s.room_id"
+            ),
+            {"sid": satellite_id, "n": (room_label or "").strip() or satellite_id},
+        )
 
 
 def utcnow() -> datetime:
@@ -3141,7 +3576,7 @@ class SatelliteHealthRepository:
     async def insert(self, room_id: str, sample: dict[str, Any]) -> None:
         await self.s.execute(
             text(
-                "INSERT INTO satellite_health (room_id, sample) "
+                "INSERT INTO satellite_health (satellite_id, sample) "
                 "VALUES (:r, CAST(:s AS jsonb))"
             ),
             {"r": room_id, "s": json.dumps(sample, default=str)},
@@ -3155,7 +3590,7 @@ class SatelliteHealthRepository:
         (the Satellites page's "last heard", review 2026-10-15), and the
         Health card says how old it is."""
         keep_newest = (
-            "AND h.id <> (SELECT n.id FROM satellite_health n WHERE n.room_id = h.room_id "
+            "AND h.id <> (SELECT n.id FROM satellite_health n WHERE n.satellite_id = h.satellite_id "
             "ORDER BY n.received_at DESC, n.id DESC LIMIT 1)"
         )
         if room_id is None:
@@ -3170,7 +3605,7 @@ class SatelliteHealthRepository:
             return int(result.rowcount or 0)
         result = await self.s.execute(
             text(
-                "DELETE FROM satellite_health h WHERE h.room_id = :r "
+                "DELETE FROM satellite_health h WHERE h.satellite_id = :r "
                 "AND h.received_at < now() - make_interval(hours => CAST(:h AS int)) "
                 + keep_newest
             ),
@@ -3183,7 +3618,7 @@ class SatelliteHealthRepository:
             await self.s.execute(
                 text(
                     "SELECT received_at, sample FROM satellite_health "
-                    "WHERE room_id = :r ORDER BY received_at DESC, id DESC LIMIT 1"
+                    "WHERE satellite_id = :r ORDER BY received_at DESC, id DESC LIMIT 1"
                 ),
                 {"r": room_id},
             )
@@ -3200,7 +3635,7 @@ class SatelliteHealthRepository:
             await self.s.execute(
                 text(
                     "SELECT received_at, sample FROM satellite_health "
-                    "WHERE room_id = :r "
+                    "WHERE satellite_id = :r "
                     "AND received_at >= now() - make_interval(hours => CAST(:h AS int)) "
                     "ORDER BY received_at ASC, id ASC LIMIT :n"
                 ),
@@ -3224,7 +3659,7 @@ class SatelliteOutageRepository:
         row = (
             await self.s.execute(
                 text(
-                    "INSERT INTO satellite_outages (room_id, prev_boot_id, report) "
+                    "INSERT INTO satellite_outages (satellite_id, prev_boot_id, report) "
                     "VALUES (:r, :b, CAST(:p AS jsonb)) RETURNING id"
                 ),
                 {"r": room_id, "b": prev_boot_id, "p": json.dumps(report, default=str)},
@@ -3232,8 +3667,8 @@ class SatelliteOutageRepository:
         ).first()
         await self.s.execute(
             text(
-                "DELETE FROM satellite_outages WHERE room_id = :r AND id NOT IN ("
-                "SELECT id FROM satellite_outages WHERE room_id = :r "
+                "DELETE FROM satellite_outages WHERE satellite_id = :r AND id NOT IN ("
+                "SELECT id FROM satellite_outages WHERE satellite_id = :r "
                 "ORDER BY reported_at DESC, id DESC LIMIT :n)"
             ),
             {"r": room_id, "n": int(keep)},
@@ -3254,7 +3689,7 @@ class SatelliteOutageRepository:
             await self.s.execute(
                 text(
                     "SELECT id, reported_at, prev_boot_id, report FROM satellite_outages "
-                    "WHERE room_id = :r ORDER BY reported_at DESC, id DESC LIMIT 1"
+                    "WHERE satellite_id = :r ORDER BY reported_at DESC, id DESC LIMIT 1"
                 ),
                 {"r": room_id},
             )
@@ -3266,7 +3701,7 @@ class SatelliteOutageRepository:
             await self.s.execute(
                 text(
                     "SELECT id, reported_at, prev_boot_id, report FROM satellite_outages "
-                    "WHERE room_id = :r ORDER BY reported_at DESC, id DESC LIMIT :n"
+                    "WHERE satellite_id = :r ORDER BY reported_at DESC, id DESC LIMIT :n"
                 ),
                 {"r": room_id, "n": int(limit)},
             )

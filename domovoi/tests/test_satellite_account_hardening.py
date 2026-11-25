@@ -42,7 +42,10 @@ EXPECTED_HELPERS = {
     # Argv-less: the router's security changed; the house profile follows
     # it, from the helper's own table (2026-10-22).
     '/usr/local/sbin/domovoi-wifi-adapt ""',
-    "/opt/xvf3800/xvf_host",
+    # The XVF3800 tool only through the root-owned wrapper that takes the
+    # satellite's exact operations (satellite/xvf_guard.py, 1.5.0); never
+    # /opt/xvf3800/xvf_host itself, which takes options that load a library.
+    "/usr/local/sbin/domovoi-xvf",
 }
 
 

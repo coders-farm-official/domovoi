@@ -478,6 +478,63 @@ async def test_an_allowlisted_fixture_is_fetched_but_its_redirect_is_re_checked(
             )
 
 
+class _Clock:
+    """``time`` for net_safety whose clock moves a second per reading."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        self.now += 1.0
+        return self.now
+
+
+def _drip():
+    while True:
+        yield b"x"
+
+
+async def _adrip():
+    while True:
+        yield b"x"
+
+
+@pytest.mark.asyncio
+async def test_a_body_that_never_ends_hits_the_whole_fetch_deadline(dns, monkeypatch) -> None:
+    """A body that keeps arriving a little at a time beats every per-read
+    timeout; the whole fetch still has an end."""
+    monkeypatch.setattr(net_safety, "time", _Clock())
+    url = "http://feeds.example.com/show.rss"
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_adrip()))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(httpx.TimeoutException):
+            await net_safety.fetch_bytes(url, max_bytes=1 << 30, timeout=1.0, client=client)
+    sync_transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_drip()))
+    with httpx.Client(transport=sync_transport) as client:
+        with pytest.raises(httpx.TimeoutException):
+            net_safety.fetch_bytes_sync(url, max_bytes=1 << 30, timeout=1.0, client=client)
+
+
+@pytest.mark.asyncio
+async def test_truncate_keeps_what_arrived_at_the_whole_fetch_deadline(dns, monkeypatch) -> None:
+    """A slow big feed with ``truncate=True`` returns the partial bytes,
+    marked truncated, instead of failing at the deadline."""
+    monkeypatch.setattr(net_safety, "time", _Clock())
+    url = "http://feeds.example.com/show.rss"
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_adrip()))
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await net_safety.fetch_bytes(
+            url, max_bytes=1 << 30, timeout=1.0, client=client, truncate=True
+        )
+    assert result.truncated and 0 < len(result.content) < (1 << 30)
+    sync_transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_drip()))
+    with httpx.Client(transport=sync_transport) as client:
+        result = net_safety.fetch_bytes_sync(
+            url, max_bytes=1 << 30, timeout=1.0, client=client, truncate=True
+        )
+    assert result.truncated and 0 < len(result.content) < (1 << 30)
+
+
 @pytest.mark.asyncio
 async def test_a_redirect_chain_that_stays_public_is_followed(dns) -> None:
     dns.set({"feeds.example.com": [str(PUBLIC_V4)], "cdn.example.com": [str(PUBLIC_V4)]})
@@ -1006,3 +1063,98 @@ async def test_a_relay_on_its_own_client_streams_from_the_address_the_check_judg
     assert net_safety.connected_address(response) == VETTED_ADDR
     assert rebinding.inside_hits == []
     assert rebinding.lookups == [VETTED_ADDR]
+
+
+@pytest.mark.parametrize("url, shown", [
+    ("https://user:pw@feeds.example.com:8443/p/feed.xml?token=abc#x",
+     "https://feeds.example.com:8443/p/feed.xml"),
+    ("http://[2001:db8::1]/rss?k=v", "http://[2001:db8::1]/rss"),
+    ("https://feeds.example.com/show.rss", "https://feeds.example.com/show.rss"),
+    (None, ""),
+])
+def test_a_url_for_a_log_line_drops_user_info_query_and_fragment(url, shown) -> None:
+    assert net_safety.url_without_secrets(url) == shown
+
+
+# ─── open_raw_stream: a live stream read as it came ─────────────────────
+
+
+def _nested_gzip_body() -> bytes:
+    import gzip
+
+    body = bytes(1 << 20)
+    for _ in range(2):
+        body = gzip.compress(body)
+    return body
+
+
+async def _streamed(body: bytes):
+    """A body httpx has not read yet, as off the network (a bytes body is
+    read, and so decoded, when the mock builds the response)."""
+    yield body
+
+
+@pytest.mark.asyncio
+async def test_a_raw_stream_asks_for_identity_and_passes_an_identity_body_through(dns) -> None:
+    seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("accept-encoding"))
+        return httpx.Response(
+            200, headers={"content-encoding": "identity"}, content=_streamed(b"ID3 audio")
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        response = await net_safety.open_raw_stream(
+            client, "http://feeds.example.com/live", headers={"Accept-Encoding": "gzip"}
+        )
+        try:
+            body = b"".join([chunk async for chunk in net_safety.iter_raw(response, 4)])
+        finally:
+            await response.aclose()
+    assert seen == ["identity"]
+    assert body == b"ID3 audio"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["gzip, gzip", "gzip", "br", "identity, deflate"])
+async def test_a_raw_stream_refuses_a_compressed_answer_unread(dns, encoding) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-encoding": encoding}, content=_streamed(_nested_gzip_body())
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(net_safety.UnsupportedContentEncoding):
+            await net_safety.open_raw_stream(client, "http://feeds.example.com/live")
+
+
+@pytest.mark.asyncio
+async def test_a_raw_stream_keeps_the_outbound_check(dns) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://127.0.0.1:6370/x"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(net_safety.UnsafeOutboundURL):
+            await net_safety.open_raw_stream(client, "http://feeds.example.com/live")
+
+
+def test_the_blocking_raw_stream_asks_for_identity_and_refuses_compression(dns) -> None:
+    seen: list[str | None] = []
+    encoding = {"value": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("accept-encoding"))
+        headers = {"content-encoding": encoding["value"]} if encoding["value"] else {}
+        return httpx.Response(200, headers=headers, content=iter([b"model bytes"]))
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        response = net_safety.open_raw_stream_sync(client, "http://feeds.example.com/m")
+        try:
+            assert b"".join(net_safety.iter_raw_sync(response, 4)) == b"model bytes"
+        finally:
+            response.close()
+        encoding["value"] = "gzip, gzip"
+        with pytest.raises(net_safety.UnsupportedContentEncoding):
+            net_safety.open_raw_stream_sync(client, "http://feeds.example.com/m")
+    assert seen == ["identity", "identity"]

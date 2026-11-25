@@ -40,6 +40,7 @@ import socket
 import threading
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -75,6 +76,9 @@ _DEFAULT_RESOLVER: Callable[..., Any] = socket.getaddrinfo
 MAX_HOSTS = 1024
 _PROBE_TIMEOUT_SEC = 0.3
 _WORKERS = 32
+#: The longest a whole sweep may take. A /24 normally answers in a few
+#: seconds; a host that keeps a probe busy cannot hold the sweep past this.
+SWEEP_DEADLINE_SEC = 30.0
 
 
 def local_ipv4() -> str | None:
@@ -145,7 +149,8 @@ def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_S
         with opener(url, timeout=timeout) as r:
             if getattr(r, "status", 200) != 200:
                 return False
-            doc = json.loads(r.read().decode("utf-8", "replace"))
+            body = server_identity.read_health_body(r, timeout=timeout)
+            doc = json.loads(body.decode("utf-8", "replace"))
     except Exception:      # noqa: BLE001 — every failure is just "not here"
         return False
     if not (isinstance(doc, dict) and doc.get("status") == "ok" and doc.get("bot_name")):
@@ -198,18 +203,20 @@ def find_core(
         return None
 
     log.info("discovering the Domovoi server across %d addresses", len(hosts))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(probe_fn, h, port=port): h for h in hosts}
-        try:
-            for fut in as_completed(futures):
-                if fut.result():
-                    found = futures[fut]
-                    log.info("found the Domovoi server at %s", found)
-                    return found
-        finally:
-            # Don't keep sweeping once we have an answer.
-            for fut in futures:
-                fut.cancel()
+    pool = ThreadPoolExecutor(max_workers=workers)
+    futures = {pool.submit(probe_fn, h, port=port): h for h in hosts}
+    try:
+        for fut in as_completed(futures, timeout=SWEEP_DEADLINE_SEC):
+            if fut.result():
+                found = futures[fut]
+                log.info("found the Domovoi server at %s", found)
+                return found
+    except FuturesTimeout:
+        log.warning("the network sweep ran out of time")
+    finally:
+        # Don't keep sweeping once we have an answer, and never wait on a
+        # probe that is still reading.
+        pool.shutdown(wait=False, cancel_futures=True)
     log.warning("no Domovoi server answered on this network")
     return None
 
@@ -500,9 +507,15 @@ class House:
     via: str = ""                  # "name", "last-known", "scan" or "address"
     #: "proved" (fingerprint above), "absent" (it offered no identity at all:
     #: a server from before identities), "failed" (it offered one that did
-    #: not check out: a relay, a stripped answer, a forgery), or "" (not
-    #: recorded — a House built by hand).
+    #: not check out: a relay, a stripped answer, a forgery), "unbound" (it
+    #: signed, but not for the address dialled: a server from before the
+    #: address binding, or something relaying one), or "" (not recorded —
+    #: a House built by hand).
     identity: str = ""
+    #: The approval-exchange version it SIGNED for that address (0: none).
+    #: 2 or more: the device binds its pairing token into the exchange
+    #: (satellite/pairing_proof.py) — never with a server that signed less.
+    proof_version: int = 0
 
 
 def probe_house(host: str, *, port: int = CORE_PORT,
@@ -537,7 +550,8 @@ def probe_house(host: str, *, port: int = CORE_PORT,
         with opener(url, timeout=timeout) as r:
             if getattr(r, "status", 200) != 200:
                 return None
-            doc = json.loads(r.read().decode("utf-8", "replace"))
+            body = server_identity.read_health_body(r, timeout=timeout)
+            doc = json.loads(body.decode("utf-8", "replace"))
     except Exception:      # noqa: BLE001 — every failure is just "not here"
         return None
     if not (isinstance(doc, dict) and doc.get("status") == "ok" and doc.get("bot_name")):
@@ -552,7 +566,15 @@ def probe_house(host: str, *, port: int = CORE_PORT,
         )
         identity = doc.get("identity")
         bound = isinstance(identity, dict) and identity.get("addr") == addr
-        state = "proved"
+        if bound:
+            state = "proved"
+        else:
+            # Verified, but not for the address dialled: anything relaying
+            # a server can produce that, so it proves no identity here and
+            # holds no fingerprint (it must not stand in for the real one).
+            state = "unbound"
+            fingerprint = None
+            log.info("%s signed an identity proof that is not bound to %s", host, addr)
     except server_identity.IdentityUnavailable as e:
         state = "absent"
         log.info("%s answers as Domovoi with no identity: %s", host, e)
@@ -562,7 +584,7 @@ def probe_house(host: str, *, port: int = CORE_PORT,
     ws = "wss" if scheme == "https" else "ws"
     name = str(doc.get("bot_name") or "")[:40]
     return House(url=f"{ws}://{host}:{port}", fingerprint=fingerprint, proof=proof, name=name,
-                 identity=state)
+                 identity=state, proof_version=version if proof else 0)
 
 
 def find_houses(
@@ -588,21 +610,23 @@ def find_houses(
     if not hosts:
         return []
     found: list[House] = []
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(probe_fn, h, port=port): h for h in hosts}
-        try:
-            for fut in as_completed(futures):
-                try:
-                    house = fut.result()
-                except Exception:  # noqa: BLE001 — a probe that breaks is a miss
-                    house = None
-                if house is not None:
-                    found.append(house)
-                    if len(found) >= cap:
-                        break
-        finally:
-            for fut in futures:
-                fut.cancel()
+    pool = ThreadPoolExecutor(max_workers=workers)
+    futures = {pool.submit(probe_fn, h, port=port): h for h in hosts}
+    try:
+        for fut in as_completed(futures, timeout=SWEEP_DEADLINE_SEC):
+            try:
+                house = fut.result()
+            except Exception:  # noqa: BLE001 — a probe that breaks is a miss
+                house = None
+            if house is not None:
+                found.append(house)
+                if len(found) >= cap:
+                    break
+    except FuturesTimeout:
+        log.warning("the network sweep ran out of time; keeping what answered")
+    finally:
+        # Never wait on a probe that is still reading.
+        pool.shutdown(wait=False, cancel_futures=True)
     return found
 
 
@@ -666,7 +690,7 @@ def locate_all(
         if house.fingerprint:
             seen_fp.add(house.fingerprint)
         out.append(House(house.url, house.fingerprint, house.proof, house.name, via,
-                         house.identity))
+                         house.identity, house.proof_version))
 
     def ask(host: str, p: int, via: str) -> None:
         try:

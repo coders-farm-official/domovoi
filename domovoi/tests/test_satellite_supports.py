@@ -159,6 +159,7 @@ def test_the_core_s_ready_features_are_the_fixtures():
         # declared it, after the features every paired device gets.
         ab = sa.from_hello(device["hello"])
         extra = ["room_display"] if ab.allows("room_display") else []
+        extra += ["mic_dsp"] if ab.allows("mic_dsp") else []
         assert device["ready"]["features"] == list(CORE_FEATURES) + extra
         assert device["ready"]["protocol_version"] == streaming.PROTOCOL_VERSION == "0.1"
 
@@ -330,6 +331,11 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
                 await session.request_logs(max_bytes=4096, timeout=0.01)
             except (TimeoutError, asyncio.TimeoutError):
                 pass  # sent, and nobody answers in a test
+        elif frame == "diag_request":
+            try:
+                await session.request_diagnostic("versions", timeout=0.01)
+            except (TimeoutError, asyncio.TimeoutError):
+                pass  # sent, and nobody answers in a test
         elif frame == "start_wake_recording":
             await session.start_wake_recording(
                 wake_word_id=1, slug="hey_test", clip_seconds=2.0, target_count=3)
@@ -343,8 +349,16 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
             await session.notify_sounds_changed()
         elif frame == "set_display":
             await session.set_display("on")
+        elif frame == "set_mic_dsp":
+            await session.send_mic_dsp("B")
+        elif frame == "mic_dsp_mark":
+            await session.send_mic_dsp_mark("block 2, 1m")
         elif frame == "chat_start":
             await session.send_chat_start()
+        elif frame.startswith("support_"):
+            # A support session's frames (domovoi/support_sessions.py), all
+            # through the one method that checks the ability.
+            await session.send_support({"type": frame, "session_id": "0" * 32})
         elif frame == "announcement":
             async def fake_announce(text, defer, *_extra):
                 await ws.send_text(json.dumps({"type": "announcement"}))
@@ -368,6 +382,11 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
                         break
                     await asyncio.sleep(0.01)
                 await feed.stop()
+        elif frame in ("wake_grant", "capture_keep"):
+            # Both answer a device's own claim (1.5.0, wake_claims.py): a
+            # device that never declared `wake_claim` is not answered.
+            await session._on_control({"type": "wake_claim", "claim": 1, "word": "hey_test",
+                                       "score": 0.9, "floor_dbfs": -50.0})
         else:  # pragma: no cover
             raise AssertionError(frame)
     except Exception as e:  # noqa: BLE001

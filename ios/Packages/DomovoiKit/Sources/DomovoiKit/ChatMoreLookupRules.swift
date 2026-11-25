@@ -64,7 +64,7 @@ public enum ChatMoreInternetChip {
         if policy == "never" { return (ChatMoreStrings.internetOff, false) }
         if alwaysAllow { return (ChatMoreStrings.internetAlwaysOn, true) }
         if chatAllowed { return (ChatMoreStrings.internetOnForThisChat, true) }
-        return (ChatMoreStrings.internetOff, false)
+        return (ChatMoreStrings.internetAskFirst, false)
     }
 
     /// Whether the chip may be tapped: not under `never`, not under the

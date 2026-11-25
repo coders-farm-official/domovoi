@@ -42,6 +42,7 @@ DOMOVOI_API = "1.0.0"
 # /api/capabilities never consults the core's in-memory registry.
 CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "dismiss",       "label": "Dismiss",        "tone": "neutral"},
+    {"name": "support_session", "label": "Support session", "tone": "device"},
     {"name": "help",          "label": "Help",           "tone": "info"},
     {"name": "help_desk",     "label": "Help desk",      "tone": "info"},
     {"name": "voice_profile", "label": "Voice Profile",  "tone": "info"},
@@ -69,6 +70,7 @@ CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "playlist",      "label": "Playlists",      "tone": "media"},
     {"name": "music_alias",   "label": "Music names",    "tone": "media"},
     {"name": "music",         "label": "Music",          "tone": "media"},
+    {"name": "media_search",  "label": "Photos & videos", "tone": "media"},
     {"name": "library",       "label": "Library",        "tone": "media"},
 ]
 

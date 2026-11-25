@@ -53,6 +53,7 @@ from typing import Any
 
 from domovoi.container_guard.expected import RETIRED_COMPOSE_SERVICES, ExpectedSet
 from domovoi.container_guard.model import (
+    DECODER_CONTAINER_PREFIX,
     FAILURE,
     KNOWN,
     ONESHOT,
@@ -447,6 +448,9 @@ def detect(
             live_ids.add(obs.id)
         in_compose = bool(exp.compose_project) and listed.compose_project == exp.compose_project
         in_mpd = bool(exp.mpd_prefix) and name.startswith(exp.mpd_prefix or "")
+        # A plugin's decoder runs only under an expected slot name, so any
+        # other container under the prefix is not Domovoi's doing.
+        in_decoder = name.startswith(DECODER_CONTAINER_PREFIX)
         if in_compose and (
             listed.compose_service in exp.compose_services
             or listed.compose_service in RETIRED_COMPOSE_SERVICES
@@ -472,7 +476,7 @@ def detect(
             if obs.security():
                 det.findings.append(_config_finding(stand_in, obs, sorted(obs.security())))
             continue
-        if not (in_compose or in_mpd):
+        if not (in_compose or in_mpd or in_decoder):
             if name.lower().startswith(_DOMOVOI_LOOKALIKE):
                 det.unrecognized.append(name)
             continue
@@ -492,6 +496,7 @@ def detect(
             det.unrecognized.append(name)
             continue
         where = (f"the compose project {exp.compose_project!r}" if in_compose
+                 else f"the plugin decoder prefix {DECODER_CONTAINER_PREFIX!r}" if in_decoder
                  else f"the music player prefix {exp.mpd_prefix!r}")
         det.findings.append(
             _tamper(

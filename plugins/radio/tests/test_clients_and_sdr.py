@@ -40,6 +40,28 @@ async def test_radio_browser_stub_paginates() -> None:
     assert await stub.search(name="jazz", offset=3) == []
 
 
+async def test_a_failed_station_search_never_logs_what_was_searched(
+    monkeypatch, caplog
+) -> None:
+    import logging
+
+    from domovoi_plugin_radio.clients import radio_browser
+
+    def _down(**kw):
+        raise RuntimeError("directory unreachable")
+
+    monkeypatch.setattr(radio_browser.egress, "internet_turned_off", lambda: False)
+    monkeypatch.setattr(radio_browser.egress, "async_client", _down)
+    caplog.set_level(logging.WARNING, logger=radio_browser.__name__)
+    got = await radio_browser.RealRadioBrowserClient().search(
+        name="smooth jazz", tag="lounge", language="french"
+    )
+    assert got == []
+    text = caplog.text
+    assert "search failed" in text
+    assert "smooth" not in text and "lounge" not in text and "french" not in text
+
+
 async def test_fcc_stub_shape() -> None:
     stub = FccFmStubClient()
     rows = await stub.fetch_state("mi".upper())
@@ -71,6 +93,7 @@ class _Upstream:
         self.body = b"\xff\xfb\x90\x00" * 4096
         self.redirects: dict[str, str] = {}
         self.opened: list[str] = []
+        self.accepted: list[str | None] = []
 
     def answer(self, request):
         import httpx
@@ -78,9 +101,19 @@ class _Upstream:
         host = request.headers.get("host") or request.url.netloc.decode()
         url = f"{request.url.scheme}://{host}{request.url.raw_path.decode()}"
         self.opened.append(url)
+        self.accepted.append(request.headers.get("accept-encoding"))
         if url in self.redirects:
             return httpx.Response(302, headers={"location": self.redirects[url]})
-        return httpx.Response(self.status, headers=self.headers, content=self.body)
+        body = self.body
+        if "content-encoding" in self.headers:
+            # Unread, as off the network: a bytes body is decoded when the
+            # response is built.
+            body = _streamed(self.body)
+        return httpx.Response(self.status, headers=self.headers, content=body)
+
+
+async def _streamed(body: bytes):
+    yield body
 
 
 @pytest.fixture
@@ -276,6 +309,41 @@ async def test_the_feed_stops_at_the_byte_budget(monkeypatch, public_stream_host
     await shazam_stream.grab_to_tempfile("http://x/stream", 2)
     assert 2048 <= len(procs[0].stdin.fed) < 2048 + 512 + 1
     assert procs[0].stdin.closed
+
+
+async def test_the_sampler_asks_for_the_stream_uncompressed(
+    monkeypatch, public_stream_host
+) -> None:
+    procs: list[_FakeProc] = []
+
+    async def fake_exec(*args, **kwargs):
+        procs.append(_FakeProc(1))
+        return procs[-1]
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    await shazam_stream.grab_to_tempfile("http://x/stream", 15)
+    assert public_stream_host.accepted == ["identity"]
+    assert bytes(procs[0].stdin.fed) == public_stream_host.body
+
+
+@pytest.mark.parametrize("encoding", ["gzip, gzip", "gzip", "deflate", "zstd"])
+async def test_a_compressed_station_is_never_inflated_or_sampled(
+    monkeypatch, public_stream_host, encoding
+) -> None:
+    import gzip
+
+    body = b"\x00" * (1 << 20)
+    for _ in range(2):
+        body = gzip.compress(body)
+    public_stream_host.headers = {"content-type": "audio/mpeg", "content-encoding": encoding}
+    public_stream_host.body = body
+
+    async def never(*args, **kwargs):  # pragma: no cover — spawning IS the failure
+        raise AssertionError("spawned ffmpeg for a compressed stream")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", never)
+    assert await shazam_stream.grab_to_tempfile("http://x/stream", 15) is None
+    assert public_stream_host.opened == ["http://x/stream"]
 
 
 @pytest.mark.skipif(

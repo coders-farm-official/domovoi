@@ -42,6 +42,7 @@ stdlib/httpx/fastapi only.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 from pathlib import Path
@@ -84,6 +85,7 @@ __all__ = [
     "unlisted_tier_routes",
     "enforce_route_tier",
     "admin_required",
+    "REQUEST_TIER",
 ]
 
 log = logging.getLogger(__name__)
@@ -95,6 +97,16 @@ _OPEN_MARKER = "_domovoi_open_endpoint"
 _DEVICE_MARKER = "_domovoi_device_endpoint"
 
 EndpointTier = Literal["open", "device", "admin"]
+
+#: The tier the plugin route being served was let in at: ``"open"`` (no
+#: credential was asked for: an ``@open_endpoint``, or a GET that is neither
+#: ``@device_endpoint`` nor behind :func:`admin_required`), ``"device"`` or
+#: ``"admin"``; None outside a plugin request (a voice turn, a worker, a
+#: mail handler). Set by :func:`enforce_route_tier` and
+#: :func:`admin_required`; ``sdk.friend_houses`` refuses its calls on
+#: ``"open"`` (SDK 1.18, L16).
+REQUEST_TIER: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "domovoi_request_tier", default=None)
 
 
 class EndpointTierConflict(TypeError):
@@ -384,16 +396,24 @@ async def enforce_route_tier(request: Request) -> None:
     """
     method = request.method
     if method == "OPTIONS":
+        REQUEST_TIER.set("open")
         return
     tier = endpoint_tier(request.scope.get("endpoint"))
     if method in ("GET", "HEAD"):
         if tier == "device":
             await require_device_read(request)
+            REQUEST_TIER.set("device")
+            return
+        # No credential was asked for; a Depends(admin_required) on the
+        # route raises this to "admin" when it passes.
+        REQUEST_TIER.set("open")
         return
     if tier == "open":
+        REQUEST_TIER.set("open")
         return
     if tier == "device":
         await require_device(request)
+        REQUEST_TIER.set("device")
         return
     await admin_required(request)
 
@@ -409,9 +429,11 @@ async def admin_required(request: Request) -> None:
     action and restarts the session's idle hour; a GET never does."""
     result = await check_admin_request(request, activity=True)
     if result in ("ok", "pre-setup"):
+        REQUEST_TIER.set("admin")
         return
     if result == "cookie-only":
         if request.method in ("GET", "HEAD"):
+            REQUEST_TIER.set("admin")
             return  # cookies may render GET state (§7.3)
         raise HTTPException(
             status_code=403,

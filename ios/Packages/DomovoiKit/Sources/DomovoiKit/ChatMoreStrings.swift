@@ -122,6 +122,10 @@ public enum ChatMoreStrings {
     public static let internetOff = "internet off"
     public static let internetAlwaysOn = "internet always on"
     public static let internetOnForThisChat = "internet on for this chat"
+    /// A house that asks first, and a chat not allowed yet: the dashboard's
+    /// words. Not "internet off" — this chat can still look things up once
+    /// someone says yes, and a tap allows it here.
+    public static let internetAskFirst = "internet: ask first"
 
     /// `ChatScreen.kt:961` — the verb its write is worded with.
     public static let verbChangeIt = "change it"
@@ -189,6 +193,18 @@ public enum ChatMoreStrings {
     public static func draftCard(title: String, version: Int) -> String {
         "draft: \(title), version \(version)"
     }
+
+    // MARK: - a chat attachment to print ("print this", 1.4.1)
+
+    /// The attachment card's one spoken line: "image to print: cat.jpg".
+    public static func attachmentCard(_ attachment: ChatPrintAttachment) -> String {
+        "\(attachment.kindWord) to print: \(attachment.shownName)"
+    }
+
+    /// Under an attachment card when the house has no printer yet (Android's
+    /// `ATTACHMENT_NO_PRINTER`).
+    public static let attachmentNoPrinter =
+        "No printer is set up yet. Add one in Settings → Printers & scanners."
 
     /// `DraftUi.kt:258-262` and `:421` — the card's and the canvas's buttons.
     public static let open = "open"

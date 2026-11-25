@@ -29,6 +29,7 @@ from sqlalchemy import text
 from domovoi import egress
 from domovoi.tests.conftest import requires_db
 
+from domovoi import player_relay
 from domovoi_plugin_radio.clients import radio_browser, shazam_stream
 from domovoi_plugin_radio.clients.fcc_fm import RealFccFmClient
 from domovoi_plugin_radio.workers import fcc_import, simulcast
@@ -275,7 +276,7 @@ async def test_handler_never_hands_mpd_an_internet_stream(stub_sdk, monkeypatch)
     with egress.override_policy("never"):
         ok = await handler._stream_station_row(lan, ctx, None)
     assert ok.text == "Streaming FM box."
-    assert [c["stream_url"] for c in stub_sdk.playback.calls] == [LAN_URL]
+    assert [player_relay.target_for(c["stream_url"]) for c in stub_sdk.playback.calls] == [LAN_URL]
 
 
 # ─── web routes ──────────────────────────────────────────────────────────
@@ -320,15 +321,15 @@ def test_web_routes_refuse_under_never(web_client, monkeypatch) -> None:
 # ─── manifest ────────────────────────────────────────────────────────────
 
 
-def test_manifest_is_1_x_and_needs_sdk_1_4() -> None:
+def test_manifest_is_1_x_and_needs_sdk_1_16() -> None:
     import tomllib
 
     manifest = tomllib.loads((PLUGIN_DIR / "domovoi-plugin.toml").read_text(encoding="utf-8"))
     major, minor, _patch = (int(p) for p in manifest["plugin"]["version"].split("."))
     assert major == 1 and minor >= 3  # 1.4.0 added the radio help (SDK 1.8 help file)
-    # 1.10: spoken_names / choices / ensure_room / room_play_template;
-    # every one of them is newer than 1.4 and 1.9's egress.
-    assert manifest["plugin"]["domovoi_api"] == ">=1.10,<2.0"
+    # 1.16: playback.relay_url (the core's player relay), newer than
+    # 1.10's spoken_names / ensure_room and 1.4's egress.
+    assert manifest["plugin"]["domovoi_api"] == ">=1.16,<2.0"
 
 
 # ─── 2026-10-03 review fixes ─────────────────────────────────────────────

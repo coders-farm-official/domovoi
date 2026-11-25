@@ -20,7 +20,17 @@ the pairing token, gets any of it; ``ready.features`` then lists
          "duration_sec", "elapsed_sec",       # numbers or null
          "controls": [subset of "pause", "resume", "skip", "previous"]},
      "timers": [{"id", "kind": "timer" | "alarm", "label", "remaining_ms", "total_ms"}],
-     "ringing": null | {"fire_id", "kind": "timer" | "alarm", "label"}}
+     "ringing": null | {"fire_id", "kind": "timer" | "alarm", "label"},
+     "media": null | {                        # 1.5.0: photo and video results
+         "id": <int, new for each set of results>,
+         "said": <the spoken answer, a string>,
+         "count": <int>, "more": <bool>,
+         "expires_in_ms": <int: hide them by then even with no new frame>,
+         "items": [{"kind": "image" | "video",
+                    "thumb": "/v1/room-media/{token}",   # short-lived, no credential
+                    "caption": <string or null: what it MIGHT show>,
+                    "date": <"YYYY-MM-DD" or null>,
+                    "at_s": <number or null: a video's best moment>}]}}
 
 * Sent once after ``ready``, then whenever it CHANGES: this room's music
   (its group host's, in a group: every member shows the same), its timers
@@ -38,6 +48,14 @@ the pairing token, gets any of it; ``ready.features`` then lists
   an alarm ("7 AM alarm"). Remaining time, never a wall clock.
 * ``ringing``: a timer or alarm going off here that nobody has acknowledged,
   within the window "stop the timer" takes (timer_delivery.ringing_fire).
+* ``media`` (1.5.0, domovoi/room_media.py): the results of "show me photos
+  of the beach" said in this room, at most 6, for 90 seconds; null
+  otherwise. Gone with the next frame sent for any other reason (music,
+  a timer), when newer results replace them, or after ``expires_in_ms``.
+  A caption is a picture model's guess and untrusted text: draw it as
+  text, never markup, as "Might show: …". ``thumb`` is a path on this
+  server, good for 10 minutes, and needs no credential. A client from
+  before 1.5.0 ignores the key.
 * ``art``: a library song's cover on this server's open cover route
   (``GET /v1/music/cover/{track_id}``); null for anything else (a stream,
   a plugin's item): never guessed.
@@ -354,6 +372,8 @@ async def build_frame(room_id: str, *, mono_ms: Callable[[], int] = _mono_ms) ->
     the feed sends nothing rather than a frame that says "nothing"."""
     from domovoi.db.session import session_scope
 
+    from domovoi import room_media
+
     async with session_scope() as s:
         np = await now_playing(s, room_id)
         rows = await timers(s, room_id)
@@ -364,6 +384,7 @@ async def build_frame(room_id: str, *, mono_ms: Callable[[], int] = _mono_ms) ->
         "now_playing": np,
         "timers": rows,
         "ringing": ring,
+        "media": room_media.frame_media(room_id),
     }
 
 
@@ -388,10 +409,22 @@ def _np_anchor(frame: dict[str, Any]) -> float | None:
     return elapsed
 
 
+def _media_id(frame: dict[str, Any] | None) -> int | None:
+    m = (frame or {}).get("media")
+    return m.get("id") if isinstance(m, dict) else None
+
+
 def differs(old: dict[str, Any] | None, new: dict[str, Any]) -> bool:
     """Whether ``new`` says something ``old`` didn't, time passing aside."""
     if old is None:
         return True
+    if _media_id(old) != _media_id(new):
+        return True
+    return differs_besides_media(old, new)
+
+
+def differs_besides_media(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    """:func:`differs`, the photo results left out."""
     if old.get("ringing") != new.get("ringing"):
         return True
     if _np_shape(old.get("now_playing")) != _np_shape(new.get("now_playing")):
@@ -464,6 +497,8 @@ class RoomDisplayFeed:
         self._bucket = _Bucket(CONTROL_BURST, CONTROL_REFILL_SEC, clock)
         self._limited_said = False
         self._actions: set[asyncio.Task[None]] = set()
+        #: Results already taken off this screen by a later frame.
+        self._media_done: int | None = None
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
@@ -508,6 +543,8 @@ class RoomDisplayFeed:
             except Exception as e:  # noqa: BLE001 — try again next look
                 log.debug("room display for %s: could not read the room: %s", self.room_id, e)
                 frame = None
+            if frame is not None:
+                frame = self.settle_media(frame)
             if frame is not None and differs(self.last_sent, frame):
                 wait = 0.0
                 if self._last_sent_at is not None:
@@ -524,6 +561,21 @@ class RoomDisplayFeed:
                 await asyncio.wait_for(self._wake.wait(), timeout=self.poll_sec)
             except asyncio.TimeoutError:
                 pass
+
+    def settle_media(self, frame: dict[str, Any]) -> dict[str, Any]:
+        """Photo results last until the next frame sent for another reason
+        (domovoi/room_media.py): once one is due with the same results,
+        they are dropped from it and from every later frame."""
+        mid = _media_id(frame)
+        if mid is None:
+            return frame
+        if mid == self._media_done or (
+            self.last_sent is not None and _media_id(self.last_sent) == mid
+            and differs_besides_media(self.last_sent, frame)
+        ):
+            self._media_done = mid
+            return {**frame, "media": None}
+        return frame
 
     # ── room_control ────────────────────────────────────────────────────
 

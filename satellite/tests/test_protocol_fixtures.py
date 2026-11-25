@@ -74,8 +74,8 @@ def test_the_fixtures_describe_the_five_devices():
 def test_today_s_pi_hello_is_the_fixtures_pi_hello():
     keys = _client_hello_keys()
     assert "supports" not in keys and "board" not in keys, (
-        "a Pi sends no `supports` and no `board`: that is what keeps it on "
-        "today's behaviour in the core"
+        "the hello literal carries no `supports` and no `board`: a Pi's list "
+        "is added after it (PI_SUPPORTS, 1.5.0) and a Pi never sends a board"
     )
     for device in PI_DEVICES:
         assert set(FIXTURES["devices"][device]["hello"]) == set(keys), device
@@ -87,6 +87,8 @@ def test_the_pi_handles_every_frame_the_core_may_send_it():
         expect = FIXTURES["devices"][device]["expect"]
         # "announcement" is an out-of-turn response_start, not a type of its own.
         frames = set(FIXTURES["always_sent"]) | set(expect["frames_sent"])
+        # 1.5.0: it declares wake_claim, so the core may send it these too.
+        frames |= {"wake_grant", "capture_keep", "room"}
         frames.discard("announcement")
         missing = frames - handled
         assert not missing, f"{device}: the client has no branch for {sorted(missing)}"

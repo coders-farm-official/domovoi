@@ -63,6 +63,9 @@ BODY_LIMITS: tuple[tuple[str, int], ...] = (
     # A phone's shared calendars (api/calendar.py, at most 20,000 events
     # of a few hundred bytes each).
     ("/api/calendar/phones", 8 * MB),
+    # An update from an offline kit: kit.json (at most 64 MiB), then each
+    # file in chunks of at most 16 MiB (domovoi/kit_update.py CHUNK_MAX).
+    ("/api/offline-kit/update", 65 * MB),
 )
 
 
@@ -194,7 +197,7 @@ class RequireRequestedWithMiddleware:
             },
         )
         log.info(
-            "refused %s %s without X-Requested-With",
+            "refused %s %r without X-Requested-With",
             scope.get("method"), scope.get("path"),
         )
         await response(scope, receive, send)
@@ -320,7 +323,7 @@ def _content_length(scope: Scope) -> int | None:
 
 
 async def _too_large(limit: int, scope: Scope, receive: Receive, send: Send) -> None:
-    log.info("refused an oversized body on %s (budget %d bytes)", scope.get("path"), limit)
+    log.info("refused an oversized body on %r (budget %d bytes)", scope.get("path"), limit)
     response = JSONResponse(
         status_code=413,
         content={"detail": f"request body too large (limit {limit} bytes)"},

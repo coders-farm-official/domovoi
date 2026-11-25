@@ -51,6 +51,31 @@ COLOR_OFF = (0, 0, 0)
 # off between clips), so each clip is visible, unlike the sound-following
 # listening look (2026-11-10).
 COLOR_RECORDING = (200, 200, 200)
+# Magenta while a support session (an admin's shell, satellite/support_shell.py)
+# is open: a slow breath, clearly not violet's "awaiting approval" (#A855F7,
+# pinker AND at least twice as slow), and solid on one LED over the other
+# states. NEEDS A CHECK ON REAL HARDWARE (both boards): the colour against
+# violet and red, and the pace against violet's breath.
+COLOR_SUPPORT = (255, 0, 200)    # #FF00C8
+SUPPORT_BREATH_SEC = 4.0         # 2 s up, 2 s down, eased
+SUPPORT_BREATH_MIN = 0.10        # 10% .. full
+# "server_changed" (1.5.0, S3-4): the server at this room's address proved a
+# DIFFERENT identity from the one the room was set up for (the house was
+# reinstalled without keeping its identity, or another house took the
+# address). Teal, a colour no other state uses, so it can't be mistaken for
+# the no-server orange, the awaiting-approval violet or a support session's
+# magenta: a double blink every two seconds on the 2-Mics HAT, a slow teal
+# breath on the XVF3800 (the chip has no blink). Held until the room
+# connects again. NEEDS A CHECK ON REAL HARDWARE (both boards): the teal
+# against the HAT's speaking green and the ring's listening blue.
+COLOR_SERVER_CHANGED = (0, 224, 176)   # #00E0B0
+# (on, off) pairs, in seconds: blink, blink, rest — 2 s a cycle.
+SERVER_CHANGED_BLINKS = ((0.18, 0.18), (0.18, 1.46))
+# "quiet": another satellite in the room took this wake word's turn (1.5.0).
+# No listening colour — a dim blue that fades out over QUIET_FADE_SEC, then
+# off (owner answer Q5: the losers' LED only fades).
+COLOR_QUIET = (0, 20, 85)
+QUIET_FADE_SEC = 0.8
 
 # ── XVF3800 WS2812 ring palette (whole-ring effects via xvf_host) ──────────
 # The XVF chip only does whole-ring effects (off/breath/rainbow/single/DoA) —
@@ -79,6 +104,23 @@ XVF_THINK = (255, 255, 0)
 # is firmware-defined — tune these if breath/rainbow feel too fast or slow.
 XVF_SPEED_BREATH = 1             # slow pulse while thinking / speaking
 XVF_SPEED_RAINBOW = 3            # rotating rainbow while music plays
+# A support session: the chip owns the breath, so its slowest speed. The
+# setup indicator's violet breathes at speed 2; if speed 1 is not clearly
+# slower on the hardware, stretch it (alternate the breath with a held dim
+# magenta, two xvf_host calls per cycle). NEEDS A CHECK ON REAL HARDWARE.
+XVF_SPEED_SUPPORT = 1
+# The base colour under the magenta dot (DoA mode) for each non-idle state
+# while a support session is open: the chip draws whole-ring effects only,
+# and DoA (a base colour plus a dot) is the one way to show both. No pulse or
+# rainbow while a session is open. NEEDS A CHECK ON REAL HARDWARE.
+XVF_SUPPORT_BASE = {
+    "listening": XVF_LISTEN_BASE,
+    "thinking": (170, 170, 0),
+    "speaking": (0, 40, 170),
+    "music": (40, 40, 40),
+    "error": (170, 0, 0),
+    "recording": (120, 120, 120),
+}
 
 
 def _hex(color: tuple[int, int, int]) -> str:
@@ -102,7 +144,7 @@ class _Driver(Protocol):
     #         software animation loop via set_pixel/show.
     native_states: bool
 
-    def render_state(self, state: str) -> None: ...  # native_states=True path
+    def render_state(self, state: str, support: bool = False) -> None: ...  # native_states=True path
     def set_pixel(self, idx: int, r: int, g: int, b: int) -> None: ...  # pixel path
     def show(self) -> None: ...
     def clear(self) -> None: ...
@@ -112,7 +154,7 @@ class _Driver(Protocol):
 class _NoOpDriver:
     native_states = False
 
-    def render_state(self, state: str) -> None: pass
+    def render_state(self, state: str, support: bool = False) -> None: pass
     def set_pixel(self, idx: int, r: int, g: int, b: int) -> None: pass
     def show(self) -> None: pass
     def clear(self) -> None: pass
@@ -145,7 +187,7 @@ class _APA102Driver:
         # pins so signal integrity isn't a concern.
         self._spi.max_speed_hz = 8_000_000
 
-    def render_state(self, state: str) -> None:  # pragma: no cover - unused (pixel path)
+    def render_state(self, state: str, support: bool = False) -> None:  # pragma: no cover - unused (pixel path)
         pass
 
     def set_pixel(self, idx: int, r: int, g: int, b: int) -> None:
@@ -211,6 +253,9 @@ class _WS2812XvfDriver:
         "error":     {"effect": 3, "color": COLOR_ERROR},                      # solid red
         "dropin":    {"effect": 3, "color": COLOR_DROPIN},                     # solid red — live call
         "recording": {"effect": 3, "color": COLOR_RECORDING},                  # steady white — training clip
+        "quiet":     {"effect": 3, "color": COLOR_QUIET},                      # dim blue, off after QUIET_FADE_SEC
+        # My server changed (S3-4): a slow teal breath, a colour nothing else breathes.
+        "server_changed": {"effect": 1, "color": COLOR_SERVER_CHANGED, "speed": XVF_SPEED_BREATH},
     }
 
     def __init__(self, brightness: int, xvf_host_path: str) -> None:
@@ -225,9 +270,13 @@ class _WS2812XvfDriver:
     def _probe(self, path: str) -> list[str]:
         if shutil.which(path) is None and not path.startswith(("/", "./")):
             raise FileNotFoundError(f"xvf_host not found on PATH: {path!r}")
-        # Try plain, then sudo -n. `sudo -n` fails fast (no hang) when no
-        # passwordless rule exists, so neither branch blocks on a prompt.
-        for prefix in ([path], ["sudo", "-n", path]):
+        # Try plain, then sudo -n: the root-owned wrapper first (the one
+        # sudoers names since 1.5.0, satellite/xvf_guard.py), then the tool
+        # (a card not yet switched). `sudo -n` fails fast (no hang) when no
+        # passwordless rule exists, so no branch blocks on a prompt.
+        from satellite import xvf_guard
+
+        for prefix in ([path], *xvf_guard.sudo_prefixes(path)):
             try:
                 rc = subprocess.run(
                     [*prefix, "led_brightness", str(self._brightness)],
@@ -257,7 +306,21 @@ class _WS2812XvfDriver:
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             log.debug("xvf_host %s failed: %s", args, e)
 
-    def render_state(self, state: str) -> None:
+    def render_state(self, state: str, support: bool = False) -> None:
+        if support and state != "dropin":
+            # A support session: idle breathes magenta; any other state is
+            # DoA mode, that state's colour as the base and a magenta dot.
+            # A drop-in call keeps its solid red (a call and a shell at once
+            # are refused anyway).
+            if state == "idle":
+                self._run("led_color", _hex(COLOR_SUPPORT))
+                self._run("led_speed", str(XVF_SPEED_SUPPORT))
+                self._run("led_effect", "1")
+            else:
+                base = XVF_SUPPORT_BASE.get(state, XVF_LISTEN_BASE)
+                self._run("led_doa_color", _hex(base), _hex(COLOR_SUPPORT))
+                self._run("led_effect", "4")
+            return
         spec = self._STATES.get(state, self._STATES["idle"])
         effect = spec["effect"]
         if effect == 0:
@@ -343,6 +406,9 @@ class LEDController:
         self._driver: _Driver = _NoOpDriver()
         self._thread: threading.Thread | None = None
         self._listeners: list = []
+        # A support session is open: an overlay, not a state, so resync()
+        # and every state change (the approval colours included) keep it.
+        self._support = False
 
     @property
     def state(self) -> str:
@@ -390,6 +456,20 @@ class LEDController:
                 return
             log.debug("[leds] %s -> %s", self._state, state)
             self._state = state
+            self._changed.set()
+        self._fire()
+
+    @property
+    def support(self) -> bool:
+        with self._lock:
+            return self._support
+
+    def set_support(self, on: bool) -> None:
+        """Turn the support-session overlay (magenta) on or off."""
+        with self._lock:
+            if self._support == bool(on):
+                return
+            self._support = bool(on)
             self._changed.set()
         self._fire()
 
@@ -470,7 +550,17 @@ class LEDController:
         """Set-once rendering for hardware that animates its own effects."""
         while not self._stop.is_set():
             self._changed.clear()
-            self._driver.render_state(self._current_state())
+            with self._lock:
+                state, support = self._state, self._support
+            if support:
+                self._driver.render_state(state, support=True)
+            else:
+                self._driver.render_state(state)
+            if state == "quiet":
+                # The ring has no fade of its own: dim, then off.
+                if not self._changed.wait(timeout=QUIET_FADE_SEC):
+                    self._demote("quiet")
+                continue
             self._changed.wait()
 
     def _run_pixel(self) -> None:
@@ -478,6 +568,9 @@ class LEDController:
         while not self._stop.is_set():
             self._changed.clear()
             state = self._current_state()
+            if self.support and state not in ("dropin", "error"):
+                self._tick_support(state)
+                continue
             if state == "idle":
                 self._solid(COLOR_OFF)
                 self._changed.wait()
@@ -498,9 +591,45 @@ class LEDController:
                 self._tick_thinking()
             elif state == "error":
                 self._tick_error()
+            elif state == "quiet":
+                self._tick_quiet()
+            elif state == "server_changed":
+                self._tick_server_changed()
             else:
                 self._solid(COLOR_OFF)
                 self._changed.wait()
+
+    def support_pixels(self, state: str, t: float) -> list[tuple[int, int, int]]:
+        """The APA102 frame at time ``t`` while a support session is open:
+        idle breathes the whole ring magenta (a 4 s eased sine, 10% to
+        full); any other state holds LED 0 solid magenta and shows the
+        state on the rest."""
+        import math
+
+        n = self._cfg.num_leds
+        if state == "idle":
+            phase = (t % SUPPORT_BREATH_SEC) / SUPPORT_BREATH_SEC
+            eased = (1 - math.cos(2 * math.pi * phase)) / 2   # 0 → 1 → 0
+            level = SUPPORT_BREATH_MIN + (1 - SUPPORT_BREATH_MIN) * eased
+            r, g, b = COLOR_SUPPORT
+            return [(int(r * level), int(g * level), int(b * level))] * n
+        color = {
+            "listening": COLOR_LISTENING, "thinking": COLOR_THINKING,
+            "speaking": COLOR_SPEAKING, "error": COLOR_ERROR,
+            "recording": COLOR_RECORDING, "music": (40, 40, 40),
+        }.get(state, COLOR_OFF)
+        return [COLOR_SUPPORT] + [color] * max(0, n - 1)
+
+    def _tick_support(self, state: str) -> None:
+        import time as _time
+
+        while not self._stop.is_set() and self.support and self._current_state() == state:
+            for i, (r, g, b) in enumerate(self.support_pixels(state, _time.monotonic())):
+                self._driver.set_pixel(i, r, g, b)
+            self._driver.show()
+            # ~25 frames a second for the breath; a held frame needs none.
+            if self._changed.wait(timeout=0.04 if state == "idle" else None):
+                return
 
     def _tick_thinking(self) -> None:
         n = self._cfg.num_leds
@@ -519,6 +648,36 @@ class LEDController:
             self._driver.show()
             i = (i + 1) % n
             self._changed.wait(timeout=period)
+
+    def _demote(self, state: str) -> None:
+        """A timed state is over: idle, unless someone set another since."""
+        with self._lock:
+            if self._state == state:
+                self._state = "idle"
+                self._changed.set()
+
+    def _tick_quiet(self) -> None:
+        steps = 8
+        r, g, b = COLOR_QUIET
+        for i in range(steps, -1, -1):
+            if self._stop.is_set() or self._current_state() != "quiet":
+                return
+            k = i / steps
+            self._solid((int(r * k), int(g * k), int(b * k)))
+            if self._changed.wait(timeout=QUIET_FADE_SEC / steps):
+                return
+        self._demote("quiet")
+
+    def _tick_server_changed(self) -> None:
+        """Teal double blink, every two seconds, until another state."""
+        while not self._stop.is_set() and self._current_state() == "server_changed":
+            for on, off in SERVER_CHANGED_BLINKS:
+                self._solid(COLOR_SERVER_CHANGED)
+                if self._changed.wait(timeout=on):
+                    return
+                self._solid(COLOR_OFF)
+                if self._changed.wait(timeout=off):
+                    return
 
     def _tick_error(self) -> None:
         for _ in range(3):
@@ -565,6 +724,7 @@ SETUP_COLORS: dict[str, tuple[int, int, int]] = {
     "no-microphone":     (229, 72, 77),
     "startup-failed":    (229, 72, 77),
     "no-server":         (255, 106, 0),
+    "server-changed":    COLOR_SERVER_CHANGED,
     "off":               (0, 0, 0),
 }
 

@@ -19,7 +19,9 @@
 #   * DOCKER-USER: nothing from 172.31.254.0/24 to private, shared,
 #     link-local, loopback or multicast addresses: the LAN, other
 #     containers, the WSL or VM host behind a NAT gateway;
-#   * the same for IPv6, should the network ever get IPv6.
+#   * for IPv6, everything from the bridge: the network has no IPv6, so
+#     nothing legitimate leaves it that way. Where ip6tables is missing,
+#     the state file says so (ipv6=absent).
 #
 # Tor relays have public addresses, so the internet still works. The rules
 # live in one chain of their own, DOMOVOI-FH, which `apply` refills from
@@ -53,7 +55,9 @@ BRIDGE=domovoi-fh0
 CHAIN=DOMOVOI-FH
 STATE_DIR=${FH_FIREWALL_STATE_DIR:-/run/domovoi-fh-firewall}
 BLOCK_V4=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 127.0.0.0/8 224.0.0.0/4)
-BLOCK_V6=(fc00::/7 fe80::/10 ::1/128 ff00::/8)
+# The Friend Houses network is IPv4 only (tor_runtime.py), so any IPv6 from
+# it is dropped, global addresses included.
+BLOCK_V6=(::/0)
 IPT=${IPTABLES:-iptables}
 IP6T=${IP6TABLES:-ip6tables}
 VERSION=1
@@ -121,9 +125,16 @@ remove_family() {
 
 # The state file the core reads: which network is fenced, and when the
 # rules were last seen in place (the core treats an old time as missing).
+# ipv6=fenced when ip6tables carries the rules, ipv6=absent when it isn't
+# there (the network has no IPv6, so there is nothing to fence).
+v6_state() {
+  if have "$IP6T" && "$IP6T" -w -L INPUT >/dev/null 2>&1; then echo fenced; else echo absent; fi
+}
+
 write_state() {
   install -d -m 0755 "$STATE_DIR" || return 1
-  printf 'version=%s\nsubnet=%s\nbridge=%s\nchecked=%s\n' "$VERSION" "$SUBNET" "$BRIDGE" "$(date +%s)" \
+  printf 'version=%s\nsubnet=%s\nbridge=%s\nipv6=%s\nchecked=%s\n' "$VERSION" "$SUBNET" "$BRIDGE" \
+    "$(v6_state)" "$(date +%s)" \
     >"$STATE_DIR/applied.tmp" \
     && chmod 0644 "$STATE_DIR/applied.tmp" && mv -f "$STATE_DIR/applied.tmp" "$STATE_DIR/applied"
 }
@@ -134,6 +145,8 @@ case ${1:-} in
     apply_family "$IPT" BLOCK_V4 || die "the IPv4 rules could not be applied"
     if have "$IP6T" && "$IP6T" -w -L INPUT >/dev/null 2>&1; then
       apply_family "$IP6T" BLOCK_V6 || die "the IPv6 rules could not be applied"
+    else
+      log "ip6tables isn't available: no IPv6 rules (the network has no IPv6)"
     fi
     write_state || die "can't write $STATE_DIR/applied"
     log "Friend Houses' Tor network ($SUBNET on $BRIDGE) can reach the internet only"

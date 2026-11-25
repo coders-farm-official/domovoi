@@ -147,11 +147,15 @@ class NowPlayingRegistry:
     def snapshot(self) -> dict[str, dict[str, Any]]:
         """JSON-safe mirror for /v1/admin/snapshot → web/Android. Never
         includes ``elapsed_sec`` (dossier §7 inv. 8 — the GET-flood
-        regression)."""
+        regression). A relay token in the data (what a room's player was
+        handed, domovoi/player_relay.py) is never in it: the snapshot is
+        an open read (L23)."""
+        from domovoi.player_relay import redact
+
         return {
             room: {
                 "source": st.source,
-                "data": dict(st.data),
+                "data": {k: redact(v) for k, v in st.data.items()},
                 "stamped_at": st.stamped_at.isoformat(),
             }
             for room, st in self._stamps.items()

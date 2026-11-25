@@ -854,7 +854,15 @@ struct MusicLibraryList: View {
     let onOpen: (LibraryTrack) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // **Lazy, and it has to be this stack.** The screen's `LazyVStack`
+        // only defers its own direct children, and this whole list is ONE of
+        // them: a plain `VStack` here built every row at once and fired every
+        // row's `onAppear`, so each page asked for the next until the whole
+        // library had loaded, every cover with it (device test 2026-11-22:
+        // 6,308 tracks, a frozen and warm phone). Its own lazy stack is what
+        // makes ``MusicModel/shouldLoadMore(lastVisible:)`` see the rows that
+        // are really on screen.
+        LazyVStack(alignment: .leading, spacing: 12) {
             if let count = music.countText {
                 Text(count)
                     .font(.footnote)

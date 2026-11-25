@@ -239,8 +239,10 @@ class MemoryHandler(Handler):
                 matched_handler=self.name,
             )
         memory_id = data.get("memory_id")
-        person_id = ctx.person_id
-        if not isinstance(memory_id, int) or person_id is None:
+        # A one-word "yes" is too short for voice ID, so the reply turn
+        # usually has no speaker: the person it was offered to answers it.
+        person_id = ctx.person_id if ctx.person_id is not None else data.get("person_id")
+        if not isinstance(memory_id, int) or not isinstance(person_id, int):
             return Response(
                 text="Got it.",
                 session_id=ctx.session_id,

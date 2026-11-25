@@ -8,7 +8,7 @@ A kit is a folder (the root of a FAT32 stick labelled ``DOMOVOIKIT``)::
     release/    the GitHub release's own files: DomovoiSetup.exe and its
                 signed manifest (PC), DomovoiSetup-mac.pkg and its signed
                 manifest (Mac), the release's SHA256SUMS
-    linux/      install.sh at the release commit
+    linux/      install.sh and provision.sh at the release commit
     source/     domovoi.bundle, a git bundle up to the release tag
     apt/        partial apt mirrors (ubuntu/, docker/, nvidia/)
     python/     wheels from the lock, one folder per platform
@@ -62,7 +62,9 @@ stored as parts only, never whole: ``<path>.part01``, ``<path>.part02``,
 the last is exactly ``part_size`` bytes; the last holds the rest. Joined
 in number order they are the file kit.json names, with its size and
 SHA-256. Each part has its own size and SHA-256 too, so a damaged part is
-named.
+named. ``part_size`` is at least 1 MiB, a file at most 1 TiB, and kit.json
+at most 64 MiB, so a reader's work is bounded by the stick, not by what
+kit.json claims.
 
 **SHA256SUMS** is ``sha256sum``'s own format (``<hex>  <path>``, sorted by
 path, LF): every file on the stick as stored (parts, not joined files) and
@@ -89,6 +91,13 @@ GUIDE_FILES = ("START-HERE.html", "START-HERE.txt")
 FAT32_MAX_FILE = 4 * 1024**3 - 1
 #: Files bigger than this are split. 3.9 GB, well under FAT32_MAX_FILE.
 PART_SIZE = 3_900_000_000
+#: The smallest part_size a kit may record (a reader's work grows with the
+#: number of parts).
+MIN_PART_SIZE = 1024 * 1024
+#: The biggest file a kit may list (far above any model or image).
+MAX_FILE_SIZE = 1024**4
+#: The biggest kit.json a reader opens.
+MAX_KIT_JSON = 64 * 1024 * 1024
 
 #: What each kit target means. PC (Windows and Linux) is ticked by
 #: default, Mac is not (owner answer 3, 2026-11-22).
@@ -267,8 +276,23 @@ def part_paths(path: str, count: int) -> list[str]:
     return [f"{path}.part{i:0{width}d}" for i in range(1, count + 1)]
 
 
+def part_count(size: int, part_size: int) -> int:
+    """How many parts a file of ``size`` bytes splits into: 0 when it
+    isn't split. Arithmetic only: nothing the size of the count is built."""
+    if size <= part_size:
+        return 0
+    return -(-size // part_size)
+
+
+def part_size_at(size: int, part_size: int, index: int) -> int:
+    """The size of part ``index`` (from 0) of a split file."""
+    return min(part_size, size - index * part_size)
+
+
 def part_sizes(size: int, part_size: int) -> list[int]:
-    """How a file of ``size`` bytes splits: [] when it isn't split."""
+    """How a file of ``size`` bytes splits: [] when it isn't split. For
+    sizes the writer has in hand; a reader checking kit.json uses
+    :func:`part_count`."""
     if size <= part_size:
         return []
     full, rest = divmod(size, part_size)
@@ -342,8 +366,8 @@ def validate(doc: Any) -> tuple[list[str], list[str]]:
     if avc is not None and (not _is_int(avc) or avc < 1):
         problems.append("android_version_code must be a positive whole number, or null")
     part_size = doc.get("part_size")
-    if not _is_int(part_size) or not 1 <= part_size <= FAT32_MAX_FILE:
-        problems.append(f"part_size must be a whole number of bytes from 1 to {FAT32_MAX_FILE}")
+    if not _is_int(part_size) or not MIN_PART_SIZE <= part_size <= FAT32_MAX_FILE:
+        problems.append(f"part_size must be a whole number of bytes from {MIN_PART_SIZE} to {FAT32_MAX_FILE}")
         part_size = None
 
     components = doc.get("components")
@@ -433,8 +457,8 @@ def validate(doc: Any) -> tuple[list[str], list[str]]:
                     problems.append(f"{fwhere}: a {kind} belongs in {folder}")
             size, sha = entry.get("size"), entry.get("sha256")
             ok = True
-            if not _is_int(size) or size < 0:
-                problems.append(f"{fwhere}: size must be a whole number of bytes")
+            if not _is_int(size) or not 0 <= size <= MAX_FILE_SIZE:
+                problems.append(f"{fwhere}: size must be a whole number of bytes, at most {MAX_FILE_SIZE}")
                 ok = False
             if not isinstance(sha, str) or not SHA256_RE.match(sha):
                 problems.append(f"{fwhere}: sha256 must be 64 lowercase hex digits")
@@ -442,26 +466,27 @@ def validate(doc: Any) -> tuple[list[str], list[str]]:
             parts = entry.get("parts")
             if not ok or part_size is None:
                 continue
-            want = part_sizes(size, part_size)
+            count = part_count(size, part_size)
             if parts is None:
-                if want:
+                if count:
                     problems.append(f"{fwhere}: it is bigger than part_size ({part_size} bytes), "
                                     "so it must be stored in parts")
                     continue
                 claim(path, size, sha, fwhere)
                 continue
-            if not isinstance(parts, list) or not want:
+            if not isinstance(parts, list) or not count:
                 problems.append(f"{fwhere}: only a file bigger than part_size ({part_size} bytes) "
                                 "is stored in parts")
                 continue
-            if len(parts) != len(want):
-                problems.append(f"{fwhere}: it splits into {len(want)} parts, kit.json lists "
+            if len(parts) != count:
+                problems.append(f"{fwhere}: it splits into {count} parts, kit.json lists "
                                 f"{len(parts)}")
                 continue
             # The logical file is never stored whole: claim its name so no
             # listed file can take it.
             claim(path, size, sha, fwhere)
-            names = part_paths(path, len(want))
+            names = part_paths(path, count)
+            want = [part_size_at(size, part_size, i) for i in range(count)]
             for pi, (part, pname, psize) in enumerate(zip(parts, names, want)):
                 pwhere = f"{fwhere}, part {pi + 1}"
                 if not isinstance(part, dict):
@@ -505,6 +530,9 @@ def read_kit(root: str | Path) -> tuple[dict[str, Any], list[str]]:
     the notes. Raises KitProblem with every reason it can't be used."""
     path = Path(root) / KIT_JSON
     try:
+        if path.stat().st_size > MAX_KIT_JSON:
+            raise KitProblem([f"{KIT_JSON} is bigger than any kit's ({MAX_KIT_JSON} bytes). The stick may "
+                              "be damaged: make it again."])
         raw = path.read_bytes()
     except FileNotFoundError:
         raise KitProblem([f"There is no {KIT_JSON} here, so this is not an offline kit (or the "

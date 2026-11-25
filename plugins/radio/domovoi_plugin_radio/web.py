@@ -61,7 +61,7 @@ from domovoi_plugin_radio.clients.radio_browser import (
     RadioBrowserStation,
     get_radio_browser_client,
 )
-from domovoi_plugin_radio.stream_types import audio_media_type
+from domovoi_plugin_radio import relay
 
 log = logging.getLogger(__name__)
 
@@ -1034,54 +1034,25 @@ async def _proxy_stream(url: str) -> StreamingResponse:
     """Open ``url`` and relay its bytes. Keeps the upstream connection +
     client alive for the life of the response (closed in the
     generator's ``finally``); an unreachable upstream surfaces as 502
-    before any bytes are sent. Redirects are followed one hop at a time
-    so each target is checked before it is opened.
+    before any bytes are sent. The station is opened by
+    :func:`relay.open_audio`, the same fetch the room players' relay uses:
+    redirects followed one hop at a time, each target checked before it
+    is opened.
 
-    Only an audio answer is relayed (:func:`audio_media_type`); anything
+    Only an audio answer is relayed (``stream_types.audio_media_type``); anything
     else closes the upstream and answers 502, and the relay always
     carries ``nosniff``, ``Content-Disposition: attachment`` and a
     sandbox CSP (A2-02)."""
-    import httpx
-
-    client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None))
     try:
-        resp = await net_safety.open_stream(
-            client, url, headers={"Icy-MetaData": "0"}
+        upstream = await relay.open_audio(
+            url, headers={"Icy-MetaData": "0"}, chunk_size=_STREAM_CHUNK
         )
-    except net_safety.OutboundFetchError as e:
-        await client.aclose()
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    except Exception as e:
-        await client.aclose()
-        raise HTTPException(
-            status_code=502, detail=f"upstream stream unreachable: {e}"
-        ) from e
-    if resp.status_code >= 400:
-        code = resp.status_code
-        await resp.aclose()
-        await client.aclose()
-        raise HTTPException(status_code=502, detail=f"upstream returned {code}")
-
-    declared = resp.headers.get("content-type")
-    content_type = audio_media_type(declared)
-    if content_type is None:
-        await resp.aclose()
-        await client.aclose()
-        base = (declared or "").split(";", 1)[0].strip().lower()[:60]
-        # Echo the upstream's type only when it is a plain ASCII type token.
-        shown = (
-            base
-            if base and all(c.isascii() and (c.isalnum() or c in "+-./") for c in base)
-            else "(unrecognised)"
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=f"upstream is not an audio stream (content type {shown})",
-        )
+    except relay.RelayRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
     async def _gen():
         try:
-            async for chunk in resp.aiter_bytes(chunk_size=_STREAM_CHUNK):
+            async for chunk in upstream.body():
                 # Switching the box to "never" ends a relay that is
                 # already open (one os.stat per chunk, cached on .env).
                 if egress.check_destination(url) is not None:
@@ -1089,16 +1060,14 @@ async def _proxy_stream(url: str) -> StreamingResponse:
                     break
                 yield chunk
         finally:
-            await resp.aclose()
-            await client.aclose()
+            await upstream.aclose()
 
     try:
         return StreamingResponse(
-            _gen(), media_type=content_type, headers=dict(_RELAY_HEADERS)
+            _gen(), media_type=upstream.media_type, headers=dict(_RELAY_HEADERS)
         )
     except Exception:
         # Building the response runs before _gen's finally can: close the
         # upstream here, or a refusal leaks one connection per request.
-        await resp.aclose()
-        await client.aclose()
+        await upstream.aclose()
         raise

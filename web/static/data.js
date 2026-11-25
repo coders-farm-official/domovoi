@@ -814,6 +814,31 @@ const apiErrorText = (e, max = 160) => {
   return clipSentence(text, max);
 };
 
+/* The plugin installer's `requirements_conflict` as plain words: which
+ * package(s) the plugin's lock pins differently from what Domovoi has
+ * installed ({detail: {error: {code, details: {conflicts: [{package,
+ * installed, requested}]}}}}). One line per package, five at most, then
+ * "and N more", then what to do about it. `headline` leads the text.
+ * Returns null for any other error (or one with no usable conflicts), so
+ * the caller keeps its existing message. */
+const REQUIREMENTS_CONFLICT_SHOWN = 5;
+const requirementsConflictText = (errBody, headline) => {
+  const err = errBody && typeof errBody === 'object' ? errBody : {};
+  if (err.code !== 'requirements_conflict') return null;
+  const list = ((err.details || {}).conflicts);
+  const rows = (Array.isArray(list) ? list : []).filter(
+    (c) => c && typeof c.package === 'string' && c.package
+      && c.requested != null && c.installed != null);
+  if (rows.length === 0) return null;
+  const lines = rows.slice(0, REQUIREMENTS_CONFLICT_SHOWN).map(
+    (c) => `${c.package}: the plugin wants ${c.requested}, Domovoi has ${c.installed}`);
+  if (rows.length > REQUIREMENTS_CONFLICT_SHOWN) {
+    lines.push(`and ${rows.length - REQUIREMENTS_CONFLICT_SHOWN} more`);
+  }
+  return [headline, ...lines,
+    "Ask the plugin's publisher for a version built for this Domovoi."].join('\n');
+};
+
 /* The code a refused request carries, for "ask Domovoi about this"
  * (help.jsx; every code has a help entry, domovoi/help_desk/error_codes.py):
  * the plugin installer's {detail: {error: {code}}}, a coded {detail, code}
@@ -879,6 +904,10 @@ const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
     return `${verb} cancelled — ${what}.${kept ? ' Your changes are still here.' : ''}`;
   }
   if (isAuthFailure(e)) return null;
+  const conflict = requirementsConflictText(
+    (((e && e.detail) || {}).detail || {}).error,
+    `${verb} failed: this plugin needs different package versions than Domovoi has.`);
+  if (conflict) return conflict;
   return `${verb} failed: ${apiErrorText(e, 120)}`;
 };
 
@@ -902,7 +931,23 @@ const reportMutationFailure = (fire, verb, e, { kept = false, key = null } = {})
 };
 
 // apiGet(path, { quiet: true }) — a read that never opens a prompt.
-const apiGet = (path, opts) => apiFetch(path, opts && opts.quiet ? { quiet: true } : {});
+// apiGet(path, { headers }) — extra request headers (e.g. callerDeviceHeaders()).
+const apiGet = (path, opts) => {
+  const init = {};
+  if (opts && opts.quiet) init.quiet = true;
+  if (opts && opts.headers) init.headers = opts.headers;
+  return apiFetch(path, init);
+};
+
+// This browser's device id as X-Device-Id, for the reads that answer
+// "is this row mine?" (chat messages, draft versions: their `mine`) — the
+// server no longer hands out the stored ids themselves.
+const callerDeviceHeaders = () => {
+  try {
+    const id = typeof DeviceIdentity !== 'undefined' ? DeviceIdentity.id() : null;
+    return id ? { 'X-Device-Id': id } : {};
+  } catch { return {}; }
+};
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
 const apiPatch = (path, body) => apiFetch(path, { method: 'PATCH', body: JSON.stringify(body || {}) });
 const apiPut = (path, body) => apiFetch(path, { method: 'PUT', body: JSON.stringify(body || {}) });
@@ -1962,6 +2007,7 @@ Object.assign(window, {
   apiHeaders, withDeviceToken,
   stateBus, ServerStore, ServerRestart, DeviceIdentity, ClaimKey, apiErrorText, isAuthFailure,
   mutationErrorText, reportMutationFailure, deviceBlockReason, clipSentence,
+  requirementsConflictText,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,
   liveNow, liveRelTime,

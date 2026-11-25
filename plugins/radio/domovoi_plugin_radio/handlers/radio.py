@@ -86,6 +86,7 @@ from domovoi.sdk import (
     HandlerDisplay,
     Intent,
     PluginSDK,
+    RelayUnavailable,
     Response,
     egress,
     net_safety,
@@ -111,10 +112,12 @@ def _stream_hops_checked(sdk: Any) -> bool:
 async def _final_stream_url(sdk: Any, url: str) -> Any:
     """The URL that answers for a station's stream once its redirects are
     followed, each hop through the outbound check and pinned to the
-    address it judged (``net_safety.resolve_final_target``): what the
-    room's player is handed, so it has no redirect of its own to follow
-    into the house (PLG-12). :data:`_BLOCKED` when a hop is refused, None
-    when the stream couldn't be reached."""
+    address it judged (``net_safety.resolve_final_target``). A look ahead,
+    so a station that can't play is refused aloud before anything is
+    queued (PLG-12). It decides nothing about what the room's player
+    fetches: the player is handed a relay URL on the core, and the relay
+    makes its own checked fetch (``sdk.playback.relay_url``, M11). :data:`_BLOCKED`
+    when a hop is refused, None when the stream couldn't be reached."""
     if not _stream_hops_checked(sdk):
         return url
     try:
@@ -928,13 +931,9 @@ class RadioHandler(Handler):
                     f"I can't stream {station['name']}: its stream address "
                     "isn't one I'm allowed to fetch.",
                 )
-            # PLG-12 (round 6): the check above looks at the URL as written;
-            # the room's player then fetched it with its own DNS lookup and
-            # its own redirect following, from a container that can reach
-            # the house. A public-directory station whose stream answers 302
-            # to an address inside the house got the player to GET it. The
-            # chain is followed here, every hop checked, and the player is
-            # handed the URL that answered.
+            # PLG-12 (round 6): the chain is followed here, every hop
+            # checked, so a station whose stream leads somewhere refused is
+            # turned down aloud before anything is queued.
             final = await _final_stream_url(self.sdk, str(url_to_play))
             if final is _BLOCKED:
                 return self._reply(
@@ -946,7 +945,20 @@ class RadioHandler(Handler):
                 return self._reply(
                     ctx, f"I couldn't reach {station['name']}'s stream just now."
                 )
-            url_to_play = final
+            # M11: a station can answer the player's own request differently
+            # from the look above, so the player never fetches the station.
+            # It is handed a one-use relay URL on the core for this room and
+            # this station, and the core fetches the station, every hop
+            # checked, and passes the audio on (SDK 1.16, the core's
+            # domovoi/player_relay.py).
+            try:
+                url_to_play = await self.sdk.playback.relay_url(
+                    ctx.room_id, str(url_to_play), kind="radio"
+                )
+            except RelayUnavailable:
+                return self._reply(
+                    ctx, f"I couldn't reach the music player for {station['name']}."
+                )
 
         elif source == "fm":
             tuner = self._tuner()
@@ -987,7 +999,10 @@ class RadioHandler(Handler):
             now_playing_data={
                 "station_id": station.get("id"),
                 "station_name": station.get("name"),
+                # What the player was handed (the sweeper's key), and the
+                # station it stands for.
                 "stream_url": url_to_play,
+                "station_url": station.get("stream_url"),
             },
         )
         if response.music_action != "start":

@@ -39,6 +39,12 @@ struct ChatMoreRowActions {
     /// `print` / `Print`. **Nil when the house has no printer**
     /// (``printingOffersDraftPrint(printers:)``), and then no card draws it.
     var print: ((ChatMoreDraftRef) -> Void)? = nil
+    /// Print a file attached in the chat ("print this", 1.4.1). Nil when the
+    /// house has no printer, as ``print`` is.
+    var printAttachment: ((ChatPrintAttachment) -> Void)? = nil
+    /// The printers have been read and the house has none: the attachment
+    /// card says where to add one instead of offering Print.
+    var noPrinter: Bool = false
 }
 
 extension ChatMoreRowExtras {
@@ -49,7 +55,7 @@ extension ChatMoreRowExtras {
     /// `:1449`), and a draft card takes the reply's text too (`:1010`) — in
     /// all three cases the row's `content` is the server's own wording of the
     /// card, which the card then says better.
-    var replacesWords: Bool { isCard || draft != nil }
+    var replacesWords: Bool { isCard || draft != nil || printAttachment?.usable == true }
 }
 
 // MARK: - above the words
@@ -247,6 +253,13 @@ struct ChatMoreRowCards: View {
                 }
                 if let heads = extras.headsUp {
                     ChatMoreHeadsUpCardView(message: id, card: heads, more: more, isLastRow: isLastRow)
+                }
+                if let attachment = extras.printAttachment, attachment.usable {
+                    ChatMoreAttachmentPrintCardView(
+                        attachment: attachment,
+                        print: actions.printAttachment.map { printIt -> () -> Void in { printIt(attachment) } },
+                        noPrinter: actions.noPrinter
+                    )
                 }
                 if let draft = extras.draft {
                     ChatMoreDraftCardView(

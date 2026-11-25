@@ -142,6 +142,26 @@ _SEARCH = r"""
   return { before, after };
 """
 
+_SEARCH_FIELDS = r"""
+  const w = h.global('window');
+  const fields = [
+    { name: 'news_auto_fetch', label: 'Auto-fetch topic news', group: 'News', section: 'common', help: 'Fetch topic feeds on a schedule.' },
+    { name: 'news_items_per_ask', label: 'Stories per ask', group: 'News', section: 'common', help: 'How many stories one ask reads.' },
+    { name: 'news_location', label: 'Local news location', group: 'News', section: 'common',
+      help: 'City or region used to build the local scope.', keywords: ['news', 'location', 'town', 'city', 'weather', 'home', 'place'] },
+    { name: 'news_retention_days', label: 'News retention', group: 'News', section: 'common', help: 'How long items are kept.' },
+    { name: 'news_fetch_hour', label: 'News fetch hour', group: 'News', section: 'common', help: 'When the daily fetch runs.' },
+    { name: 'news_enabled', label: 'News worker', group: 'Workers', section: 'common', help: 'Run the news worker.' },
+    { name: 'tts_news_voice', label: 'News reader voice', group: 'Voice', section: 'common', help: 'Voice for news.' },
+    { name: 'db_pool_size', label: 'Connection pool', group: 'Database', section: 'advanced',
+      help: 'Connections kept open to the database.' },
+  ];
+  const index = w.settingsSearchIndex(w.settingsLayout().groups, fields);
+  const find = (q) => w.settingsSearch(index, q).map((x) => x.key);
+  return { news: find('news'), town: find('town'), weather: find('weather'), advanced: find('connection pool'),
+           helpword: find('kept'), group: find('database'), other: find('zebra') };
+"""
+
 _PANEL = r"""
   const w = h.global('window');
   h.render(); await h.settle(); h.rerender(); await h.settle(); h.rerender();
@@ -270,6 +290,10 @@ SCENARIOS: dict[str, dict] = {
     "search": {
         "files": [COMPONENTS, SETTINGS, CONTAINERS, HEALTH], "component": "SettingsPage",
         "script": _SEARCH,
+    },
+    "search_fields": {
+        "files": [COMPONENTS, SETTINGS, CONTAINERS, HEALTH], "component": "SettingsPage",
+        "script": _SEARCH_FIELDS,
     },
     "panel_admin": {
         "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
@@ -587,6 +611,17 @@ def test_search_jumps_straight_to_a_setting(driven) -> None:
     assert a["rooms"] == ["Rooms", "People", "Phones & browsers", "Printers & scanners"]
 
 
+def test_search_finds_a_setting_by_its_group_its_keywords_and_its_help(driven) -> None:
+    r = driven["search_fields"]
+    # "news" matches a lot of settings; the cap must not push one off the list.
+    assert "advanced/news_location" in r["news"]
+    assert "advanced/news_location" in r["town"] and "advanced/news_location" in r["weather"]
+    assert r["advanced"] == ["advanced/db_pool_size"]        # an Advanced-section field
+    assert {"advanced/news_retention_days", "advanced/db_pool_size"} <= set(r["helpword"])   # help words
+    assert "advanced/db_pool_size" in r["group"]             # its group title finds it
+    assert r["other"] == []
+
+
 def test_advanced_opens_folded_and_a_named_setting_unfolds_it() -> None:
     s = _src("settings.jsx")
     assert "case 'advanced': return <ConfigPanel setupAsked={mark === 'setup'} mark={mark} startFolded/>;" in s
@@ -596,3 +631,15 @@ def test_advanced_opens_folded_and_a_named_setting_unfolds_it() -> None:
     assert "<VersionSection/>" not in config
     about = s[s.index("const AboutPanel = () => {"):]
     assert "<VersionSection/>" in about[:about.index("\n};")]
+
+
+def test_the_home_location_carries_the_old_news_location_keywords() -> None:
+    """1.4.1: "Local news location" moved to Settings → Household → Home
+    location; its search words went with it."""
+    from domovoi.config_schema import EDITABLE_FIELDS, widget_payload
+    assert not any(f.name == "news_location" for f in EDITABLE_FIELDS)
+    assert widget_payload(next(f for f in EDITABLE_FIELDS if f.name == "bot_name"))["keywords"] == []
+    s = _src("settings.jsx")
+    entry = s[s.index("{ id: 'home-location'"):]
+    entry = entry[:entry.index("},")]
+    assert set("news location town city weather home place".split()) <= set(entry.split("words: '")[1].split("'")[0].split())

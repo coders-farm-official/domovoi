@@ -1,0 +1,236 @@
+{
+  "kit_format": 1,
+  "domovoi_version": "1.0.1",
+  "tag": "v1.0.1",
+  "commit": "c0ffee0123456789abcdef0123456789abcdef01",
+  "created_at": "2026-11-22T00:00:00Z",
+  "targets": [
+    "pc-x86_64"
+  ],
+  "includes": [],
+  "android_version_code": null,
+  "part_size": 1048576,
+  "notices": [
+    {
+      "id": "do-not-sell",
+      "text": "Don't sell this stick: some files on it may only be shared for free."
+    }
+  ],
+  "components": [
+    {
+      "kind": "release",
+      "name": "DomovoiSetup.exe",
+      "version": "1.0.1",
+      "licence": "MIT",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "release/DomovoiSetup.exe",
+          "size": 3000,
+          "sha256": "4da7179ab79e2515384310ccbbcdc4082ad3f6b84e28b0b69a60b8025bd4c8bd"
+        },
+        {
+          "path": "release/DomovoiSetup.manifest.json",
+          "size": 276,
+          "sha256": "5b1aa4c7e25fe5df5f08622410f85c2d44a62821a69f50ee929f0b6adad4d11d"
+        },
+        {
+          "path": "release/DomovoiSetup.manifest.json.sig",
+          "size": 330,
+          "sha256": "e9fcc74fe7f2f66138794cf1f01a7653f87149ed25fd65e9b7b58f47aaa482f3"
+        }
+      ]
+    },
+    {
+      "kind": "linux-installer",
+      "name": "install.sh",
+      "version": "1.0.1",
+      "licence": "MIT",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "linux/install.sh",
+          "size": 22,
+          "sha256": "800ac2145b1e0441fc5b136b93e83a5e252e02ef97d0f72d553ac8e556f19922"
+        },
+        {
+          "path": "linux/provision.sh",
+          "size": 94,
+          "sha256": "fe7ee78c17f914c3a17e585afb18a1926f8a6f6b26eeecd762cb28fca6f0a85d"
+        }
+      ]
+    },
+    {
+      "kind": "source",
+      "name": "Domovoi's source",
+      "version": "1.0.1",
+      "licence": "MIT",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "source/domovoi.bundle",
+          "size": 5000,
+          "sha256": "7d52d6495402c5dea9dfdac696deefcfa04f8d29e5371c6413c74fd9f63bf985"
+        }
+      ]
+    },
+    {
+      "kind": "apt",
+      "name": "Ubuntu's packages",
+      "version": "1.0.1",
+      "licence": "LicenseRef-distro-archive",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "apt/amd64/ubuntu/dists/resolute/InRelease",
+          "size": 8,
+          "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f"
+        }
+      ]
+    },
+    {
+      "kind": "apt",
+      "name": "Docker's packages",
+      "version": "1.0.1",
+      "licence": "LicenseRef-distro-archive",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "apt/amd64/docker/dists/resolute/InRelease",
+          "size": 8,
+          "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f"
+        },
+        {
+          "path": "apt/amd64/docker/gpg",
+          "size": 12,
+          "sha256": "aad75540d1039b1ac3027da2abaf2e0a4eb9f2902424a00ae2d165988cb3afd5"
+        }
+      ]
+    },
+    {
+      "kind": "python-wheels",
+      "name": "wheels",
+      "version": "1.0.1",
+      "licence": "MIT",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "python/cp314-x86_64/fixture-1.0-py3-none-any.whl",
+          "size": 14,
+          "sha256": "c539f7a4cdf7d2c3e0e0a2d190f98c2a5892b797d569df9c52f6c45c8e23d161"
+        }
+      ]
+    },
+    {
+      "kind": "container-image",
+      "name": "postgres",
+      "version": "1.0.1",
+      "licence": "PostgreSQL",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "images/postgres_16.15-trixie.tar",
+          "size": 14,
+          "sha256": "061d63149a55fb1680b755a1d1046e8004d8700327eaa3db1c2c15a8f6c157a7"
+        }
+      ]
+    },
+    {
+      "kind": "ollama-runtime",
+      "name": "ollama",
+      "version": "1.0.1",
+      "licence": "MIT",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "ollama/ollama-linux-amd64.tar.zst",
+          "size": 15,
+          "sha256": "4586e0d0bb8224f45b736aac33916b3e110089d5744adb12042eb1e07d2b99d0"
+        }
+      ]
+    },
+    {
+      "kind": "whisper-model",
+      "name": "small.en",
+      "version": "1.0.1",
+      "licence": "MIT",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "speech/whisper-small.en/model.bin",
+          "size": 16,
+          "sha256": "97e9e09b8f9cab1aa43ec3be777ce27ce0363333f55b5a2bb98047890ad98a9b"
+        }
+      ]
+    },
+    {
+      "kind": "piper-voice",
+      "name": "fixture",
+      "version": "1.0.1",
+      "licence": "MIT",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "speech/piper/fixture.onnx",
+          "size": 14,
+          "sha256": "acaced3bffe7cfed8fbde9f062597eddc6eacd7f88f3a63e4c885d902a7746d9"
+        }
+      ]
+    },
+    {
+      "kind": "speaker-model",
+      "name": "fixture",
+      "version": "1.0.1",
+      "licence": "Apache-2.0",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "speech/speaker/fixture.onnx",
+          "size": 16,
+          "sha256": "573af9c550d43712ebdcd1a157dd7f89642a10ed0e07a553699dc8cc0e752d3b"
+        }
+      ]
+    },
+    {
+      "kind": "windows-part",
+      "name": "ubuntu-26.04.1-wsl-amd64.wsl",
+      "version": "1.0.1",
+      "licence": "LicenseRef-distro-archive",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "windows/ubuntu-26.04.1-wsl-amd64.wsl",
+          "size": 28,
+          "sha256": "3b2cca62e2a57bdd44657a7927cdb8f03073e1d7dfe36a780ace4bffc7f49c44"
+        }
+      ]
+    },
+    {
+      "kind": "windows-part",
+      "name": "wsl.2.7.14.0.x64.msi",
+      "version": "1.0.1",
+      "licence": "MIT",
+      "household_added": false,
+      "pinned_by": "fixture",
+      "files": [
+        {
+          "path": "windows/wsl.2.7.14.0.x64.msi",
+          "size": 19,
+          "sha256": "31a1c970ecd54f1bf9650f400a992e9b48af15b3f3fd39a9d05df7360c8aaaf0"
+        }
+      ]
+    }
+  ]
+}

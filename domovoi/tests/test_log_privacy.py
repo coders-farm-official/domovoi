@@ -236,6 +236,22 @@ def test_the_reviewers_proof_a_real_uvicorn_access_log_carries_no_token() -> Non
 # ─── said(): words at DEBUG only ──────────────────────────────────────────
 
 
+def test_station_directory_search_fields_are_blanked_on_its_host_only(monkeypatch) -> None:
+    """The radio plugin's station searches carry what was said in ``name`` /
+    ``tag`` / ``language``: blanked in a URL on the directory's host at the
+    default level, left alone on any other host and at DEBUG."""
+    monkeypatch.setattr(log_privacy, "_words_hidden", lambda: True)
+    line = ("HTTP Request: GET https://de1.api.radio-browser.info/json/stations/search"
+            "?limit=30&name=smooth+jazz&tag=lounge&language=french&order=clickcount")
+    out = scrub(line)
+    assert "smooth" not in out and "lounge" not in out and "french" not in out
+    assert "name=<words>" in out and "limit=30" in out and "order=clickcount" in out
+    other = "GET https://example.org/list?name=kitchen&tag=v2"
+    assert scrub(other) == other
+    monkeypatch.setattr(log_privacy, "_words_hidden", lambda: False)
+    assert scrub(line) == line
+
+
 def test_said_shows_a_word_count_at_info_and_the_words_at_debug(caplog) -> None:
     caplog.set_level(logging.INFO)
     log = logging.getLogger("domovoi.router")
@@ -303,3 +319,12 @@ def test_no_log_line_at_info_or_above_writes_a_transcript_bare() -> None:
                 if bare:
                     offenders.append(f"{path.relative_to(REPO)}:{node.lineno} {sorted(set(bare))}")
     assert offenders == [], "log what was said through log_privacy.said():\n" + "\n".join(offenders)
+
+
+def test_the_player_relay_token_is_blanked_in_a_request_line() -> None:
+    """L23 (review 2026-11-23): the relay's token is the path's last
+    segment; the access log never holds it."""
+    line = 'GET /v1/player-relay/AbC-123_xyz0123456789abcdefABCDEF HTTP/1.1" 200'
+    assert log_privacy.scrub(line) == 'GET /v1/player-relay/*** HTTP/1.1" 200'
+    assert log_privacy.scrub("http://172.17.0.1:6370/v1/player-relay/tok_en") == (
+        "http://172.17.0.1:6370/v1/player-relay/***")

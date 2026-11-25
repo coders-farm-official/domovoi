@@ -22,6 +22,7 @@
  *   * POST /api/satellites/{room}/dropin/end                  — drawer · overview · Hang up
  *   * GET  /api/satellites/{room}/config                      — drawer · settings tab (load)
  *   * PATCH /api/satellites/{room}/config                     — drawer · settings tab (save → Pi rewrites config.toml + restarts)
+ *   * GET/POST /api/satellites/{room}/mic_dsp[/mark]           — drawer · settings tab · XVF3800 mic presets (admin, declared mic_dsp only)
  *   * GET  /api/satellites/{room}/logs                        — drawer · logs tab (lazy: fetched only when the tab is opened)
  *   * /ws/state · `satellites.presence.changed`               — refresh roster
  *   * /ws/state · `satellites.wifi.changed`                   — refresh roster
@@ -563,10 +564,22 @@ const SatConversationTurn = ({ c, showWake = false }) => {
           </button>
         )}</span>}
       </div>
+      {c.heard_by && <SatTurnHeardBy c={c}/>}
       <VoiceMatchLine vm={c.voice_match}/>
     </div>
   );
 };
+
+/* Rooms with several satellites (1.5.0): the room answered, and the turn was
+ * transcribed from the microphone that heard the person best. The server
+ * sets heard_by only when there was a choice (the room has several
+ * satellites, or another device's mic was used). */
+const satHeardByText = (c) => `Answered in the ${c.room_name || 'room'}. Heard best by ${c.heard_by}.`;
+const SatTurnHeardBy = ({ c }) => (
+  <div className="turn-heard-by" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 4 }}>
+    {satHeardByText(c)}
+  </div>
+);
 
 /* ---- Health section + last outage (Settings tab) -------------- */
 // GET /api/satellites/{room}/health: the latest `health` sample the Pi
@@ -760,7 +773,7 @@ const SatHealthCard = ({ room, online }) => {
     let alive = true;
     (async () => {
       try {
-        const d = await apiGet(`/api/satellites/${room}/health`);
+        const d = await apiGet(`/api/satellites/${encodeURIComponent(room)}/health`);
         if (alive) { setData(d); setError(null); }
       } catch (e) {
         if (alive) setError(e.message || String(e));
@@ -904,7 +917,7 @@ const VolumeControl = ({ s, fire }) => {
 
   const commit = async (level) => {
     try {
-      await apiPost(`/api/satellites/${s.room_id}/volume`, { level });
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/volume`, { level });
       fire(`${s.room_id} volume set to ${level}%`);
     } catch (e) {
       reportMutationFailure(fire, 'volume', e);
@@ -963,7 +976,7 @@ const VideoControls = ({ s, fire }) => {
   const online = s.status === 'online';
   const sendDisplay = async (action) => {
     try {
-      await apiPost(`/api/satellites/${s.room_id}/display`, { action });
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/display`, { action });
       fire(action === 'restart_kiosk'
         ? `restarting kiosk on ${s.room_id}…`
         : `screen ${action} sent to ${s.room_id}`);
@@ -971,8 +984,8 @@ const VideoControls = ({ s, fire }) => {
       reportMutationFailure(fire, 'display action', e);
     }
   };
-  const restartKiosk = () => {
-    if (!window.confirm(
+  const restartKiosk = async () => {
+    if (!await askConfirm(
       `Restart the kiosk browser on ${s.room_id}?\n\n` +
       `The screen goes blank for a few seconds while it relaunches.`
     )) return;
@@ -1034,7 +1047,7 @@ const SatCaptureControl = ({ s, fire, refresh }) => {
   const plural = (n) => `${n} recording${n === 1 ? '' : 's'}`;
 
   const turnOn = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Record commands in ${s.room_id}?\n\n` +
       `Each command said in this room (after the wake word, or answering a ` +
       `follow-up question) is kept on the Domovoi server for ${days} days, the audio ` +
@@ -1055,7 +1068,7 @@ const SatCaptureControl = ({ s, fire, refresh }) => {
   };
 
   const turnOff = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Stop recording in ${s.room_id}?\n\n` +
       (kept ? `The ${plural(kept)} kept so far will be deleted now. This can't be undone.`
             : 'Nothing kept here yet, so nothing to delete.')
@@ -1273,7 +1286,7 @@ const RoomVoicePicker = ({ s, fire, refresh }) => {
     if (value === current) return;
     setBusy(true);
     try {
-      const res = await apiPost(`/api/satellites/${s.room_id}/voice`, { voice: value || null });
+      const res = await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/voice`, { voice: value || null });
       const spoken = res?.voice || serverLabel;
       fire(res?.kept_on === 'device'
         ? `${s.room_id} switches to ${spoken}: it says so in the new voice`
@@ -1393,7 +1406,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       // The server returns a 200 with `announced_to: []` when
       // the WS to this room is dead under the active-sessions map.
       // Inspect that to give an honest toast.
-      const result = await apiPost(`/api/satellites/${s.room_id}/announce`, { message: msg });
+      const result = await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/announce`, { message: msg });
       const delivered = Array.isArray(result?.announced_to) ? result.announced_to : [];
       if (delivered.includes(s.room_id)) {
         fire(`announced to ${s.room_id}`);
@@ -1409,9 +1422,9 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const restartSat = async () => {
     if (upgrading) { fire(`${s.room_id} is upgrading — it restarts itself when the new code is in`); return; }
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
-    if (!window.confirm(`Restart the ${s.room_id} room? It'll drop offline for a few seconds while the service bounces.`)) return;
+    if (!await askConfirm(`Restart the ${s.room_id} room? It'll drop offline for a few seconds while the service bounces.`)) return;
     try {
-      await apiPost(`/api/satellites/${s.room_id}/restart`, {});
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/restart`, {});
       fire(`restarting ${s.room_id}…`);
     } catch (e) {
       reportMutationFailure(fire, 'restart', e);
@@ -1421,7 +1434,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const upgradeSat = async () => {
     if (upgrading || asking) return;
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
-    if (!window.confirm(
+    if (!await askConfirm(
       `Upgrade the ${s.room_id} room to ${coreSha || 'the latest domovoi code'}?\n\n` +
       `It pulls the new room software from the Domovoi server, backs up its current ` +
       `tree, and restarts — dropping offline for a few seconds. If the new code won't ` +
@@ -1432,7 +1445,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
     setUpgradeErr(null);
     setAsking(true);
     try {
-      const res = await apiPost(`/api/satellites/${s.room_id}/upgrade`, {});
+      const res = await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/upgrade`, {});
       // Locked from here until the satellite is back (satUpgradeView).
       const rec = res && res.upgrade;
       const startedMs = rec && rec.started_at ? Date.parse(rec.started_at) : NaN;
@@ -1459,7 +1472,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   // moving a room to a new device (the old token no longer matches). Works
   // whether or not the room is online — the pairing lives in the DB.
   const resetPairing = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       `Reset pairing for ${s.room_id}?\n\n` +
       `The next device that connects as this room will re-pair and take it ` +
       `over. Do this after re-flashing the Pi or moving the room to a new ` +
@@ -1467,7 +1480,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       `the room.`
     )) return;
     try {
-      const r = await apiPost(`/api/satellites/${s.room_id}/pairing/reset`, {});
+      const r = await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/pairing/reset`, {});
       fire(r && r.reset ? `pairing reset for ${s.room_id}` : `${s.room_id} had no pairing to reset`);
     } catch (e) {
       reportMutationFailure(fire, 'reset pairing', e);
@@ -1485,7 +1498,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
     if (!peer) { fire('pick a room to drop in on'); return; }
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
     try {
-      await apiPost(`/api/satellites/${s.room_id}/dropin/start`, { target_room: peer });
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/dropin/start`, { target_room: peer });
       fire(`dropping in: ${s.room_id} → ${peer}`);
       setPeer('');
     } catch (e) {
@@ -1494,7 +1507,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   };
   const hangUp = async () => {
     try {
-      await apiPost(`/api/satellites/${s.room_id}/dropin/end`, {});
+      await apiPost(`/api/satellites/${encodeURIComponent(s.room_id)}/dropin/end`, {});
       fire(`hung up ${s.room_id}`);
     } catch (e) {
       reportMutationFailure(fire, 'hang up', e);
@@ -1536,17 +1549,17 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
                   <IconButton name={np.state === 'play' ? 'pause' : 'play'}
                               title={np.state === 'play' ? 'pause' : 'resume'}
                               onClick={async () => {
-                                try { await apiPost(`/api/music/${np.state === 'play' ? 'pause' : 'resume'}/${s.room_id}`); }
+                                try { await apiPost(`/api/music/${np.state === 'play' ? 'pause' : 'resume'}/${encodeURIComponent(s.room_id)}`); }
                                 catch (e) { reportMutationFailure(fire, np.state === 'play' ? 'pause' : 'resume', e); }
                               }}/>
                   <IconButton name="skip-forward" title="skip"
                               onClick={async () => {
-                                try { await apiPost(`/api/music/skip/${s.room_id}`); }
+                                try { await apiPost(`/api/music/skip/${encodeURIComponent(s.room_id)}`); }
                                 catch (e) { reportMutationFailure(fire, 'skip', e); }
                               }}/>
                   <IconButton name="square" title="stop"
                               onClick={async () => {
-                                try { await apiPost(`/api/music/stop/${s.room_id}`); }
+                                try { await apiPost(`/api/music/stop/${encodeURIComponent(s.room_id)}`); }
                                 catch (e) { reportMutationFailure(fire, 'stop', e); }
                               }}/>
                 </div>
@@ -1684,10 +1697,10 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             {s.room_label || 'ungrouped'}
           </span>
           <IconButton name="pencil" title="edit room label" onClick={async () => {
-            const v = window.prompt('Room label (empty to clear):', s.room_label || '');
+            const v = await askPrompt('Room label (empty to clear):', { value: s.room_label || '', confirmLabel: 'Save' });
             if (v === null) return;
             try {
-              await apiPatch(`/api/satellites/${s.room_id}`, { room_label: v.trim() || null });
+              await apiPatch(`/api/satellites/${encodeURIComponent(s.room_id)}`, { room_label: v.trim() || null });
               fire(v.trim() ? `labeled ${s.room_id} as "${v.trim()}"` : `cleared ${s.room_id}'s room label`);
               refresh && refresh();
             } catch (e) {
@@ -1724,12 +1737,12 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
           </Button>
           {waiting && (
             <Button icon="trash-2" onClick={async () => {
-              if (!window.confirm(
+              if (!await askConfirm(
                 `Remove ${s.room_id}?\n\nThis deletes the adopted-but-never-connected room and its ` +
                 `preseeded pairing. Do this if the device was unplugged mid-setup or adopted by mistake.`
               )) return;
               try {
-                await apiDelete(`/api/satellites/${s.room_id}`);
+                await apiDelete(`/api/satellites/${encodeURIComponent(s.room_id)}`);
                 fire(`removed ${s.room_id}`);
                 onClose && onClose();
                 refresh && refresh();
@@ -1747,14 +1760,14 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
               refuses to retire a room out from under a live device. */}
           {!waiting && s.status !== 'online' && (
             <Button icon="trash-2" onClick={async () => {
-              if (!window.confirm(
+              if (!await askConfirm(
                 `Retire ${s.room_id}?\n\n` +
                 `Frees the name so a new room device can use it. Removes this room's ` +
                 `pairing, any pending approval, and its music instance.\n\n` +
                 `Saved playlists for the room and conversation history are kept.`
               )) return;
               try {
-                await apiDelete(`/api/satellites/${s.room_id}?purge=true`);
+                await apiDelete(`/api/satellites/${encodeURIComponent(s.room_id)}?purge=true`);
                 fire(`retired ${s.room_id} - the name is free again`);
                 onClose && onClose();
                 refresh && refresh();
@@ -1809,8 +1822,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
 };
 
 const RoomSessionsBody = ({ room }) => {
-  const { items: sessions, loading } = useApiList(`/api/satellites/${room}/sessions?limit=100`);
-  const { items: convos, reread } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  const { items: sessions, loading } = useApiList(`/api/satellites/${encodeURIComponent(room)}/sessions?limit=100`);
+  const { items: convos, reread } = useApiList(`/api/satellites/${encodeURIComponent(room)}/conversations?limit=300`);
   useSatPendingRefresh(convos, reread);
   if (loading && sessions.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading sessions…</div>;
@@ -1822,7 +1835,7 @@ const RoomSessionsBody = ({ room }) => {
 
 const RoomConversationsBody = ({ room }) => {
   const [q, setQ] = React.useState('');
-  const { items: all, loading, error, reread } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  const { items: all, loading, error, reread } = useApiList(`/api/satellites/${encodeURIComponent(room)}/conversations?limit=300`);
   useSatPendingRefresh(all, reread);
   const filtered = all.filter(c => !q || ((c.user_text || '') + ' ' + (c.assistant_text || '')).toLowerCase().includes(q.toLowerCase()));
   const several = severalWakeWords(all);
@@ -1854,7 +1867,7 @@ const RoomConversationsBody = ({ room }) => {
 };
 
 const RoomNotesBody = ({ room }) => {
-  const { items: notes, loading, error } = useApiList(`/api/satellites/${room}/notes`);
+  const { items: notes, loading, error } = useApiList(`/api/satellites/${encodeURIComponent(room)}/notes`);
   if (loading && notes.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading notes…</div>;
   if (error && error.deviceTokenRequired && notes.length === 0)
@@ -1930,7 +1943,7 @@ const RoomTimersBody = ({ room, fire }) => {
   const shared = useSharedScreen();
   // A reminder's words answer to a household credential (rule M1):
   // re-read when one arrives or goes.
-  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${room}/timers`,
+  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${encodeURIComponent(room)}/timers`,
                                                        { refetchOnAuth: true });
   // Tick state so the remaining-time column counts down between fetches.
   const [, setTick] = React.useState(0);
@@ -1941,7 +1954,7 @@ const RoomTimersBody = ({ room, fire }) => {
 
   const onCancel = async (t) => {
     try {
-      await apiDelete(`/api/satellites/${room}/timers/${t.id}`);
+      await apiDelete(`/api/satellites/${encodeURIComponent(room)}/timers/${t.id}`);
       fire(`cancelled ${t.is_reminder ? 'reminder' : 'timer'} #${t.id}`);
       refresh();
     } catch (e) {
@@ -2020,7 +2033,7 @@ const useSourceTones = () => {
 };
 
 const RoomRecentlyPlayedBody = ({ room, fire }) => {
-  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${room}/recently-played?limit=100`);
+  const { items: rows, loading, refresh } = useApiList(`/api/satellites/${encodeURIComponent(room)}/recently-played?limit=100`);
   const sourceTones = useSourceTones();
   // Fulfiller availability gates the "+ add" affordance (design §10.1:
   // the button appears while a media-acquisition-fulfiller capability
@@ -2241,11 +2254,94 @@ const RoomQuietHoursSettings = ({ room, fire }) => {
   );
 };
 
+/* ---- Microphone DSP presets (1.4.1, domovoi/mic_dsp.py) --------------
+ * An XVF3800 satellite that declared mic_dsp, admins only: pick a preset by
+ * name (the satellite applies it from its fixed table, at runtime only),
+ * see what the chip read back, and stamp a test marker into the
+ * satellite's and the server's logs. Nothing here for any other device. */
+const SAT_MIC_DSP_MARK_MAX = 120;
+const SatMicDspControl = ({ s, fire }) => {
+  const room = s.room_id;
+  const path = `/api/satellites/${encodeURIComponent(room)}/mic_dsp`;
+  const { data, error, refresh } = useApiObject(path, { quiet: true });
+  const [busy, setBusy] = React.useState(false);
+  const [mark, setMark] = React.useState('');
+  const state = data && data.state;
+  const presets = (data && data.presets) || [];
+  const fmt = (v) => (Array.isArray(v) ? v.join(', ') : '?');
+
+  // The satellite answers in a second or two: read again until it has.
+  const settle = () => { [1500, 4000, 8000].forEach((ms) => setTimeout(() => refresh && refresh(), ms)); };
+
+  const pick = async (preset) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await apiFetch(path, { method: 'POST', body: JSON.stringify({ preset }) });
+      fire(`${room}: mic preset ${preset} sent`);
+      settle();
+    } catch (err) {
+      reportMutationFailure(fire, 'change the mic preset', err);
+    } finally { setBusy(false); }
+  };
+
+  const stamp = async (e) => {
+    e && e.preventDefault();
+    const text = mark.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    try {
+      const res = await apiFetch(`${path}/mark`, { method: 'POST', body: JSON.stringify({ text }) });
+      fire(`marked “${(res && res.text) || text}”`);
+      setMark('');
+    } catch (err) {
+      reportMutationFailure(fire, 'add the marker', err);
+    } finally { setBusy(false); }
+  };
+
+  const params = state ? Object.keys(state.readback || {}) : [];
+  return (
+    <div className="sat-mic-dsp" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 6 }}>microphone dsp · admin</div>
+      {error && !data && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>couldn’t read the mic preset: {error}</div>}
+      {presets.map((p) => (
+        <label key={p.name} className="sat-timer-scope" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
+                                                                 cursor: busy ? 'default' : 'pointer', padding: '3px 0' }}>
+          <input type="radio" name={`micdsp-${room}`} value={p.name}
+                 checked={!!state && state.preset === p.name} disabled={busy} onChange={() => pick(p.name)}/>
+          {p.label}
+        </label>
+      ))}
+      {state ? (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
+          {state.ok ? 'read back' : `not applied: ${state.error || 'unknown error'}`}
+          {state.at && <> · {relTime(state.at)}</>}
+          {params.map((k) => (
+            <div key={k}>{k} = {fmt(state.readback[k])}</div>
+          ))}
+        </div>
+      ) : data && (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>waiting for the satellite to report its values…</div>
+      )}
+      <form onSubmit={stamp} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+        <input type="text" aria-label="test marker" placeholder="marker, e.g. block 2, 1m"
+               value={mark} maxLength={SAT_MIC_DSP_MARK_MAX} onChange={(e) => setMark(e.target.value)}
+               style={{ flex: '1 1 160px', font: 'inherit', fontSize: 13, padding: '4px 6px', borderRadius: 'var(--r-sm)',
+                        border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}/>
+        <Button type="submit" disabled={busy || !mark.trim()}>Mark</Button>
+      </form>
+      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
+        runtime only · unplugging the array restores its own settings · the marker goes into this satellite’s log and the server’s
+      </div>
+    </div>
+  );
+};
+
 // Per-satellite config editor. Reuses the global ConfigField + _groupBy
 // from components.jsx (same field UI as the server gear). Saving
 // pushes edits to the Pi, which rewrites config.toml and restarts.
 const RoomSettingsBody = ({ room, fire }) => {
-  const { data, loading } = useApiObject(`/api/satellites/${room}/config`);
+  const { data, loading } = useApiObject(`/api/satellites/${encodeURIComponent(room)}/config`);
   const fields = (data && data.fields) || [];
   const reported = data && data.reported;
   const [edits, setEdits] = React.useState({});
@@ -2265,10 +2361,10 @@ const RoomSettingsBody = ({ room, fire }) => {
 
   const save = async () => {
     if (dirtyCount === 0 || badEdits.length > 0) return;
-    if (!window.confirm(`Save and restart the ${room} room? It'll drop offline for a few seconds while it applies the change.`)) return;
+    if (!await askConfirm(`Save and restart the ${room} room? It'll drop offline for a few seconds while it applies the change.`)) return;
     setSaving(true); setResult(null);
     try {
-      const res = await apiPatch(`/api/satellites/${room}/config`, { changes: edits });
+      const res = await apiPatch(`/api/satellites/${encodeURIComponent(room)}/config`, { changes: edits });
       setResult(res);
       const rejected = (res && res.rejected) || {};
       setEdits(prev => { const n = {}; Object.keys(prev).forEach(k => { if (k in rejected) n[k] = prev[k]; }); return n; });
@@ -2364,7 +2460,7 @@ const RoomLogsBody = ({ room, online }) => {
   const load = React.useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      setData(await apiGet(`/api/satellites/${room}/logs?max_bytes=${LOG_VIEW_BYTES}`));
+      setData(await apiGet(`/api/satellites/${encodeURIComponent(room)}/logs?max_bytes=${LOG_VIEW_BYTES}`));
       setRefusal(null);
     } catch (e) {
       setError(e.message || String(e));
@@ -2449,9 +2545,94 @@ const RoomLogsBody = ({ room, online }) => {
   );
 };
 
+/* ---- Diagnostics tab ---------------------------------------- */
+/* Read-only probes (1.5.0, owner decision 2026-11-22): what an admin would
+ * otherwise SSH in for, from a fixed list of named probes the room device
+ * runs as its own account — no command input of any kind. The tab is only
+ * there for a device that declared `diagnostics` in its hello (s.diagnostics).
+ * Each answer is capped and scrubbed on the device and again on the server. */
+const satDiagStamp = (at) => (typeof at === 'number' ? new Date(at * 1000).toLocaleString() : '');
+
+const RoomDiagnosticsBody = ({ room, fire }) => {
+  const [results, setResults] = React.useState({});   // probe -> result
+  const [order, setOrder] = React.useState([]);        // [[probe, label]]
+  const [busy, setBusy] = React.useState(null);        // 'all' | probe name
+  const [error, setError] = React.useState(null);
+  React.useEffect(() => { setResults({}); setOrder([]); setError(null); }, [room]);
+
+  const run = async (probe) => {
+    setBusy(probe || 'all'); setError(null);
+    try {
+      const path = `/api/satellites/${encodeURIComponent(room)}/diagnostics${probe ? `/${encodeURIComponent(probe)}` : ''}`;
+      const d = await apiPost(path);
+      if (d && d.probes) setOrder(Object.entries(d.probes));
+      setResults((prev) => {
+        const next = { ...prev };
+        for (const r of (d && d.results) || []) next[r.probe] = r;
+        return next;
+      });
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally { setBusy(null); }
+  };
+
+  const copyAll = async () => {
+    const text = order.filter(([p]) => results[p]).map(([p, label]) => {
+      const r = results[p];
+      return `## ${label} (${p}) · ${r.ok ? 'ok' : 'failed'} · ${satDiagStamp(r.at)}\n${r.text}`;
+    }).join('\n\n');
+    const ok = await copyToClipboard(`Diagnostics for ${room}\n\n${text}`);
+    fire(ok ? 'diagnostics copied' : 'couldn’t copy: select the text instead');
+  };
+  const any = order.some(([p]) => results[p]);
+
+  return (
+    <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <Button variant="primary" icon="stethoscope" disabled={!!busy} onClick={() => run(null)}>
+          {busy === 'all' ? 'Running…' : 'Run all'}
+        </Button>
+        {any && <Button icon="copy" disabled={!!busy} onClick={copyAll}>Copy</Button>}
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--fg-muted)' }}>
+          read-only checks · secrets taken out
+        </span>
+      </div>
+      {error && <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>{error}</div>}
+      {!any && !error && (
+        <Empty glyph="sleeping" title="nothing run yet"
+               sub="Run all checks the logs, network, disk and memory, audio devices, versions and restarts on the device itself"/>
+      )}
+      {order.map(([probe, label]) => {
+        const r = results[probe];
+        if (!r) return null;
+        return (
+          <div key={probe} style={{ border: '1px solid var(--border-soft)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                          borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+              <Pill tone={r.ok ? 'ok' : 'err'}>{r.ok ? 'ok' : 'failed'}</Pill>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{satDiagStamp(r.at)}</span>
+              <div style={{ marginLeft: 'auto' }}>
+                <Button icon="rotate-cw" disabled={!!busy} onClick={() => run(probe)}>
+                  {busy === probe ? 'Running…' : 'Run again'}
+                </Button>
+              </div>
+            </div>
+            <pre className="mono" style={{ margin: 0, padding: '10px 12px', background: 'var(--sunken)',
+                                           color: 'var(--fg-muted)', fontSize: 11, lineHeight: 1.55,
+                                           whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 320, overflow: 'auto' }}>{r.text}</pre>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 /* ---- Drawer ----------------------------------------------- */
 const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
   const [tab, setTab] = React.useState('overview');
+  // The mic DSP block is admin-only: hidden without the sign-in.
+  const adminSignedIn = useAdminSignedIn();
   React.useEffect(() => { setTab('overview'); }, [s?.room_id]);
   React.useEffect(() => {
     if (!s) return;
@@ -2471,6 +2652,8 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
     { id: 'notes',         label: 'Notes',           icon: 'sticky-note' },
     { id: 'timers',        label: 'Timers',          icon: 'timer' },
     { id: 'logs',          label: 'Logs',            icon: 'terminal' },
+    // Only for a connected device that declared it (no misleading controls).
+    ...(s.diagnostics ? [{ id: 'diagnostics', label: 'Diagnostics', icon: 'stethoscope' }] : []),
     { id: 'settings',      label: 'Settings',        icon: 'settings' },
   ];
 
@@ -2502,9 +2685,11 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
           {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
+          {tab === 'diagnostics'   && s.diagnostics && <RoomDiagnosticsBody room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && <SatHealthCard room={s.room_id} online={s.status === 'online'}/>}
           {tab === 'settings'      && <RoomQuietHoursSettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && s.board === 'android_room' && <RoomBatterySettings room={s.room_id} fire={fire}/>}
+          {tab === 'settings'      && s.mic_dsp && s.status === 'online' && adminSignedIn && <SatMicDspControl s={s} fire={fire}/>}
           {tab === 'settings'      && (satCan(s, 'config')
             ? <RoomSettingsBody room={s.room_id} fire={fire}/>
             : s.board === 'android_room'
@@ -2514,6 +2699,8 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
               : <Empty glyph="sleeping" title="settings stay on the device"
                        sub={`${satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device'} didn't offer remote settings — change them on the device itself`}/>)}
           {tab === 'settings'      && <SatCaptureControl s={s} fire={fire} refresh={refresh}/>}
+          {/* support_session.jsx (1.5.0); a page that didn't load it has no control. */}
+          {tab === 'settings'      && typeof SatSupportControl !== 'undefined' && <SatSupportControl s={s} fire={fire} refresh={refresh}/>}
         </div>
       </aside>
     </>
@@ -2690,7 +2877,7 @@ const MusicGroupsCard = ({ sats, fire }) => {
     }
   };
   const remove = async (g) => {
-    if (!window.confirm(`Delete the group ${g.name}?\n\nMusic playing in its rooms keeps playing.`)) return;
+    if (!await askConfirm(`Delete the group ${g.name}?\n\nMusic playing in its rooms keeps playing.`)) return;
     setBusy(true);
     try {
       await apiDelete(`/api/music/groups/${g.id}`);
@@ -2957,10 +3144,17 @@ const approvalFieldError = (e) => {
   return { ...shape, text: apiErrorText(e, 0) };
 };
 
-const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => {
+const ApprovalCard = ({ a, rooms = [], busy, error, onApprove, onReject, onClearError }) => {
   const [code, setCode] = React.useState('');
-  const ready = code.length >= 4 && !busy;
-  const submit = () => { if (ready) onApprove(a, code); };
+  // Which room is it in? The room the device asked for when that room has a
+  // name here; otherwise a room of its own, as before 1.5.0 (or a new one).
+  const asked = a.requested_room && a.requested_room_name
+    && rooms.some(r => r.room_id === a.requested_room) ? a.requested_room : '';
+  const [roomPick, setRoomPick] = React.useState(asked);
+  const [roomName, setRoomName] = React.useState('');
+  const roomOk = roomChoiceReady(roomPick, roomName, true);
+  const ready = code.length >= 4 && !busy && roomOk;
+  const submit = () => { if (ready) onApprove(a, code, roomChoiceBody(roomPick, roomName)); };
   // Typing is the operator answering the message, so it goes. The digits
   // stay: fixing the one that was wrong beats retyping all six, and the
   // budget is five tries.
@@ -2973,7 +3167,7 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px',
                     flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ fontWeight: 600 }}>{a.room_id}</div>
+          <div style={{ fontWeight: 600 }}>{a.satellite_id || a.room_id}</div>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             {(a.board && (SAT_BOARD_LABELS[a.board] || a.board)) || 'unknown board'}
             {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
@@ -2989,6 +3183,12 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
                 </span>
               : null}
           </div>
+        </div>
+        <div style={{ flexBasis: '100%', order: 5 }}>
+          <div className="label" style={{ marginBottom: 4 }}>Which room is it in?</div>
+          <RoomPicker rooms={rooms} value={roomPick} onChange={setRoomPick}
+                      newName={roomName} onNewName={setRoomName}
+                      none="A room of its own" label="which room is it in"/>
         </div>
         <input value={code}
                onChange={e => retype(e.target.value.replace(/\D/g, '').slice(0, 10))}
@@ -3068,8 +3268,8 @@ const PendingSatCard = ({ p, adopted, onAdopt }) => {
       ) : failed ? (
         <Button variant="primary" icon="wifi" onClick={() => onAdopt(p, true)}>Re-enter Wi-Fi</Button>
       ) : readopt ? (
-        <Button icon="rotate-cw" onClick={() => {
-          if (window.confirm(`Re-provision this device as "${p.already_adopted_as}"? Its pairing token is rotated — the previous device for that room stops matching.`)) onAdopt(p, true);
+        <Button icon="rotate-cw" onClick={async () => {
+          if (await askConfirm(`Re-provision this device as "${p.already_adopted_as}"? Its pairing token is rotated — the previous device for that room stops matching.`)) onAdopt(p, true);
         }}>Re-provision</Button>
       ) : (
         <Button variant="primary" icon="plug" onClick={() => onAdopt(p, false)}>Adopt</Button>
@@ -3203,7 +3403,7 @@ const SpareWindowsSetupOffer = ({ st, running, fetching, onGet }) => {
   if (!st.fetchable) {
     return (
       <div className="spare-windows-setup-offer" style={note}>
-        {st.internet_off
+        {st.kit_note ? st.kit_note : st.internet_off
           ? 'Internet access is off (Settings → Privacy → Internet), so this server can’t get the double-click Setup; the command above does the same.'
           : 'A double-click Setup will be offered here once a Domovoi release carries it; until then, the command above does the same.'}
       </div>
@@ -3318,6 +3518,7 @@ const SpareWindows = ({ res, fire }) => {
                 itself.{' '}
                 {rt.fetch && rt.fetch.ok === false && rt.fetch.message
                   ? <span style={{ color: 'var(--err-ink)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+          {!rt.ready && rt.kit_note && <div className="spare-kit-note" style={{ marginTop: 6 }}>{rt.kit_note}</div>}
           {!rt.ready && (
             <div style={{ marginTop: 6 }}>
               <Button icon="download" disabled={running || fetching} onClick={getFiles}>
@@ -3621,6 +3822,7 @@ const SpareLinuxPython = ({ res, fire }) => {
             Get it now, or the laptop downloads the same pinned file from GitHub itself.{' '}
             {rt.fetch && rt.fetch.ok === false && rt.fetch.message
               ? <span style={{ color: 'var(--err-ink)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+      {!rt.ready && rt.kit_note && <div className="spare-kit-note" style={{ marginTop: 6 }}>{rt.kit_note}</div>}
       {!rt.ready && (
         <div style={{ marginTop: 6 }}>
           <Button icon="download" disabled={running || fetching} onClick={getIt}>
@@ -3812,22 +4014,25 @@ const SpareUsbStick = ({ res, body, fire }) => {
   );
 };
 
-const SpareDeviceCard = ({ fire }) => {
+const SpareDeviceCard = ({ fire, target = null }) => {
   const admin = useAdminSignedIn();
   const [open, setOpen] = React.useState(false);
   const [room, setRoom] = React.useState('');
+  // "Add a satellite to the Kitchen" (1.5.0): the room drawer hands over an
+  // existing room; the server names the device ("Kitchen 2") and the code
+  // carries `in=kitchen`, so its approval card pre-selects the Kitchen.
+  const [inRoom, setInRoom] = React.useState(null);   // {room_id, name}
+  const cardRef = React.useRef(null);
   const [core, setCore] = React.useState('');
   const [editCore, setEditCore] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [res, setRes] = React.useState(null);
   const [err, setErr] = React.useState(null);
-  if (!admin) return null;
-
-  const make = async () => {
-    if (!room.trim() || busy) return;
+  const make = async (into = inRoom) => {
+    if ((!into && !room.trim()) || busy) return;
     setBusy(true); setErr(null);
     try {
-      const body = { room: room.trim() };
+      const body = into ? { in_room: into.room_id } : { room: room.trim() };
       if (editCore && core.trim()) body.core = core.trim();
       const r = await apiPost('/api/satellites/enrolment', body);
       setRes(r);
@@ -3839,6 +4044,18 @@ const SpareDeviceCard = ({ fire }) => {
       setBusy(false);
     }
   };
+  React.useEffect(() => {
+    if (!target || !admin) return;
+    const into = { room_id: target.room_id, name: target.name };
+    setInRoom(into); setRes(null); setOpen(true);
+    make(into);
+    const el = cardRef.current;
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+  if (!admin) return null;
+  const leaveRoom = () => { setInRoom(null); setRes(null); setErr(null); };
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(res.command);
@@ -3849,7 +4066,7 @@ const SpareDeviceCard = ({ fire }) => {
   };
 
   return (
-    <div className="spare-device-card"
+    <div className="spare-device-card" ref={cardRef}
          style={{ background: 'var(--card)', border: '1px solid var(--border)',
                   borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)' }}>
       <button onClick={() => setOpen(o => !o)}
@@ -3871,12 +4088,20 @@ const SpareDeviceCard = ({ fire }) => {
             approval code, and nothing in this command or code is a password. Spare computers
             and phones work as rooms the same way. (The USB stick is a preview: see its column below.)
           </div>
+          {inRoom ? (
+            <div className="spare-in-room" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ fontSize: 13, flex: 1, minWidth: 200 }}>
+                Adding a satellite to the {inRoom.name}.
+              </div>
+              <Button variant="ghost" disabled={busy} onClick={leaveRoom}>Make a new room instead</Button>
+            </div>
+          ) : (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input value={room} onChange={e => setRoom(e.target.value)} maxLength={64}
                    onKeyDown={e => { if (e.key === 'Enter') make(); }}
                    placeholder="room name, e.g. Kid's Room" aria-label="room name"
                    style={{ ...smInput, minWidth: 220 }}/>
-            <Button variant="primary" icon="qr-code" disabled={!room.trim() || busy} onClick={make}>
+            <Button variant="primary" icon="qr-code" disabled={!room.trim() || busy} onClick={() => make()}>
               {busy ? 'making…' : 'make the code'}
             </Button>
             <label style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -3889,6 +4114,7 @@ const SpareDeviceCard = ({ fire }) => {
                      style={{ ...smInput, minWidth: 220 }}/>
             )}
           </div>
+          )}
           {err && (
             <div role="alert" style={{ fontSize: 12, color: 'var(--err-ink)' }}>
               {err}{/home network/.test(err) && !editCore
@@ -3898,7 +4124,10 @@ const SpareDeviceCard = ({ fire }) => {
           {res && (
             <>
               <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-                It connects as <span className="mono">{res.room_id}</span> to{' '}
+                {res.in_room && inRoom
+                  ? `It joins the ${inRoom.name} as ${res.room}. It connects as `
+                  : 'It connects as '}
+                <span className="mono">{res.room_id}</span> to{' '}
                 <span className="mono">{res.core}</span>.
               </div>
               {res.conflict && <div role="alert" style={{ fontSize: 12, color: 'var(--warn-ink)' }}>{res.conflict}</div>}
@@ -3929,7 +4158,9 @@ const SpareDeviceCard = ({ fire }) => {
               </div>
               {res.command_windows && <SpareWindows res={res} fire={fire}/>}
               <SpareUsbStick res={res} fire={fire}
-                             body={editCore && core.trim() ? { room: res.room, core: core.trim() } : { room: res.room }}/>
+                             body={{ room: res.room,
+                                     ...(res.in_room ? { in_room: res.in_room } : {}),
+                                     ...(editCore && core.trim() ? { core: core.trim() } : {}) }}/>
             </>
           )}
         </div>
@@ -3945,6 +4176,502 @@ const SpareDeviceCard = ({ fire }) => {
  * read, action and auth tier is the same either way. */
 // How often the page asks whether the core answers (the web pings it).
 const SAT_HEALTH_POLL_MS = 10000;
+
+/* ---- Rooms and their satellites (1.5.0) ---------------------------------
+ *
+ * A room is a place; a satellite is a device in one room. The page's cards
+ * stay one per device (their drawers hold the per-satellite tabs); this
+ * block is the room view on top: each room with the satellites in it, and
+ * the admin's way to rename, move, create, delete and merge. Reads are the
+ * household's (GET /api/rooms); every change is the admin's, so the
+ * controls only show to a signed-in admin. A merge is OFFERED from the
+ * server's merge_offers and only ever runs from the admin's own click
+ * (owner Q11). Words: "satellite" lives here on the admin page; a device
+ * with no name of its own reads "Satellite for the Kitchen".
+ */
+const ROOM_NEW = '__new__';
+
+const roomSatName = (sat, room) => sat.name || `Satellite for the ${room.name}`;
+const roomSatIsPhone = (sat) => sat.board === 'android_room' || sat.board === 'ios_room';
+
+const roomsErrText = (e, what) => {
+  if (e && e.status === 409) return `${what}: that conflicts with how the room is set up now.`;
+  if (e && e.status === 404) return `${what}: it was already changed. Refresh and try again.`;
+  return mutationErrorText(e, what, { kept: false });
+};
+
+/* Which room: an existing one, or a new one by name. `none` is the extra
+ * first choice for the approval's "a room of its own". */
+const RoomPicker = ({ rooms, value, onChange, newName, onNewName, exclude, none, label }) => (
+  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+    <select value={value} aria-label={label} onChange={e => onChange(e.target.value)}
+            style={{ ...adoptInputStyle, height: 34, width: 'auto', minWidth: 150 }}>
+      {none ? <option value="">{none}</option> : <option value="" disabled>choose a room</option>}
+      {rooms.filter(r => r.room_id !== exclude)
+            .map(r => <option key={r.room_id} value={r.room_id}>{r.name}</option>)}
+      <option value={ROOM_NEW}>a new room…</option>
+    </select>
+    {value === ROOM_NEW && (
+      <input value={newName} onChange={e => onNewName(e.target.value)} aria-label="new room name"
+             placeholder="Den" maxLength={120}
+             style={{ ...adoptInputStyle, width: 150 }}/>
+    )}
+  </div>
+);
+
+/* A room choice as the API takes it: exactly one key, or none. */
+const roomChoiceBody = (value, newName) =>
+  value === ROOM_NEW ? { new_room_name: newName.trim() }
+    : value ? { room_id: value } : {};
+
+const roomChoiceReady = (value, newName, noneOk) =>
+  value === ROOM_NEW ? newName.trim().length > 0 : (noneOk || !!value);
+
+const RoomSatelliteRow = ({ room, sat, rooms, admin, canOpen, onOpen, fire, refresh }) => {
+  const [mode, setMode] = React.useState(null);        // null | 'rename' | 'move'
+  const [name, setName] = React.useState(sat.name || '');
+  const [dest, setDest] = React.useState('');
+  const [destName, setDestName] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const id = encodeURIComponent(sat.satellite_id);
+  const done = () => { setMode(null); setBusy(false); refresh(); };
+  const saveName = async () => {
+    setBusy(true);
+    try {
+      await apiPatch(`/api/satellites/${id}/name`, { name: name.trim() || null });
+      fire(name.trim() ? 'Satellite renamed' : 'Satellite name cleared');
+      done();
+    } catch (e) { setBusy(false); const t = roomsErrText(e, 'rename'); if (t) fire(t); }
+  };
+  const move = async () => {
+    setBusy(true);
+    try {
+      const r = await apiPost(`/api/satellites/${id}/room`, roomChoiceBody(dest, destName));
+      fire(r && r.moved === false ? 'It is already there'
+        : r && r.learned_samples_dropped
+          ? `Moved. ${r.learned_samples_dropped} learned voice samples were left behind`
+          : 'Moved');
+      done();
+    } catch (e) { setBusy(false); const t = roomsErrText(e, 'move'); if (t) fire(t); }
+  };
+  return (
+    <div className="room-sat-row" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <StatusDot tone={sat.connected ? 'ok' : 'idle'} live={!!sat.connected}/>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 140 }}>{roomSatName(sat, room)}</div>
+        {sat.speaks_for_room && <Pill tone="live">speaks for the room</Pill>}
+        <Pill tone={sat.connected ? 'live' : 'idle'}>{sat.connected ? 'connected' : 'not connected'}</Pill>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)', margin: '2px 0 0 18px' }}>
+        {(sat.board && (SAT_BOARD_LABELS[sat.board] || sat.board)) || 'Raspberry Pi'}
+        {' · '}{sat.sat_type || 'voice'}
+        {sat.paired === false ? ' · not paired' : ''}
+        {sat.output_latency_us != null ? ` · speaker tuned (${(sat.output_latency_us / 1000).toFixed(1)} ms)` : ''}
+      </div>
+      {sat.needs_update && (
+        /* Owner answer Q6: an older app (or image) still works here, but it
+         * can't share a wake word with the room's other satellites, so its
+         * duplicate turns are dropped. Words only: the update happens on
+         * the device. */
+        <div className="room-sat-update" style={{ fontSize: 12, color: 'var(--warn-ink)', margin: '4px 0 0 18px' }}>
+          {roomSatIsPhone(sat) ? 'Update the app on this phone.' : 'Update the software on this satellite.'}
+        </div>
+      )}
+      {mode === 'rename' && admin && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, marginLeft: 18 }}>
+          <input value={name} onChange={e => setName(e.target.value)} aria-label="satellite name"
+                 placeholder={`Satellite for the ${room.name}`} maxLength={120}
+                 onKeyDown={e => { if (e.key === 'Enter') saveName(); }}
+                 style={{ ...adoptInputStyle, flex: 1 }}/>
+          <Button variant="primary" disabled={busy} onClick={saveName}>Save</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => setMode(null)}>Cancel</Button>
+        </div>
+      )}
+      {mode === 'move' && admin && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, marginLeft: 18, flexWrap: 'wrap', alignItems: 'center' }}>
+          <RoomPicker rooms={rooms} exclude={room.room_id} value={dest} onChange={setDest}
+                      newName={destName} onNewName={setDestName} label="move to room"/>
+          <Button variant="primary" disabled={busy || !roomChoiceReady(dest, destName, false)}
+                  onClick={move}>Move</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => setMode(null)}>Cancel</Button>
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%' }}>
+            Moving keeps its history with this room, forgets the voices it learned here, and
+            clears its speaker tuning. Voices you enrolled stay.
+          </div>
+        </div>
+      )}
+      {mode === null && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, marginLeft: 18, flexWrap: 'wrap' }}>
+          {canOpen && <Button variant="ghost" icon="info" onClick={() => onOpen(sat.satellite_id)}>Details</Button>}
+          {admin && <Button variant="ghost" icon="pencil" onClick={() => { setName(sat.name || ''); setMode('rename'); }}>Rename</Button>}
+          {admin && <Button variant="ghost" icon="arrow-right" onClick={() => setMode('move')}>Move to another room</Button>}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* "Tune the speakers" (1.5.0): each speaker of the room plays a chirp in
+ * turn while the others listen, so the room's speakers line up in the air,
+ * not just at the audio API. POST /api/rooms/{room}/calibrate (admin); the
+ * answer, and the last run's outcome from GET /api/rooms, say plainly what
+ * was tuned and what kept its old setting. A room with one speaker that can
+ * take part has nothing to tune against: no button, a line saying so. */
+const RoomTuning = ({ room, admin, refresh }) => {
+  const [busy, setBusy] = React.useState(false);
+  const [note, setNote] = React.useState(null);   // {tone, text}
+  React.useEffect(() => { setNote(null); }, [room.room_id]);
+  const last = room.calibration || null;
+  const able = (room.tunable_speakers || 0) >= 2;
+  const tune = async () => {
+    setBusy(true); setNote(null);
+    try {
+      const r = await apiPost(`/api/rooms/${encodeURIComponent(room.room_id)}/calibrate`, {});
+      setNote({ tone: r && r.status === 'done' ? 'ok' : 'warn', text: (r && r.message) || 'Done' });
+      refresh();
+    } catch (e) {
+      const d = e && e.detail && e.detail.detail;
+      setNote({ tone: 'warn', text: typeof d === 'string' ? d : (roomsErrText(e, 'tune the speakers') || 'Could not tune the speakers') });
+    } finally { setBusy(false); }
+  };
+  const shown = note || (last ? { tone: last.status === 'done' ? 'ok' : 'warn', text: last.message } : null);
+  return (
+    <div className="room-tuning" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)',
+                                          display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 140 }}>Speaker tuning</div>
+        {admin && able && (
+          <Button variant="ghost" icon="volume-2" disabled={busy} onClick={tune}>
+            {busy ? 'Tuning…' : 'Tune the speakers'}
+          </Button>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+        {able
+          ? 'Each speaker plays a short chirp while the others listen, so they all sound at the same moment.'
+          : 'Tuning needs two connected speakers in this room that can take part.'}
+      </div>
+      {shown && (
+        <div role="status" style={{ fontSize: 13, color: shown.tone === 'ok' ? 'var(--fg)' : 'var(--warn-ink)' }}>
+          {shown.text}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* "Rooms that can hear this one" (1.5.0, owner answer Q3): rooms linked
+ * here share one turn per wake word, answered by the satellite that heard
+ * it best, instead of each answering. Off unless an admin links them (the
+ * Rooms page suggests a link when two rooms keep waking together).
+ * POST /api/rooms/{room}/links, DELETE /api/rooms/{room}/links/{other}. */
+const RoomHearLinks = ({ room, rooms, admin, fire, refresh }) => {
+  const [adding, setAdding] = React.useState(false);
+  const [pick, setPick] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => { setAdding(false); setPick(''); }, [room.room_id]);
+  const rid = encodeURIComponent(room.room_id);
+  const linked = room.linked_rooms || [];
+  const nameOf = (id) => (rooms.find(r => r.room_id === id) || {}).name || id;
+  const choices = rooms.filter(r => r.room_id !== room.room_id && !linked.includes(r.room_id));
+  const add = async () => {
+    if (!pick) return;
+    setBusy(true);
+    try {
+      await apiPost(`/api/rooms/${rid}/links`, { room_id: pick });
+      fire(`The ${room.name} and the ${nameOf(pick)} now share one answer`);
+      setAdding(false); setPick(''); refresh();
+    } catch (e) { const t = roomsErrText(e, 'link rooms'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  const remove = async (other) => {
+    if (!await askConfirm(
+      `Stop treating the ${nameOf(other)} as hearing the ${room.name}?\n\n` +
+      `A wake word heard in both rooms will be answered in each of them again.`)) return;
+    setBusy(true);
+    try {
+      await apiDelete(`/api/rooms/${rid}/links/${encodeURIComponent(other)}`);
+      fire('Rooms unlinked');
+      refresh();
+    } catch (e) { const t = roomsErrText(e, 'unlink rooms'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  if (!admin && linked.length === 0) return null;
+  return (
+    <div className="room-hear-links" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)',
+                                              display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 140 }}>Rooms that can hear this one</div>
+        {admin && !adding && choices.length > 0 && (
+          <Button variant="ghost" icon="plus" disabled={busy} onClick={() => setAdding(true)}>Add a room</Button>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+        One wake word heard here and in a room listed here gets one answer, from the satellite that heard it best.
+      </div>
+      {linked.length === 0
+        ? <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>none</div>
+        : linked.map(other => (
+          <div key={other} className="room-hear-link" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 32 }}>
+            <span style={{ flex: 1 }}>{nameOf(other)}</span>
+            {admin && <IconButton name="x" title={`Remove the ${nameOf(other)}`} onClick={() => remove(other)}/>}
+          </div>
+        ))}
+      {admin && adding && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={pick} aria-label="room that can hear this one" onChange={e => setPick(e.target.value)}
+                  style={{ ...adoptInputStyle, height: 34, width: 'auto', minWidth: 150, maxWidth: '100%' }}>
+            <option value="" disabled>choose a room</option>
+            {choices.map(r => <option key={r.room_id} value={r.room_id}>{r.name}</option>)}
+          </select>
+          <Button variant="primary" disabled={busy || !pick} onClick={add}>Link</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => { setAdding(false); setPick(''); }}>Cancel</Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* The room's latest turn, when it had a choice of microphones: "Answered in
+ * the Kitchen. Heard best by Kitchen phone." (design §3.2 item 10). */
+const RoomLastTurn = ({ room }) => {
+  const { items } = useApiList(`/api/satellites/${encodeURIComponent(room.room_id)}/conversations?limit=1`, { quiet: true });
+  const c = (items || [])[0];
+  if (!c || !c.heard_by) return null;
+  return (
+    <div className="room-last-turn" style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-soft)',
+                                             fontSize: 12, color: 'var(--fg-muted)' }}>
+      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginRight: 8 }}>{relTime(c.at)}</span>
+      {satHeardByText(c)}
+    </div>
+  );
+};
+
+const RoomDrawer = ({ room, rooms, sats, admin, onClose, onOpenSatellite, onAddSatellite, fire, refresh }) => {
+  const [renaming, setRenaming] = React.useState(false);
+  const [name, setName] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => { setRenaming(false); }, [room && room.room_id]);
+  React.useEffect(() => {
+    if (!room) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [room, onClose]);
+  if (!room) return null;
+  const rid = encodeURIComponent(room.room_id);
+  const rename = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      await apiPatch(`/api/rooms/${rid}`, { name: name.trim() });
+      fire('Room renamed');
+      setRenaming(false); refresh();
+    } catch (e) { const t = roomsErrText(e, 'rename'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!await askConfirm(`Delete the ${room.name}?\n\nOnly an empty room can go. Its history is kept.`)) return;
+    setBusy(true);
+    try {
+      await apiDelete(`/api/rooms/${rid}`);
+      fire('Room deleted');
+      onClose(); refresh();
+    } catch (e) { const t = roomsErrText(e, 'delete'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  const list = room.satellites || [];
+  const known = new Set(sats.map(s => s.room_id));
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.18)', backdropFilter: 'blur(2px)', zIndex: 60 }}/>
+      <aside aria-label={`${room.name} satellites`}
+             style={{ position: 'fixed', top: 0, right: 0, height: 'var(--app-h)', width: 560, maxWidth: '100%',
+                      background: 'var(--card)', borderLeft: '1px solid var(--border)',
+                      boxShadow: 'var(--shadow-md)', zIndex: 61, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-soft)',
+                      display: 'flex', alignItems: 'center', gap: 10 }}>
+          {renaming ? (
+            <>
+              <input value={name} onChange={e => setName(e.target.value)} aria-label="room name" autoFocus
+                     maxLength={120} onKeyDown={e => { if (e.key === 'Enter') rename(); }}
+                     style={{ ...adoptInputStyle, flex: 1 }}/>
+              <Button variant="primary" disabled={busy || !name.trim()} onClick={rename}>Save</Button>
+              <Button variant="ghost" onClick={() => setRenaming(false)}>Cancel</Button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>{room.name}</div>
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                {list.length === 1 ? '1 satellite' : `${list.length} satellites`}
+              </span>
+              {admin && <IconButton name="pencil" title="Rename room"
+                                    onClick={() => { setName(room.name); setRenaming(true); }}/>}
+              <div style={{ marginLeft: 'auto' }}><IconButton name="x" onClick={onClose}/></div>
+            </>
+          )}
+        </div>
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          {list.length === 0 ? (
+            <Empty glyph="sleeping" title="no satellites here yet"
+                   sub="move one in from another room, or approve a new one into this room"/>
+          ) : list.map(sat => (
+            <RoomSatelliteRow key={sat.satellite_id} room={room} sat={sat} rooms={rooms} admin={admin}
+                              canOpen={known.has(sat.satellite_id)} onOpen={onOpenSatellite}
+                              fire={fire} refresh={refresh}/>
+          ))}
+          {admin && onAddSatellite && (
+            <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+              <Button variant="ghost" icon="plus" onClick={() => onAddSatellite(room)}>
+                Add a satellite to the {room.name}
+              </Button>
+            </div>
+          )}
+          {list.length > 1 && <RoomLastTurn room={room}/>}
+          {list.length > 1 && <RoomTuning room={room} admin={admin} refresh={refresh}/>}
+          <RoomHearLinks room={room} rooms={rooms} admin={admin} fire={fire} refresh={refresh}/>
+          {admin && list.length === 0 && (
+            <div style={{ padding: 16 }}>
+              <Button variant="ghost" icon="trash-2" disabled={busy} onClick={remove}>Delete this room</Button>
+            </div>
+          )}
+          {admin && list.length > 0 && (
+            <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+              A room can be deleted once its satellites are moved out.
+            </div>
+          )}
+        </div>
+      </aside>
+    </>
+  );
+};
+
+/* The suggestion to link two rooms (owner answer Q3): one "hey Domovoi"
+ * keeps waking satellites in both at once (the server counts these and
+ * offers the pair from a few in a fortnight). Linking makes it one turn,
+ * answered by the satellite that heard it best; "Keep them separate" is remembered and
+ * the pair is never offered again (it can still be linked in the drawer). */
+const RoomLinkOffer = ({ offer, rooms, fire, refresh }) => {
+  const [busy, setBusy] = React.useState(false);
+  const [a, b] = offer.rooms;
+  const nameOf = (id) => (rooms.find(r => r.room_id === id) || {}).name || id;
+  const link = async () => {
+    setBusy(true);
+    try {
+      await apiPost(`/api/rooms/${encodeURIComponent(a)}/links`, { room_id: b });
+      fire(`The ${nameOf(a)} and the ${nameOf(b)} now share one answer`);
+      refresh();
+    } catch (e) { const t = roomsErrText(e, 'link rooms'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  const dismiss = async () => {
+    setBusy(true);
+    try {
+      await apiPost(`/api/rooms/${encodeURIComponent(a)}/links/${encodeURIComponent(b)}/dismiss`, {});
+      fire('Suggestion dismissed');
+      refresh();
+    } catch (e) { const t = roomsErrText(e, 'dismiss'); if (t) fire(t); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Card>
+      <div className="room-link-offer" style={{ display: 'flex', alignItems: 'center', gap: 10,
+                                                 padding: '10px 16px', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 200, fontSize: 13, lineHeight: 1.5 }}>
+          The {nameOf(a)} and the {nameOf(b)} often both answer the same wake word.
+          Link them so one satellite answers?
+        </div>
+        <Button icon="link" disabled={busy} onClick={link}>Link them</Button>
+        <Button variant="ghost" disabled={busy} onClick={dismiss}>Keep them separate</Button>
+      </div>
+    </Card>
+  );
+};
+
+const RoomsCard = ({ rooms, merge, links = [], admin, onOpenRoom, fire, refresh }) => {
+  const [adding, setAdding] = React.useState(false);
+  const [name, setName] = React.useState('');
+  const [busy, setBusy] = React.useState('');
+  const create = async () => {
+    if (!name.trim()) return;
+    setBusy('create');
+    try {
+      await apiPost('/api/rooms', { name: name.trim() });
+      fire('Room added');
+      setName(''); setAdding(false); refresh();
+    } catch (e) { const t = roomsErrText(e, 'add room'); if (t) fire(t); }
+    finally { setBusy(''); }
+  };
+  // Only the admin's click merges; the server never does it on its own.
+  const doMerge = async (offer) => {
+    const [keep, ...rest] = offer.rooms;
+    if (!await askConfirm(
+      `Merge the ${offer.rooms.length} rooms called ${offer.name} into one?\n\n` +
+      `Their satellites all move into it. Voices a satellite learned in its old room are ` +
+      `forgotten, and speaker tuning is cleared.`)) return;
+    setBusy(keep);
+    try {
+      await apiPost(`/api/rooms/${encodeURIComponent(keep)}/merge`, { rooms: rest });
+      fire(`Merged into one ${offer.name}`);
+      refresh();
+    } catch (e) { const t = roomsErrText(e, 'merge'); if (t) fire(t); }
+    finally { setBusy(''); }
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="label" style={{ flex: 1 }}>rooms and their satellites</div>
+        {admin && !adding && <Button variant="ghost" icon="plus" onClick={() => setAdding(true)}>Add a room</Button>}
+      </div>
+      {admin && adding && (
+        <Card>
+          <div style={{ display: 'flex', gap: 6, padding: '10px 16px' }}>
+            <input value={name} onChange={e => setName(e.target.value)} aria-label="new room name"
+                   placeholder="Porch" maxLength={120} autoFocus
+                   onKeyDown={e => { if (e.key === 'Enter') create(); }}
+                   style={{ ...adoptInputStyle, flex: 1 }}/>
+            <Button variant="primary" disabled={busy === 'create' || !name.trim()} onClick={create}>Add</Button>
+            <Button variant="ghost" onClick={() => { setAdding(false); setName(''); }}>Cancel</Button>
+          </div>
+        </Card>
+      )}
+      {admin && links.map(offer => (
+        <RoomLinkOffer key={offer.rooms.join(',')} offer={offer} rooms={rooms} fire={fire} refresh={refresh}/>
+      ))}
+      {admin && merge.map(offer => (
+        <Card key={offer.rooms.join(',')}>
+          <div className="room-merge-offer" style={{ display: 'flex', alignItems: 'center', gap: 10,
+                                                      padding: '10px 16px', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 200, fontSize: 13, lineHeight: 1.5 }}>
+              {offer.rooms.length} rooms are all called {offer.name}. Are they the same room?
+            </div>
+            <Button icon="merge" disabled={!!busy} onClick={() => doMerge(offer)}>Merge into one</Button>
+          </div>
+        </Card>
+      ))}
+      <Card>
+        {rooms.length === 0 ? (
+          <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>no rooms yet</div>
+        ) : rooms.map(r => {
+          const n = (r.satellites || []).length;
+          const live = (r.satellites || []).filter(x => x.connected).length;
+          return (
+            <button key={r.room_id} type="button" className="room-row" onClick={() => onOpenRoom(r.room_id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                             padding: '10px 16px', background: 'none', border: 0, font: 'inherit',
+                             color: 'var(--fg)', cursor: 'pointer', borderBottom: '1px solid var(--border-soft)' }}>
+              <StatusDot tone={live ? 'ok' : 'idle'} live={live > 0}/>
+              <span style={{ fontWeight: 600, flex: 1 }}>{r.name}</span>
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                {n === 0 ? 'empty' : n === 1 ? '1 satellite' : `${n} satellites`}
+              </span>
+            </button>
+          );
+        })}
+      </Card>
+    </div>
+  );
+};
 
 const SatellitesPage = ({ embedded = false } = {}) => {
   const [openRoom, setOpenRoom] = React.useState(null);
@@ -3976,6 +4703,17 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     wasDown.current = coreDown;
   }, [coreDown, refresh]);
   const { items: approvals, refresh: refreshApprovals } = useApiList('/api/satellites/approvals');
+  // Rooms and the satellites in them (1.5.0); a household read, the
+  // changes on it are the admin's.
+  const adminIn = useAdminSignedIn();
+  const { data: roomsDoc, refresh: refreshRoomsDoc } = useApiObject('/api/rooms', { quiet: true });
+  const roomList = (roomsDoc && Array.isArray(roomsDoc.rooms)) ? roomsDoc.rooms : [];
+  const mergeOffers = (roomsDoc && Array.isArray(roomsDoc.merge_offers)) ? roomsDoc.merge_offers : [];
+  const linkOffers = (roomsDoc && Array.isArray(roomsDoc.link_suggestions)) ? roomsDoc.link_suggestions : [];
+  const [openRoomId, setOpenRoomId] = React.useState(null);
+  const [spareTarget, setSpareTarget] = React.useState(null);
+  const refreshRooms = React.useCallback(() => { refreshRoomsDoc(); refresh(); }, [refreshRoomsDoc, refresh]);
+  React.useEffect(() => { refreshRoomsDoc(); }, [sats.length, approvals.length, refreshRoomsDoc]);
   // Why a room couldn't join, when only the server knows (a dialled
   // address it can't prove is its own, a room paired with another device):
   // otherwise the room's ring just stays red. Admin read, like approvals.
@@ -3993,8 +4731,8 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     return () => clearInterval(t);
   }, [refreshApprovals, refreshJoin]);
 
-  const decide = async (a, action, code) => {
-    if (action === 'reject' && !window.confirm(
+  const decide = async (a, action, code, roomChoice) => {
+    if (action === 'reject' && !await askConfirm(
       `Reject ${a.room_id}?\n\nThe room device keeps retrying until it is ` +
       `approved or powered off — this clears the request, it doesn't ban the device.`
     )) return;
@@ -4003,8 +4741,8 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     try {
       // The code rides with the approval: the server compares it before it
       // binds the room to that device, so an approve without one is refused.
-      const r = await apiPost(`/api/satellites/approvals/${a.room_id}/${action}`,
-                              action === 'approve' ? { code } : {});
+      const r = await apiPost(`/api/satellites/approvals/${encodeURIComponent(a.satellite_id || a.room_id)}/${action}`,
+                              action === 'approve' ? { code, ...(roomChoice || {}) } : {});
       // A room device that checks the code itself (1.4.0) hasn't said yes
       // yet: it confirms on its next visit, within seconds. Don't call it
       // approved before it is.
@@ -4120,11 +4858,11 @@ const SatellitesPage = ({ embedded = false } = {}) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="label">waiting for approval</div>
           {approvals.map(a => (
-            <ApprovalCard key={a.room_id} a={a} busy={approvalBusy === a.room_id}
+            <ApprovalCard key={a.room_id} a={a} rooms={roomList} busy={approvalBusy === a.room_id}
                           error={approvalError && approvalError.room_id === a.room_id
                                  ? approvalError : null}
                           onClearError={() => setApprovalError(null)}
-                          onApprove={(x, code) => decide(x, 'approve', code)}
+                          onApprove={(x, code, choice) => decide(x, 'approve', code, choice)}
                           onReject={x => decide(x, 'reject')}/>
           ))}
         </div>
@@ -4174,14 +4912,24 @@ const SatellitesPage = ({ embedded = false } = {}) => {
         </div>
       )}
 
+      {roomList.length > 0 && (
+        <RoomsCard rooms={roomList} merge={mergeOffers} links={linkOffers} admin={adminIn}
+                   onOpenRoom={setOpenRoomId} fire={fire} refresh={refreshRooms}/>
+      )}
+
       <Broadcast onlineCount={onlineCount} fire={fire}/>
 
       <MusicGroupsCard sats={sats} fire={fire}/>
 
       <PrepareMediaCard fire={fire}/>
 
-      <SpareDeviceCard fire={fire}/>
+      <SpareDeviceCard fire={fire} target={spareTarget}/>
 
+      <RoomDrawer room={roomList.find(r => r.room_id === openRoomId) || null} rooms={roomList}
+                  sats={sats} admin={adminIn} onClose={() => setOpenRoomId(null)}
+                  onOpenSatellite={(id) => { setOpenRoomId(null); setOpenRoom(id); }}
+                  onAddSatellite={(r) => { setOpenRoomId(null); setSpareTarget({ room_id: r.room_id, name: r.name, at: Date.now() }); }}
+                  fire={fire} refresh={refreshRooms}/>
       <SatDrawer s={open} sats={sats} onClose={() => setOpenRoom(null)} fire={fire} refresh={refresh}/>
       {adoptTarget && (
         <AdoptModal pending={adoptTarget.pending} sats={sats} force={adoptTarget.force}

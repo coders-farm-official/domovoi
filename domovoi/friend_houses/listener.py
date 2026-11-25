@@ -24,6 +24,34 @@ the core process:
   Core checks each event again before acting on it (an invite is used
   once, an accept must match a request this house sent).
 
+Plugin mail (1.5.0)
+-------------------
+Two frames are no longer fixed-size: a friend's ``CAPS`` and a plugin mail
+envelope (``KIND_PLUGIN``). The listener parses CAPS (bounded, exact
+length) and, of a plugin mail, only what it must to sort it: the kind byte
+and the app's slug. **The payload stays opaque here**; it is checked only
+by its signature. In order, for a ``MESSAGE`` frame:
+
+1. size (the session's frame cap; plugin mail has its own, smaller one);
+2. peek the envelope's kind (:func:`envelope.peek`);
+3. plugin mail: only on a connection whose caller sent a CAPS with
+   ``proto >= 2`` first (else the connection closes), and only for an app
+   in this friend's ``apps`` list in ``friends.json``: an unlisted one gets
+   ``MESSAGE_NACK not_allowed`` and **spends no budget**;
+4. the plugin buckets (:mod:`domovoi.friend_houses.budget`: per friend and
+   app, per friend, per friend in bytes, per house, per house in bytes) or
+   ``MESSAGE_NACK rate`` (a house bucket answers a fixed 60 s, L7);
+   people's 60 an hour is spent only on text and list changes;
+5. the full parse and the signature;
+6. a ``plugin_mail`` event for core (never ``message``), then the ACK or
+   ``MESSAGE_NACK`` with core's reason (``refused <id> <reason> <secs>``).
+
+Core waits at most :data:`PLUGIN_STORE_WAIT_SEC` (20 s, under the sender's
+30, L10); after :data:`NOT_ALLOWED_PER_CONNECTION` refusals of unlisted
+apps the connection is closed (L9). A CAPS is reported to core whenever it
+differs from the last one reported for that friend; only a repeat spends
+the CAPS budget (L8).
+
 Two sockets:
 
 ``main.sock``
@@ -53,9 +81,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from domovoi.friend_houses import budget as fb
 from domovoi.friend_houses import envelope as fe
 from domovoi.friend_houses import identity as fid
 from domovoi.friend_houses import pairing as fp
+from domovoi.friend_houses import plugin_wire as pw
 from domovoi.friend_houses import session as fs
 
 log = logging.getLogger("domovoi.friend_houses.listener")
@@ -63,22 +93,54 @@ log = logging.getLogger("domovoi.friend_houses.listener")
 MAX_CONNECTIONS = 32       # on main.sock
 MAX_PAIRING_CONNECTIONS = 8  # on pairing.sock: its own slots (audit R6 FH-9)
 MAX_PER_FRIEND = 4
+# Connections still before their handshake (main.sock) or before naming an
+# open friend file (pairing.sock). When these are full, the oldest is
+# closed to make room, so callers that say nothing can't hold every slot.
+MAX_HANDSHAKING = 8
+MAX_PAIRING_HANDSHAKING = 4
+PINGS_PER_CONNECTION = 16  # a house pings once per check; more is closed
 PAIRING_PER_HOUR = 20      # requests that name an open friend file
 MESSAGES_PER_HOUR = 60     # per friend (threat-model finding 32)
 EVENTS_PER_HOUR = 120      # per house: connected / I'm back / accepted (R6 FH-3)
 HANDSHAKE_DEADLINE_SEC = 20.0  # preface + handshake, all of it (R6 FH-9)
 PAIRING_DEADLINE_SEC = 90.0    # a whole friend request, round trips over Tor
 STORE_WAIT_SEC = 30.0      # how long a message waits for core to store it
+# A plugin mail waits less than its sender (30 s), so core's "unavailable"
+# reaches the sender before it gives up (L10).
+PLUGIN_STORE_WAIT_SEC = 20.0
+# Refusals of unlisted apps on one connection before it is closed (L9).
+NOT_ALLOWED_PER_CONNECTION = 16
+# A plugin mail core didn't answer in time is refused as "unavailable".
+UNANSWERED_RETRY_SEC = 10
 
-FRIENDS_FILE = "friends.json"     # {"<session key hex>": {"house": hex, "pending": bool}}
+# {"<session key hex>": {"house": hex, "pending": bool, "apps": [slug, ...]}}
+# "apps": the plugins this friend may mail (an admin's "Apps with this
+# friend" and each app allowed); missing or unreadable means none.
+FRIENDS_FILE = "friends.json"
 HELLO_FILE = "hello.bin"          # this house's Hello (statement + epoch)
 INVITES_FILE = "invites.json"     # {"<invite id hex>": <expires, unix seconds>}
+
+# core's answer words for a refused plugin mail -> the NACK reason
+_REASONS = {"full": fs.Nack.FULL, "not_allowed": fs.Nack.NOT_ALLOWED, "rate": fs.Nack.RATE,
+            "unavailable": fs.Nack.UNAVAILABLE}
 
 
 @dataclass(frozen=True)
 class Peer:
     friend: fs.Friend
     pending: bool  # a house this one asked: may only deliver its accept
+    # The apps this friend may mail. Part of the equality the per-frame
+    # check uses, so any change closes the friend's connection (§6.8).
+    apps: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class Answer:
+    """Core's answer about one envelope."""
+
+    stored: bool
+    reason: fs.Nack = fs.Nack.UNAVAILABLE
+    retry_after: int = UNANSWERED_RETRY_SEC
 
 
 @dataclass
@@ -97,15 +159,40 @@ class State:
     _invites: _Cached = field(default_factory=_Cached)
     _open: int = 0
     _open_pairing: int = 0
+    _handshaking: deque = field(default_factory=deque)          # main.sock writers
+    _pairing_handshaking: deque = field(default_factory=deque)  # pairing.sock writers
     _per_friend: dict[bytes, int] = field(default_factory=dict)
     _event_times: dict[bytes, deque] = field(default_factory=dict)
     _pairing_times: deque = field(default_factory=deque)
+    # invite id -> runs broken off after this house's nonce went out
+    _abandoned: dict[bytes, int] = field(default_factory=dict)
     _message_times: dict[bytes, deque] = field(default_factory=dict)
+    _caps_times: dict[bytes, deque] = field(default_factory=dict)
+    # house -> (proto, slugs) of the last CAPS reported to core (L8)
+    _caps_reported: dict[bytes, tuple[int, tuple[str, ...]]] = field(default_factory=dict)
+    # Plugin mail's own buckets, separate from people's (review D7).
+    budgets: fb.PluginBudgets = field(default_factory=fb.PluginBudgets)
     # msg_id -> the future core's "stored"/"refused" line resolves
     _waiting: dict[bytes, asyncio.Future] = field(default_factory=dict)
 
     def message_allowed(self, house: bytes) -> bool:
+        """People's budget: text and list changes only, never plugin mail."""
         return _within(self._message_times.setdefault(house, deque()), MESSAGES_PER_HOUR)
+
+    def caps_allowed(self, house: bytes) -> bool:
+        """CAPS events have their own budget, not the shared 120."""
+        return _within(self._caps_times.setdefault(house, deque()), pw.CAPS_PER_HOUR)
+
+    def caps_reportable(self, house: bytes, caps: pw.Caps) -> bool:
+        """L8: a CAPS that differs from the last one reported for this
+        friend is always reported; a repeat only within its budget."""
+        content = (caps.proto, tuple(caps.slugs))
+        if self._caps_reported.get(house) != content:
+            if house not in self._caps_reported and len(self._caps_reported) >= 4 * MAX_CONNECTIONS:
+                self._caps_reported.pop(next(iter(self._caps_reported)))
+            self._caps_reported[house] = content
+            return True
+        return self.caps_allowed(house)
 
     def event_allowed(self, house: bytes) -> bool:
         """Whether core hears about one more connected / I'm back / accept
@@ -117,27 +204,43 @@ class State:
         """Wait for core to say it stored (True) or refused (False) a
         message. No answer in time counts as refused: the sender keeps it
         and tries again later, so nothing is lost by saying no."""
+        return (await self.answer_for(msg_id)).stored
+
+    async def answer_for(self, msg_id: bytes, wait: float | None = None) -> Answer:
+        """Core's whole answer; no answer in time is ``unavailable``."""
+        if msg_id in self._waiting:  # the same id twice at once: refuse the second
+            return Answer(False)
         fut = asyncio.get_running_loop().create_future()
         self._waiting[msg_id] = fut
         try:
-            return await asyncio.wait_for(fut, STORE_WAIT_SEC)
+            return await asyncio.wait_for(fut, STORE_WAIT_SEC if wait is None else wait)
         except asyncio.TimeoutError:
-            return False
+            return Answer(False)
         finally:
             self._waiting.pop(msg_id, None)
 
     def answer(self, line: str) -> None:
-        """One line from core on stdin: ``stored <hex>`` or ``refused <hex>``."""
+        """One line from core on stdin: ``stored <hex>``, ``refused <hex>``
+        or ``refused <hex> <reason> <secs>`` (plugin mail)."""
         parts = line.strip().split()
-        if len(parts) != 2 or parts[0] not in ("stored", "refused"):
+        if len(parts) not in (2, 4) or parts[0] not in ("stored", "refused"):
+            return
+        if len(parts) == 4 and (parts[0] != "refused" or parts[2] not in _REASONS
+                                or not parts[3].isdigit() or len(parts[3]) > 6):
             return
         try:
             msg_id = bytes.fromhex(parts[1])
         except ValueError:
             return
         fut = self._waiting.get(msg_id)
-        if fut is not None and not fut.done():
-            fut.set_result(parts[0] == "stored")
+        if fut is None or fut.done():
+            return
+        if parts[0] == "stored":
+            fut.set_result(Answer(True))
+        elif len(parts) == 4:
+            fut.set_result(Answer(False, _REASONS[parts[2]], int(parts[3])))
+        else:
+            fut.set_result(Answer(False))
 
     def _reload(self, name: str, cache: _Cached, parse) -> dict:
         path = self.folder / name
@@ -158,6 +261,8 @@ class State:
         return {k: p.friend for k, p in self.peers().items() if not p.pending}
 
     def invite_open(self, invite_id: bytes) -> bool:
+        if self._abandoned.get(invite_id, 0) >= fp.ABANDONED_MAX:
+            return False  # closed here; core closes it for good
         expires = self._reload(INVITES_FILE, self._invites, _read_invites).get(invite_id)
         return expires is not None and expires > time.time()
 
@@ -175,6 +280,27 @@ class State:
             return False
         self._pairing_times.append(now)
         return True
+
+
+def _admit(open_now: int, max_open: int, waiting: deque, max_waiting: int) -> bool:
+    """Whether a new connection gets a slot. When every slot is taken, or
+    too many are still before their handshake, the oldest of those is
+    closed to make room (its handler sees its stream end and gives the slot
+    back); with every slot past its handshake, the newcomer is refused."""
+    if open_now >= max_open:
+        if not waiting:
+            return False
+        waiting.popleft().close()
+    while len(waiting) >= max_waiting:
+        waiting.popleft().close()
+    return True
+
+
+def _done_waiting(waiting: deque, writer: asyncio.StreamWriter) -> None:
+    try:
+        waiting.remove(writer)
+    except ValueError:
+        pass
 
 
 def _within(times: deque, limit: int, window: float = 3600.0) -> bool:
@@ -196,12 +322,27 @@ def _read_friends(path: Path) -> dict[bytes, Peer]:
                 entry = {"house": entry, "pending": False}
             session_key, house_key = bytes.fromhex(session_hex), bytes.fromhex(entry["house"])
             if len(session_key) == 32 and len(house_key) == 32:
-                out[session_key] = Peer(fs.Friend(house_key, session_key), bool(entry.get("pending")))
+                pending = bool(entry.get("pending"))
+                apps = frozenset() if pending else _read_apps(entry.get("apps"))
+                out[session_key] = Peer(fs.Friend(house_key, session_key), pending, apps)
         return out
-    except (OSError, ValueError, AttributeError, KeyError, TypeError) as e:
+    except (OSError, ValueError, AttributeError, KeyError, TypeError, RecursionError) as e:
         # An unreadable list means nobody gets in, never everybody.
         log.error("the friend list can't be read (%s); refusing every caller", e)
         return {}
+
+
+def _read_apps(raw: object) -> frozenset[str]:
+    """A friend entry's ``apps``: a list of at most 32 plugin slugs by the
+    manifest's rule. Anything else means no apps for that friend (its
+    people's messages are unaffected): a bad list never opens anything."""
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, list) or len(raw) > pw.MAX_SLUGS or \
+            not all(fe.valid_slug(s) for s in raw):
+        log.error("a friend's app list can't be read; no apps for that friend")
+        return frozenset()
+    return frozenset(raw)
 
 
 def _read_invites(path: Path) -> dict[bytes, float]:
@@ -225,11 +366,13 @@ def emit(event: str, **fields: str) -> None:
 
 async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, state: State) -> None:
     """One inbound connection on main.sock, start to finish. Never raises."""
-    if state._open >= MAX_CONNECTIONS:
+    if not _admit(state._open, MAX_CONNECTIONS, state._handshaking, MAX_HANDSHAKING):
         writer.close()
         return
     state._open += 1
+    state._handshaking.append(writer)
     caller: bytes | None = None
+    pings = 0
     try:
         hello = state.hello()
         if hello is None:
@@ -248,6 +391,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
         sess = await asyncio.wait_for(
             fs.respond(reader, writer, keys=state.keys, me=hello, friend_for=friend_for),
             HANDSHAKE_DEADLINE_SEC)
+        _done_waiting(state._handshaking, writer)
         assert peer is not None
         caller = sess.peer.statement.session_key
         state._per_friend[caller] = state._per_friend.get(caller, 0) + 1
@@ -257,6 +401,9 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
             emit("connected", house=house, statement=sess.peer.statement.to_bytes().hex(),
                  epoch=sess.peer.epoch.hex())
         said_back = False
+        caps_seen = False
+        refusals = [0]  # not_allowed refusals on this connection (L9)
+        proto: int | None = None  # what the caller's CAPS said, on THIS connection
         while True:
             kind, body = await sess.recv()
             # The friend list is checked on every frame, not just at the
@@ -275,30 +422,83 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sta
             elif peer.pending:
                 break  # a pending house may only deliver its accept
             elif kind is fs.Kind.PING:
+                pings += 1
+                if pings > PINGS_PER_CONNECTION:
+                    break
                 await sess.send(fs.Kind.PONG, body)
             elif kind is fs.Kind.IM_BACK:
                 if not said_back and state.event_allowed(house_key):
                     emit("im_back", house=house)
                 said_back = True  # once per connection
+            elif kind is fs.Kind.CAPS:
+                # After the pending check above; one per connection (D6, D14).
+                if caps_seen:
+                    break
+                caps_seen = True
+                caps = pw.parse_caps(body)  # BadCaps closes the connection
+                proto = caps.proto
+                if state.caps_reportable(house_key, caps):  # a repeat over its budget: not reported
+                    emit("caps", house=house, proto=str(caps.proto), apps=",".join(caps.slugs),
+                         epoch=sess.peer.epoch.hex())
             elif kind is fs.Kind.MESSAGE:
+                head = fe.peek(body)  # BadEnvelope closes the connection
+                if head.kind == fe.KIND_PLUGIN:
+                    if proto is None or proto < fs.PROTO:
+                        break  # plugin mail only after a CAPS on this connection
+                    await _plugin_mail(sess, state, peer, head, body, refusals)
+                    if refusals[0] >= NOT_ALLOWED_PER_CONNECTION:
+                        break  # L9: a friend looping unlisted apps is cut off
+                    continue
                 if not state.message_allowed(sess.peer_house_key):
                     break  # over the hourly limit: the sender keeps it for later
                 env = fe.parse(body, sender=sess.peer_house_key, recipient=state.keys.house_key)
+                if env.kind not in fe.PEOPLE_KINDS:
+                    break  # never: peek sorted it; checked again all the same
                 emit("message", house=house, envelope=env.to_bytes().hex())
                 if await state.stored(env.msg_id):
                     await sess.send(fs.Kind.MESSAGE_ACK, env.msg_id)
-            # PONG without a PING of ours, ACCEPT_OK unasked: ignored.
-    except (fs.SessionRefused, fe.BadEnvelope, asyncio.TimeoutError) as e:
+            # PONG without a PING of ours, ACCEPT_OK or MESSAGE_NACK unasked: ignored.
+    except (fs.SessionRefused, fe.BadEnvelope, pw.BadCaps, asyncio.TimeoutError) as e:
         log.info("connection closed: %s", e)
     except Exception:  # noqa: BLE001 — one bad connection never stops the listener
         log.exception("connection failed")
     finally:
         state._open -= 1
+        _done_waiting(state._handshaking, writer)
         if caller is not None:
             state._per_friend[caller] -= 1
             if not state._per_friend[caller]:
                 del state._per_friend[caller]
         writer.close()
+
+
+async def _plugin_mail(sess: fs.Session, state: State, peer: Peer, head: fe.Peek,
+                       body: bytes, refusals: list[int] | None = None) -> None:
+    """One plugin mail, in the order in the module docstring (steps 3-6).
+    Its payload is never looked at here."""
+    house_key = sess.peer_house_key
+    assert head.slug is not None
+    if head.slug not in peer.apps:
+        # Unlisted: refused before any bucket is spent (review D7).
+        if refusals is not None:
+            refusals[0] += 1
+        await sess.send(fs.Kind.MESSAGE_NACK, fs.nack_body(head.msg_id, fs.Nack.NOT_ALLOWED, 0))
+        return
+    wait = state.budgets.spend(house_key, head.slug, len(body))
+    if wait:
+        await sess.send(fs.Kind.MESSAGE_NACK, fs.nack_body(head.msg_id, fs.Nack.RATE, wait))
+        return
+    env = fe.parse(body, sender=house_key, recipient=state.keys.house_key)
+    emit("plugin_mail", house=house_key.hex(), envelope=env.to_bytes().hex(),
+         hello_epoch=sess.peer.epoch.hex())
+    answer = await state.answer_for(env.msg_id, PLUGIN_STORE_WAIT_SEC)
+    if answer.stored:
+        await sess.send(fs.Kind.MESSAGE_ACK, env.msg_id)
+    else:
+        if refusals is not None and answer.reason is fs.Nack.NOT_ALLOWED:
+            refusals[0] += 1
+        await sess.send(fs.Kind.MESSAGE_NACK,
+                        fs.nack_body(env.msg_id, answer.reason, answer.retry_after))
 
 
 # ─── the pairing onion ────────────────────────────────────────────────────
@@ -311,17 +511,30 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
     Its connections have their own slots, separate from friends' (R6 FH-9),
     and only a handshake that names an open friend file spends the hourly
     budget: empty connections from anyone who once saw a file don't."""
-    if state._open_pairing >= MAX_PAIRING_CONNECTIONS:
+    if not _admit(state._open_pairing, MAX_PAIRING_CONNECTIONS,
+                  state._pairing_handshaking, MAX_PAIRING_HANDSHAKING):
         writer.close()
         return
     state._open_pairing += 1
+    state._pairing_handshaking.append(writer)
+    revealed: list[bytes] = []
+    done = False
+
+    def nonce_sent(invite_id: bytes) -> None:
+        # It named an open friend file: no longer one that can be closed
+        # to make room.
+        _done_waiting(state._pairing_handshaking, writer)
+        revealed.append(invite_id)
+
     try:
         async def invite_open(invite_id: bytes) -> bool:
             return state.invite_open(invite_id) and state.pairing_allowed()
 
         req = await asyncio.wait_for(
-            fp.answer(reader, writer, keys=state.keys, invite_open=invite_open),
+            fp.answer(reader, writer, keys=state.keys, invite_open=invite_open,
+                      nonce_sent=nonce_sent),
             PAIRING_DEADLINE_SEC)
+        done = True
         emit("request", invite=req.invite_id.hex(), statement=req.statement.to_bytes().hex(),
              reach_private=req.reach_private.hex(), name=req.name, code=req.code)
     except fp.PairingRefused as e:
@@ -332,6 +545,14 @@ async def handle_pairing(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         log.exception("friend request failed")
     finally:
         state._open_pairing -= 1
+        _done_waiting(state._pairing_handshaking, writer)
+        if revealed and not done:
+            # A run broken off after the nonce went out is one try at the
+            # code: a file allows only a few, then it is closed.
+            invite_id = revealed[0]
+            state._abandoned[invite_id] = state._abandoned.get(invite_id, 0) + 1
+            if state._abandoned[invite_id] == fp.ABANDONED_MAX:
+                emit("invite_closed", invite=invite_id.hex())
         writer.close()
 
 

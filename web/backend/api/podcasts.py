@@ -43,7 +43,7 @@ from sqlalchemy import text
 # Imported here, at the top, on purpose: the web process refuses new
 # domovoi.* imports once it has started (plugin_host's import guard).
 from domovoi import egress, net_safety, podcast_artwork
-from domovoi.admin_auth import require_device
+from domovoi.admin_auth import check_device_request, require_device, require_device_read
 from domovoi.config import settings as core_settings
 from domovoi import spoken_audio as sa
 from web.backend.api.audio_serve import safe_download_name, serve_audio_range
@@ -116,6 +116,22 @@ class PositionSave(BaseModel):
 ARTWORK_CACHE_CONTROL = "max-age=86400"
 
 
+async def _device_tier(request: Request) -> bool:
+    """Whether this open read's caller holds a household credential."""
+    try:
+        return await check_device_request(request) in ("ok", "admin", "pre-setup", "cookie-only")
+    except Exception:  # noqa: BLE001 — can't tell: an open caller
+        return False
+
+
+def _for_open_caller(row: dict[str, Any]) -> dict[str, Any]:
+    """A private feed's URL carries a per-subscriber token (in its query or
+    user info): an open caller sees the URL without them."""
+    out = dict(row)
+    out["feed_url"] = net_safety.url_without_secrets(out.get("feed_url")) or None
+    return out
+
+
 def _with_server_artwork(row: dict[str, Any]) -> dict[str, Any]:
     """A subscription row with ``artwork`` swapped from the stored source
     URL to the server path of the stored image (or None). A row whose
@@ -154,6 +170,7 @@ _SUB_SELECT = """
 
 @router.get("/subscriptions")
 async def list_subscriptions(
+    request: Request,
     q: Optional[str] = Query(None, max_length=200,
                              description="Case-insensitive substring of title, author or feed URL"),
     sort: SubscriptionSort = Query("title", description="title (default) · newest"),
@@ -164,13 +181,20 @@ async def list_subscriptions(
     """Subscribed shows with episode counts, sorted and searched here.
     Paged when ``limit`` / ``cursor`` / ``offset`` is sent (``{items, total,
     limit, has_more, next_cursor}``, paging.py); the bare list, as before,
-    for a client that sends none of them."""
+    for a client that sends none of them.
+
+    Open, but a caller without a household credential gets each feed URL
+    without its query or user info, and its search doesn't look in them."""
     keys = _SUB_SORT_KEYS[sort]
+    household = await _device_tier(request)
+    shown = _with_server_artwork if household else (
+        lambda r: _with_server_artwork(_for_open_caller(r)))
     params: dict[str, Any] = {}
     where_parts: list[str] = []
     if q and q.strip():
         where_parts.append(
-            "(sub.title ILIKE :q OR sub.author ILIKE :q OR sub.feed_url ILIKE :q)")
+            "(sub.title ILIKE :q OR sub.author ILIKE :q OR sub.feed_url ILIKE :q)" if household
+            else "(sub.title ILIKE :q OR sub.author ILIKE :q)")
         params["q"] = f"%{q.strip()}%"
     where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -183,7 +207,7 @@ async def list_subscriptions(
                     params,
                 )
             ).mappings().all()
-        return [_with_server_artwork(dict(r)) for r in rows]
+        return [shown(dict(r)) for r in rows]
 
     lim = limit or paging.DEFAULT_LIMIT
     page_where = where
@@ -205,7 +229,7 @@ async def list_subscriptions(
         ).mappings().all()
     page, has_more, nxt = paging.db_page_dicts(rows, keys, limit=lim, sort=sort)
     return {
-        "items": [_with_server_artwork(r) for r in page],
+        "items": [shown(r) for r in page],
         **paging.page_fields(total=total, limit=lim, has_more=has_more, next_cursor=nxt,
                              offset=None if cursor is not None else (offset or 0)),
     }
@@ -328,6 +352,7 @@ def _episode_row(r: Any) -> dict[str, Any]:
 
 @router.get("/subscriptions/{sub_id}/episodes")
 async def list_episodes(
+    request: Request,
     sub_id: int,
     q: Optional[str] = Query(None, max_length=200,
                              description="Case-insensitive substring of the episode title"),
@@ -346,9 +371,16 @@ async def list_episodes(
     """One show's episodes, newest first by default. Paged when ``limit`` /
     ``cursor`` / ``offset`` is sent (``{items, total, …}``, paging.py — a
     long back catalogue no longer arrives in one answer); the bare list, as
-    before, for a client that sends none of them."""
+    before, for a client that sends none of them. The list is open; a
+    listener's place (``device_id``/``person_id``) is the household's read,
+    so without a device-tier credential ``position_sec`` stays null."""
     keys = _EP_SORT_KEYS[sort]
     params: dict[str, Any] = {"sid": sub_id}
+    if device_id:
+        try:
+            await require_device_read(request)
+        except HTTPException:
+            device_id = None
     if device_id:
         cols = _EP_COLUMNS + _EP_POSITION_COLUMNS
         params.update({"pp_type": sa.ITEM_PODCAST, "pp_dev": device_id, "pp_pid": person_id})
@@ -564,12 +596,14 @@ async def episode_audio(
 
 
 # ─── Resume positions (per device × person × episode) ───────────────────
-@router.get("/positions/{episode_id}")
+@router.get("/positions/{episode_id}", dependencies=[Depends(require_device_read)])
 async def get_position(
     episode_id: int,
     device_id: str = Query(...),
     person_id: Optional[int] = Query(None),
 ) -> dict[str, Any]:
+    """A listener's place in an episode. Device tier: it names any person,
+    like the audiobook twin (audiobooks.py)."""
     async with session_scope() as s:
         pos = await sa.get_position(
             s, item_type=sa.ITEM_PODCAST, item_id=episode_id,

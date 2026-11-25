@@ -124,7 +124,10 @@ class _FakeApprovals:
     def __init__(self, session: Any) -> None:
         pass
 
-    async def approve(self, room_id: str, code: str) -> str:
+    async def get(self, room_id: str) -> None:
+        return None  # 1.5.0: no room asked for
+
+    async def approve(self, room_id: str, code: str, *, into: str | None = None) -> str:
         type(self).seen.append((room_id, code))
         return type(self).answers.pop(0) if type(self).answers else "mismatch"
 
@@ -334,7 +337,7 @@ async def test_approval_requests_are_budgeted_per_source(fake_park) -> None:
         await sess._park_for_approval(object(), {}, token_hash="a" * 64, code=CODE)
         assert _last_frame(sess)["reason"] == "awaiting_approval"
 
-    blocked = _session("roomN")
+    blocked = _session("room_n")
     # A session object would raise if it were used — the throttle answers
     # before anything reaches the database.
     accepted = await blocked._park_for_approval(
@@ -345,7 +348,7 @@ async def test_approval_requests_are_budgeted_per_source(fake_park) -> None:
     assert len(fake_park.calls) == budget
 
     # A different address still gets through: the budget is per source.
-    other = _session("roomN", host="192.168.1.77")
+    other = _session("room_n", host="192.168.1.77")
     await other._park_for_approval(object(), {}, token_hash="a" * 64, code=CODE)
     assert _last_frame(other)["reason"] == "awaiting_approval"
 
@@ -454,6 +457,36 @@ async def test_the_conflict_says_when_the_newcomer_gets_its_turn(fake_park) -> N
     frame = _last_frame(sess)
     assert frame["reason"] == "approval_conflict"
     assert "3 minutes" in frame["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_full_waiting_list_asks_the_device_to_try_later(fake_park) -> None:
+    fake_park.outcome = "full"
+    fake_park.parked_code = None
+    sess = _session()
+    assert await sess._park_for_approval(object(), {}, token_hash="c" * 64, code=CODE) is False
+    assert _last_frame(sess)["reason"] == "approval_throttled"
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_first_frame_is_closed_unread(monkeypatch) -> None:
+    """A first frame past HELLO_MAX_CHARS never reaches the hello handler."""
+    sess = _session()
+    big = json.dumps({"type": "hello", "sat_type": "x" * streaming_mod.HELLO_MAX_CHARS})
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "websocket.receive", "text": big}
+
+    sess.ws.receive = receive  # type: ignore[attr-defined]
+    handled: list[Any] = []
+
+    async def on_control(ctrl: Any) -> None:  # pragma: no cover - must not run
+        handled.append(ctrl)
+
+    monkeypatch.setattr(sess, "_on_control", on_control)
+    assert await sess._await_hello() is False
+    assert handled == []
+    assert _last_frame(sess)["reason"] == "hello_required"
 
 
 def test_the_code_shape_is_the_one_the_core_mints() -> None:

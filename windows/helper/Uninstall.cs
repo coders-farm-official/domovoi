@@ -41,8 +41,13 @@ namespace Domovoi.Windows.Helper
         const string RunOnceKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce";
         const string RunOnceValue = "DomovoiSetupResume";
 
-        public static int Run(Output o, bool dry)
+        // keep: the keep-data uninstall (S3-4): the distro is stopped, not
+        // unregistered, and its disk (the database, settings and the
+        // server's identity) is moved to C:\ProgramData\Domovoi-kept-<time>
+        // for the next Setup to use. Everything else goes as before.
+        public static int Run(Output o, bool dry, bool keep)
         {
+            o.Kv("mode", keep ? "keep-data" : "remove-everything");
             Ledger ledger = null;
             try { ledger = Steps.LoadLedger(); }
             catch (FormatException e) { o.Say("the install record is unreadable (" + e.Message + "); going by what is on the PC"); }
@@ -67,7 +72,7 @@ namespace Domovoi.Windows.Helper
             int code = UninstallRunner.Run(plan, delegate (UninstallStep s)
             {
                 o.Kv("progress", UninstallProgress.Line(plan.IndexOf(s), plan.Count, s));
-                return Do(s, ledger, notes, atRestart, o);
+                return Do(s, ledger, notes, atRestart, o, keep);
             }, left, null, run);
             foreach (var l in left)
             {
@@ -99,7 +104,7 @@ namespace Domovoi.Windows.Helper
         // uninstall's message, rather than deleted or left blocking the
         // uninstall. One the host never recorded is a half-finished import:
         // it goes with C:\ProgramData\Domovoi. Returns a leftover, or null.
-        static string KeepOrDropDisk(List<string> notes, Output o)
+        static string KeepOrDropDisk(List<string> notes, Output o, bool keep)
         {
             if (!File.Exists(Paths.DistroDisk)) return null;
             if (Folders.IsReparse(Paths.Distro)) throw new InvalidOperationException(Paths.Distro + " is a link; not moving or deleting anything through it");
@@ -116,8 +121,11 @@ namespace Domovoi.Windows.Helper
             Folders.CreateAdminOnly(dir);
             string dest = Path.Combine(dir, "ext4.vhdx");
             File.Move(Paths.DistroDisk, dest);
-            string note = "Your Domovoi data was kept: Windows no longer listed Domovoi's Linux system, so its disk (the database, settings and the server's identity) was moved to "
-                + dest + ". Only administrators can open that folder; delete it when you no longer need it.";
+            string note = keep
+                ? "Your Domovoi data was kept, as you asked: its disk (the database, settings and the server's identity) is in "
+                    + dest + ". Install Domovoi again and Setup offers to use it, so your rooms reconnect by themselves. Only administrators can open that folder; delete it if you won't install Domovoi again."
+                : "Your Domovoi data was kept: Windows no longer listed Domovoi's Linux system, so its disk (the database, settings and the server's identity) was moved to "
+                    + dest + ". Only administrators can open that folder; delete it when you no longer need it.";
             notes.Add(note);
             o.Say(note);
             return null;
@@ -187,7 +195,7 @@ namespace Domovoi.Windows.Helper
         }
 
         // Does one step; returns a leftover description, or null when done.
-        static string Do(UninstallStep s, Ledger ledger, List<string> notes, List<RestartNote> atRestart, Output o)
+        static string Do(UninstallStep s, Ledger ledger, List<string> notes, List<RestartNote> atRestart, Output o, bool keep)
         {
             switch (s.Kind)
             {
@@ -205,7 +213,7 @@ namespace Domovoi.Windows.Helper
                     return null;
 
                 case UninstallKind.UnregisterDistro:
-                    return Unregister(notes, o);
+                    return Unregister(notes, o, keep);
 
                 case UninstallKind.DeleteService:
                     HostService.Delete();
@@ -258,7 +266,7 @@ namespace Domovoi.Windows.Helper
                     return null;
 
                 case UninstallKind.DeleteProgramData:
-                    return KeepOrDropDisk(notes, o) ?? DeleteProgramData(ledger != null ? ledger.AccountSid : null, atRestart, o);
+                    return KeepOrDropDisk(notes, o, keep) ?? DeleteProgramData(ledger != null ? ledger.AccountSid : null, atRestart, o);
 
                 case UninstallKind.RemoveRunOnce:
                     using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
@@ -279,22 +287,26 @@ namespace Domovoi.Windows.Helper
         // the wait is for Running or Stopped, then Stopped (ServiceWait).
         // The result counts only if the host wrote it after this request:
         // the helper never deletes in host\out.
-        static string Unregister(List<string> notes, Output o)
+        static string Unregister(List<string> notes, Output o, bool keep)
         {
             if (!Directory.Exists(Paths.HostOut)) return "the distro (the host's folder is gone, so it could not report)";
             DateTime asked = DateTime.UtcNow.AddSeconds(-2);
-            o.Say("asking " + Paths.ServiceName + " to unregister the distro as " + Paths.AccountName);
-            OneShotResult r = HostService.RunOnce(new[] { Paths.UnregisterArg }, 120, 15 * 60);
+            o.Say(keep
+                ? "asking " + Paths.ServiceName + " to stop the distro as " + Paths.AccountName + " and keep its disk"
+                : "asking " + Paths.ServiceName + " to unregister the distro as " + Paths.AccountName);
+            OneShotResult r = HostService.RunOnce(new[] { keep ? Paths.KeepArg : Paths.UnregisterArg }, 120, 15 * 60);
             if (r == OneShotResult.NeverStarted) return "the distro (" + Paths.ServiceName + " did not start within 2 minutes; see " + Paths.HostLog + ")";
             if (r == OneShotResult.StillRunning) return "the distro (" + Paths.ServiceName + " did not finish unregistering within 15 minutes)";
             var d = Steps.ReadHostFile(Paths.UnregisterResult);
             string why = UnregisterOutcome.Judge(d, asked);
             if (why != null) return why;
-            o.Say("the WSL distro '" + Paths.DistroName + "' is not registered any more (" + (Json.Str(d, "message") ?? "") + ")");
+            if (keep) o.Say("the WSL distro '" + Paths.DistroName + "' is stopped and its disk kept (" + (Json.Str(d, "message") ?? "") + ")");
+            else o.Say("the WSL distro '" + Paths.DistroName + "' is not registered any more (" + (Json.Str(d, "message") ?? "") + ")");
             if (Json.Bool(d, "released") == true) o.Say("ended " + Paths.AccountName + "'s own WSL session (the household's WSL keeps running)");
-            // WSL doesn't list it, yet its disk is there: kept aside or, if no
-            // import ever finished, left to go with ProgramData.
-            return KeepOrDropDisk(notes, o);
+            // WSL doesn't list it (or, keeping the data, it is stopped), yet
+            // its disk is there: kept aside or, if no import ever finished,
+            // left to go with ProgramData.
+            return KeepOrDropDisk(notes, o, keep);
         }
 
         // The host ended the account's WSL session after unregistering

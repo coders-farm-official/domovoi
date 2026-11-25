@@ -154,6 +154,9 @@ async def test_a_refused_address_is_said_where_an_admin_looks(healthy_core, monk
     assert line["kind"] == "addr_refused"
     assert "192.0.2.197:6370" in line["text"]
     assert "couldn't prove it's the one at that address" in line["text"]
+    # The address came from the request, so the advice never just says to
+    # trust it: listing it is only for an address someone set up.
+    assert "If nobody set a room up with it, don't trust it" in line["text"]
 
 
 def test_join_problems_keep_the_newest_few_and_count_repeats(monkeypatch):
@@ -204,14 +207,18 @@ async def test_approving_a_device_that_checks_the_code_says_so(monkeypatch):
         def __init__(self, _s):
             pass
 
-        async def approve(self, room_id, code):
+        async def get(self, room_id):
+            return None  # 1.5.0: no room asked for
+
+        async def approve(self, room_id, code, *, into=None):
             return "entered"
 
     monkeypatch.setattr(main, "session_scope", fake_scope)
     monkeypatch.setattr(main, "SatelliteApprovalRepository", _Repo)
     main.APPROVAL_CODE_LIMITER.reset()
     out = await main.admin_satellite_approve("kitchen", main._ApproveSatelliteBody(code="481502"))
-    assert out == {"approved": False, "waiting_for_device": True, "room_id": "kitchen"}
+    assert out == {"approved": False, "waiting_for_device": True, "room_id": "kitchen",
+                   "satellite_id": "kitchen", "into_room_id": None}
 
 
 # ─── SAT-13: the port is part of the address ──────────────────────────────
@@ -301,6 +308,19 @@ async def test_health_signs_the_pairing_proof_advert(healthy_core, identity_in_t
 
 
 @pytest.mark.asyncio
+async def test_a_pairing_proof_challenge_is_signed_only_bound(healthy_core, identity_in_tmp):
+    """Every device that asks the pairing-proof form names the address it
+    dialed, so the form without one gets no signature."""
+    challenge = "pairing-proof." + "cd" * 16
+    doc = await main.health(challenge=challenge)
+    assert "signature" not in doc["identity"] and "addr" not in doc["identity"]
+    with pytest.raises(sat_identity.IdentityError):
+        sat_identity.verify_health_document(
+            doc, challenge=challenge, expected_fingerprint=None, addr=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_an_ordinary_challenge_is_signed_as_it_always_was(healthy_core, identity_in_tmp):
     """Older devices (and the root clock helper) never ask: their message
     is byte for byte what it was."""
@@ -310,3 +330,134 @@ async def test_an_ordinary_challenge_is_signed_as_it_always_was(healthy_core, id
         doc, challenge=challenge, expected_fingerprint=identity_in_tmp.fingerprint,
         addr="127.0.0.1:6370",
     ) == identity_in_tmp.fingerprint
+
+
+# ─── S3-4: a room set up for a different server ───────────────────────────
+
+
+class _Peer:
+    """A /v1/health request from a room device at ``host``, arriving at
+    the core's own port."""
+
+    def __init__(self, host, port=6370):
+        self.scope = {"server": ("192.168.1.20", port)}
+        self.client = type("C", (), {"host": host})()
+        self.headers = {}
+
+
+@pytest.mark.asyncio
+async def test_a_room_pinned_to_another_server_is_said_where_an_admin_looks(
+    healthy_core, monkeypatch,
+):
+    """S3-4: a room set up for this house before it was reinstalled checks
+    the new key, refuses it and never opens a stream. The server says so in
+    Settings → Rooms once the address has kept asking for a while."""
+    monkeypatch.setattr(server_identity, "VOUCHED_ADDRESS_SOURCES", [lambda: ["192.168.1.20"]])
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    stranded = _Peer("192.168.1.41")
+
+    async def check(peer):
+        await main.health(challenge=sat_identity.new_challenge(),
+                          addr="192.168.1.20:6370", request=peer)
+
+    await check(stranded)
+    assert join_problems.recent() == []          # one check is just a check
+    now[0] += 60
+    await check(stranded)
+    assert join_problems.recent() == []
+    now[0] += join_problems.OTHER_SERVER_AFTER_SEC
+    await check(stranded)
+    [line] = join_problems.recent()
+    assert line["kind"] == "other_server" and line["subject"] == "192.168.1.41"
+    assert "set it up again for this server" in line["text"]
+
+    # A device that does open a stream is this server's: no line, and the
+    # one above goes once that address joins.
+    joined = _Peer("192.168.1.42")
+    await check(joined)
+    join_problems.stream_opened("192.168.1.42")
+    now[0] += join_problems.OTHER_SERVER_AFTER_SEC + 60
+    await check(joined)                          # e.g. its clock helper
+    assert [p["subject"] for p in join_problems.recent()] == ["192.168.1.41"]
+    join_problems.stream_opened("192.168.1.41")
+    assert join_problems.recent() == []
+
+
+@pytest.mark.asyncio
+async def test_approval_proof_checks_and_plain_health_are_not_counted(
+    healthy_core, monkeypatch,
+):
+    """An unpaired device asking every house (``pairing-proof.`` challenge)
+    parks through a stream anyway, and a check without an address is a
+    phone's or the dashboard's: neither is a room refusing this server."""
+    monkeypatch.setattr(server_identity, "VOUCHED_ADDRESS_SOURCES", [lambda: ["192.168.1.20"]])
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    peer = _Peer("192.168.1.43")
+    for _ in range(5):
+        await main.health(challenge=sat_identity.new_challenge(pairing_proof=True),
+                          addr="192.168.1.20:6370", request=peer)
+        await main.health(challenge=sat_identity.new_challenge(), request=peer)
+        now[0] += 120
+    assert join_problems.recent() == []
+
+
+def test_a_probe_not_repeated_starts_over(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    join_problems.identity_checked("192.168.1.44")
+    now[0] += join_problems._PROBE_FORGET_SEC + 1
+    join_problems.identity_checked("192.168.1.44")
+    assert join_problems.recent() == []
+    join_problems.stream_closed("192.168.1.99")  # never opened: no error
+
+
+class _Socket:
+    def __init__(self, host, headers=None):
+        self.client = type("C", (), {"host": host})()
+        self.headers = headers or {}
+
+
+@pytest.mark.asyncio
+async def test_a_room_socket_refused_before_its_session_still_counts_as_joined(monkeypatch):
+    """The stream route marks the address as talking to this server for as
+    long as the socket lives, a socket it refuses before any session too."""
+    seen = []
+
+    async def refuse(ws, code, detail):
+        seen.append((code, dict(join_problems._streams)))
+
+    monkeypatch.setattr(main, "_refuse_ws", refuse)
+    await main.stream(_Socket("192.168.1.45"), "Not A Room!")
+    assert seen == [("bad_room_id", {"192.168.1.45": 1})]
+    assert join_problems._streams == {}
+
+
+def test_a_source_that_is_not_an_address_gives_no_line(monkeypatch):
+    """A forwarded header is any text: only an IP address reaches a line."""
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    for _ in range(4):
+        join_problems.identity_checked("<b>call 555-0100</b>")
+        join_problems.identity_checked("192.168.1.46")
+        now[0] += 60
+    assert [p["subject"] for p in join_problems.recent()] == ["192.168.1.46"]
+
+
+@pytest.mark.asyncio
+async def test_one_forwarder_for_every_device_gives_no_line(healthy_core, monkeypatch):
+    """Loopback with no forwarded address (the web process, a host's
+    forwarder) stands for every device: never named as one room."""
+    monkeypatch.setattr(server_identity, "VOUCHED_ADDRESS_SOURCES", [lambda: ["192.168.1.20"]])
+    now = [1000.0]
+    monkeypatch.setattr(join_problems, "_clock", lambda: now[0])
+    peer = _Peer("127.0.0.1")
+    for _ in range(5):
+        await main.health(challenge=sat_identity.new_challenge(),
+                          addr="192.168.1.20:6370", request=peer)
+        now[0] += 60
+    assert join_problems.recent() == []
+    assert main._room_device_source(_Socket("127.0.0.1")) is None
+    assert main._room_device_source(
+        _Socket("127.0.0.1", {"x-forwarded-for": "192.168.1.47"})) == "192.168.1.47"

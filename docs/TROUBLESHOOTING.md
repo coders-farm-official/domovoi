@@ -13,6 +13,7 @@ Many rows below name a fix that came with a particular version. If your Domovoi 
 - [No TTS audio / Domovoi is silent](#no-tts-audio--domovoi-is-silent)
 - [Wake word not triggering](#wake-word-not-triggering)
 - [Wake-word training](#wake-word-training)
+- [Rooms with several satellites](#rooms-with-several-satellites)
 - [Music won't play](#music-wont-play)
 - [Acquisitions / downloads stuck](#acquisitions--downloads-stuck)
 - [Everything offline, dashboard up](#everything-offline-dashboard-up)
@@ -76,6 +77,7 @@ Open the room in Settings → Household → Rooms first: its card and its Health
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| A room's light **double-blinks teal** (a slow teal breath on an XVF3800 ring) and it says **"My Domovoi server has changed, so I can't connect to it"**; the log says `the server changed` | The server at the room's address has a different identity from the one the room was set up for: it was reinstalled without keeping its identity (or another Domovoi took the address). The room refuses it on purpose and never switches by itself (1.5.0 rooms; older ones only blink "no server") | Set the room up again for this server: prepare its card again from Settings → Household → Rooms and write it (a spare computer or phone: pair it again). To avoid it next time, uninstall keeping the data, or download the house identity backup and restore it at install ([LINUX_HOST.md](LINUX_HOST.md#uninstalling-and-reinstalling-without-losing-your-rooms), [WINDOWS_HOST.md](WINDOWS_HOST.md#reinstalling-without-losing-your-rooms)). If you didn't reinstall anything, find what answers at the room's address. The room says it once, then at most every 12 hours, and whenever you say the wake word |
 | Room shows connected, then drops ~15 s after Wi-Fi blips | Working as intended | The server pings each satellite every 10 s (5 s timeout); a dead connection is dropped within ~15 s and the satellite reconnects by itself. No action needed |
 | The router keeps listing the satellites as new devices; they drop off the server and come back | Satellite software older than 1.0.0 rejoined the Wi-Fi at every server restart, with power saving on | Update the server, upgrade each satellite, then reboot each satellite once. The room's retained log shows what the reboot changed (`network settings (applied as root at boot): changed: …`) |
 | The setup page says **"Couldn't join that network. Check the password"**, and the password is right | A card prepared by a version older than 1.0.0 let the Pi offer WPA3 to a WPA2/WPA3 mixed router; a Pi Zero 2 W can't finish WPA3 | Update the server and prepare the card again: the join now uses WPA2 on a mixed router, and says the real reason when it fails. See [satellite/PROVISIONING.md §8.5](../satellite/PROVISIONING.md#85-which-home-wi-fi-networks-a-satellite-can-join) |
@@ -142,6 +144,24 @@ its model stays in use until the new one lands.
 | **Record** says "... is training" | A word records nothing while it trains: the run is reading its clips | Wait for it to finish (or **Stop training**), then record more and **Train again** |
 | A word was training when the server restarted | Working as intended | The training container is removed and the word stays queued; it trains again once the core is back |
 | Voice is slow while a word trains | A CPU-only server: training takes most of the processor for about 75 minutes a word | Expected, and the dashboard said so before the Train. Lower **CPUs for training** to leave voice more, at the cost of a longer training |
+
+### Rooms with several satellites
+
+A room can hold several satellites (1.5.0). Open the room in Settings →
+Rooms first: it lists each satellite with whether it is connected and
+which one **speaks for the room**.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Two satellites chime or answer for one wake word | One of them is older than 1.5.0, so it can't hand over the turn: it records on its own. The server drops its duplicate, but its chime still plays | Upgrade that satellite (its **Overview** tab, **Upgrade room**, or **Upgrade satellite**) |
+| Answers, music or alarms sound doubled, like an echo | The room's speakers are more than a few milliseconds apart, or two satellites are close enough to hear each other's speaker | In the room's drawer press **Tune the speakers** (nothing may be playing). If it says a speaker kept its old setting, move the satellites closer to each other for the run, or somewhere quieter, and try again. Setting **Tune speakers on their own** (Settings → Rooms) does it each time a satellite joins |
+| A speaker in the room plays nothing | It is an older satellite or phone app (they play only when the room has no other satellite), or it isn't connected | Check its row in the room's drawer, upgrade or update it. A Bluetooth speaker or headphones on a device is that device's own output: check it there |
+| **Tune the speakers** is missing, or says tuning needs two speakers | Fewer than two connected speakers in the room can take part (older ones can't) | Connect and update the satellites, stop anything playing in the room, then try again |
+| Music starts about half a second after you ask | Working as intended: the speakers play a moment later together | Nothing to fix |
+| A satellite never answers (wake word is heard, light fades, no chime) | Another satellite in the room took the turn (it heard the wake word first); this one is a quiet listener. The answer still plays from every speaker, this one included | Nothing is wrong. Say the wake word nearer the satellite you want to hear it first; Domovoi transcribes whichever microphone heard you best |
+| A satellite never answers and shows no response at all | Its microphone is muted, or it isn't connected or approved | Its row in the room's drawer, then [Satellite won't connect](#satellite-wont-connect) and [Wake word not triggering](#wake-word-not-triggering) |
+| A new satellite appeared as a room of its own | It was approved into **a new room** | Open the room, press **Move to another room** on the satellite and pick the right one; delete the empty room afterwards |
+| Two rooms with the same name | Rooms from before 1.5.0 that shared a label | Settings → Rooms offers a merge; nothing merges until you press **Merge into one** and confirm |
 
 ### Music won't play
 
@@ -257,6 +277,7 @@ that keeps sending an old token restarts the wait each time it ends.
 | The app shows **couldn't load rooms**, **calendar unavailable** and **offline**, and Videos says `429 Too Many Requests … too many wrong X-Device-Token values`. Or a browser shows the same 429 on every panel | Something at that address is sending a household token this server no longer accepts. Usually it is a **browser tab or an app that was paired before the server was reinstalled, moved to a new machine at the same address, or had its household token changed**: for example, an old dashboard tab left open in the phone's own browser locks out the app on that same phone | 1. Find the old holder on that device: an open dashboard tab on the server's address (close it, or pair it again), another app, or an old kiosk link with `device_token=` in it. 2. Wait up to 5 minutes. 3. Pair again with the current token: the app's card or Settings → Household → Phones & browsers → Household token → **replace**; in a browser, **pair again** or **sign in as admin**, which fetches the token by itself. In the app you can also forget the server (tap the server name at the top, then the **✕** on its row) and add it again |
 | The app shows **Domovoi doesn't recognise this phone any more** | The server refused the household token this phone holds, and the app stopped sending it | Paste the current household token into the card and press **pair again**. If the card counts a wait down, the new token is tried when the wait is over. If it was a passing fault on the server (its database not answering refuses every token), **try the old token again** |
 | The app shows local media and **This looks like a different Domovoi, or it was reinstalled** | The server at the saved address proved a different identity from the one this phone trusted. The app sends it nothing until you decide | If you reinstalled or replaced your Domovoi, compare the new fingerprint with the dashboard's Settings → System → About & updates, then press **it's my Domovoi — trust it again**, and paste that server's household token on the pairing screen that follows (the old token is forgotten with the old identity). Away from home, don't |
+| A room only blinks red ("no server") after the server was reinstalled, and Settings → Rooms says **a room device at … checks this server's identity but never joins** | The room was set up for the server's old identity (or for another house) and trusts only that key. Nothing the new server says can change that, by design | Set the room up again for this server: prepare its card again from Settings → Rooms and write it (a spare computer or phone: pair it again). Keeping the server's identity across a reinstall avoids this |
 | Pasting the household token says **That token doesn't match this server** | The token is another server's, or an old one: after a reinstall the server has a fresh token, and a custom one you chose before is gone | Copy it from **this** server's dashboard: Settings → Household → Phones & browsers → Household token. Each paste is checked once with the server, so a few wrong ones make it ask you to wait (it counts down) |
 | A page or the app says **auth check unavailable**, or **Couldn't check it with the server** | The server could not reach its database for a moment (a restart, too many connections) | Try again in a few seconds. Nothing is dropped, and it doesn't count as a wrong token |
 | The dashboard says **This Domovoi doesn't recognise this browser any more** | The server refused the household token this browser stored, and the browser stopped sending it | **pair again** (paste the current token) or **sign in as admin**. Try **try the old token again** only if the server had a passing fault |
@@ -285,6 +306,30 @@ When the dashboard can't restart Domovoi ([Everything offline, dashboard up](#ev
 
 - **Over SSH** on a Linux server: `sudo systemctl restart domovoi-core`.
 - **On the Windows install:** `Restart-Service DomovoiHost` from an administrator PowerShell.
+
+### A support session (admins, a satellite the Diagnostics tab can't explain)
+
+When a satellite misbehaves and its drawer's **Diagnostics** tab doesn't
+say why, an admin can open a shell on it from the dashboard, without SSH:
+
+1. Settings → Household → Rooms, open the room, the **Settings** tab.
+2. Turn on **Allow support sessions** (sign in again first if your sign-in
+   is more than five minutes old). It stays on for that satellite only.
+3. Press **Open support session**, type the admin password, and use the
+   terminal. You are the satellite's service account, not root: restart
+   the service, read logs under `~/.domovoi`, check the network. For a root
+   task use what already exists (a satellite upgrade, Restart, a screen and
+   keyboard).
+
+It closes after 30 minutes (warnings at 5 and 1), or after 10 minutes
+without typing, and the satellite restarts its service afterwards. The
+room hears that it started and ended, its light breathes magenta, and every
+dashboard shows a banner with **End**; anyone in the house can end it, or
+say "end support session" in the room. Each session's transcript is in
+Settings → System → **Support sessions** for 30 days. Only a Raspberry Pi
+on a card prepared by Domovoi whose account can't use sudo offers it (press
+**Upgrade satellite** on an older one); turn the switch off again when you
+are done.
 
 ### Satellite won't connect: on the Pi
 

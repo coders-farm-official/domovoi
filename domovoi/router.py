@@ -11,7 +11,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi import ai_features, registered_values
+from domovoi import ai_features, loud_room, registered_values
 from domovoi.clients.mpd import MPDNotProvisioned
 from domovoi.clients.ollama import QAWithUncertainty, SearchSubject, get_ollama_client
 from domovoi.config import settings
@@ -25,6 +25,7 @@ from domovoi.db.repositories import (
     ConversationLogRepository,
     IntentLogRepository,
     MemoriesRepository,
+    PeopleRepository,
     SessionRepository,
     WebSearchPrefsRepository,
 )
@@ -32,10 +33,12 @@ from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path, satellite_setting_refusal
 from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
 from domovoi.models import Context, Intent, Response
-from domovoi.profile_context import build_profile_prefix
+from domovoi.profile_context import build_profile_prefix, wants_profile
 from domovoi.spoken_answer import SpokenAnswer, StreamedQA
 from domovoi.turn_timings import timings_for_row
+from domovoi import egress, weather
 from domovoi.uncertainty import (
+    CATEGORY_WEATHER,
     VOLATILE_CATEGORIES,
     answer_admits_staleness,
     answer_offers_lookup,
@@ -348,6 +351,14 @@ def dispatchable_confirmation(
     return None
 
 
+def loud_confirmation_target(pending: Any) -> Handler | None:
+    """The handler of a loud command parked for a yes (domovoi/loud_room.py)
+    that a yes may still run, or None."""
+    if not loud_room.is_loud_pending(pending) or not loud_room.still_fresh(pending):
+        return None
+    return HANDLER_BY_NAME.get(str(pending.get("handler", "")))
+
+
 def dispatchable_choice(pending: Any) -> tuple[Handler, str] | None:
     """Like :func:`dispatchable_confirmation`, but only for a parked CHOICE
     — a kind its handler also lists in ``choice_kinds``, whose reply may be
@@ -426,6 +437,13 @@ def plan_route(raw_transcript: str, *, pending: Any = None) -> RoutePlan | None:
     """
     transcript = normalize_transcript(raw_transcript)
     if pending is not None and _parse_yes_no(transcript) is not None:
+        loud = loud_confirmation_target(pending)
+        if loud is not None:
+            # A yes/no to "It's loud in here. Should I ...?" (loud_room).
+            return RoutePlan(
+                path="confirmation", handler=loud, transcript=transcript,
+                kind=loud_room.LOUD_KIND,
+            )
         target = dispatchable_confirmation(pending)
         if target is not None:
             return RoutePlan(
@@ -509,6 +527,18 @@ def is_request_for_a_story(raw_transcript: str) -> bool:
     return bool(_QA_REQUEST_LOOSE_RE.match(strip_leading_filler(normalize_transcript(raw_transcript or ""))))
 
 
+def _friend_houses_plugin(*names: str | None) -> str | None:
+    """The slug of the plugin whose handler answered, when it holds
+    ``[permissions] friend_houses`` (SDK 1.18), else None."""
+    from domovoi.sdk.friend_houses import holds_permission
+
+    for name in names:
+        slug = getattr(HANDLER_BY_NAME.get(name or ""), "plugin_slug", None)
+        if slug and holds_permission(slug):
+            return slug
+    return None
+
+
 async def _persist_turn(
     *,
     session: AsyncSession,
@@ -536,6 +566,16 @@ async def _persist_turn(
     An unregistered value raises exactly where the CHECK used to abort.
     """
     registered_values.require("matched_path", matched_path)
+    # Friend words in a reply (M5, SDK 1.18): a plugin with the friend_houses
+    # permission may build its reply from a friend's text. The room hears it
+    # through the speech filter, and the chat history and this log keep the
+    # stand-in (or the plugin's own history_text, as friend_reply sets).
+    # In place: the caller speaks this same response.
+    friend_plugin = _friend_houses_plugin(matched_handler, response.matched_handler)
+    if friend_plugin is not None:
+        from domovoi.sdk.friend_houses import guard_response
+
+        await guard_response(response)
     # A voice turn's stage timings (speech-to-text, voice identification,
     # the capture length) go in with the row, in this same transaction;
     # the stages after routing are merged into it by id once the reply is
@@ -560,7 +600,9 @@ async def _persist_turn(
         room_id=ctx.room_id,
         person_id=ctx.person_id,
         user_text=intent.transcript,
-        assistant_text=heard_text(ctx, response.text),
+        assistant_text=heard_text(
+            ctx, response.history_text if friend_plugin is not None and response.history_text is not None
+            else response.text),
         matched_handler=matched_handler,
         matched_path=matched_path,
         presence_tier=ctx.presence_tier,
@@ -593,38 +635,84 @@ async def _persist_turn(
         await music_listens.note_voice_start(ctx.room_id, ctx.person_id)
 
 
+_INFORMATION_REQUEST_RE = re.compile(
+    r"^\s*(?:tell me about|explain|define|describe)\b", re.IGNORECASE
+)
+
+
+def _asks_for_information(transcript: str) -> bool:
+    """A question, or a request for facts ("tell me about Mars"): its
+    answer is no place for a memory offer."""
+    return looks_like_question(transcript) or bool(
+        _INFORMATION_REQUEST_RE.match(transcript or "")
+    )
+
+
+async def _food_safety_note(
+    ctx: Context, transcript: str, session: AsyncSession
+) -> str:
+    """The line after a food recommendation when someone in the house has
+    a remembered allergy or diet (domovoi/food_safety.py), else "". An
+    unrecognised speaker may be a guest: that line names no one and no
+    allergy. Best-effort: a failure here never blocks the answer."""
+    from domovoi import food_safety
+
+    if not food_safety.is_food_recommendation(transcript):
+        return ""
+    try:
+        rows = await MemoriesRepository(session).list_active_household()
+    except Exception as e:
+        log.warning("food safety note: couldn't read memories: %s", e)
+        return ""
+    mine = [b for pid, b in rows if pid == ctx.person_id]
+    others = [b for pid, b in rows if pid != ctx.person_id]
+    return food_safety.household_note(ctx.person_id is not None, mine, others)
+
+
 async def _maybe_offer_pending_memory(
     ctx: Context, session: AsyncSession
 ) -> tuple[str, int] | None:
     """If the implicit extractor has parked a pending memory for the
-    current speaker and it's outside the offer cooldown, return
-    ``(offer_text, memory_id)`` and stamp ``last_offered_at`` so the
-    same row doesn't surface every turn. Returns None if nothing's
-    eligible.
+    current speaker and the speaker is outside the offer cooldown (one
+    offer per person per ``memory_extractor_offer_cooldown_sec``), return
+    ``(offer_text, memory_id)`` and stamp ``last_offered_at``. Returns
+    None if nothing's eligible.
+
+    A pending fact the house already knows (the person's own name, or
+    one of their remembered facts said another way) is never offered:
+    it's set aside as rejected, so the extractor doesn't add it again.
 
     Wrapped in a broad try/except so a profile-side bug never blocks
     the QA response — failure here logs and returns None.
     """
     try:
         repo = MemoriesRepository(session)
-        row = await repo.next_pending_for_offer(
+        rows = await repo.pending_for_offer(
             ctx.person_id,  # type: ignore[arg-type]  # caller guards
             settings.memory_extractor_offer_cooldown_sec,
         )
-        if row is None:
+        if not rows:
             return None
-        memory_id, body, _topic = row
-        await repo.mark_offered(memory_id)
-        # Said to the person the fact is about: "my"/"their"/"the user"
-        # become "your" (domovoi/memory_wording.py). Word for word, a
-        # fact like "Biscuit and Pepper are their pets" sounded like
-        # Domovoi talking about someone else.
+        from domovoi.memory_wording import already_known
         from domovoi.memory_wording import offer_text as _word_offer
 
-        offer_text = _word_offer(body)
-        if not offer_text:
-            return None
-        return offer_text, memory_id
+        person = await PeopleRepository(session).get(ctx.person_id)  # type: ignore[arg-type]
+        name = person[1] if person else None
+        known = [b for _i, b, _t, _s in await repo.list_active(ctx.person_id)]  # type: ignore[arg-type]
+        for memory_id, body, _topic in rows:
+            if already_known(body, name, known):
+                await repo.set_status(memory_id, ctx.person_id, "rejected")  # type: ignore[arg-type]
+                continue
+            # Said to the person the fact is about: "my"/"their"/"the user"
+            # become "your" (domovoi/memory_wording.py). Word for word, a
+            # fact like "Biscuit and Pepper are their pets" sounded like
+            # Domovoi talking about someone else.
+            offer_text = _word_offer(body)
+            if not offer_text:
+                continue
+            await repo.mark_offered(memory_id)
+            return offer_text, memory_id
+        return None
     except Exception as e:
         log.warning("memory surfacing failed: %s", e)
         return None
@@ -719,6 +807,54 @@ def offered_tool_schemas(transcript: str) -> list[dict]:
     offered = [h for h in HANDLERS if h.offers_tool(transcript)]
     offered.sort(key=_tool_order)  # stable: band order within each group
     return [h.tool_schema for h in offered]
+
+
+async def _ask_loud(
+    handler: Handler, command: str, ctx: Context, session: AsyncSession, session_id: Any,
+) -> Response:
+    """Park ``command`` for a yes and ask about it (domovoi/loud_room.py).
+    The follow-up mic opens for the answer, though the capture was long
+    (streaming keeps ``expect_followup`` for ``data["loud_confirm"]``)."""
+    payload = loud_room.pending_payload(handler.name, command)
+    await SessionRepository(session).set_context_key(
+        session_id, PENDING_CONFIRMATION_KEY, payload,
+    )
+    return Response(
+        text=payload["prompt"],
+        session_id=session_id,
+        matched_handler=handler.name,
+        matched_path="fast",
+        online=ctx.online,
+        expect_followup=True,
+        data={"loud_confirm": True},
+    )
+
+
+async def _answer_loud(
+    handler: Handler, pending: dict[str, Any], affirmative: bool,
+    ctx: Context, session: AsyncSession,
+) -> Response:
+    """A yes or a no to a parked loud command. Yes runs the command on
+    the fast path it was asked about, as an ordinary turn (no longer
+    "capped"); no, or a command no fast path takes any more, runs nothing."""
+    if not affirmative:
+        return Response(text=loud_room.NO_LINE, matched_handler=handler.name,
+                        matched_path="confirmation")
+    command = str(pending.get("command") or "")
+    hit = first_fast_path(command)
+    if hit is None or hit[0] is not handler:
+        log.info("loud command %r no longer takes %s's fast path; not run",
+                 said(command), handler.name)
+        return Response(text=loud_room.GONE_LINE, matched_handler=handler.name,
+                        matched_path="confirmation")
+    _, fp, m = hit
+    run_ctx = ctx.model_copy(update={"loud_command": False, "capped_capture": False})
+    response = await run_fast_path(handler, fp, m, run_ctx, session)
+    if response is None:
+        response = Response(text=loud_room.GONE_LINE)
+    response.matched_handler = handler.name
+    response.matched_path = "confirmation"
+    return response
 
 
 async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
@@ -818,6 +954,28 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     if affirmative is not None:
         ctx_data = await session_repo.get_context(session_id) or {}
         pending = ctx_data.get("pending_confirmation")
+        if loud_room.is_loud_pending(pending):
+            # "It's loud in here. Should I ...?" (domovoi/loud_room.py). One
+            # shot: cleared whatever the answer; a stale one is just dropped
+            # and the turn routed as usual.
+            await session_repo.set_context_key(session_id, PENDING_CONFIRMATION_KEY, None)
+            loud = loud_confirmation_target(pending)
+            if loud is not None:
+                response = await _answer_loud(loud, pending, affirmative, ctx, session)
+                response.session_id = session_id
+                response.online = ctx.online
+                await _persist_turn(
+                    session=session,
+                    session_id=session_id,
+                    intent=intent,
+                    ctx=ctx,
+                    response=response,
+                    matched_handler=response.matched_handler,
+                    matched_path="confirmation",
+                    latency_ms=_elapsed_ms(),
+                )
+                return response
+            pending = None
         target = dispatchable_confirmation(pending, warn=True)
         if target is not None and target[1] in target[0].choice_kinds:
             # A choice CHOICE_PARKED didn't know about (the core restarted
@@ -914,12 +1072,31 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             )
             return response
 
+        if ctx.loud_command and loud_room.changes_house(handler, transcript):
+            # A command at the start of a capture cut off at its cap in a
+            # loud room that would change the house: asked about first,
+            # run only on a yes (domovoi/loud_room.py; owner answer Q7).
+            response = await _ask_loud(handler, transcript, ctx, session, session_id)
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler=handler.name,
+                matched_path="fast",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
         try:
             response = phone_refusal(handler, ctx)
             if response is None:
                 response = await fp.method(handler, m, ctx, session)
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
+        if response is not None and ctx.loud_command:
+            # Read-only: answered, after what was heard.
+            response.text = loud_room.with_heard_line(transcript, response.text)
         if response is not None:
             response.matched_handler = handler.name
             response.matched_path = "fast"
@@ -1052,22 +1229,36 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # answer may be stale; we either auto-search (known speaker has
     # opted in) or speak-then-offer.
     category = categorize_question(transcript)
+    if category == CATEGORY_WEATHER and weather.plugin_handles_weather():
+        # A weather plugin is installed: core's weather path (the offer and
+        # the lookup) steps aside and the plugin's handler answers.
+        category = None
+    # "Always" means the household already said yes to the internet: a
+    # weather question goes straight to the lookup, no "want me to check?".
+    always_weather = (
+        category == CATEGORY_WEATHER
+        and ctx.online
+        and not ctx.long_capture
+        and egress.policy() == "always"
+    )
 
     # Auto-search short-circuit: known speaker who's previously opted
     # in for this category. Skip the QA call entirely and answer from
     # SearxNG. Anonymous speakers and offline state both fall through
     # to the normal QA path.
-    if (
+    if always_weather or (
         category is not None
         and ctx.person_id is not None
         and ctx.online
     ):
-        prefs_repo = WebSearchPrefsRepository(session)
-        try:
-            auto = await prefs_repo.is_auto(ctx.person_id, category)
-        except Exception as e:
-            log.warning("web_search_prefs.is_auto failed: %s", e)
-            auto = False
+        auto = always_weather
+        if not auto:
+            prefs_repo = WebSearchPrefsRepository(session)
+            try:
+                auto = await prefs_repo.is_auto(ctx.person_id, category)
+            except Exception as e:
+                log.warning("web_search_prefs.is_auto failed: %s", e)
+                auto = False
         if auto:
             dc = HANDLER_BY_NAME.get("double_check")
             if dc is not None and hasattr(dc, "answer_question_from_web"):
@@ -1163,8 +1354,6 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             # rather than emit a possibly-stale local answer. A box set to
             # stay off the internet (INTERNET_ACCESS=never) says that
             # instead of implying the line is down.
-            from domovoi import egress
-
             response = Response(
                 text=(
                     "I'd need the internet to answer that, and I'm set to "
@@ -1200,7 +1389,12 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # Failure here is non-fatal: log + proceed without personalization
     # rather than break QA for a profile-side bug.
     try:
-        profile_prefix = await build_profile_prefix(ctx.person_id, session)
+        # Only for a question about the speaker or a request for
+        # suggestions: a plain fact question gets the same prompt as
+        # anyone's (profile_context.wants_profile).
+        profile_prefix = await build_profile_prefix(
+            ctx.person_id if wants_profile(intent.transcript) else None, session,
+        )
     except Exception as e:
         log.warning("profile_prefix build failed: %s", e)
         profile_prefix = ""
@@ -1341,6 +1535,9 @@ async def _finish_qa(
             latency_ms=latency_ms(),
         )
         return response, response.text
+    # A food suggestion: a fixed line about the household's allergies and
+    # diets, added here by code (never left to the model).
+    note = await _food_safety_note(ctx, intent.transcript, session)
     # The model may already close with an offer of its own ("…can I look
     # that up for you?"): that counts as its doubt, and it is the offer —
     # parked below so a "yes" is kept, not asked a second time.
@@ -1353,6 +1550,7 @@ async def _finish_qa(
     should_offer = ctx.online and not ctx.long_capture and (category is not None or self_doubt)
     expect_followup = False
     offer = ""
+    memory_offer_made = False
     if should_offer:
         if not offers_itself:
             offer = _ONLINE_CHECK_OFFER
@@ -1377,22 +1575,32 @@ async def _finish_qa(
             # If we couldn't park the confirmation, drop the offer text
             # so we don't promise something the next "yes" can't honor.
             offer = ""
-    elif ctx.person_id is not None and not ctx.long_capture:
+    elif (
+        ctx.person_id is not None
+        and not ctx.long_capture
+        and not _asks_for_information(intent.transcript)
+    ):
         # No higher-priority offer is firing — see if the implicit
         # memory extractor has parked anything to surface. Mutually
         # exclusive with the self-doubt offer above so we never park
-        # two pending_confirmations at once.
+        # two pending_confirmations at once. Never after an answer to a
+        # question ("how far is the moon? … By the way, your pets are
+        # …"): only after a remark or a chat, where it reads naturally.
         memory_offer = await _maybe_offer_pending_memory(ctx, session)
         if memory_offer is not None:
             offer_text, memory_id = memory_offer
             offer = offer_text
+            memory_offer_made = True
             try:
                 await request_confirmation(
                     session,
                     session_id,
                     kind="core.pending_memory_offer",
                     handler="memory",
-                    data={"memory_id": memory_id},
+                    # The person it was offered to: a one-word "yes" is
+                    # too short for voice ID, so the reply turn usually
+                    # has no speaker of its own.
+                    data={"memory_id": memory_id, "person_id": ctx.person_id},
                 )
                 expect_followup = True
             except Exception as e:
@@ -1402,6 +1610,12 @@ async def _finish_qa(
                 # Drop the offer text if we can't park it.
                 offer = ""
 
+    # The conversation history the model reads next turn keeps the answer
+    # without a memory offer: a history of answers ending "By the way,
+    # <a fact about you>" teaches the model to tack facts on itself.
+    if note:
+        answer = _end_sentence(answer) + " " + note
+    history_text = answer if (offer and memory_offer_made) else None
     if offer:
         answer = _end_sentence(answer) + " " + offer
     response = Response(
@@ -1411,6 +1625,7 @@ async def _finish_qa(
         matched_path="qa",
         online=ctx.online,
         expect_followup=expect_followup,
+        history_text=history_text,
     )
     await _persist_turn(
         session=session,
@@ -1422,4 +1637,5 @@ async def _finish_qa(
         matched_path="qa",
         latency_ms=latency_ms(),
     )
-    return response, (offer if spoken else response.text)
+    rest = " ".join(part for part in (note, offer) if part)
+    return response, (rest if spoken else response.text)

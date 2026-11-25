@@ -233,6 +233,10 @@ async def assemble(
         sat_dir / "scripts" / "domovoi-wifi-adapt",
         system / "domovoi-wifi-adapt",
     )
+    # The XVF3800 wrapper (satellite/xvf_guard.py): the one way the account
+    # reaches xvf_host as root, and only for the operations it needs. Stage 1
+    # installs it root's as /usr/local/sbin/domovoi-xvf; sudoers names it.
+    shutil.copy2(sat_dir / "xvf_guard.py", system / "domovoi-xvf")
     # The verifier that helper uses to make the server prove who it is.
     # Shipped separately from the copy under satellite/ because first boot
     # installs THIS one root-owned: the helper runs as root on the

@@ -84,10 +84,11 @@ const VideoPosterTile = ({ video, progress, onClick }) => {
   );
 };
 
-/* Full-screen playback overlay. Auto-resumes at `resumeSec`, saves the
+/* Full-screen playback overlay. Starts at `startSec` when given (a chat
+ * result's moment), else auto-resumes at `resumeSec`, saves the
  * position every 5 s while playing plus on pause/close/end (end saves 0 so
  * a finished video restarts next time). Esc closes. */
-const VideoOverlay = ({ video, resumeSec, onClose }) => {
+const VideoOverlay = ({ video, resumeSec, startSec, onClose }) => {
   const p = usePlayback();
   const ref = React.useRef(null);
   const lastSave = React.useRef(0);
@@ -169,7 +170,12 @@ const VideoOverlay = ({ video, resumeSec, onClose }) => {
                  controls autoPlay
                  onLoadedMetadata={() => {
                    const el = ref.current;
-                   if (el && resumeSec > 5 && (!el.duration || resumeSec < el.duration * 0.95))
+                   // A moment to open at (a chat's photo-and-video result,
+                   // chat_media.jsx) wins over the resume position.
+                   if (el && startSec != null && Number.isFinite(Number(startSec))) {
+                     const at = Math.max(0, Number(startSec));
+                     if (!el.duration || at < el.duration) el.currentTime = at;
+                   } else if (el && resumeSec > 5 && (!el.duration || resumeSec < el.duration * 0.95))
                      el.currentTime = resumeSec;
                  }}
                  onTimeUpdate={onTimeUpdate}

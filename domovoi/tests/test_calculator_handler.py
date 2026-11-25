@@ -21,6 +21,7 @@ from domovoi.handlers.calculator import (
     _DAYS_FUTURE_RE,
     _DAYS_PAST_RE,
     _DAYS_UNTIL_RE,
+    _HOLIDAY_WHEN_RE,
     _HOURS_FUTURE_RE,
     _HOURS_PAST_RE,
     _IN_N_DAYS_RE,
@@ -513,6 +514,129 @@ async def test_date_days_until_unknown_holiday_responds_gracefully() -> None:
     with _patch_today(date(2026, 5, 11)):
         resp = handler._respond_holiday("dragonday", ctx)
     assert "don't know" in resp.text.lower()
+
+
+# ─── Holidays (2026-11-22 live: "how many days until New Year's Day" got
+# "I don't know the date of New Year's Day." — the table only knew
+# "new year's") ────────────────────────────────────────────────────────
+
+_CTX = Context(session_id=None, room_id="kitchen", online=True)
+
+
+def _holiday(label: str, today: date, *, country=None, year=None) -> str:
+    with _patch_today(today):
+        return CalculatorHandler()._respond_holiday(
+            label, _CTX, country=country, year=year,
+        ).text
+
+
+@pytest.mark.parametrize(
+    ("transcript", "holiday", "year"),
+    [
+        ("how many days until new year's day", "new year's day", None),
+        ("how many days until new years day", "new years day", None),
+        ("how many days are left until easter next year", "easter", "next year"),
+        ("days until the 4th of july", "4th of july", None),
+        ("how many days until christmas 2027", "christmas", "2027"),
+        ("when is thanksgiving", "thanksgiving", None),
+        ("when's easter this year", "easter", "this year"),
+        ("what day is christmas this year", "christmas", "this year"),
+        ("what day does halloween fall on this year", "halloween", "this year"),
+        ("what date is easter in 2027", "easter", "in 2027"),
+        ("how long until mothers day", "mothers day", None),
+        ("what day of the week is new year's day next year", "new year's day", "next year"),
+        ("when is st. patrick's day", "st. patrick's day", None),
+        ("when is boxing day", "boxing day", None),
+    ],
+)
+def test_holiday_questions_match(transcript: str, holiday: str, year) -> None:
+    m = _DAYS_UNTIL_RE.match(transcript) or _HOLIDAY_WHEN_RE.match(transcript)
+    assert m, transcript
+    assert (m.group("holiday"), m.group("year")) == (holiday, year)
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    ["when is my appointment", "when is the next train", "what day is it",
+     "how long until the timer goes off", "when is my next event", "what date is it"],
+)
+def test_holiday_when_does_not_poach(transcript: str) -> None:
+    assert not _HOLIDAY_WHEN_RE.match(transcript)
+
+
+def test_new_years_day_the_owner_report() -> None:
+    text = _holiday("New Year's Day", date(2026, 11, 22))
+    assert text == "New Year's Day is Friday, January 1st, 2027 — 40 days from now."
+
+
+@pytest.mark.parametrize("country", ["US", "GB"])
+def test_fixed_date_holiday_both_countries(country: str) -> None:
+    assert "Christmas is Friday, December 25th, 2026 — 33 days" in _holiday(
+        "christmas", date(2026, 11, 22), country=country)
+
+
+def test_thanksgiving_us_and_canada() -> None:
+    today = date(2026, 9, 1)
+    assert "Thursday, November 26th, 2026" in _holiday("thanksgiving", today, country="US")
+    assert "Monday, October 12th, 2026" in _holiday("thanksgiving", today, country="CA")
+
+
+def test_mothers_day_us_and_gb() -> None:
+    today = date(2026, 1, 10)
+    assert "May 10th, 2026" in _holiday("mother's day", today, country="US")
+    assert "March 15th, 2026" in _holiday("mother's day", today, country="GB")  # Easter - 21
+
+
+def test_holiday_rolls_to_next_year_once_passed() -> None:
+    # Halloween passed: the next one, not a negative count.
+    assert "October 31st, 2027 — 344 days from now" in _holiday("halloween", date(2026, 11, 21))
+
+
+def test_holiday_today_and_tomorrow() -> None:
+    assert _holiday("christmas", date(2026, 12, 25)).startswith("Christmas is today")
+    assert "— tomorrow." in _holiday("christmas", date(2026, 12, 24))
+
+
+def test_this_year_after_it_passed_says_days_ago() -> None:
+    text = _holiday("easter", date(2026, 11, 22), year="this year")
+    assert text == "Easter was Sunday, April 5th, 2026 — 231 days ago."
+
+
+def test_next_year_and_explicit_year() -> None:
+    assert "Sunday, March 28th, 2027" in _holiday("easter", date(2026, 11, 22), year="next year")
+    assert "Sunday, April 16th, 2028" in _holiday("easter", date(2026, 11, 22), year="in 2028")
+
+
+def test_unknown_country_falls_back() -> None:
+    # No rule of its own: the US rule (Memorial Day) or the everywhere one.
+    assert "May 25th, 2026" in _holiday("memorial day", date(2026, 1, 1), country="GB")
+    assert "December 25th" in _holiday("christmas", date(2026, 1, 1), country="FR")
+
+
+@pytest.mark.asyncio
+async def test_fast_path_reads_the_home_country() -> None:
+    m = _HOLIDAY_WHEN_RE.match("when is thanksgiving")
+
+    async def _ca(self):
+        return "CA"
+
+    with _patch_today(date(2026, 9, 1)), patch.object(CalculatorHandler, "_home_country", _ca):
+        resp = await CalculatorHandler()._date_days_until(m, _CTX, None)
+    assert "October 12th, 2026" in resp.text
+    assert resp.data["country"] == "CA"
+
+
+@pytest.mark.asyncio
+async def test_tool_path_label_with_year_words() -> None:
+    async def _none(self):
+        return None
+
+    with _patch_today(date(2026, 11, 22)), patch.object(CalculatorHandler, "_home_country", _none):
+        resp = await CalculatorHandler().execute_from_tool(
+            {"action": "date_math", "kind": "holiday", "label": "Easter next year"},
+            _CTX, session=None,
+        )
+    assert "March 28th, 2027" in resp.text
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,8 @@
   the refill at five songs left, only while playing; Autoplay off takes the
   waiting picks out (a list keeps itself); picks removed or jumped past are
   noted; picks a "less like this" took out leave the queue but the song
-  playing now stays; trimming past 50 played songs; the session ends when
+  playing now stays; trimming past 50 played songs (never ones a jump
+  passed); the session ends when
   the queue is replaced, the room stops, or it sits idle; a cast's picks
   found by their files; the song that ended feeds the session; the
   extender's tick writes the listen with its session and origin;
@@ -93,7 +94,7 @@ def test_stub_play_id_and_the_queue_generation() -> None:
     _run(stub.queue_add_files(["A/3.flac"]))
     assert stub.queue_generation == g0 + 1
     for replace in (stub.prepare_tracks([{"title": "t"}]), stub.play_search({"title": "t"}),
-                    stub.prepare_url("http://radio.example/stream"), stub.queue_clear()):
+                    stub.prepare_url("http://192.168.1.20:8000/stream"), stub.queue_clear()):
         before = stub.queue_generation
         _run(replace)
         assert stub.queue_generation == before + 1
@@ -345,6 +346,9 @@ async def test_old_played_songs_are_trimmed_past_fifty(clean, room) -> None:
     sid = await rooms.start(ROOM, mode="continue", seed=SeedRef(track_id=d["ids"][0], kind="ids",
                             track_ids=tuple(d["ids"][:60]), label="from this queue"), client=room)
     ids = await _ids(room)
+    for i in ids[:8]:                                      # the room plays its first eight
+        await room.play_id(i)
+        await _look(room)
     await room.play_id(ids[58])
     did = await _look(room)
     assert did["trimmed"] == 8
@@ -355,11 +359,26 @@ async def test_old_played_songs_are_trimmed_past_fifty(clean, room) -> None:
 
 
 @requires_db
+async def test_a_jump_ahead_trims_nothing_it_passed(clean, room) -> None:
+    d = await _seed()
+    await _playing(room, [d["uri"][t] for t in d["ids"][:60]])
+    await rooms.start(ROOM, mode="continue", seed=SeedRef(track_id=d["ids"][0], kind="ids",
+                      track_ids=tuple(d["ids"][:60]), label="from this queue"), client=room)
+    ids = await _ids(room)
+    await _look(room)                                      # the first song is heard
+    await room.play_id(ids[59])                            # straight to the last
+    did = await _look(room)
+    assert did["trimmed"] == 1                            # the one it heard
+    left = await _ids(room)
+    assert all(i in left for i in ids[1:60])               # only songs heard may go
+
+
+@requires_db
 async def test_the_session_ends_when_the_queue_is_replaced(clean, room) -> None:
     d = await _seed()
     sid = await _library_start(room, d)
     assert (await _look(room))["ended"] is None
-    await room.prepare_url("http://radio.example/stream")   # a stream took the room
+    await room.prepare_url("http://192.168.1.20:8000/stream")   # a stream took the room
     await room.resume()
     assert (await _look(room))["ended"] == "the queue was replaced"
     assert await _active() is None
@@ -661,6 +680,62 @@ async def test_insert_end_appends_without_picks_and_the_room_jumps(_db, clean, r
 
 
 @requires_db
+async def test_the_why_text_is_left_out_for_a_guest(clean, room) -> None:
+    """Each pick's "why" comes from the listener's history: the queue view
+    and the session answer leave it null when asked to (a guest's read)."""
+    from domovoi.db.session import session_scope
+
+    d = await _seed()
+    sid = await _library_start(room, d)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "UPDATE up_next_picks SET why = CAST(:w AS jsonb) WHERE session_id = :s"),
+            {"w": '[["wildcard", ""], ["plays_often", ""]]', "s": sid})
+    queue = await room.queue_list()
+
+    def items():
+        return [dict(song_id=e["id"], file=e["file"]) for e in queue]
+
+    full, bare = items(), items()
+    await rooms.queue_view(ROOM, full)
+    await rooms.queue_view(ROOM, bare, with_why=False)
+    assert all(it["why"] for it in full[1:])
+    assert all(it["why"] is None and it["origin"] == "auto" for it in bare[1:])
+    async with session_scope() as s:
+        st = await store.active_for(s, rooms.target_for(ROOM))
+        household = await service.session_json(s, st)
+        guest = await service.session_json(s, st, with_person=False)
+    assert all(p["why"] for p in household["picks"])
+    assert guest["picks"] and all(p["why"] is None for p in guest["picks"])
+
+
+@requires_db
+async def test_queue_files_outside_the_music_folder_resolve_in_one_query(clean) -> None:
+    """A library song stored under another folder still resolves by its path
+    under the music folder, and many unknown files cost one extra query."""
+    from domovoi.db.session import session_scope
+
+    async with engine.begin() as conn:
+        tid = (await conn.execute(text(
+            "INSERT INTO library_tracks (file_path, title, artist) "
+            "VALUES ('/srv/other/Nina/far.flac', 'Far', 'Nina') RETURNING id"))).scalar_one()
+    files = ["Nina/far.flac"] + [f"Book/{i:03d}.mp3" for i in range(40)]
+    async with session_scope() as s:
+        calls = 0
+        real = s.execute
+
+        async def counting(*a, **kw):
+            nonlocal calls
+            calls += 1
+            return await real(*a, **kw)
+
+        s.execute = counting
+        got = await rooms.tracks_for_files(s, files)
+    assert got == {"Nina/far.flac": tid}
+    assert calls == 2
+
+
+@requires_db
 async def test_clear_ends_the_session_and_the_room_read(_db, clean, room, dispatched) -> None:
     d = await _seed()
     await _library_start(room, d)
@@ -823,7 +898,7 @@ async def test_save_the_rooms_queue_as_a_playlist(_db, clean, room, dispatched, 
     token = await _household()
     await _playing(room, [d["uri"][d["ids"][3]], d["uri"][d["ids"][7]]])
     await room.queue_add_files([
-        "http://radio.example/stream",                 # a stream
+        "http://192.168.1.20:8000/stream",                 # a stream
         "Podcasts/Some Show/ep1.mp3",                  # a podcast: not a library song
         d["uri"][d["ids"][3]],                         # the same song again
         d["uri"][d["ids"][11]],
@@ -843,7 +918,7 @@ async def test_save_the_rooms_queue_as_a_playlist(_db, clean, room, dispatched, 
     assert [r[0] for r in rows] == [d["ids"][3], d["ids"][7], d["ids"][11]]
     # Nothing in the queue from the library: nothing to save.
     await room.queue_clear()
-    await room.queue_add_files(["http://radio.example/stream"])
+    await room.queue_add_files(["http://192.168.1.20:8000/stream"])
     async with _dev(token, "browser-w6") as c:
         r = await c.post(f"/api/music/queue/{ROOM}/save-playlist", json={"name": "Radio"})
         assert r.status_code == 422
@@ -943,3 +1018,18 @@ def test_new_core_route_tiers() -> None:
         "POST", "/v1/admin/music/queue/{room_id}/play")
     assert guest_queue.require_device_read_or_active_room_guest in _gates_for(
         "GET", "/v1/admin/music/up-next/room/{room_id}")
+
+
+@requires_db
+async def test_unheard_songs_behind_are_capped_oldest_first(clean, room) -> None:
+    d = await _seed(260)
+    await _playing(room, [d["uri"][t] for t in d["ids"]])
+    await rooms.start(ROOM, mode="continue", seed=SeedRef(track_id=d["ids"][0], kind="ids",
+                      track_ids=tuple(d["ids"]), label="from this queue"), client=room)
+    ids = await _ids(room)
+    await room.play_id(ids[259])                           # one jump: none of them was heard
+    did = await _look(room)
+    left = await _ids(room)
+    cap = rooms.TRIM_MAX_BEHIND
+    assert did["trimmed"] == 259 - cap
+    assert left.index(ids[259]) == cap and left[0] == ids[259 - cap]   # the oldest went, 200 stay

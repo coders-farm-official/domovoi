@@ -8,6 +8,7 @@ core-before-plugin, then plugin slug, then handler name — see
 Condensed band map — core handlers occupy exactly the design §4.2 table:
 
     100 dismiss          brush-offs win before anything acts
+    101 support_session  "end support session": the room ends an admin's shell
     105 help             "what can you do" / "help": whole closed questions
     106 help_desk        "how do I …" about Domovoi, from its own help; declines otherwise
     110 voice_profile    "i'm Sarah" before any greedy capture
@@ -44,6 +45,9 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     290 playlist         before music's ^play catch-all
     295 music_alias      "when i say X i mean Y" names, before music's ^play
     300 music            greedy ^play catch-all (its "... in the garage" room paths first)
+    305 media_search     "show me photos of …", "find the video where …": an asking
+                         verb AND a photo/video word; leaves "… in my library"
+                         to library
     310 library          "find X in my library" before greedier "find X"
     900 (media-provider plugin)  greedy ^find catch-all — LAST band
 
@@ -77,6 +81,7 @@ from domovoi.handlers.household_calendar import CalendarHandler
 from domovoi.handlers.intercom import IntercomHandler
 from domovoi.handlers.library import LibraryHandler
 from domovoi.handlers.lists import ListsHandler
+from domovoi.handlers.media_search import MediaSearchHandler
 from domovoi.handlers.memory import MemoryHandler
 from domovoi.handlers.music import MusicHandler
 from domovoi.handlers.music_alias import MusicAliasHandler
@@ -86,6 +91,7 @@ from domovoi.handlers.printing import PrintingHandler
 from domovoi.handlers.reminder import ReminderHandler
 from domovoi.handlers.repeat import RepeatHandler
 from domovoi.handlers.spoken_audio import SpokenAudioHandler
+from domovoi.handlers.support_session import SupportSessionHandler
 from domovoi.handlers.timer import TimerHandler
 from domovoi.handlers.voice import VoiceHandler
 from domovoi.handlers.voice_notes import VoiceNotesHandler
@@ -110,6 +116,7 @@ _CORE_HANDLERS: list[Handler] = [
     IntercomHandler(),
     LibraryHandler(),
     ListsHandler(),
+    MediaSearchHandler(),
     MemoryHandler(),
     MusicHandler(),
     MusicAliasHandler(),
@@ -119,6 +126,7 @@ _CORE_HANDLERS: list[Handler] = [
     ReminderHandler(),
     RepeatHandler(),
     SpokenAudioHandler(),
+    SupportSessionHandler(),
     TimerHandler(),
     VoiceHandler(),
     VoiceNotesHandler(),
@@ -177,6 +185,7 @@ __all__ = [
     "IntercomHandler",
     "LibraryHandler",
     "ListsHandler",
+    "MediaSearchHandler",
     "MemoryHandler",
     "MusicAliasHandler",
     "MusicHandler",
@@ -187,6 +196,7 @@ __all__ = [
     "ReminderHandler",
     "RepeatHandler",
     "SpokenAudioHandler",
+    "SupportSessionHandler",
     "TimerHandler",
     "unregister_handler",
     "VoiceHandler",

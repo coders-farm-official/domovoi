@@ -70,6 +70,7 @@ from domovoi.container_guard.expected import (
     mpd_expectations,
     tor_expectation,
     listener_expectation,
+    decoder_expectations,
     plugin_expectations,
 )
 from domovoi.container_guard.model import FAILURE, ONESHOT, RUNNING, TAMPER, Finding
@@ -81,6 +82,8 @@ MPD_BASELINE_KEY = "mpd_image_id"
 TOR_BASELINE_KEY = "friend_houses_tor_image_id"
 # ...and the image of its inbound listener (note_listener_image).
 LISTENER_BASELINE_KEY = "friend_houses_listener_image_id"
+# ...and each plugin's decode-only image (note_decoder_image), by slug.
+DECODER_BASELINE_PREFIX = "plugin_decoder_image_id:"
 # The baseline before the current one, kept when a rebuild Domovoi vouched
 # for (or an admin's clear) moved it: rooms still on Domovoi's previous
 # build wait to be recreated, they aren't tampering.
@@ -917,6 +920,17 @@ async def gather_expected(guard: ContainerGuard, cfg: GuardConfig, *, with_db: b
         ),
     ])
     plugin_rows = await reg.list_plugins()
+    # Plugins' decode-only containers: the core's own, before the plugins'
+    # declared ones (the first claim wins).
+    decoder_slugs = [r.slug for r in plugin_rows
+                     if isinstance((getattr(r, "manifest", None) or {}).get("isolated"), dict)]
+    decoder_ids: dict[str, str | None] = {}
+    if decoder_slugs:
+        async with guard.session_factory() as s:
+            for slug in decoder_slugs:
+                b = await store.get_baseline(s, DECODER_BASELINE_PREFIX + slug)
+                decoder_ids[slug] = (b or {}).get("value") or None
+    exp.add(decoder_expectations(plugin_rows, decoder_ids))
     expected, names, unwatched = await plugin_expectations(
         plugin_rows, dict(LOADER.loaded),
         pending_restart=set(LOADER.pending_restart),
@@ -1063,6 +1077,23 @@ async def note_listener_image(image_id: str) -> None:
     guard = get_guard()
     async with guard.session_factory() as s:
         await store.set_baseline(s, LISTENER_BASELINE_KEY, image_id, "core-build")
+
+
+async def note_decoder_image(slug: str, image_id: str) -> None:
+    """Record the decode-only image the core just built for plugin ``slug``
+    (domovoi/plugins_runtime/isolated.py), like :func:`note_tor_image`."""
+    guard = get_guard()
+    async with guard.session_factory() as s:
+        await store.set_baseline(s, DECODER_BASELINE_PREFIX + slug, image_id, "core-build")
+
+
+async def decoder_image_record(slug: str) -> str | None:
+    """The decode-only image ID on record for plugin ``slug``: the core
+    runs no decoder image the guard has no record of."""
+    guard = get_guard()
+    async with guard.session_factory() as s:
+        b = await store.get_baseline(s, DECODER_BASELINE_PREFIX + slug)
+    return (b or {}).get("value") or None
 
 
 async def note_mpd_image(image_id: str | None, *, built: bool) -> str:

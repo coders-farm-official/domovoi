@@ -51,6 +51,7 @@ from domovoi.clients.mpd import (
 from domovoi.db.session import session_scope
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Response
+from domovoi.player_route import PlayerRoute, player_route
 from domovoi.now_playing import NOW_PLAYING
 
 log = logging.getLogger(__name__)
@@ -82,9 +83,12 @@ class PlaybackAPI:
                 f"play_url: {source!r} is not a registered now-playing source"
             )
         # The room's MPD would fetch an internet stream itself, out of
-        # sight of every in-process gate: refuse it here under never.
-        if egress.check_destination(stream_url) is not None:
-            egress.log_refusal(f"music stream {stream_url[:120]}")
+        # sight of every in-process gate: refuse it here under never. A
+        # relay URL (relay_url) is judged by the remote URL it stands for.
+        from domovoi import player_relay
+
+        if egress.check_destination(player_relay.target_for(stream_url) or stream_url) is not None:
+            egress.log_refusal(f"music stream {player_relay.url_hash(stream_url)}")
             return Response(
                 text=(
                     f"{egress.spoken_offline_phrase()}, so I can't play "
@@ -92,6 +96,22 @@ class PlaybackAPI:
                 ),
                 data={"stream_url": stream_url, "ok": False, "status": "internet_off"},
             )
+        # A raw internet URL never reaches the room's queue (L20): it is
+        # played through the core's relay, as a file the player may seek
+        # in (a plugin that knows it is a live station asks relay_url
+        # with kind="radio" itself).
+        from domovoi.relay_queue import is_internet_uri
+
+        if is_internet_uri(stream_url):
+            try:
+                stream_url = await self.relay_url(room_id, stream_url, kind="file")
+            except (ValueError, player_relay.RelayUnavailable) as e:
+                log.warning("play_url: room=%s: the stream can't be relayed (%s)",
+                            room_id, type(e).__name__)
+                return Response(
+                    text=f"I found {title}, but the music player wouldn't accept the stream.",
+                    data={"ok": False},
+                )
         ok = False
         try:
             ok = await get_mpd_client_for(room_id).prepare_url(
@@ -111,6 +131,8 @@ class PlaybackAPI:
         # Now-playing stamp — data carries "stream_url" by convention (the
         # sweeper's freshness key) and "title" for the dashboard card.
         data = dict(now_playing_data or {})
+        if player_relay.token_of(stream_url) is not None:
+            data["stream_url"] = stream_url  # what the player holds (a relay URL)
         data.setdefault("stream_url", stream_url)
         data.setdefault("title", title)
         if play_ref is not None:
@@ -135,7 +157,9 @@ class PlaybackAPI:
                         title=title,
                         artist=artist,
                         url=play_ref,
-                        stream_url=stream_url,
+                        # The remote URL, never a relay token: the queue
+                        # check reads it back (domovoi/relay_queue.py).
+                        stream_url=player_relay.target_for(stream_url) or stream_url,
                     )
             except Exception as e:
                 log.debug("play_url: media_plays record failed: %s", e)
@@ -184,8 +208,10 @@ class PlaybackAPI:
 
         A room that shares a queue (a group, domovoi/music_groups.py) stops
         alone: it leaves the group and the other rooms play on."""
-        from domovoi import music_groups
+        from domovoi import music_groups, player_relay
 
+        # A relay serving the room ends with the music (SDK 1.16).
+        player_relay.revoke_room(room_id)
         if music_groups.share_of(room_id) is not None:
             from domovoi.plugins_runtime.loader import LOADER
 
@@ -262,6 +288,64 @@ class PlaybackAPI:
         except Exception as e:  # noqa: BLE001 — the play surfaces it
             log.warning("playback.ensure_room(%s) failed: %s", room_id, e)
         return True
+
+    async def player_route(self, room_id: str) -> PlayerRoute | None:
+        """SDK 1.15: how the music player that plays ``room_id``'s music
+        reaches this core (``.host`` / ``.port``, ``.url(path)``) and the
+        address the core sees it call from (``.admits(request.client.host)``),
+        for a plugin that hands the player a URL on the core itself, such
+        as a stream relay (domovoi/player_route.py). None when it can't be
+        told (no player yet, Docker didn't answer)."""
+        return await player_route(room_id)
+
+    async def relay_url(self, room_id: str, remote_url: str, *, kind: str = "file") -> str:
+        """SDK 1.16: a URL on the core for ``room_id``'s music player that
+        plays ``remote_url`` through the core's checked fetch
+        (domovoi/player_relay.py), to hand to :meth:`play_url` instead of
+        the remote URL itself. The player never fetches the remote URL, so
+        never follows a redirect of its own into the house.
+
+        ``kind="radio"``: a live stream, one connection, ICY titles passed
+        through. ``kind="file"``: a finite file, any number of byte-range
+        requests (seek, resume) for 6 hours. Either way the token is bound
+        to this room, this URL and the room's player's address, must be
+        opened within 30 s, and ends at the room's next relay or stop.
+
+        Raises ``RelayUnavailable`` when the room's player can't be told
+        (no such room, no player yet, Docker didn't answer), ``ValueError``
+        for an unknown kind or a URL the core won't fetch (the outbound
+        check runs here, before the room's current relay is ended, and
+        again at every fetch).
+
+        The token is keyed on the room whose player plays ``room_id``'s
+        music, never on the caller's string (L25, review 2026-11-23): a
+        made-up room name can't evict another room's relay."""
+        from domovoi import net_safety, player_relay
+        from domovoi.clients import mpd as mpd_module
+        from domovoi.config import settings
+        from domovoi.player_route import player_room
+
+        if kind not in player_relay.KINDS:
+            raise ValueError(f"relay kind must be one of {player_relay.KINDS}, not {kind!r}")
+        host = mpd_module._host_of((room_id or "").strip())
+        if not host:
+            raise ValueError("relay needs a room")
+        if not settings.use_stubs or mpd_module._room_ports:
+            if player_room(host) != host:
+                raise player_relay.RelayUnavailable(f"no room {room_id!r} with a music player")
+        await net_safety.avet_outbound_url(remote_url, require_resolution=False)
+        route = await player_route(host)
+        if route is None:
+            raise player_relay.RelayUnavailable(f"no route to room {room_id!r}'s player")
+        return player_relay.mint(host, remote_url, route, kind=kind)
+
+    def relay_target(self, player_url: str | None) -> str | None:
+        """SDK 1.16: the remote URL a :meth:`relay_url` stands for while it
+        is still good (a now-playing matcher reading the player's file),
+        else None."""
+        from domovoi import player_relay
+
+        return player_relay.target_for(player_url)
 
     async def mpd_client_for(self, room_id: str) -> MPDClient:
         """Escape hatch (search_only, seek, ...) — same client the core

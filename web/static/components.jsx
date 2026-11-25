@@ -671,8 +671,43 @@ const IconButton = ({ name, ...rest }) => (
  * A URL that failed is remembered for the life of the page (coverMisses),
  * so a re-render, a page flipped back to, or the same track in another
  * row never asks again: one request per artless track per visit, not one
- * per render, and nothing logged from here. */
+ * per render, and nothing logged from here. A library cover is remembered
+ * without its ?size= (coverMissKey): a track with no art has none at any
+ * size, so the 40px row's 404 also spares the 200px player its request.
+ *
+ * Sizes: the original picture can be 1.5 MB, so every library cover the
+ * dashboard draws asks for a thumbnail, `?size=` s (160px long edge), m
+ * (320), l (512) or xl (768), a WebP with its own ETag (track_cover). The
+ * bucket is the smallest whose edge covers the tile at 2x (coverBucket):
+ * table cells and cards (<= 80px) get s, the expanded player's 200px tile
+ * l, the OS media controls xl. A server too old to know `size` ignores it
+ * and sends the original, as before. */
 const coverMisses = new Set();
+const COVER_BUCKETS = [['s', 160], ['m', 320], ['l', 512], ['xl', 768]];
+/* The bucket for a tile `css` px wide (or a bucket name, passed through). */
+const coverBucket = (css) => {
+  if (typeof css === 'string' && COVER_BUCKETS.some(([b]) => b === css)) return css;
+  const need = Number(css) * 2;
+  if (!Number.isFinite(need)) return 'xl';
+  const hit = COVER_BUCKETS.find(([, edge]) => edge >= need);
+  return hit ? hit[0] : 'xl';
+};
+const MUSIC_COVER_PATH = /\/api\/music\/library\/[^/?#]+\/cover(?:\?|$)/;
+/* `url` with its ?size= set to `css`'s bucket (or dropped, css == null),
+ * every other parameter (?v=) kept. Only a music library cover is touched:
+ * an audiobook's or a podcast's URL comes back as it was. */
+const coverUrlAtSize = (url, css) => {
+  if (typeof url !== 'string' || !MUSIC_COVER_PATH.test(url)) return url;
+  const at = url.indexOf('?');
+  const path = at < 0 ? url : url.slice(0, at);
+  const params = (at < 0 ? '' : url.slice(at + 1)).split('&')
+    .filter((p) => p && p !== 'size' && !p.startsWith('size='));
+  if (css != null) params.push(`size=${coverBucket(css)}`);
+  return params.length ? `${path}?${params.join('&')}` : path;
+};
+/* What a miss is remembered under: the URL without its size. */
+const coverMissKey = (url) => coverUrlAtSize(url, null);
+const coverMissed = (url) => !!url && coverMisses.has(coverMissKey(url));
 /* The cover's version (V059): a track row's `cover_v`, carried on the URL
  * as ?v= so the browser's cached picture (and a remembered miss) is
  * replaced exactly when the art changes. `library.cover.changed` names the
@@ -697,13 +732,17 @@ const listenForCoverVersions = () => {
     }
   });
 };
-const libraryCoverUrl = (trackId, coverV) => {
+/* A track's cover URL. `size` is the tile's CSS px (or a bucket name) and
+ * adds ?size=; left out, the URL names the original picture (the player's
+ * queue items keep that form, and each place that draws one sizes it). */
+const libraryCoverUrl = (trackId, coverV, size) => {
   if (trackId == null) return null;
   listenForCoverVersions();
   const known = coverVersions.get(trackId);
   const v = Math.max(Number.isFinite(coverV) ? coverV : 0, known || 0);
-  return `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`
+  const url = `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`
     + (v > 0 || Number.isFinite(coverV) ? `?v=${v}` : '');
+  return size == null ? url : coverUrlAtSize(url, size);
 };
 /* The artists a track credits beyond the one its artist line already
  * names (schemas.Track `artists`, in the file's order): what the library
@@ -724,7 +763,7 @@ const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
   // from an effect, which drew the new URL under the last picture's 'shown'
   // and put a known-missing cover into an <img> (a second request and a
   // second 404 line on the console).
-  const fresh = src && !coverMisses.has(src) ? 'loading' : 'none';
+  const fresh = src && !coverMissed(src) ? 'loading' : 'none';
   const [held, setHeld] = React.useState({ src, state: fresh });
   if (held.src !== src) setHeld({ src, state: fresh });
   const state = held.src === src ? held.state : fresh;
@@ -739,7 +778,7 @@ const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
       {state !== 'none' && (
         <img src={src} alt="" width={size} height={size} loading="lazy" decoding="async" draggable={false}
              onLoad={() => setHeld({ src, state: 'shown' })}
-             onError={() => { coverMisses.add(src); setHeld({ src, state: 'none' }); }}
+             onError={() => { coverMisses.add(coverMissKey(src)); setHeld({ src, state: 'none' }); }}
              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
                       objectFit: 'cover', opacity: shown ? 1 : 0 }}/>
       )}
@@ -789,6 +828,75 @@ const DeleteConfirmDialog = ({ open = true, title = 'Delete?', busy = false, con
     </div>
   );
 };
+
+/* ---- In-page confirm / prompt -------------------------------- */
+/* The dashboard's own answer to window.confirm and window.prompt, which an
+ * embedded browser (and some phone webviews) dismisses without ever showing,
+ * so the press that asked did nothing. Both return a promise:
+ *
+ *   if (!await askConfirm('Restart now?', { confirmLabel: 'Restart' })) return;
+ *   const name = await askPrompt('Rename chat', { value: title });   // null = cancelled
+ *
+ * One dialog at a time; a second ask waits for the first. Escape and the
+ * backdrop cancel. `message` keeps its line breaks. */
+const InPageAsk = ({ ask, onDone }) => {
+  const [text, setText] = React.useState(ask.value || '');
+  const done = (ok) => onDone(ask.input ? (ok ? text : null) : !!ok);
+  React.useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') done(false); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  });
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,0.45)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+         onClick={() => done(false)}>
+      <div role="dialog" aria-modal="true" aria-label={ask.title} onClick={(e) => e.stopPropagation()}
+           style={{ width: 'min(480px, 100%)', background: 'var(--card)',
+                    border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+                    boxShadow: 'var(--shadow-md), var(--inner-highlight)', overflow: 'hidden' }}>
+        <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+          <strong style={{ fontSize: 14 }}>{ask.title}</strong>
+        </div>
+        <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--fg-muted)',
+                      whiteSpace: 'pre-wrap', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>{ask.message}</div>
+          {ask.input && (
+            <input autoFocus value={text} onChange={(e) => setText(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') done(true); }}
+                   style={{ font: 'inherit', padding: '6px 8px', borderRadius: 'var(--r-md)',
+                            border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}/>
+          )}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px',
+                      borderTop: '1px solid var(--border-soft)' }}>
+          <Button onClick={() => done(false)}>Cancel</Button>
+          <Button variant="primary" onClick={() => done(true)}>{ask.confirmLabel}</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+const inPageAsks = { queue: [], root: null, host: null, busy: false };
+const inPageNext = () => {
+  const st = inPageAsks;
+  if (st.busy || !st.queue.length) return;
+  const ask = st.queue.shift();
+  st.busy = true;
+  if (!st.host) {
+    st.host = document.createElement('div');
+    document.body.appendChild(st.host);
+    st.root = ReactDOM.createRoot(st.host);
+  }
+  const finish = (v) => { st.root.render(null); st.busy = false; ask.resolve(v); inPageNext(); };
+  st.root.render(<InPageAsk ask={ask} onDone={finish}/>);
+};
+const inPageAsk = (message, o) => new Promise((resolve) => {
+  inPageAsks.queue.push({ message: String(message), title: 'Are you sure?', confirmLabel: 'OK', ...o, resolve });
+  inPageNext();
+});
+const askConfirm = (message, o = {}) => inPageAsk(message, o);
+const askPrompt = (message, o = {}) => inPageAsk(message, { title: message, confirmLabel: 'OK', ...o, input: true });
 
 /* The pending-delete state a list panel needs to put DeleteConfirmDialog
  * in front of its delete handler:
@@ -1313,7 +1421,7 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, confi
   });
   // What the confirm asks, from the panel's copy.
   const asked = fullBy(core);
-  if (!confirmed && !window.confirm(asked
+  if (!confirmed && !await askConfirm(asked
     ? fullUpdateText(asked, false)
     : plain
     ? `${question || 'Restart Domovoi now?'}\n\n` +
@@ -1350,7 +1458,7 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, confi
     // Asked as a quick restart, and the server as it is now says the unit
     // would run its full update (a pull landed after the panel read the
     // version, say): ask again, as that, before anything happens.
-    if (!window.confirm(fullUpdateText(full, true))) {
+    if (!await askConfirm(fullUpdateText(full, true))) {
       // Nothing was asked for, and the panel's copy is out of date.
       try { await onSettled(); } catch { /* the caller's re-read reports itself */ }
       return false;
@@ -1675,7 +1783,7 @@ const CoreRestart = ({ onBack, style }) => {
   }, [silent, busy, refresh]);
   if (!admin || !st || st.answering) return null;
   const press = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       'Restart the Domovoi core?\n\n' +
       'It isn’t answering. The dashboard first makes sure it is really stuck ' +
       '(no answer at all for about a minute, longer than the core waits before ' +
@@ -1816,6 +1924,11 @@ const CORE_NAV_ITEMS = [
   { route: 'videos',     icon: 'film',        label: 'Videos',     order: 15 },
   // order 16 is deliberately free — the Image Generation plugin's Images
   // page slots there (nav_order 16 in its manifest) when installed.
+  // Photos and Faces (1.5.0, photos.jsx): what is in the photos and videos,
+  // and the people in them. Faces is on a launcher only while faces are on
+  // (navItemsFor); 18 belongs to News, in Tools.
+  { route: 'photos',     icon: 'images',      label: 'Photos',     order: 17 },
+  { route: 'faces',      icon: 'scan-face',   label: 'Faces',      order: 19 },
   { route: 'news',       icon: 'newspaper',   label: 'News',       order: 18 },
   // A Settings section since 2026-11-09, on no launcher but the phone bar,
   // and there only when someone here picked it (Settings → App layout):
@@ -1838,7 +1951,7 @@ const CORE_NAV_ITEMS = [
  * groups and a household's own layout into what every launcher draws. */
 const NAV_GROUPS = [
   { id: 'media', label: 'Media', icon: 'circle-play', open: true,
-    routes: ['music', 'podcasts', 'audiobooks', 'videos'] },
+    routes: ['music', 'podcasts', 'audiobooks', 'videos', 'photos', 'faces'] },
   { id: 'tools', label: 'Tools', icon: 'wrench', open: false,
     routes: ['news', 'calendar', 'lists', 'files'] },
 ];
@@ -2263,12 +2376,87 @@ const useAiFeatures = () => {
   return on;
 };
 
+/* The Faces page (1.5.0, photos.jsx; design MEDIA-UNDERSTANDING §6/§8) is
+ * on a launcher only while "Recognize faces" is on, and never for a guest
+ * or on a shared screen: no misleading controls, and the household's faces
+ * are nobody else's. GET /api/faces/status decides. It is the household
+ * tier and refuses a shared screen (403) and a guest (401), so a refusal
+ * means "not here"; a guest isn't asked at all. Unknown (not answered yet)
+ * is hidden. Asked again when a credential changes, the tab comes back
+ * into view, or `media_understanding.changed` arrives (the switch), at
+ * most once every few seconds (progress fires that event often). */
+const FACES_ROUTE = 'faces';
+const FACES_ASK_GAP_MS = 5000;
+const FacesPageStore = (() => {
+  let on = null;
+  let asking = null;
+  let last = 0;
+  let trailing = null;
+  let watching = false;
+  const subs = new Set();
+  const set = (v) => {
+    if (v === on) return;
+    on = v;
+    subs.forEach((fn) => { try { fn(on); } catch { /* one bad subscriber */ } });
+  };
+  const ask = () => {
+    if (asking) return asking;
+    let guest = false;
+    try { guest = typeof isGuestViewer === 'function' && isGuestViewer(); } catch { guest = false; }
+    if (guest) { set(false); return Promise.resolve(false); }
+    last = Date.now();
+    asking = Promise.resolve()
+      .then(() => apiGet('/api/faces/status', { quiet: true }))
+      .then((st) => set(!!(st && st.enabled === true)), () => set(false))
+      .then(() => { asking = null; return on; });
+    return asking;
+  };
+  // A later ask, no sooner than the gap after the last one.
+  const soon = () => {
+    if (trailing) return;
+    const wait = Math.max(0, FACES_ASK_GAP_MS - (Date.now() - last));
+    trailing = setTimeout(() => { trailing = null; ask(); }, wait);
+  };
+  const watch = () => {
+    if (watching) return;
+    watching = true;
+    try { document.addEventListener('visibilitychange', () => { if (!document.hidden) soon(); }); } catch { /* no document */ }
+    try { if (typeof Auth !== 'undefined' && Auth.subscribe) Auth.subscribe(soon); } catch { /* auth.js absent */ }
+    try {
+      if (typeof stateBus !== 'undefined') {
+        stateBus.subscribe((ev) => { if (ev && ev.type === 'media_understanding.changed') soon(); });
+      }
+    } catch { /* data.js absent */ }
+  };
+  return {
+    get: () => on === true,
+    ask, watch,
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+})();
+const facesPageOn = () => FacesPageStore.get();
+// facesPageOn() that re-renders when the answer changes (asks once on mount).
+const useFacesPage = () => {
+  const [on, setOn] = useState(facesPageOn());
+  useEffect(() => {
+    const un = FacesPageStore.subscribe(() => setOn(facesPageOn()));
+    FacesPageStore.watch();
+    FacesPageStore.ask();
+    setOn(facesPageOn());
+    return un;
+  }, []);
+  return on;
+};
+
 // buildNavItems as a launcher shows it: on a shared screen, without the
 // SHARED_SCREEN_HIDDEN pages; with the household's AI features off,
-// without Chat (`ai`: the caller's useAiFeatures(), so it re-renders).
-const navItemsFor = (manifest, { shared = false, ai = aiFeaturesOn() } = {}) =>
+// without Chat (`ai`: the caller's useAiFeatures(), so it re-renders);
+// Faces only while faces are on here (`faces`: FacesPageStore, which the
+// caller's useFacesPage() keeps current), and never on a shared screen.
+const navItemsFor = (manifest, { shared = false, ai = aiFeaturesOn(), faces = facesPageOn() } = {}) =>
   buildNavItems(manifest).filter((it) => !(shared && SHARED_SCREEN_HIDDEN.has(it.route))
-    && !(!ai && AI_ONLY_ROUTES.has(it.route)));
+    && !(!ai && AI_ONLY_ROUTES.has(it.route))
+    && !(it.route === FACES_ROUTE && (shared || !faces)));
 
 /* ---- the phone bar ----------------------------------------------------
  * The tabs along the bottom of a phone-width screen (760px and below).
@@ -2608,6 +2796,7 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   const badges = given || own;
   const shared = useSharedScreen();
   const ai = useAiFeatures();
+  useFacesPage();   // re-renders when Faces comes and goes (navItemsFor reads it)
   const items = navItemsFor(manifest, { shared, ai });
   const strip = phoneBarRoutes(items, usePhoneBar());
   const primaryRoutes = new Set(strip);
@@ -3399,6 +3588,18 @@ const useFirstFieldFocus = (which) => {
   return ref;
 };
 
+/* The code a setup-code QR brought (setup_fragment.js: read from the
+ * address's #setup-code=... and already taken out of it), or ''. The
+ * claim form starts with it in its field and posts it exactly as a typed
+ * code. Never stored anywhere, never put in an address. */
+const setupFragmentCode = () => {
+  try { return (typeof window !== 'undefined' && window.SetupFragment) ? window.SetupFragment.code() : ''; }
+  catch { return ''; }
+};
+const forgetSetupFragment = () => {
+  try { if (typeof window !== 'undefined' && window.SetupFragment) window.SetupFragment.forget(); } catch { /* gone */ }
+};
+
 // The first-run form's own checks, before anything is sent: the same two
 // for the admin setup dialog and the welcome (FirstRunWelcome below).
 const setupFormError = (password, confirm) => {
@@ -3409,7 +3610,7 @@ const setupFormError = (password, confirm) => {
 
 const LoginModal = ({ onClose }) => {
   const [status, setStatus] = useState(Auth.status);
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(setupFragmentCode);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3477,7 +3678,7 @@ const LoginModal = ({ onClose }) => {
     // First-run setup done: "you're all set" and the household token next
     // (FirstRun below), then the internet question, when nobody (the
     // Windows installer, env_bootstrap) has answered it yet.
-    if (needsSetup) FirstRun.claimed();
+    if (needsSetup) { forgetSetupFragment(); FirstRun.claimed(); }
     // Signed in: auth.js has already taken the modal down. A host whose
     // onClose does more than that still hears about it — unless a NEW
     // prompt opened meanwhile, which is not this one to close.
@@ -3839,7 +4040,9 @@ const copyToClipboard = async (text) => {
 const FirstRun = (() => {
   let claiming = false;   // a claim from the welcome is on its way
   let allSet = false;     // a claim just landed in this tab
-  let wanted = false;     // "claim it" asked for the welcome again
+  // "claim it" asked for the welcome again; so did scanning the setup-code
+  // QR (its code is in the form), past an earlier "Not now".
+  let wanted = setupFragmentCode() !== '';
   let putAway = null;     // "Not now" in this page (its key), whatever storage does
   let tokenVersion = 0;   // bumped by every household token saved from "you're all set"
   const subs = new Set();
@@ -3888,7 +4091,7 @@ const welcomeShows = (status, { dismissed = false, wanted = false, claiming = fa
 };
 
 const FirstRunWelcome = () => {
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(setupFragmentCode);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3930,6 +4133,7 @@ const FirstRunWelcome = () => {
       setErr(loginErrorText(failed));
       return;
     }
+    forgetSetupFragment();
     FirstRun.claimed();
   };
   // Claimed elsewhere while this stood open: coming back to the tab asks
@@ -5263,7 +5467,7 @@ Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
   CORE_NAV_ITEMS, NAV_GROUPS, resolveNavTree, NavGroupsStore,
-  NavLayoutStore, useNavLayout, navLayoutFull, navGroupId, navLayoutEdit, buildNavItems, navItemsFor, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
+  NavLayoutStore, useNavLayout, navLayoutFull, navGroupId, navLayoutEdit, buildNavItems, navItemsFor, FacesPageStore, facesPageOn, useFacesPage, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
   PluginPageFrame, pluginAccentStyle, ToastNotice,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
@@ -5274,10 +5478,11 @@ Object.assign(window, {
   FirstRun, welcomeShows, FirstRunWelcome, FirstRunAllSet, copyToClipboard,
   ConnectAsk, connectShows, ConnectPrompt,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
-  DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
+  DeleteConfirmDialog, useDeleteConfirm, askConfirm, askPrompt, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState, AdminSignedOutNotice,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses, coverVersions, creditedWith,
+  coverBucket, coverUrlAtSize, coverMissKey, coverMissed,
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,
   CONTAINER_GUARD_GUEST_TEXT,
   DeviceTokenNotice, deviceTokenNoticeText, tokenWaitClock,

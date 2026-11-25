@@ -301,3 +301,55 @@ async def test_fh15_removed_items_dont_freeze_a_list(house) -> None:
     await sl.on_envelope(house.friend, _env(house.them, house.us, space_id,
                                             [sp.Op("add", clock, secrets.token_bytes(16), "Lantern")]))
     assert ("Lantern", False) in await _items(made["list_id"])
+
+
+async def test_an_offer_withdrawn_before_accepting_leaves_nothing(house) -> None:
+    space_id, _ = await _offer(house, items=("Tent", "Stove"))
+    await sl.on_envelope(house.friend, _env(house.them, house.us, space_id, [sp.Op("leave", 30)]))
+    async with sl._db() as s:
+        for table, col in (("friend_houses_spaces", "id"), ("friend_houses_space_ops", "space_id"),
+                           ("friend_houses_space_items", "space_id")):
+            n = (await s.execute(text(f"SELECT count(*) FROM {table} WHERE {col} = :s"),
+                                 {"s": space_id})).scalar_one()
+            assert n == 0, table
+
+
+async def test_applied_changes_are_pruned_by_count_even_on_one_clock(house, monkeypatch) -> None:
+    monkeypatch.setattr(sl, "OPS_KEPT", 5)
+    space_id, _ = await _offer(house, items=("Tent",))
+    await sl.accept(space_id.hex())
+    await sl.on_envelope(house.friend, _env(house.them, house.us, space_id, [
+        sp.Op("add", 20, secrets.token_bytes(16), f"Item {k}") for k in range(12)]))
+    async with sl._db() as s:
+        kept = (await s.execute(text(
+            "SELECT count(*) FROM friend_houses_space_ops WHERE space_id = :s AND direction = 'in' "
+            "AND state = 'applied'"), {"s": space_id})).scalar_one()
+    assert kept == 5
+
+
+async def test_a_friends_edit_to_our_item_shows_as_the_friends(house) -> None:
+    list_id = await _list("Shopping")
+    async with sl._db() as s:
+        await core_lists.add_item(s, list_id, "Milk", room="kitchen")
+    shared = await sl.share(list_id, "fthem")
+    async with sl._db() as s:
+        uid = bytes((await s.execute(text(
+            "SELECT uid FROM friend_houses_space_items WHERE space_id = :s"),
+            {"s": bytes.fromhex(shared["id"])})).scalar_one())
+    await sl.on_envelope(house.friend, _env(house.them, house.us, bytes.fromhex(shared["id"]),
+                                            [sp.Op("text", 40, uid, "Oat milk")]))
+    async with sl._db() as s:
+        (row,) = await core_lists.items_of(s, list_id)
+    assert row.text == "Oat milk"
+    assert row.added_via == "friend" and row.added_by_room is None and row.added_by_person_id is None
+
+
+async def test_removing_a_friend_stops_sharing_and_drops_what_was_queued(house) -> None:
+    list_id = await _list("Shopping", ["Milk"])
+    await sl.share(list_id, "fthem")
+    assert await _queued_ops(house)
+    async with sl._db() as s:
+        await store.delete_friend(s, "fthem")
+    assert await sl.queued_envelopes(house.them.house_key) == []
+    assert await sl.overview() == []
+    assert await _items(list_id) == [("Milk", False)]

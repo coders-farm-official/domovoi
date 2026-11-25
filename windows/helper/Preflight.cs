@@ -56,6 +56,9 @@ namespace Domovoi.Windows.Helper
             Disk(o);
             WslState(o);
             Network(o);
+            // From an offline kit the internet isn't checked: Setup passes
+            // --skip-internet with --offline, and anything else is a fault.
+            if (!skipInternet && NetGuard.Offline) throw new InvalidOperationException("the internet check" + NetGuard.Fault);
             if (!skipInternet) Internet(o, haveImage);
         }
 
@@ -502,8 +505,9 @@ namespace Domovoi.Windows.Helper
             o.Kv("probe_target", probe ?? "");
         }
 
-        static bool Reachable(string url)
+        internal static bool Reachable(string url)
         {
+            NetGuard.Check(url);
             try
             {
                 var req = (HttpWebRequest)WebRequest.Create(url);
@@ -521,8 +525,9 @@ namespace Domovoi.Windows.Helper
             }
         }
 
-        static bool Dial(string ip, int port)
+        internal static bool Dial(string ip, int port)
         {
+            NetGuard.CheckHost(ip);
             try
             {
                 using (var c = new TcpClient())

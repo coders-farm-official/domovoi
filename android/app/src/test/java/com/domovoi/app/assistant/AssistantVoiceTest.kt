@@ -3,6 +3,7 @@ package com.domovoi.app.assistant
 import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.audio.MicOwnership
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -98,7 +99,11 @@ class AssistantVoiceTest {
         nanos = clock.read,
         clock = { EPOCH_MS },
         clockStyle = { ClockStyle(ZoneId.of("America/Los_Angeles"), Locale.US, is24Hour = false) },
-    ).also { c -> scope.launch { c.messages.collect { said += it } } }
+        // UNDISPATCHED: subscribed before this returns. `messages` keeps no
+        // history, so a sentence said before a dispatched collector started
+        // was lost, and "the reason" timed out on a busy runner (main
+        // a375ef66, 2026-11-22).
+    ).also { c -> scope.launch(start = CoroutineStart.UNDISPATCHED) { c.messages.collect { said += it } } }
 
     // 20 s, not 5: a busy CI runner once took longer than 5 s for a step
     // (main 7eeafcf2, 2026-11-20). A passing wait still ends at once.

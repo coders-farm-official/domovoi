@@ -328,6 +328,53 @@ def test_print_it_offers_the_print_card_and_never_prints_by_itself(model, monkey
         assert sent[-1]["path"] == "/v1/print/jobs" and sent[-1]["title"].endswith(" v3")
 
 
+@requires_db
+def test_print_this_with_a_picture_prints_the_picture_and_asks_no_model(model, monkeypatch):
+    from domovoi.tests.test_chat_api import TINY_PNG
+
+    sent: list[dict[str, Any]] = []
+
+    async def _forward(core_path, request, data, filename, **kw):
+        sent.append({"path": core_path, "data": data, **kw})
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"summary": "1 page"})
+
+    from web.backend.api import printers
+
+    monkeypatch.setattr(printers, "forward_print_bytes", _forward)
+    monkeypatch.setattr(chat_api, "schedule_title_job", lambda _tid: None)   # the title writer is a model call too
+    with _client() as c:
+        tid = _thread(c)
+        up = c.post("/api/chat/uploads", files={"file": ("cat.png", io.BytesIO(TINY_PNG), "image/png")}).json()
+        r = c.post(f"/api/chat/threads/{tid}/messages",
+                   json={"content": "can you print this please?", "images": [up]})
+        done = next(d for ev, d in _sse(r.text) if ev == "done")
+        assert model.calls == []                              # no model asked, so no "I can't print"
+        assert not done.get("draft")                          # never a draft card: old apps would draw it broken
+        assert done["print_attachment"] == {"token": up["token"], "name": "cat.png", "kind": "image"}
+        assert done["content"] == "Here's cat.png, ready to print. Check the preview, then press Print."
+        # A later "print it" finds the picture again; a draft made after it wins instead.
+        again, _ = _send(c, tid, "print it")
+        assert again["print_attachment"]["token"] == up["token"] and model.calls == []
+        r = c.post(f"/api/chat/attachments/{up['token']}/print/preview", json={"options": {"copies": 2}})
+        assert r.status_code == 200 and sent[-1]["data"] == TINY_PNG and sent[-1]["options"] == {"copies": 2}
+        assert c.post("/api/chat/attachments/" + "0" * 32 + "/print/jobs", json={}).status_code == 404
+        model.replies = ["Here is your cover letter:" + chr(10) * 2 + LETTER]
+        _send(c, tid, "Write a cover letter for the warehouse lead job at Acme Logistics")
+        draft, _ = _send(c, tid, "print it")
+        assert draft["draft"]["id"] is not None and not draft.get("print_attachment")
+
+
+@requires_db
+def test_print_this_with_nothing_to_print_goes_to_the_model_as_before(model):
+    with _client() as c:
+        tid = _thread(c)
+        model.replies = ["I can't see anything to print."]
+        done, _ = _send(c, tid, "print this")
+        assert len(model.calls) == 1 and not done.get("draft")
+
+
 # ─── The household's AI switch ───────────────────────────────────────────
 @requires_db
 def test_with_ai_off_nothing_is_drafted_but_saving_still_works(model, documents_dir):
@@ -520,9 +567,18 @@ def test_each_version_records_the_device_that_made_it(model):
         e = c.post(f"/api/chat/drafts/{did}/versions",
                    json={"text": "Dear Sam,\n\nHi.", "base_version": 1, "device_id": "android-bbbb"})
         assert e.status_code == 200
-        vs = c.get(f"/api/chat/drafts/{did}").json()["versions"]
-        assert [v["device_id"] for v in vs] == ["browser-aaaa", "android-bbbb"]
+        # L39 (1.5.0): the read says ``mine`` for the caller's own
+        # X-Device-Id and never returns the stored ids.
+        vs = c.get(f"/api/chat/drafts/{did}", headers={"X-Device-Id": "browser-aaaa"}).json()["versions"]
+        assert [v["mine"] for v in vs] == [True, False]
+        assert all("device_id" not in v for v in vs)
         assert "device_name" in vs[1]
+        vs = c.get(f"/api/chat/drafts/{did}", headers={"X-Device-Id": "android-bbbb"}).json()["versions"]
+        assert [v["mine"] for v in vs] == [False, True]
+        bare = c.get(f"/api/chat/drafts/{did}")
+        assert [v["mine"] for v in bare.json()["versions"]] == [False, False]
+        assert "browser-aaaa" not in bare.text and "android-bbbb" not in bare.text
+        assert e.json()["version"]["mine"] is True and "device_id" not in e.json()["version"]
 
 
 @requires_db
@@ -541,7 +597,11 @@ async def test_a_version_names_its_device_and_the_person_whose_device_it_is():
         await drafts_api.edit_draft(did, drafts_api.EditBody(text=LETTER + "\nMine.\n", base_version=1,
                                                              device_id="android-d4own"))
         v = (await _all_versions(did))[1]
-        assert (v["device_id"], v["device_name"], v["person_id"]) == ("android-d4own", "Sam's phone", pid)
+        assert (v["device_name"], v["person_id"]) == ("Sam's phone", pid)
+        assert "device_id" not in v and v["mine"] is False
+        async with session_scope() as s:
+            mine = (await drafts_api._versions(s, did, "android-d4own"))[1]
+        assert mine["mine"] is True
     finally:
         async with session_scope() as s:
             await s.execute(sql("DELETE FROM devices WHERE device_id = 'android-d4own'"))

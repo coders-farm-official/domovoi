@@ -1202,7 +1202,29 @@ else
 fi
 as_sat /usr/bin/find "$PREFIX/satellite" -name __pycache__ -type d -prune -exec /usr/bin/rm -rf {} +
 
-say "Setting up Python (this downloads the room software's libraries, a few minutes)..."
+# Where the packages come from: the Domovoi server when it holds every one
+# this lock names (a server installed from an offline kit serves them at
+# /v1/satellite-linux/wheels/<lock>/, and offers that page only when it is
+# complete), else PyPI. Either way pip takes only files whose SHA-256 the
+# lock lists.
+LOCK_NAME=$(/usr/bin/basename "$LOCK_REL" .txt)
+WHEELS_URL="$CORE/v1/satellite-linux/wheels/$LOCK_NAME/"
+PIP_FROM=()
+core_serves() {  # core_serves URL -> 0 when the Domovoi server answers 200 (no redirects)
+  if [ -x /usr/bin/curl ]; then
+    /usr/bin/curl -fsS --proto '=http,https' --max-redirs 0 --connect-timeout 15 --max-time 60 -o /dev/null "$1" 2>/dev/null
+  elif [ -x /usr/bin/wget ]; then
+    /usr/bin/wget -q --max-redirect=0 --timeout=30 -O /dev/null "$1" 2>/dev/null
+  else
+    return 1
+  fi
+}
+if [ -n "$CORE" ] && core_serves "$WHEELS_URL"; then
+  PIP_FROM=(--no-index --find-links "$WHEELS_URL")
+  say "Setting up Python (the room software's libraries come from the Domovoi server)..."
+else
+  say "Setting up Python (this downloads the room software's libraries, a few minutes)..."
+fi
 # A fresh venv every time: an old one is the account's, and nothing in it
 # (a planted .pth runs at Python's start) is ever run.
 as_sat /usr/bin/rm -rf "$VENV"
@@ -1210,8 +1232,9 @@ as_sat $PY -I -m venv "$VENV"
 # Every package, its version and the SHA-256 of every file pip may take are
 # in the list (it reached this computer inside the checked bundle); pip
 # refuses anything else, and builds nothing from source.
-as_sat "$VENV/bin/pip" install --no-input -q --disable-pip-version-check \
-  --require-hashes --only-binary=:all: --no-deps -r "$PREFIX/$LOCK_REL"
+as_sat "$VENV/bin/pip" install --no-input -q --disable-pip-version-check ${PIP_FROM[@]+"${PIP_FROM[@]}"} \
+  --require-hashes --only-binary=:all: --no-deps -r "$PREFIX/$LOCK_REL" \
+  || die "the room software's libraries could not be installed (pip's error is above). The Domovoi server doesn't hold them for this computer ($LOCK_NAME) and PyPI couldn't be reached: connect this computer to the internet, or update the server from an offline kit made with Rooms ticked, then run the command again" 1
 OWW_DIR=$(as_sat "$VENV/bin/python" -c 'import os, openwakeword; print(os.path.join(os.path.dirname(openwakeword.__file__), "resources", "models"))')
 say "Fetching the wake-word models (checked against their pinned SHA-256)..."
 as_sat /usr/bin/sh -c "cd '$PREFIX' && '$VENV/bin/python' -m satellite.pc_install models --dest '$OWW_DIR' --payload \"\$1\"" _ "$PAYLOAD" >/dev/null \

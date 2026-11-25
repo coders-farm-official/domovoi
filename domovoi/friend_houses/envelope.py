@@ -26,12 +26,38 @@ Layout (big-endian)::
     signature   64
 
 The receiver refuses in this order: size, header, version and kind, body
-length, signature, UTF-8. Expiry and ordering never trust ``sent_at``
-(finding 19): the receiver's own clock and (epoch, seq) do that.
+length, signature, then the kind's own body rules (UTF-8 and length for
+text, the layout below for plugin mail). Expiry and ordering never trust
+``sent_at`` (finding 19): the receiver's own clock and (epoch, seq) do that.
+
+Plugin mail (``KIND_PLUGIN``, 1.5.0)
+------------------------------------
+Mail between two houses' copies of one plugin ("apps with friends"). It
+uses the same signed header; ``seq`` is the per-(friend, plugin) counter,
+not the house-wide one. The body, all of it under the signature::
+
+    ver         1   (1: data mail; 2: image mail)
+    slug_len    1
+    slug        slug_len bytes: the manifest's rule, ^[a-z][a-z0-9_]{1,31}$
+    ttl_s       4   how long the mail may wait, 30..259,200 seconds
+    payload     the rest: 1..16,384 bytes, opaque here
+
+consumed to the exact length. An **image mail** (``ver`` 2, SDK 1.18
+``send_image``) has the same layout; its payload is ``tag_len u8``
+(1..64), ``tag`` (the plugin's label, ``^[a-z0-9_.:-]{1,64}$``) and at
+least one byte of an encoded image, which only the core's image helper in
+the friend's decoder container ever opens (D1). ``ttl_s`` is the time the mail has LEFT when
+it is sent (a resend carries less, L13b). The payload is never parsed by
+the listener or by core's message code: it goes only to the plugin mail
+service (:mod:`domovoi.friend_houses.plugin_mail`). People's messages and plugin mail never
+share a path: :func:`peek` lets the listener sort them before it spends
+any budget, and core dispatches on the kind and refuses anything it has no
+handler for.
 """
 
 from __future__ import annotations
 
+import re
 import secrets
 import struct
 import unicodedata
@@ -44,11 +70,32 @@ KIND_TEXT = 1
 # A batch of changes to something two houses share (a list, F4): the body is
 # binary, in the layout of domovoi/friend_houses/spaces.py.
 KIND_SPACE = 2
-KINDS = frozenset({KIND_TEXT, KIND_SPACE})
+# Plugin mail (1.5.0): the body layout is in the module docstring.
+KIND_PLUGIN = 3
+KINDS = frozenset({KIND_TEXT, KIND_SPACE, KIND_PLUGIN})
+#: The kinds that are people's messages and lists (the 60-an-hour budget).
+PEOPLE_KINDS = frozenset({KIND_TEXT, KIND_SPACE})
 TEXT_MAX_CHARS = 2000            # Limits p4
 ENVELOPE_MAX = 63 * 1024          # one Noise message with room to spare
 _HEADER = struct.Struct(">BB32s32s16s8sQQH")
 SIGNATURE = 64
+
+PLUGIN_BODY_VERSION = 1
+#: An image mail (SDK 1.18 ``send_image``): the payload is a tag and an image.
+PLUGIN_BODY_IMAGE = 2
+PLUGIN_BODY_VERSIONS = frozenset({PLUGIN_BODY_VERSION, PLUGIN_BODY_IMAGE})
+IMAGE_TAG_RE = re.compile(r"^[a-z0-9_.:-]{1,64}\Z")
+PLUGIN_PAYLOAD_MAX = 16 * 1024
+PLUGIN_TTL_MIN = 30
+PLUGIN_TTL_MAX = 259_200          # 3 days (owner decision 10)
+#: The plugin manifest's slug rule (plugins_runtime/manifest.py SLUG_RE; a
+#: test keeps them equal). Copied, not imported: the listener's container
+#: carries only the Friend Houses modules.
+SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}\Z")
+SLUG_MAX = 32
+_PLUGIN_TTL = struct.Struct(">I")
+PLUGIN_BODY_MAX = 2 + SLUG_MAX + _PLUGIN_TTL.size + PLUGIN_PAYLOAD_MAX
+PLUGIN_ENVELOPE_MAX = _HEADER.size + PLUGIN_BODY_MAX + SIGNATURE
 
 
 class BadEnvelope(ValueError):
@@ -76,7 +123,146 @@ class Envelope:
 
     @property
     def text(self) -> str:
+        if self.kind != KIND_TEXT:  # plugin mail or a list change is never text
+            raise ValueError("not a text message")
         return self.body.decode("utf-8")
+
+    @property
+    def plugin(self) -> PluginBody:
+        """The plugin mail body (``KIND_PLUGIN`` only)."""
+        if self.kind != KIND_PLUGIN:
+            raise ValueError("not plugin mail")
+        return parse_plugin_body(self.body)
+
+
+@dataclass(frozen=True)
+class PluginBody:
+    slug: str
+    ttl_s: int
+    payload: bytes
+    #: PLUGIN_BODY_VERSION (data) or PLUGIN_BODY_IMAGE (a tag and an image).
+    version: int = PLUGIN_BODY_VERSION
+
+    def to_bytes(self) -> bytes:
+        slug = self.slug.encode("ascii")
+        return (bytes([self.version, len(slug)]) + slug + _PLUGIN_TTL.pack(self.ttl_s)
+                + self.payload)
+
+    @property
+    def is_image(self) -> bool:
+        return self.version == PLUGIN_BODY_IMAGE
+
+    def image(self) -> tuple[str, bytes]:
+        """An image mail's ``(tag, image bytes)`` (checked when parsed)."""
+        if not self.is_image:
+            raise ValueError("not an image mail")
+        return split_image_payload(self.payload)
+
+
+def image_payload(tag: str, image: bytes) -> bytes:
+    """An image mail's payload (ValueError for a bad tag or no image)."""
+    if not isinstance(tag, str) or not IMAGE_TAG_RE.match(tag):
+        raise ValueError("an image tag is up to 64 of a-z 0-9 _ . : -")
+    if not isinstance(image, (bytes, bytearray)) or not image:
+        raise ValueError("an image is non-empty bytes")
+    raw = tag.encode("ascii")
+    return bytes([len(raw)]) + raw + bytes(image)
+
+
+def split_image_payload(payload: bytes) -> tuple[str, bytes]:
+    """``(tag, image)`` from an image mail's payload (BadEnvelope)."""
+    if len(payload) < 3:
+        raise BadEnvelope("image payload size")
+    n = payload[0]
+    if not 1 <= n <= 64 or len(payload) < 1 + n + 1:
+        raise BadEnvelope("image tag length")
+    try:
+        tag = bytes(payload[1:1 + n]).decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise BadEnvelope("image tag") from exc
+    if not IMAGE_TAG_RE.match(tag):
+        raise BadEnvelope("image tag")
+    return tag, bytes(payload[1 + n:])
+
+
+def valid_slug(slug: object) -> bool:
+    return isinstance(slug, str) and SLUG_RE.match(slug) is not None
+
+
+def parse_plugin_body(body: bytes) -> PluginBody:
+    """A plugin mail body, checked to the exact length (BadEnvelope)."""
+    if not 2 + 2 + _PLUGIN_TTL.size + 1 <= len(body) <= PLUGIN_BODY_MAX:
+        raise BadEnvelope("plugin body size")
+    if body[0] not in PLUGIN_BODY_VERSIONS:
+        raise BadEnvelope("plugin body version")
+    slug_len = body[1]
+    if not 2 <= slug_len <= SLUG_MAX:
+        raise BadEnvelope("slug length")
+    end = 2 + slug_len
+    try:
+        slug = bytes(body[2:end]).decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise BadEnvelope("slug") from exc
+    if not valid_slug(slug):
+        raise BadEnvelope("slug")
+    if len(body) < end + _PLUGIN_TTL.size + 1:
+        raise BadEnvelope("plugin body size")
+    (ttl_s,) = _PLUGIN_TTL.unpack(body[end:end + _PLUGIN_TTL.size])
+    if not PLUGIN_TTL_MIN <= ttl_s <= PLUGIN_TTL_MAX:
+        raise BadEnvelope("ttl")
+    payload = bytes(body[end + _PLUGIN_TTL.size:])
+    if not 1 <= len(payload) <= PLUGIN_PAYLOAD_MAX:
+        raise BadEnvelope("payload size")
+    if body[0] == PLUGIN_BODY_IMAGE:
+        split_image_payload(payload)
+    return PluginBody(slug, ttl_s, payload, int(body[0]))
+
+
+def plugin_mail(keys: fid.HouseKeys, *, to: bytes, slug: str, payload: bytes, ttl_s: int,
+                epoch: bytes, seq: int, sent_at: int, msg_id: bytes | None = None,
+                version: int = PLUGIN_BODY_VERSION) -> Envelope:
+    """A signed plugin mail. ValueError for a bad slug, TTL or payload.
+    ``msg_id`` is the outbox row's mail id: a resend keeps it (with the
+    remaining ``ttl_s``, so a new signature), and the receiver ACKs it as
+    the duplicate it is."""
+    if not valid_slug(slug):
+        raise ValueError("bad plugin slug")
+    if version not in PLUGIN_BODY_VERSIONS:
+        raise ValueError("bad plugin body version")
+    body = PluginBody(slug, int(ttl_s), bytes(payload), int(version)).to_bytes()
+    parse_plugin_body(body)  # the same rules the receiver applies
+    return signed(keys, kind=KIND_PLUGIN, to=to, body=body, epoch=epoch, seq=seq,
+                  sent_at=sent_at, msg_id=msg_id)
+
+
+@dataclass(frozen=True)
+class Peek:
+    """What the listener reads of an envelope before spending any budget
+    or checking the signature: never trusted beyond sorting it."""
+
+    kind: int
+    msg_id: bytes
+    slug: str | None  # plugin mail only
+
+
+def peek(data: bytes) -> Peek:
+    """Size, header, version and kind, length, and for plugin mail the slug.
+    BadEnvelope for anything malformed. The signature is NOT checked."""
+    if not isinstance(data, (bytes, bytearray)) or not \
+            _HEADER.size + SIGNATURE <= len(data) <= ENVELOPE_MAX:
+        raise BadEnvelope("size")
+    head = _HEADER.unpack(data[: _HEADER.size])
+    version, kind, msg_id, body_len = head[0], head[1], head[4], head[8]
+    if version != VERSION or kind not in KINDS:
+        raise BadEnvelope("version or kind")
+    if len(data) != _HEADER.size + body_len + SIGNATURE:
+        raise BadEnvelope("length")
+    slug = None
+    if kind == KIND_PLUGIN:
+        if len(data) > PLUGIN_ENVELOPE_MAX:
+            raise BadEnvelope("size")
+        slug = parse_plugin_body(bytes(data[_HEADER.size: _HEADER.size + body_len])).slug
+    return Peek(kind, bytes(msg_id), slug)
 
 
 def clean_text(text: str) -> str:
@@ -105,13 +291,17 @@ def text_message(keys: fid.HouseKeys, *, to: bytes, text: str, epoch: bytes, seq
 
 
 def signed(keys: fid.HouseKeys, *, kind: int, to: bytes, body: bytes, epoch: bytes, seq: int,
-           sent_at: int) -> Envelope:
+           sent_at: int, msg_id: bytes | None = None) -> Envelope:
     """Any envelope, signed. Callers check their own body first."""
     if kind not in KINDS:
         raise ValueError("unknown kind")
     if len(body) > ENVELOPE_MAX - _HEADER.size - SIGNATURE:
         raise ValueError("body too large")
-    draft = Envelope(kind, keys.house_key, to, secrets.token_bytes(16), epoch, seq,
+    if kind == KIND_PLUGIN:
+        parse_plugin_body(body)
+    if msg_id is not None and len(msg_id) != 16:
+        raise ValueError("msg_id is 16 bytes")
+    draft = Envelope(kind, keys.house_key, to, msg_id or secrets.token_bytes(16), epoch, seq,
                      sent_at, body)
     return Envelope(draft.kind, draft.sender, draft.recipient, draft.msg_id, draft.epoch,
                     draft.seq, draft.sent_at, draft.body,
@@ -130,6 +320,8 @@ def parse(data: bytes, *, sender: bytes, recipient: bytes) -> Envelope:
         raise BadEnvelope("version or kind")
     if len(data) != _HEADER.size + body_len + SIGNATURE:
         raise BadEnvelope("length")
+    if kind == KIND_PLUGIN and len(data) > PLUGIN_ENVELOPE_MAX:
+        raise BadEnvelope("size")
     if not (secrets.compare_digest(frm, sender) and secrets.compare_digest(to, recipient)):
         raise BadEnvelope("not from this sender to this house")
     signed_part, signature = bytes(data[: -SIGNATURE]), bytes(data[-SIGNATURE:])
@@ -143,6 +335,8 @@ def parse(data: bytes, *, sender: bytes, recipient: bytes) -> Envelope:
             raise BadEnvelope("encoding") from exc
         if not (0 < len(text) <= TEXT_MAX_CHARS):
             raise BadEnvelope("text length")
+    elif kind == KIND_PLUGIN:
+        parse_plugin_body(body)  # kind-specific bounds (review D12)
     return Envelope(kind, frm, to, msg_id, epoch, seq, sent_at, body, signature)
 
 

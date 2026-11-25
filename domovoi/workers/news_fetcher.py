@@ -9,7 +9,7 @@ idempotent (dedup unique index), so a restart re-running it is harmless.
 One fetch pass (gated by ``news_enabled`` + connectivity):
 
   1. Ensure the curated national/global house feeds exist + discover a local
-     feed from ``news_location`` (so "what's the news today" answers offline).
+     feed from the Home location (so "what's the news today" answers offline).
   2. Fetch each house geographic scope (local/national/global) → house items.
   3. Feed discovery for any free-form topic that still has no feeds attached.
   4. When ``news_auto_fetch`` is on: fetch every person's topic feeds → per-
@@ -32,7 +32,7 @@ from sqlalchemy import text
 
 from domovoi.config import settings
 from domovoi.db.session import session_scope
-from domovoi import news_service
+from domovoi import home_location, news_service
 from domovoi.workers.base import Worker
 
 log = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ class NewsFetcher(Worker):
             # 1 + 2 — house-scope feeds + geographic fetch.
             await news_service.ensure_house_feeds(session)
             scopes = ["national", "global"]
-            if settings.news_location.strip():
+            if await home_location.load(session):
                 scopes.insert(0, "local")
             for scope in scopes:
                 house += await news_service.fetch_house_scope(session, scope)
@@ -109,6 +109,10 @@ class NewsFetcher(Worker):
                 ).all()
                 for (person_id,) in people:
                     topics += await news_service.fetch_person_topics(session, int(person_id))
+                    # Committed before the briefing, which may wait out a
+                    # voice turn (voice_first.py): a turn that fetches this
+                    # person's topics itself must not wait on these rows.
+                    await session.commit()
                     if await news_service.summarize_person_briefing(session, int(person_id)):
                         briefings += 1
                 await session.commit()

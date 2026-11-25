@@ -150,6 +150,10 @@ class ContractError(RuntimeError):
 class ContractReport:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Soft: the core entry module imported slowly. Never a failure (a busy
+    # box at boot is not the plugin's fault); the loader shows it on the
+    # plugin's card as a note while the plugin stays enabled.
+    slow_import: str | None = None
 
     def ok(self) -> bool:
         return not self.errors
@@ -427,13 +431,26 @@ def check_import_budget(
     import_seconds: float,
     cuda_initialized: bool,
     report: ContractReport,
+    import_cpu_seconds: float | None = None,
 ) -> None:
-    if import_seconds > IMPORT_TIME_BUDGET_SEC:
-        report.errors.append(
-            f"importing the core entry module took {import_seconds:.1f}s "
-            f"(budget {IMPORT_TIME_BUDGET_SEC:.0f}s) — load heavy libraries "
+    """A slow import is SOFT (a warning + ``report.slow_import``): it is
+    judged on CPU time when the loader measured it, so a box busy with
+    other work does not count against the plugin. CUDA initialized at
+    import stays a hard error."""
+    judged = import_seconds if import_cpu_seconds is None else import_cpu_seconds
+    if judged > IMPORT_TIME_BUDGET_SEC:
+        msg = (
+            f"loaded slowly: importing the core entry module took "
+            f"{import_seconds:.1f}s"
+        )
+        if import_cpu_seconds is not None:
+            msg += f" ({import_cpu_seconds:.1f}s of CPU)"
+        msg += (
+            f", budget {IMPORT_TIME_BUDGET_SEC:.0f}s — load heavy libraries "
             f"lazily inside worker/handler bodies (design §4.1)"
         )
+        report.warnings.append(msg)
+        report.slow_import = msg
     if cuda_initialized:
         report.errors.append(
             "importing the core entry module initialized CUDA — this breaks "
@@ -571,6 +588,34 @@ def check_route_tiers(
         )
 
 
+FRIEND_HOUSES_OPEN_ROUTES = (
+    "it holds permissions.friend_houses and has open routes (no sign-in at "
+    "all): never let one reach friends() or send_mail; those belong on "
+    "device-tier or admin routes (docs/PLUGIN_DEVELOPMENT.md, \"Apps with friends\")"
+)
+
+
+def friend_houses_open_routes(manifest: PluginManifest, open_routes: list[Any]) -> bool:
+    """The trust screen's flag (review D13): a ``friend_houses`` plugin that
+    also answers with no credential at all."""
+    return bool(manifest.permissions.get("friend_houses")) and bool(open_routes)
+
+
+def check_friend_houses_routes(
+    manifest: PluginManifest, routers: list[Any], report: ContractReport
+) -> None:
+    """A warning, never an error: a ``friend_houses`` plugin with open
+    routes (SDK 1.18). The trust screen flags the same."""
+    if not manifest.permissions.get("friend_houses"):
+        return
+    from domovoi.webkit import endpoint_tier, iter_plugin_routes
+
+    open_routes = [r for r in iter_plugin_routes(routers)
+                   if endpoint_tier(getattr(r, "endpoint", None)) == "open"]
+    if friend_houses_open_routes(manifest, open_routes):
+        report.warnings.append(FRIEND_HOUSES_OPEN_ROUTES)
+
+
 def check_containers(
     slug: str,
     manifest: PluginManifest,
@@ -609,6 +654,7 @@ def run_contract_checks(
     foreign_corpus: list[tuple[str, str]] | None = None,
     foreign_web_routes: list[tuple[str, str]] | None = None,
     import_seconds: float = 0.0,
+    import_cpu_seconds: float | None = None,
     cuda_initialized: bool = False,
     routers: list[Any] | None = None,
     package_dir: Path | None = None,
@@ -620,6 +666,7 @@ def run_contract_checks(
     report = ContractReport()
     check_handlers(slug, handlers, report)
     check_route_tiers(list(routers or []), report, package_dir)
+    check_friend_houses_routes(manifest, list(routers or []), report)
     check_consumes(manifest, report)
     check_manifest_drift(
         slug, manifest, handlers, worker_names, hook_names,
@@ -642,7 +689,9 @@ def run_contract_checks(
         slug, handlers, merged_registry,
         list(foreign_corpus or []) + own_corpus, report,
     )
-    check_import_budget(slug, import_seconds, cuda_initialized, report)
+    check_import_budget(
+        slug, import_seconds, cuda_initialized, report, import_cpu_seconds
+    )
     return report
 
 

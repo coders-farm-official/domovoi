@@ -48,6 +48,7 @@ from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
 from web.backend.api import fonts as fonts_api
 from web.backend.api import friend_houses as friend_houses_api
+from web.backend.api import offline_kit as offline_kit_api
 from web.backend.api import printers as printers_api
 from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
@@ -73,11 +74,17 @@ from web.backend.api import podcasts as podcasts_api
 from web.backend.api import plugins as plugins_api
 from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import short_address as short_address_api
+from web.backend.api import rooms as rooms_api
 from web.backend.api import satellites as satellites_api
+from web.backend.api import support_sessions as support_sessions_api
 from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
 from web.backend.api import up_next_history as up_next_history_api
+from web.backend.api import media_search as media_search_api
+from web.backend.api import media_understanding as media_understanding_api
+from web.backend.api import faces as faces_api
 from web.backend.api import music_mix as music_mix_api
+from web.backend.api import home_location as home_location_api
 from web.backend.api import videos as videos_api
 from web.backend.api import visualizer as visualizer_api
 from web.backend.api import voice as voice_api
@@ -448,6 +455,12 @@ app.include_router(up_next_api.router)
 # what Up next picked and why; read-only, its own literal prefix.
 app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)
+app.include_router(media_understanding_api.router)
+app.include_router(media_search_api.router)
+# Faces and people (1.5.0): household views and trains, admin merges named
+# people; guests and shared screens get nothing.
+app.include_router(faces_api.router)
+app.include_router(home_location_api.router)
 # Groups (V060): /api/music/groups — named sets of rooms and the shared
 # queues; its own literal prefix, proxied to the core.
 app.include_router(music_groups_api.router)
@@ -474,6 +487,11 @@ app.include_router(satellite_media_api.router)
 app.include_router(satellite_media_api.claim_router)
 # The container guard: the banner's reads and the admin actions (docs/CONTAINER_GUARD.md).
 app.include_router(containers_api.router)
+# Satellite support sessions (1.5.0): literal /support paths and the
+# /api/support-sessions prefix, ahead of the /{room_id} matchers.
+app.include_router(support_sessions_api.router)
+# Rooms and their satellites (1.5.0): the room drawer, proxied to the core.
+app.include_router(rooms_api.router)
 app.include_router(satellites_api.router)
 app.include_router(satellites_api.timers_router)
 app.include_router(calendar_api.router)
@@ -497,6 +515,7 @@ app.include_router(files_api.blocks_router)
 app.include_router(fonts_api.router)
 # Printers, printing and scanning: proxies to the core's /v1/printers, /v1/print, /v1/scan.
 app.include_router(printers_api.router)
+app.include_router(offline_kit_api.router)
 # Friend Houses: proxies to the core's /v1/admin/friend-houses (security tier at both hops).
 app.include_router(friend_houses_api.router)
 app.include_router(podcasts_api.router)
@@ -755,16 +774,40 @@ async def _authorize_state_socket(ws: WebSocket) -> object | None:
     token, offered = _offered_token_subprotocol(ws)
     try:
         result = await admin_auth.check_device_request(ws)
-        if result in ("ok", "admin", "pre-setup", "cookie-only"):
+        if result in ("ok", "admin"):
+            return offered
+        # What a browser attaches on its own (the cookie, or nothing before
+        # setup) counts only from a page of this dashboard: the cookie
+        # reaches every port of this host, and another service's page must
+        # not read the household's state with it (the collab socket's rule).
+        if result in ("pre-setup", "cookie-only") and collab_api.origin_ok(ws):
             return offered
         if result != "throttled" and token:
-            if await admin_auth.check_device_credential(ws, token) in (
-                "ok", "admin", "pre-setup", "cookie-only"
-            ):
+            if await admin_auth.check_device_credential(ws, token) in ("ok", "admin"):
                 return offered
     except admin_auth.AuthCheckUnavailable:
         pass   # the database did not answer: refused, and the client retries
     return _REFUSE
+
+
+async def _state_socket_still_admitted(ws: WebSocket) -> bool:
+    """Would the credentials this open socket carries still let it in? Read
+    only (nothing charged to the wrong-token backoff, no session clock
+    moved): a rotated household token, a sign-out or an idled-out session
+    ends the subscription instead of leaving it fed until it reconnects.
+    The ambient credentials count under the handshake's Origin rule."""
+    token, _ = _offered_token_subprotocol(ws)
+    ambient = collab_api.origin_ok(ws)
+    async with admin_auth.session_scope() as s:
+        if not await admin_auth.has_admin_auth(s):
+            return ambient
+        for candidate in (admin_auth.device_token_from_request(ws), token):
+            if candidate and await admin_auth.validate_device_token(s, candidate):
+                return True
+        bearer = admin_auth.bearer_token(ws)
+        if bearer and await admin_auth.validate_token(s, bearer):
+            return True
+        return ambient and await admin_auth.validate_cookie(s, admin_auth.cookie_token(ws))
 
 
 @app.websocket("/ws/state")
@@ -800,7 +843,8 @@ async def websocket_state(ws: WebSocket) -> None:
     await ws.accept(subprotocol=subprotocol)
     broadcaster: StateBroadcaster = ws.app.state.broadcaster
     await broadcaster.connect(ws)
-    try:
+
+    async def _serve() -> None:
         while True:
             # Keep the socket alive + accept subscription updates.
             try:
@@ -812,6 +856,14 @@ async def websocket_state(ws: WebSocket) -> None:
                 await broadcaster.set_subscriptions(
                     ws, [str(c) for c in channels if isinstance(c, str)]
                 )
+
+    try:
+        # The credential is read again while the socket lives (the drop-in
+        # socket's cadence), not only at the handshake.
+        await admin_auth.run_while_admitted(
+            ws, None, _serve(), what="state socket",
+            still=lambda: _state_socket_still_admitted(ws),
+        )
     finally:
         await broadcaster.disconnect(ws)
 

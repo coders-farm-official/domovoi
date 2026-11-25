@@ -467,6 +467,16 @@ pull requests into it and weekly (Security → Code scanning, admins only), skip
 `.github/ci-extra-requirements.txt`, `.github/ci-test-tools-requirements.txt` (hypothesis, coverage, pytest-cov) and
 `.github/ci-fuzz-requirements.txt` (Atheris) (`pip install --require-hashes`); bump them by hand with the new version's PyPI hashes.
 
+**sherpa-onnx rebuild** (`.github/workflows/sherpa-onnx-rebuild.yml`)
+rebuilds the app's committed speech-recognition libraries
+(`android/native/sherpa-onnx/jniLibs/`) from source with `build-native.sh`,
+the no-Docker build F-Droid runs, one job per ABI, and checks every file it
+writes against that folder's `SHA256SUMS` byte for byte. It runs weekly, by
+hand, and on pushes to `main` and pull requests into it that change that
+folder or the workflow; never otherwise. A red run's `compare` job summary
+lists each file that no longer reproduces (the folder's README says how
+the build is pinned).
+
 **Dependabot** (`.github/dependabot.yml`) offers weekly update pull requests
 for the workflows' actions and the Android app's Gradle dependencies,
 grouped one per kind, each release at least 14 days old, never a new major
@@ -822,7 +832,14 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    **Later**, and name the next work). The docs gates fail on a stale
    version in either (`domovoi/tests/test_version_copies.py`); whether the
    wording is still true is for the person releasing to read.
-2. Wait for CI to go green on that commit.
+2. Wait for CI to go green on that commit. Also check the first-party
+   plugins' locks against the release's (the plugin repos aren't in this
+   one, so CI can't): `python scripts/release/check_plugin_locks.py
+   <each plugin's zip or requirements.lock>`. It fails with a table if a
+   plugin pins a package at a different version than the core's locks; a
+   household that installs that plugin would be refused
+   (`requirements_conflict`). Ask the plugin's publisher for a rebuilt
+   lock before releasing.
 3. **Actions → release → Run workflow**, branch `main` (leave *tag* empty:
    it is `v` + `pyproject.toml`'s version).
 4. The **plan** job (no secrets) checks the commit and says which path it

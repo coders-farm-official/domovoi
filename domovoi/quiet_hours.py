@@ -116,7 +116,7 @@ def hours_for(choice: RoomChoice, settings: Any = None) -> tuple[str, str] | Non
 async def room_choice(s: Any, room_id: str) -> RoomChoice:
     """The room's stored choice; ``house`` for a room with no row."""
     row = (await s.execute(
-        text("SELECT quiet_mode, quiet_start, quiet_end FROM satellites WHERE room_id = :r"),
+        text("SELECT quiet_mode, quiet_start, quiet_end FROM rooms WHERE room_id = :r"),
         {"r": room_id},
     )).first()
     if row is None or row[0] not in MODES:
@@ -137,8 +137,8 @@ async def set_room_choice(s: Any, room_id: str, choice: RoomChoice) -> RoomChoic
         start, end = None, None
     await s.execute(
         text(
-            "INSERT INTO satellites (room_id, quiet_mode, quiet_start, quiet_end, adopted_via) "
-            "VALUES (:r, :m, :s, :e, 'manual') ON CONFLICT (room_id) DO UPDATE SET "
+            "INSERT INTO rooms (room_id, name, quiet_mode, quiet_start, quiet_end) "
+            "VALUES (:r, :r, :m, :s, :e) ON CONFLICT (room_id) DO UPDATE SET "
             "quiet_mode = EXCLUDED.quiet_mode, quiet_start = EXCLUDED.quiet_start, "
             "quiet_end = EXCLUDED.quiet_end, updated_at = now()"
         ),
@@ -177,3 +177,53 @@ async def holds_back(room_id: str, kind: str, **kw: Any) -> bool:
     if kind in EXEMPT_KINDS:
         return False
     return await is_quiet(room_id, **kw)
+
+
+def _minutes_until(local: datetime, clock: str) -> int:
+    """Minutes from wall-clock ``local`` to the next ``clock``."""
+    return (minutes(clock) - (local.hour * 60 + local.minute)) % (24 * 60)
+
+
+async def _hours_of(room_ids: list[str], settings: Any, scope: Any) -> list[tuple[str, str] | None]:
+    """Each room's hours, in order. No rooms: the house's own, once."""
+    if not room_ids:
+        return [house_hours(settings)]
+    hours: list[tuple[str, str] | None] = []
+    try:
+        if scope is None:
+            from domovoi.db.session import session_scope as scope
+        async with scope() as s:
+            for room in room_ids:
+                hours.append(hours_for(await room_choice(s, room), settings))
+    except Exception as e:  # noqa: BLE001 — as is_quiet: the house's hours
+        log.debug("quiet hours: room choices unreadable (%s); the house's", e)
+        hours = [house_hours(settings)] * len(room_ids)
+    return hours
+
+
+async def quiet_rooms(room_ids: list[str], *, now: datetime | None = None, settings: Any = None,
+                      scope: Any = None) -> list[str]:
+    """Those of ``room_ids`` in quiet hours now (one read for them all)."""
+    if not room_ids:
+        return []
+    local = now or _local_now()
+    hours = await _hours_of(room_ids, settings, scope)
+    return [r for r, h in zip(room_ids, hours) if h is not None and in_window(local, *h)]
+
+
+async def quiet_now(room_ids: list[str], *, now: datetime | None = None, settings: Any = None,
+                    scope: Any = None) -> dict[str, str] | None:
+    """Which of ``room_ids`` are in quiet hours now, for a page that says
+    so: None when none is, else ``{"rooms": "all" | "some", "until":
+    "HH:MM"}`` on the house's clock. ``until`` is when the first quiet room
+    may speak again ("all") or the last one ("some"). No rooms given: the
+    house's own hours."""
+    local = now or _local_now()
+    hours = await _hours_of(room_ids, settings, scope)
+    ends = [h[1] for h in hours if h is not None and in_window(local, *h)]
+    if not ends:
+        return None
+    every = len(ends) == len(hours)
+    pick = min if every else max
+    return {"rooms": "all" if every else "some",
+            "until": pick(ends, key=lambda e: _minutes_until(local, e))}

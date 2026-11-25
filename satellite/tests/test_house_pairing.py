@@ -58,8 +58,16 @@ class FakeHouse:
     ``challenge_delay`` holds its challenge back a moment."""
 
     def __init__(self, url: str, fp: str, mode: str = "honest", *,
-                 confirm_deadline: float = 30.0, challenge_delay: float = 0.0) -> None:
-        self.house = House(url=url, fingerprint=fp, proof=True, name=url[-8:], via="name")
+                 confirm_deadline: float = 30.0, challenge_delay: float = 0.0,
+                 version: int = 0) -> None:
+        # ``version``: the pairing_proof it signed (0 = built by hand, a v1
+        # house). It runs v2 for a hello that says ``pairing_proof: 2``.
+        # ``mode="relay"``: something in between swapped the hello's token.
+        # It runs v3 (the support key bound too) for ``pairing_proof: 3``;
+        # ``mode="key_swap"``: something in between swapped the hello's key.
+        self.house = House(url=url, fingerprint=fp, proof=True, name=url[-8:], via="name",
+                           proof_version=version)
+        self.version = version
         self.mode = mode
         self.entered: str | None = None
         self.hellos: list[dict] = []
@@ -105,8 +113,19 @@ class FakeHouse:
             return
         code, self.entered = self.entered, None
         fp = "SHA256:" + "Z" * 43 if self.mode == "other_fp" else self.house.fingerprint
+        token_hash = None
+        support_key = None
+        if self.version >= 2 and hello.get("pairing_proof") in (2, 3):
+            seen = "r" * 64 if self.mode == "relay" else hello["pairing_token"]
+            token_hash = pairing_proof.token_digest(seen)
+        if self.version >= 3 and hello.get("pairing_proof") == 3:
+            sent = hello.get("support_key")
+            support_key = sent if isinstance(sent, str) else ""
+            if self.mode == "key_swap":
+                support_key = "B" * 43 + "="
         ex = pairing_proof.ServerExchange(code, hello["approval_pake"], room_id=hello["room_id"],
-                                          fingerprint=fp)
+                                          fingerprint=fp, token_hash=token_hash,
+                                          support_key=support_key)
         if self.challenge_delay:
             await asyncio.sleep(self.challenge_delay)
         self.challenges += 1
@@ -336,6 +355,24 @@ def test_a_stripped_or_changed_advert_breaks_the_signature(strip, tamper):
     assert h.proof is False and h.fingerprint is None and h.identity == "failed"
 
 
+def test_an_unbound_answer_holds_no_fingerprint_and_does_not_hide_the_real_house():
+    """An answer verified but not bound to the address dialled proves no
+    identity there: it takes no fingerprint, so the server it names, found
+    at its own address, is still the one asked."""
+    unbound, fp = _proof_opener(None, bind=None)
+    h = discovery.probe_house("192.168.1.31", opener=unbound)
+    assert h.fingerprint is None and h.proof is False and h.identity == "unbound"
+    real, _ = _proof_opener(1)
+    by_host = {"192.168.1.31": h, "192.168.1.20": discovery.probe_house("192.168.1.20", opener=real)}
+    out = discovery.locate_all(
+        names=("domovoi.local",), probe_fn=lambda host, **k: by_host.get(host),
+        resolver=lambda *a: [(None, None, None, None, ("192.168.1.31", 6370))],
+        sweeper=lambda **k: [by_host["192.168.1.20"]],
+    )
+    assert [x.url for x in out if x.proof] == ["ws://192.168.1.20:6370"]
+    assert out[0].fingerprint == fp
+
+
 # ─── parking with every house ──────────────────────────────────────────────
 
 
@@ -510,6 +547,7 @@ def test_adopting_the_approving_house_pins_it_and_keeps_its_token(tmp_path, conf
     import types
 
     monkeypatch.setattr(client, "APPROVED_MARKER", tmp_path / "approved")
+    monkeypatch.setattr(client, "APPROVAL_PROOF_SERVERS_PATH", tmp_path / "proof-servers.json")
     cfg = types.SimpleNamespace(domovoi_url="auto", server_fingerprint="", room_id=ROOM)
     house = House("ws://192.168.1.30:6370", FP2, True, "test")
     token = house_pairing.house_token(MASTER, FP2)
@@ -653,10 +691,29 @@ def test_adopting_records_the_approval_so_a_restart_is_not_half_paired(
     monkeypatch.setattr(client, "PAIRING_TOKEN_SIDECAR", tmp_path / "pairing_token")
     monkeypatch.setattr(client, "_PAIRING_TOKEN_OVERRIDE", None)
     monkeypatch.setattr(client, "APPROVED_MARKER", tmp_path / "approved")
+    monkeypatch.setattr(client, "APPROVAL_PROOF_SERVERS_PATH", tmp_path / "proof-servers.json")
     cfg = types.SimpleNamespace(domovoi_url="auto", server_fingerprint="", room_id=ROOM)
     house = House("ws://192.168.1.30:6370", FP2, True, "test")
     client._adopt_approved_house(cfg, config_file, house, house_pairing.house_token(MASTER, FP2))
     assert client._read_approval_record() == client._APPROVAL_YES
+
+
+def test_adopting_remembers_the_house_proves_approvals(tmp_path, config_file, monkeypatch):
+    """After an every-house approval the device's later hellos to that
+    server carry no approval code, as after a one-house approval."""
+    import types
+
+    monkeypatch.setattr(server_identity, "PENDING_SERVER_SIDECAR", tmp_path / "pending.json")
+    monkeypatch.setattr(client, "PAIRING_TOKEN_SIDECAR", tmp_path / "pairing_token")
+    monkeypatch.setattr(client, "_PAIRING_TOKEN_OVERRIDE", None)
+    monkeypatch.setattr(client, "APPROVED_MARKER", tmp_path / "approved")
+    monkeypatch.setattr(client, "APPROVAL_PROOF_SERVERS_PATH", tmp_path / "proof-servers.json")
+    cfg = types.SimpleNamespace(domovoi_url="auto", server_fingerprint="", room_id=ROOM)
+    house = House("ws://192.168.1.30:6370", FP2, True, "test")
+    assert not client._proof_server_remembered(FP2)
+    client._adopt_approved_house(cfg, config_file, house, house_pairing.house_token(MASTER, FP2))
+    assert client._proof_server_remembered(FP2)
+    assert client._legacy_approval_code(cfg) is None
 
 
 # ─── SAT-15: the budget, and who gets the places ───────────────────────────
@@ -854,3 +911,96 @@ def test_an_unverified_answer_still_connects_but_without_the_code(monkeypatch, t
     monkeypatch.setattr(client, "_probe_one_house", lambda cfg: ("legacy", None))
     assert _run(client.Satellite._before_legacy_session(sat)) == "legacy"
     assert sat._legacy_allowed is True
+
+
+# --- L9: the token-bound exchange (pairing_proof 2, 1.5.0) ------------------
+
+
+def test_probe_house_keeps_the_signed_version():
+    opener, _fp = _proof_opener(2)
+    assert discovery.probe_house("192.168.1.20", opener=opener).proof_version == 2
+    opener, _fp = _proof_opener(1)
+    assert discovery.probe_house("192.168.1.20", opener=opener).proof_version == 1
+    unbound, _ = _proof_opener(2, bind=None)
+    assert discovery.probe_house("192.168.1.20", opener=unbound).proof_version == 0
+
+
+def test_a_v2_house_gets_the_token_bound_exchange(tmp_path):
+    house = FakeHouse("ws://192.168.1.20:6370", FP1, version=2)
+    house.entered = CODE
+    result = _run(_visit(house, house_pairing.ProofBudget(tmp_path / "b.json")))
+    assert result.kind == "approved"
+    assert house.hellos[-1]["pairing_proof"] == 2
+
+
+def test_a_v2_device_never_sends_the_token_bound_form_to_a_v1_house(tmp_path):
+    house = FakeHouse("ws://192.168.1.20:6370", FP1, version=1)
+    house.entered = CODE
+    result = _run(_visit(house, house_pairing.ProofBudget(tmp_path / "b.json")))
+    assert result.kind == "approved"
+    assert "pairing_proof" not in house.hellos[-1]
+
+
+def test_a_hello_cannot_carry_a_stale_version_marker(tmp_path):
+    """A hello template that already holds ``pairing_proof`` does not reach
+    a v1 house: only the signed version decides."""
+    house = FakeHouse("ws://192.168.1.20:6370", FP1, version=1)
+    house.entered = CODE
+    result = _run(house_pairing.visit(
+        house.house, room_id=ROOM, code=CODE, hello={"pairing_proof": 2}, token="t" * 64,
+        connect=_connect([house]), budget=house_pairing.ProofBudget(tmp_path / "b.json"),
+    ))
+    assert result.kind == "approved" and "pairing_proof" not in house.hellos[-1]
+
+
+def test_a_relay_that_swaps_the_token_fails_cleanly(tmp_path):
+    """The core binds the token it received; a relay that replaced the
+    device's makes the transcripts differ, so the run ends as a mismatch:
+    no proof, nothing bound."""
+    house = FakeHouse("ws://192.168.1.20:6370", FP1, mode="relay", version=2)
+    house.entered = CODE
+    result = _run(_visit(house, house_pairing.ProofBudget(tmp_path / "b.json")))
+    assert result.kind == "mismatch"
+    assert house.paired is None and house.last_proof is None
+
+
+# --- the support key rides the exchange (pairing_proof 3, 1.5.0) ------------
+
+SUPPORT_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+
+
+def _visit_with_key(house: FakeHouse, budget, hello: dict):
+    return house_pairing.visit(
+        house.house, room_id=ROOM, code=CODE, hello=hello, token="t" * 64,
+        connect=_connect([house]), budget=budget,
+    )
+
+
+def test_a_v3_house_gets_the_key_bound_exchange(tmp_path):
+    for hello in ({"support_key": SUPPORT_KEY}, {}):
+        house = FakeHouse("ws://192.168.1.20:6370", FP1, version=3)
+        house.entered = CODE
+        result = _run(_visit_with_key(house, house_pairing.ProofBudget(tmp_path / "b.json"),
+                                      dict(hello)))
+        assert result.kind == "approved"
+        assert house.hellos[-1]["pairing_proof"] == 3
+        assert house.hellos[-1].get("support_key") == hello.get("support_key")
+
+
+def test_a_v2_house_never_gets_the_key_bound_form(tmp_path):
+    house = FakeHouse("ws://192.168.1.20:6370", FP1, version=2)
+    house.entered = CODE
+    result = _run(_visit_with_key(house, house_pairing.ProofBudget(tmp_path / "b.json"),
+                                  {"support_key": SUPPORT_KEY}))
+    assert result.kind == "approved" and house.hellos[-1]["pairing_proof"] == 2
+
+
+def test_a_relay_that_swaps_the_support_key_fails_cleanly(tmp_path):
+    """The core binds the key it received; a relay that replaced the
+    device's makes the transcripts differ: no proof, nothing bound."""
+    house = FakeHouse("ws://192.168.1.20:6370", FP1, mode="key_swap", version=3)
+    house.entered = CODE
+    result = _run(_visit_with_key(house, house_pairing.ProofBudget(tmp_path / "b.json"),
+                                  {"support_key": SUPPORT_KEY}))
+    assert result.kind == "mismatch"
+    assert house.paired is None and house.last_proof is None

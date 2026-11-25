@@ -17,16 +17,29 @@ main onion), a **reach key** for A (the private half of a Tor client key B
 has already authorized, so A can answer on B's main onion when it accepts)
 and the name B calls itself.
 
-**The 4-digit code** (owner decision 14): both sides compute
-``SHA-256("domovoi-fh-code-v2" ‖ h ‖ A ‖ B ‖ nA ‖ nB) mod 10,000``, where
-h is the Noise handshake hash. B commits to **its house key and nB**
+**The 6-digit code** (owner decision 14; 6 digits since pairing v2, in
+1.5.0): both sides compute
+``SHA-256("domovoi-fh-code-v3" ‖ h ‖ A ‖ B ‖ nA ‖ nB) mod 1,000,000``,
+where h is the Noise handshake hash. B commits to **its house key and nB**
 before it sees nA, and A sends nA before it sees nB, so someone who
 swapped the file and sits between the two houses can't steer either code:
 not by choosing a nonce, and not by generating house keys after seeing nA
 (audit R6 FH-1: the first version committed to nB alone, and the house key
 that arrives later could be ground to any code in under a second). A swap
-survives a comparison with a 1-in-10,000 chance, once per single-use file
-(finding 13).
+survives a comparison with a 1-in-1,000,000 chance per run. A run broken
+off after the nonces are out counts as a try on the file: the inviter
+closes the file after :data:`ABANDONED_MAX` of them, and the asker stops
+retrying on its own after one (finding 13).
+
+**Versions.** This is pairing v2: preface ``DFP2``, its own Noise prologue
+and code context, so its handshake hash and code can't be mixed with v1's
+(4 digits, ``DFP1``). The version is also the friend file's signed version
+byte (:mod:`domovoi.friend_houses.friend_file`), so a house asks only with
+a v2 file and answers only v2. v1 isn't spoken at all, in either role:
+there is nothing to fall back to, so nobody can talk a house into the
+4-digit code. Friends made with v1 stay friends; pairing is only how they
+met, and the session protocol (:mod:`domovoi.friend_houses.session`) is
+unchanged.
 
 Nothing in a request is trusted until the handshake proved the file's
 secret, the statement's signature checks out, and the statement names the
@@ -47,10 +60,12 @@ from domovoi.friend_houses import identity as fid
 from domovoi.friend_houses import session as fs
 from domovoi.friend_houses.noise import TAGLEN, Handshake, NoiseError, Transport
 
-PREFACE = b"DFP1"
-PROLOGUE = b"domovoi-fh-pairing-v1"
-CODE_CONTEXT = b"domovoi-fh-code-v2"
-COMMIT_CONTEXT = b"domovoi-fh-code-commit-v2"
+PROTOCOL_VERSION = 2
+PREFACE = b"DFP2"
+PROLOGUE = b"domovoi-fh-pairing-v2"
+CODE_CONTEXT = b"domovoi-fh-code-v3"
+COMMIT_CONTEXT = b"domovoi-fh-code-commit-v3"
+CODE_DIGITS = 6
 TIMEOUT_SEC = 60.0
 
 _MSG1_PAYLOAD = 16 + 32
@@ -62,7 +77,21 @@ _RECEIVED = b"\x01"
 
 
 class PairingRefused(Exception):
-    """The request didn't go through. Never says why to the other end."""
+    """The request didn't go through. Never says why to the other end.
+
+    ``after_nonces`` is true when both nonces had already been exchanged:
+    the code for that run could be worked out, so the run counts as a try
+    on the friend file (see :data:`ABANDONED_MAX` and ``friending``)."""
+
+    def __init__(self, *args: object, after_nonces: bool = False) -> None:
+        super().__init__(*args)
+        self.after_nonces = after_nonces
+
+
+#: Runs on one friend file that the asker broke off after the inviter's
+#: nonce was sent, before the file is closed. Each such run is one guess
+#: at the code, so the file allows only this many.
+ABANDONED_MAX = 3
 
 
 def commitment(nonce: bytes, house_key: bytes) -> bytes:
@@ -75,7 +104,12 @@ def code(handshake_hash: bytes, inviter_house: bytes, asker_house: bytes, n_invi
          n_asker: bytes) -> str:
     digest = hashlib.sha256(CODE_CONTEXT + handshake_hash + inviter_house + asker_house
                             + n_inviter + n_asker).digest()
-    return f"{int.from_bytes(digest, 'big') % 10_000:04d}"
+    return f"{int.from_bytes(digest, 'big') % 10 ** CODE_DIGITS:0{CODE_DIGITS}d}"
+
+
+def is_code(value: object) -> bool:
+    """A code this house's pairing makes: exactly :data:`CODE_DIGITS` digits."""
+    return isinstance(value, str) and len(value) == CODE_DIGITS and value.isascii() and value.isdigit()
 
 
 @dataclass(frozen=True)
@@ -109,10 +143,11 @@ async def ask(
     name: str,
 ) -> str:
     """House B's side, over a stream already connected to A's pairing onion.
-    Returns the 4-digit code. Raises :class:`PairingRefused`."""
+    Returns the 6-digit code. Raises :class:`PairingRefused`."""
     hs = Handshake("IKpsk2", initiator=True, prologue=PROLOGUE, static=keys.session,
                    remote_static=file.session_key, psk=file.invite_secret)
     n_asker = secrets.token_bytes(32)
+    after_nonces = False
     try:
         writer.write(PREFACE + fs.frame(hs.write_message(
             file.invite_id + commitment(n_asker, keys.house_key))))
@@ -121,6 +156,7 @@ async def ask(
         n_inviter = hs.read_message(msg2)
         if len(n_inviter) != 32:
             raise PairingRefused("bad answer")
+        after_nonces = True
         transport = hs.transport()
         name_bytes = ff.clean_name(name).encode("utf-8")
         request = _REQUEST_FIXED.pack(n_asker, statement.to_bytes(), reach_private,
@@ -128,10 +164,11 @@ async def ask(
         await _send(writer, transport.encrypt(request))
         reply = await fs.read_frame(reader, max_size=1 + TAGLEN, timeout=TIMEOUT_SEC)
         if transport.decrypt(reply) != _RECEIVED:
-            raise PairingRefused("not received")
+            raise PairingRefused("not received", after_nonces=True)
     except (NoiseError, fs.SessionRefused, ConnectionError) as exc:
         writer.close()  # don't leave the other end waiting for a request
-        raise PairingRefused("the other house didn't take the request") from exc
+        raise PairingRefused("the other house didn't take the request",
+                             after_nonces=after_nonces) from exc
     return code(transport.handshake_hash, file.house_key, keys.house_key, n_inviter, n_asker)
 
 
@@ -141,16 +178,19 @@ async def answer(
     *,
     keys: fid.HouseKeys,
     invite_open: Callable[[bytes], Awaitable[bool]],
+    nonce_sent: Callable[[bytes], None] | None = None,
 ) -> Request:
     """House A's side, on its pairing listener. ``invite_open(id)`` says
-    whether that invite is unused and unexpired. Raises
+    whether that invite is unused and unexpired. ``nonce_sent(id)`` is
+    called once this side's nonce has gone out: from then on a run that
+    doesn't finish counts against the invite. Raises
     :class:`PairingRefused` for anything else, without a word to the caller."""
     try:
         preface = await asyncio.wait_for(reader.readexactly(len(PREFACE)), TIMEOUT_SEC)
     except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError) as exc:
         raise PairingRefused("no preface") from exc
     if preface != PREFACE:
-        raise PairingRefused("unknown protocol")
+        raise PairingRefused("unknown protocol")  # v1 (DFP1) included: never answered
     try:
         msg1 = await fs.read_frame(reader, max_size=_MSG1_SIZE, timeout=TIMEOUT_SEC)
         hs = Handshake("IKpsk2", initiator=False, prologue=PROLOGUE, static=keys.session)
@@ -163,6 +203,8 @@ async def answer(
         hs.provide_psk(keys.invite_secret(invite_id))
         n_inviter = secrets.token_bytes(32)
         await _send(writer, hs.write_message(n_inviter))
+        if nonce_sent is not None:
+            nonce_sent(invite_id)
         transport: Transport = hs.transport()
         sealed = await fs.read_frame(reader, max_size=_REQUEST_MAX, timeout=TIMEOUT_SEC)
         request = transport.decrypt(sealed)  # fails unless the caller held the file

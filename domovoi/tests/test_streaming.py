@@ -770,8 +770,10 @@ def test_announce_triggers_fan_out_to_target_rooms(
                 assert start["matched_handler"] == "intercom"
                 assert start["matched_path"] == "intercom_broadcast"
                 assert start["text"] == "dinner is ready"
-                garage_ws.receive_bytes()  # audio
-                end = garage_ws.receive_json()
+                # The audio (chime + speech) may span several binary frames.
+                while (msg := garage_ws.receive()).get("bytes") is not None:
+                    pass
+                end = json.loads(msg["text"])
                 assert end == {"type": "response_end", "interrupted": False, "expect_followup": False}
 
 

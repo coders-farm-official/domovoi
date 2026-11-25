@@ -46,13 +46,20 @@ globalThis.apiFetchRaw = async (path, opts) => {
 """
 
 
+def _caller_headers(src: str) -> str:
+    """data.js's callerDeviceHeaders: the chat's reads send X-Device-Id (1.5.0 L39)."""
+    c = re.search(r"^const callerDeviceHeaders = .*?^};$", src, re.M | re.S)
+    assert c, "callerDeviceHeaders is gone from web/static/data.js"
+    return "\n" + c.group(0) + "\n"
+
+
 def _setup() -> str:
     src = DATA_JS.read_text(encoding="utf-8")
     m = re.search(r"^const useRetryAfterCredential = .*?^};$", src, re.M | re.S)
     assert m
     return ("window.innerWidth = 1280;\nglobalThis.API_BASE = '';\n"
             "globalThis.withDeviceToken = (u) => u + '?device_token=t';\n"
-            "globalThis.liveRelTime = () => 'now';\n" + m.group(0) + STORAGE)
+            "globalThis.liveRelTime = () => 'now';\n" + m.group(0) + _caller_headers(src) + STORAGE)
 
 
 CARD = {"kind": "calc", "text": "Domovoi isn't reliable at arithmetic, and its answers are checked for their "

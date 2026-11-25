@@ -21,6 +21,9 @@
  * runs shows it from the message list's `jobs`, polled until it ends; a
  * stopped summary offers "carry on".
  *
+ * Photo and video results (chat_media.jsx, ChatMedia): a reply that found
+ * the household's photos or videos carries `media`; its cards are drawn
+ * under the reply (optional here, like ChatVideos).
  * Videos (chat_videos.jsx, ChatVideos): one short video a message rides
  * the same paperclip when the server can watch one; the attachment shows
  * "Watching your video… about N minutes left" (the thread's `videos`,
@@ -43,6 +46,8 @@
  * the URL carries the household token as ?device_token= (withDeviceToken,
  * data.js) — the query the server accepts on reads and nowhere else. */
 const chatUploadUrl = (token) => withDeviceToken(`${API_BASE}/api/chat/uploads/${token}`);
+// A reply carrying photo and video results (chat_media.jsx).
+const hasMediaCards = (m) => !!(m && m.media && Array.isArray(m.media.items) && m.media.items.length);
 
 /* What a send says when the household's AI features are off. */
 const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
@@ -231,8 +236,8 @@ const chatCopyText = async (text) => {
 /* Who sent a user message, as the details show it. */
 const chatDeviceLabel = (m) => {
   if (m.device) return m.device;
-  const mine = typeof DeviceIdentity !== 'undefined' && m.device_id && m.device_id === DeviceIdentity.id();
-  return mine ? 'this browser' : (m.device_name || m.device_id || null);
+  // `mine`: the server compared the row with this browser's X-Device-Id.
+  return m.mine ? 'this browser' : (m.device_name || null);
 };
 
 /* The copy / details menu, at the pointer (right-click or long press) or
@@ -396,12 +401,14 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
           <div {...bubbleEvents}
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0,
-                        flex: m.draft && !m.pending ? 1 : undefined }}>
+                        flex: (m.draft || m.print_attachment || hasMediaCards(m)) && !m.pending ? 1 : undefined }}>
             {headsUp ? (
               // A heads-up card is the reply until an option is picked
               // (documents plan D3): its own sentence and buttons.
               <ChatDocs.HeadsUpCard card={headsUp} busy={busy}
                                     onPick={onHeadsUp ? (option) => onHeadsUp(m, option) : null}/>
+            ) : m.print_attachment && !m.pending && window.ChatDrafts && draftHooks ? (
+              <window.ChatDrafts.AttachmentCard m={m} onPrint={draftHooks.printAttachment} canPrint={draftHooks.canPrint}/>
             ) : m.draft && !m.pending && window.ChatDrafts && draftHooks ? (
               // A draft (chat_drafts.jsx): the card, not the text.
               <window.ChatDrafts.DraftCard m={m} latest={draftHooks.latest[m.draft.id] || null}
@@ -411,6 +418,10 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
             ) : m.stats && m.stats.lookup_card
               ? <ChatLookups.Card m={m} busy={busy} onDecide={onLookup}/>
               : <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>}
+            {!m.pending && m.media && window.ChatMedia && <window.ChatMedia.Cards media={m.media}/>}
+            {m.pending && m.status === 'waiting_for_voice' && !m.content && (
+              <span className="mono chat-doc-checking">a spoken answer goes first…</span>
+            )}
             {m.pending && m.status === 'drafting' && (
               <span className="mono chat-doc-checking">writing the draft…</span>
             )}
@@ -617,7 +628,7 @@ const ChatPageMain = () => {
   const [videos, setVideos] = React.useState([]);
   const loadMessages = async (id) => {
     try {
-      const r = await apiGet(`/api/chat/threads/${id}/messages`);
+      const r = await apiGet(`/api/chat/threads/${id}/messages`, { headers: callerDeviceHeaders() });
       setMessages(r.messages || []);
       setJobs(r.jobs || []);
       setVideos(r.videos || []);
@@ -757,6 +768,7 @@ const ChatPageMain = () => {
     },
     print: (id, version) => setPrintDraft({ id, version,
       title: ((draftLatest[id] || {}).title) || 'draft' }),
+    printAttachment: (attachment) => setPrintDraft({ attachment, title: attachment.name }),
     save: async (id, version) => {
       try {
         const r = await Drafts.api.save(id, version, null);
@@ -825,7 +837,7 @@ const ChatPageMain = () => {
 
   // The household's chats: a delete is for everyone (the app says the same).
   const deleteThread = async (t) => {
-    if (!window.confirm(`Delete "${t.title || 'new chat'}"? Deletes it for everyone in the house. `
+    if (!await askConfirm(`Delete "${t.title || 'new chat'}"? Deletes it for everyone in the house. `
       + "This can't be undone.")) return;
     try {
       await apiDelete(`/api/chat/threads/${t.id}`);
@@ -836,7 +848,7 @@ const ChatPageMain = () => {
 
   // A name set here is the person's: the model's title never replaces it.
   const renameThread = async (t) => {
-    const name = window.prompt('rename chat', t.title || '');
+    const name = await askPrompt('Rename chat', { value: t.title || '', confirmLabel: 'Rename' });
     if (name == null) return;
     const title = name.trim();
     if (!title || title === t.title) return;
@@ -1306,9 +1318,13 @@ const ChatPageMain = () => {
       )}
       {printDraft && typeof PrintDialog === 'function' && (
         <PrintDialog name={printDraft.title} fire={fire}
-                     target={{ version: printDraft.version }}
-                     previewPath={`/api/chat/drafts/${printDraft.id}/print/preview`}
-                     submitPath={`/api/chat/drafts/${printDraft.id}/print/jobs`}
+                     target={printDraft.attachment ? {} : { version: printDraft.version }}
+                     previewPath={printDraft.attachment
+                       ? `/api/chat/attachments/${printDraft.attachment.token}/print/preview`
+                       : `/api/chat/drafts/${printDraft.id}/print/preview`}
+                     submitPath={printDraft.attachment
+                       ? `/api/chat/attachments/${printDraft.attachment.token}/print/jobs`
+                       : `/api/chat/drafts/${printDraft.id}/print/jobs`}
                      onClose={() => setPrintDraft(null)}/>
       )}
       {toastNode}

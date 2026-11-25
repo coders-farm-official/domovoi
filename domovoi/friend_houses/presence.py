@@ -84,6 +84,46 @@ async def saw(house_key: bytes, statement: bytes | fid.AddressStatement | None =
         _service().schedule_reconcile()  # Tor's key file names the onion
 
 
+CAPS_CARRY_EVERY_SEC = 3600
+_CAPS_CARRIED: dict[str, float] = {}
+
+
+async def _caps_to_carry(friend_id: str) -> tuple[tuple[str, ...], bytes] | None:
+    """This house's CAPS for a presence dial, or None: only for a friend
+    with "Apps with this friend" on and ``peer_proto >= 2``, at most hourly
+    (a house before 1.5.0 is never sent it here)."""
+    from domovoi.friend_houses import plugin_mail, plugin_wire
+
+    if time.monotonic() - _CAPS_CARRIED.get(friend_id, -1e9) < CAPS_CARRY_EVERY_SEC:
+        return None
+    try:
+        async with _db() as s:
+            friend = await plugin_mail.friend_row(s, friend_id=friend_id)
+            if friend is None or not friend["apps_on"] or (friend["peer_proto"] or 0) < 2:
+                return None
+            slugs = tuple(await plugin_mail.caps_slugs(s, friend))
+    except Exception:  # noqa: BLE001 — presence never fails on apps
+        return None
+    return slugs, plugin_wire.encode_caps(slugs)
+
+
+async def _caps_carried(friend_id: str, slugs: tuple[str, ...]) -> None:
+    """The PING after the CAPS was answered: clear ``caps_needed`` when that
+    is still what this house wants to say."""
+    from domovoi.friend_houses import plugin_mail
+
+    _CAPS_CARRIED[friend_id] = time.monotonic()
+    try:
+        async with _db() as s:
+            friend = await plugin_mail.friend_row(s, friend_id=friend_id, lock=True)
+            if friend is not None and tuple(await plugin_mail.caps_slugs(s, friend)) == slugs:
+                await s.execute(text(
+                    "UPDATE friend_houses_friends SET caps_needed = FALSE, caps_sent_at = now() "
+                    "WHERE id = :i"), {"i": friend_id})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def online(last_seen_at: datetime | None, *, now: float | None = None) -> bool:
     if last_seen_at is None:
         return False
@@ -123,13 +163,20 @@ async def check_all() -> int:
                                          keys=keys, me=hello, friend=fs.Friend(f.house_key, f.session_key))
         except (fc.Unreachable, fs.SessionRefused):
             continue
+        caps = await _caps_to_carry(f.id)
         try:
+            if caps is not None:
+                # A carrier of this house's CAPS (§6.8): only to a friend
+                # with apps on that speaks plugin mail, at most hourly.
+                await sess.send(fs.Kind.CAPS, caps[1])
             await sess.ping(timeout=45)
             answered += 1
-        except fs.SessionRefused:
+        except (fs.SessionRefused, ConnectionError, OSError):
             continue
         finally:
             await sess.close()
+        if caps is not None:
+            await _caps_carried(f.id, caps[0])
         await saw(f.house_key, sess.peer.statement)
         if stale[f.house_key]:
             async with _db() as s:

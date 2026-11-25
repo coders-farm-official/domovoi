@@ -109,6 +109,16 @@ class RestartWatch:
             room_id, cur.uptime, prev.uptime, gap, cur.state, cur.pos,
             _clock_str(cur.elapsed), prev.state, prev.pos, _clock_str(prev.elapsed),
         )
+        # The daemon came back with whatever its state file held: an
+        # internet entry that isn't relayed is rewritten or removed first
+        # (L20, domovoi/relay_queue.py).
+        try:
+            from domovoi import relay_queue
+
+            await relay_queue.scan_room(room_id, client)
+        except Exception as e:  # noqa: BLE001 — the put-back goes on
+            log.warning("music player for room=%s: its queue wasn't checked: %s",
+                        room_id, type(e).__name__)
         if prev.state != "play" or prev.pos is None or gap > MAX_GAP_SEC:
             return False
         if cur.state not in ("play", "pause"):

@@ -72,9 +72,12 @@ def test_the_windows_hello_is_the_fixtures_windows_pc_hello():
     got = client.Satellite(win_cfg())._hello_frame()
     assert set(got) == set(want)
     for key in ("type", "sat_type", "mic_enabled", "speech_pause", "capture_control",
-                "announce_after_session_end", "board", "supports_full_duplex", "supports"):
+                "announce_after_session_end", "board", "supports_full_duplex"):
         assert got[key] == want[key], key
-    assert not set(got["supports"]) & set(FIXTURES["devices"]["windows_pc"]["expect"]["not_allowed"])
+    # 1.5.0 adds wake_claim to the fixtures' (pre-1.5.0) laptop.
+    adds = FIXTURES["room_turns"]["hello_supports_adds"]
+    assert got["supports"] == [*want["supports"], adds]
+    assert not set(got["supports"]) & (set(FIXTURES["devices"]["windows_pc"]["expect"]["not_allowed"]) - {adds})
     assert not set(got["supports"]) & {"plugin_payloads", "wifi", "leds", "mic_gain", "time_sync", "display"}
 
 
@@ -143,6 +146,19 @@ def test_the_windows_player_holds_the_first_read_until_the_buffer_is_in():
     reader.join(timeout=2.0)
     assert not reader.is_alive()
     assert got == [b"a" * 1000 + b"b" * 1000 + b"c" * 1000]
+
+
+def test_the_windows_player_says_audio_arrived_before_its_buffer_fills(capsys):
+    """The engine waits for this line before music_ready (4 s at most);
+    the buffer (`--buffer-sec`, 3 s by default) fills only at the stream's
+    real-time pace, so the line must not wait for it."""
+    body = _TrickleBody([b"a" * 1000])
+    win_player._Prefetch(body, start_bytes=10_000)
+    body.allow.release()
+    deadline = time.monotonic() + 2.0
+    while "MPEG" not in capsys.readouterr().err:
+        assert time.monotonic() < deadline, "no audio line"
+        time.sleep(0.01)
 
 
 def test_the_windows_player_plays_a_stream_shorter_than_its_buffer():

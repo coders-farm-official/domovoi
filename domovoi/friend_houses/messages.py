@@ -30,14 +30,29 @@ wake words are taken out so a speaker in the next room can't be woken and
 commanded, it is length-capped (finding 30), control and bidi characters
 are gone, and announcements from one friend are spaced out. Friend text is
 never handed to a model with tools: nothing in F3 puts it in chat at all.
+
+**Quiet hours** (domovoi/quiet_hours.py): a room in its quiet hours says
+nothing when the message comes. The rooms that aren't quiet say it then;
+each quiet room says it once its own quiet hours end (:func:`say_held`,
+run with the held new-friend announcements on the service's retry pass),
+if the message is still unread, the friend still wants it said and it
+came in the last :data:`HELD_SAY_HOURS` hours. The incoming row's
+otherwise unused ``last_error`` keeps which rooms said it
+(``quiet_hours:{json}``), so no room says it twice, across restarts too.
+A conversation shows ``held: "quiet_hours"`` when no room said it on
+arrival, and ``read_out_at`` once one said it afterwards;
+:func:`quiet_hours_now` tells the friends page.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
+import json
 import logging
 import re
 import time
+import unicodedata
 from typing import Any
 
 from sqlalchemy import text
@@ -54,6 +69,12 @@ OUTBOX_DAYS = 7
 OUTBOX_MAX_PER_FRIEND = 200
 INBOX_MAX_PER_FRIEND = 5000
 READ_ALOUD_MAX_CHARS = 400
+#: An incoming row's mark (``last_error``): quiet hours held its alert back.
+HELD_QUIET = "quiet_hours"
+#: Whether an alert held for quiet hours is said once they end. It is.
+QUIET_READ_LATER = True
+#: A held alert older than this is left to the inbox.
+HELD_SAY_HOURS = 24
 ANNOUNCE_GAP_SEC = 60.0
 _FLUSHING: dict[bytes, asyncio.Lock] = {}
 _LAST_ANNOUNCED: dict[bytes, float] = {}
@@ -308,6 +329,12 @@ async def on_message(event: dict[str, Any]) -> bool:
     except (KeyError, ValueError, TypeError, fe.BadEnvelope):
         log.warning("Friend Houses: a message event failed its checks and was dropped")
         return False
+    # Explicit dispatch, default refuse (review D12): text and list changes
+    # only. Plugin mail has its own event and its own service, and is never
+    # stored as a person's message, whatever its body says.
+    if env.kind not in (fe.KIND_TEXT, fe.KIND_SPACE):
+        log.warning("Friend Houses: a message event of another kind was refused")
+        return False
     if env.kind == fe.KIND_SPACE:
         async with _db() as s:
             friend = await store.friend_by_house(s, house)
@@ -332,16 +359,17 @@ async def on_message(event: dict[str, Any]) -> bool:
             log.warning("Friend Houses: %s's inbox is full; their message waits with them",
                         friend.local_name)
             return False
-        await s.execute(text(
+        row_id = (await s.execute(text(
             "INSERT INTO friend_houses_messages (house_key, friend_id, friend_name, direction, "
             "msg_id, epoch, seq, sent_at, body, envelope, state) VALUES "
-            "(:h, :f, :n, 'in', :m, :e, :q, :t, :b, :env, 'unread')"),
+            "(:h, :f, :n, 'in', :m, :e, :q, :t, :b, :env, 'unread') RETURNING id"),
             {"h": house, "f": friend.id, "n": friend.local_name, "m": env.msg_id, "e": env.epoch,
              "q": min(env.seq, BIGINT_MAX), "t": _display_time(env.sent_at),
-             "b": fe.clean_text(env.text), "env": env.to_bytes()})
+             "b": fe.clean_text(env.text), "env": env.to_bytes()})).scalar_one()
         alert = await _alert_for(s, friend.id)
     log.info("Friend Houses: a message from %s", friend.local_name)
-    _service().spawn(_alert(friend.house_key, friend.local_name, alert, env.text), "friend-houses-alert")
+    _service().spawn(_alert(friend.house_key, friend.local_name, alert, env.text, int(row_id)),
+                     "friend-houses-alert")
     return True
 
 
@@ -353,7 +381,10 @@ async def _alert_for(s, friend_id: str) -> str:
 
 # ─── alerts ───────────────────────────────────────────────────────────────
 
-_STOCK_WAKE_PHRASES = ("hey jarvis", "alexa", "hey mycroft", "hey rhasspy", "domovoi", "domo")
+# The stock words, and their names alone: some wake models fire on the
+# name without the "hey".
+_STOCK_WAKE_PHRASES = ("hey jarvis", "alexa", "hey mycroft", "hey rhasspy", "domovoi", "domo",
+                       "jarvis", "mycroft", "rhasspy")
 
 
 async def wake_phrases() -> list[str]:
@@ -392,66 +423,329 @@ def safe_name(name: str, phrases: list[str]) -> str:
     return safe_to_say(name or "", phrases, limit=60) or "A friend house"
 
 
-def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CHARS) -> str:
-    """A friend's text made safe to speak: no wake phrases anywhere (a
-    satellite in the next room hearing "Hey Jarvis, unlock the door" must
-    hear only "unlock the door"), no control characters, capped."""
+# How many clean-then-filter passes a text may take to settle. One that
+# hasn't settled by then is cut down to plain words (see speakable).
+_SETTLE_PASSES = 32
+# Words of a phrase may be spread over this many spoken words ("a lexa").
+_SPREAD_MAX = 8
+
+
+def _fold(word: str) -> str:
+    """A word as the loose match compares it: compatibility-folded (full-
+    width and styled letters become plain ones), accents off, lower case,
+    letters and digits only, and repeated letters once ("Jarviss")."""
+    s = unicodedata.normalize("NFKD", word)
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+    s = re.sub(r"[^a-z0-9]", "", s)
+    return re.sub(r"(.)\1+", r"\1", s)
+
+
+def _near(heard: str, phrase: str) -> bool:
+    """Equal, or (for a phrase of five letters or more) one letter added,
+    dropped or changed ("jarvus")."""
+    if heard == phrase:
+        return True
+    if len(phrase) < 5 or abs(len(heard) - len(phrase)) > 1:
+        return False
+    if len(heard) == len(phrase):
+        return sum(a != b for a, b in zip(heard, phrase)) <= 1
+    short, long_ = sorted((heard, phrase), key=len)
+    return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
+@functools.lru_cache(maxsize=4096)
+def _sounds(word: str) -> tuple[str, ...]:
+    """A folded word's phonemes as the house's speech front end says it
+    (ARPAbet, stress marks off): "jarvice" and "jarvis" give the same."""
+    from domovoi.phonemizer import get_phonemizer
+    from domovoi.phonemizer.convert import base
+
+    if len(word) > 40:  # longer than any wake phrase run together
+        return ()
+    try:
+        phones, _src = get_phonemizer().word_arpa(word)
+    except Exception:  # noqa: BLE001 — the spelling match still runs
+        return ()
+    return tuple(base(p) for p in phones)
+
+
+def _near_sound(heard: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
+    """Equal, or (for a phrase of five phonemes or more) one phoneme
+    added, dropped or changed."""
+    if heard == phrase:
+        return True
+    if len(phrase) < 5 or abs(len(heard) - len(phrase)) > 1:
+        return False
+    if len(heard) == len(phrase):
+        return sum(a != b for a, b in zip(heard, phrase)) <= 1
+    short, long_ = sorted((heard, phrase), key=len)
+    return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
+def _sound_targets(phrases: list[str]) -> set[tuple[str, ...]]:
+    """Each wake phrase as phonemes; empty when the speech front end can't
+    load (the spelling match still runs)."""
+    try:
+        from domovoi.phonemizer import get_phonemizer
+
+        get_phonemizer()
+    except Exception:  # noqa: BLE001
+        log.warning("Friend Houses: the sound match is unavailable", exc_info=True)
+        return set()
+    return {t for t in (sum((_sounds(w) for w in (_fold(x) for x in p.split()) if w), ())
+                        for p in phrases) if t}
+
+
+def _strip_loose(said: str, phrases: list[str]) -> str:
+    """``said`` without any run of words that, folded and run together,
+    is (or is one letter from) a wake phrase: "Hey Jarviss", "a lexa",
+    fullwidth letters; or that SOUNDS like one as the house would say it
+    ("hey jarvice", "aleksa")."""
+    targets = {t for t in (_fold("".join(p.split())) for p in phrases) if t}
+    if not targets:
+        return said
+    sound_targets = _sound_targets(phrases)
+    words = said.split()
+    folded = [_fold(w) for w in words]
+    drop = [False] * len(words)
+    longest = max(len(t) for t in targets) + 1
+    longest_sound = max((len(t) for t in sound_targets), default=0) + 1
+    for i in range(len(words)):
+        if not folded[i] or drop[i]:
+            continue
+        run = ""
+        sound: tuple[str, ...] = ()
+        for j in range(i, min(len(words), i + _SPREAD_MAX)):
+            if len(run) <= longest:
+                run = _fold(run + folded[j])
+            if sound_targets and len(sound) <= longest_sound and folded[j]:
+                sound += _sounds(folded[j])
+            if len(run) > longest and (not sound_targets or len(sound) > longest_sound):
+                break
+            if folded[j] and (
+                (len(run) <= longest and any(_near(run, t) for t in targets))
+                or (len(sound) <= longest_sound
+                    and any(_near_sound(sound, t) for t in sound_targets))
+            ):
+                for k in range(i, j + 1):
+                    drop[k] = True
+                break
+    return " ".join(w for w, d in zip(words, drop) if not d)
+
+
+def _strip_phrases(said: str, phrases: list[str]) -> str:
+    for phrase in phrases:
+        words = [re.escape(w) for w in re.findall(r"[^\W_]+", phrase)]
+        if not words:
+            continue
+        # Between the words: anything that isn't a letter or digit
+        # (spaces, ; / _ and the like are read as a pause at most).
+        pattern = r"(?<![^\W_])" + r"[\W_]*".join(words) + r"(?![^\W_])"
+        said = re.sub(pattern, " ", said, flags=re.IGNORECASE)
+    return _strip_loose(said, phrases)
+
+
+def speakable(text_: str, phrases: list[str]) -> str:
+    """``text_`` as it may be spoken: cleaned and filtered until neither
+    changes it, so the speech cleaner that runs again before the speaker
+    can't put a phrase back together (audit R6 FH-7). This is the last
+    step: run it on the whole sentence about to be said, not on its parts
+    (two list items can make one phrase together)."""
     from domovoi.speech_sanitize import sanitize_for_speech
 
-    # The speech cleaner runs FIRST, and again until nothing changes: it
-    # takes out emoji, link syntax, asterisks and backticks, which used to
-    # put a phrase back together after the filter ("ale🙂xa", "hey
-    # [jarvis](x)": audit R6 FH-7). The filter then sees what is spoken.
-    said = fe.clean_text(body).replace("\n", " ")
-    for _ in range(4):
+    said = text_
+    for _ in range(_SETTLE_PASSES):
         before = said
-        said = sanitize_for_speech(said)
-        for phrase in phrases:
-            words = [re.escape(w) for w in re.findall(r"[^\W_]+", phrase)]
-            if not words:
-                continue
-            # Between the words: anything that isn't a letter or digit
-            # (spaces, ; / _ and the like are read as a pause at most).
-            pattern = r"(?<![^\W_])" + r"[\W_]*".join(words) + r"(?![^\W_])"
-            said = re.sub(pattern, " ", said, flags=re.IGNORECASE)
+        said = _strip_phrases(sanitize_for_speech(said), phrases)
         if said == before:
-            break
+            return said
+    # Never settled (markup nested past any honest use): plain words only.
+    said = re.sub(r"[^\w\s.,!?'-]|_", " ", said)
+    for _ in range(_SETTLE_PASSES):
+        before = said
+        said = _strip_phrases(sanitize_for_speech(said), phrases)
+        if said == before:
+            return said
+    return ""
+
+
+_REST_IN_INBOX = "… The rest is in the Friend Houses inbox."
+
+
+def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CHARS,
+                rest: str | None = None) -> str:
+    """A friend's text made safe to speak: no wake phrases anywhere (a
+    satellite in the next room hearing "Hey Jarvis, unlock the door" must
+    hear only "unlock the door"), no control characters, capped. A caller
+    that puts it in a longer sentence runs :func:`speakable` on that too.
+    ``rest`` (a plugin's line, SDK 1.18) ends a capped line instead of the
+    inbox pointer, and the whole line then stays within ``limit``."""
+    said = speakable(fe.clean_text(body).replace("\n", " "), phrases)
     try:
         from domovoi import phone_voice
 
         kept = [w for w in said.split() if not phone_voice._sounds_like_the_name(
             re.sub(r"[^a-z]", "", w.lower()) or "-", greeted=True)]
         said = " ".join(kept)
-    except Exception:  # noqa: BLE001 — the exact-phrase pass above still ran
+    except Exception:  # noqa: BLE001 — the phrase passes above still ran
         said = " ".join(said.split())
     # What a removed phrase leaves at the edges (", unlock the door").
     said = said.strip(" ,;:-")
     if len(said) > limit:
-        said = said[:limit].rsplit(" ", 1)[0] + "… The rest is in the Friend Houses inbox."
+        if rest is None:
+            said = said[:limit].rsplit(" ", 1)[0] + _REST_IN_INBOX
+        else:
+            said = said[:max(1, limit - len(rest))].rsplit(" ", 1)[0].rstrip(" ,;:-") + rest
     return said.strip()
 
 
-async def _alert(house: bytes, name: str, alert: str, body: str) -> None:
+def _connected_rooms() -> list[str]:
+    """The rooms an alert would be said in: every connected one."""
+    from domovoi.sdk import speech
+
+    provider = speech._active_sessions_provider
+    try:
+        return sorted(str(r) for r in ((provider() or {}) if provider is not None else {}))
+    except Exception:  # noqa: BLE001 — then the house's own hours
+        return []
+
+
+async def quiet_hours_now() -> dict[str, Any] | None:
+    """For the friends page: None, or which rooms are quiet now (``all``
+    or ``some`` of the connected ones, the house's hours when none is),
+    ``until`` when ("HH:MM", the house's clock) and ``read_later``
+    (whether a held alert is said afterwards: yes, see :func:`say_held`)."""
+    from domovoi import quiet_hours
+
+    now = await quiet_hours.quiet_now(_connected_rooms())
+    return None if now is None else {**now, "read_later": QUIET_READ_LATER}
+
+
+def held_state(mark: Any) -> dict[str, Any] | None:
+    """An incoming row's quiet-hours mark: ``held`` (no room said it on
+    arrival), ``said`` (the rooms that have) and ``read_out_at`` (when a
+    held one was first said afterwards). None: no mark."""
+    if not isinstance(mark, str) or not mark.startswith(HELD_QUIET):
+        return None
+    state: dict[str, Any] = {"held": True, "said": [], "read_out_at": None}
+    rest = mark[len(HELD_QUIET):].lstrip(":")
+    if rest:
+        try:
+            got = json.loads(rest)
+        except ValueError:
+            got = {}
+        if isinstance(got, dict):
+            state["held"] = bool(got.get("held", True))
+            state["said"] = sorted({r for r in got.get("said") or [] if isinstance(r, str)})
+            at = got.get("read_out_at")
+            state["read_out_at"] = at if isinstance(at, str) else None
+    return state
+
+
+async def _mark_held(row_id: int, state: dict[str, Any]) -> None:
+    async with _db() as s:
+        await s.execute(text(
+            "UPDATE friend_houses_messages SET last_error = :q WHERE id = :i AND direction = 'in'"),
+            {"q": HELD_QUIET + ":" + json.dumps(state, separators=(",", ":")), "i": row_id})
+
+
+def _alert_text(alert: str, name: str, bodies: list[str], phrases: list[str]) -> str:
+    """What the rooms hear: the name (and, for ``read``, the one text)."""
+    from domovoi.speech_sanitize import sanitize_for_speech
+
+    name = safe_name(name, phrases)
+    if alert == "read" and len(bodies) == 1:
+        spoken = f"A message from {name}: {safe_to_say(bodies[0], phrases)}"
+    elif len(bodies) > 1:
+        spoken = f"{len(bodies)} messages from {name}."
+    else:
+        spoken = f"A message from {name}."
+    return speakable(sanitize_for_speech(spoken), phrases)
+
+
+async def _announce(room: str | None, said: str) -> list[str]:
+    try:
+        from domovoi.sdk.speech import SpeechAPI
+
+        return list(await SpeechAPI("core").announce(room, said) or [])
+    except Exception as e:  # noqa: BLE001 — the inbox has it regardless
+        log.info("Friend Houses: announcing a message failed: %s", e)
+        return []
+
+
+async def _alert(house: bytes, name: str, alert: str, body: str, row_id: int | None = None) -> None:
     if alert == "inbox":
         return
     now = time.monotonic()
     if now - _LAST_ANNOUNCED.get(house, 0.0) < ANNOUNCE_GAP_SEC:
         return  # spaced out: the inbox has the rest (finding 30)
     _LAST_ANNOUNCED[house] = now
-    from domovoi.speech_sanitize import sanitize_for_speech
+    from domovoi import quiet_hours
 
+    rooms = _connected_rooms()
+    if rooms:
+        quiet = await quiet_hours.quiet_rooms(rooms)
+    else:  # no room to say it in: the house's hours say whether it waits
+        quiet = ["(house)"] if await quiet_hours.quiet_now([]) else []
+    reached: list[str] = []
+    if len(quiet) < max(len(rooms), 1):
+        # A quiet room refuses it (StreamSession.announce); the others say it.
+        reached = await _announce(None, _alert_text(alert, name, [body], await wake_phrases()))
+    if quiet and row_id is not None:
+        # Kept for the quiet rooms, said when their quiet hours end.
+        await _mark_held(row_id, {"held": not reached, "said": sorted(reached), "read_out_at": None})
+        log.info("Friend Houses: quiet hours; a message waits for %s",
+                 "them to end" if not reached else "the quiet rooms' hours to end")
+
+
+async def say_held() -> int:
+    """Say the messages quiet hours held back, in each connected room that
+    isn't quiet now and hasn't said them: still unread, the friend's alert
+    still on, at most :data:`HELD_SAY_HOURS` old. One friend's messages go
+    together per room ("3 messages from ..." for more than one). Returns
+    how many times a room said something."""
+    from datetime import datetime, timezone
+
+    from domovoi import quiet_hours
+
+    rooms = _connected_rooms()
+    if not rooms:
+        return 0
+    quiet = set(await quiet_hours.quiet_rooms(rooms))
+    awake = [r for r in rooms if r not in quiet]
+    if not awake:
+        return 0
+    async with _db() as s:
+        rows = (await s.execute(text(
+            "SELECT m.id, m.house_key, m.body, m.last_error, f.local_name, f.alert "
+            "FROM friend_houses_messages m JOIN friend_houses_friends f ON f.id = m.friend_id "
+            "WHERE m.direction = 'in' AND m.state = 'unread' AND m.last_error LIKE :q "
+            "AND f.state = 'active' AND f.alert IN ('sender', 'read') "
+            "AND m.created_at > now() - make_interval(hours => :h) ORDER BY m.id"),
+            {"q": HELD_QUIET + "%", "h": HELD_SAY_HOURS})).all()
+    by_friend: dict[bytes, list] = {}
+    for r in rows:
+        st = held_state(r[3])
+        if st is not None:
+            by_friend.setdefault(bytes(r[1]), []).append((r, st))
+    if not by_friend:
+        return 0
     phrases = await wake_phrases()
-    name = safe_name(name, phrases)
-    if alert == "read":
-        spoken = f"A message from {name}: {safe_to_say(body, phrases)}"
-    else:
-        spoken = f"A message from {name}."
-    try:
-        from domovoi.sdk.speech import SpeechAPI
-
-        await SpeechAPI("core").announce(None, sanitize_for_speech(spoken))
-    except Exception as e:  # noqa: BLE001 — the inbox has it regardless
-        log.info("Friend Houses: announcing a message failed: %s", e)
+    spoke = 0
+    for group in by_friend.values():
+        name, alert = group[0][0][4], group[0][0][5]
+        for room in awake:
+            due = [(r, st) for r, st in group if room not in st["said"]]
+            if not due or not await _announce(room, _alert_text(alert, name, [r[2] for r, _ in due], phrases)):
+                continue
+            spoke += 1
+            at = datetime.now(timezone.utc).isoformat()
+            for r, st in due:
+                st["said"] = sorted(set(st["said"]) | {room})
+                if st["held"] and not st["read_out_at"]:
+                    st["read_out_at"] = at
+                await _mark_held(int(r[0]), st)
+    return spoke
 
 
 async def set_alert(friend_id: str, alert: str) -> bool:
@@ -468,9 +762,19 @@ async def set_alert(friend_id: str, alert: str) -> bool:
 
 
 def _view(r: Any) -> dict[str, Any]:
+    incoming = r[1] == "in"
     return {"id": int(r[0]), "direction": r[1], "body": r[2], "state": r[3],
             "sent_at": int(r[4]), "created_at": r[5].isoformat(),
-            "delivered_at": r[6].isoformat() if r[6] else None, "last_error": r[7]}
+            "delivered_at": r[6].isoformat() if r[6] else None,
+            "last_error": None if incoming else r[7],
+            **_held_view(r[7] if incoming else None)}
+
+
+def _held_view(mark: Any) -> dict[str, Any]:
+    st = held_state(mark)
+    if st is None or not st["held"]:
+        return {"held": None, "read_out_at": None}
+    return {"held": HELD_QUIET, "read_out_at": st["read_out_at"]}
 
 
 async def conversation(house_key: bytes, *, before: int | None = None,
@@ -543,6 +847,7 @@ async def export(house_key: bytes) -> dict[str, Any]:
 
 
 __all__ = ["ALERTS", "MessageError", "conversation", "conversations", "delete_conversation",
-           "export", "flush", "flush_all", "mark_read", "on_message", "safe_to_say", "say_im_back",
-           "send", "set_alert", "unread_total", "wake_phrases"]
+           "export", "flush", "flush_all", "held_state", "mark_read", "on_message",
+           "quiet_hours_now", "safe_to_say", "say_held", "say_im_back", "send", "set_alert",
+           "speakable", "unread_total", "wake_phrases"]
 

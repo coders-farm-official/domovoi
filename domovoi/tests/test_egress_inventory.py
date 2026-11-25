@@ -90,8 +90,11 @@ NEVER_CONTACTED = frozenset({
     "www.raspberrypi.com",     # the Raspberry Pi imager (satellite card help)
     "bztsrc.gitlab.io",        # USBImager (satellite card help)
     "aka.ms",                  # the Visual C++ runtime, named in a satellite error message
+    "www.geonames.org",        # the GeoNames credit under Settings → Household → Home location
     # Licence, model-card and attribution links, and comments
     "creativecommons.org",
+    "launchpad.net",        # the offline kit's licences/README.txt: where Ubuntu's sources are
+    "sources.debian.org",   # the same note, for Debian's
     "learn.microsoft.com",
     "docs.docker.com",
     "docs.nvidia.com",

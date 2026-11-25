@@ -9,8 +9,12 @@ does. Each route wears the core's tier here too, so a refused caller is
 refused before anything is forwarded. Most routes wear the security
 tier at both hops, reads included (a friend file is a bearer secret, and
 who this house's friends are is the household's business). What every
-household phone may do with existing friends (owner decision 17: the
-inbox, sending, the friends and shared lists) wears the device tier.
+household member may do with existing friends (owner decision 17: the
+inbox, sending, the friends; and, since 2026-11-23, taking, declining
+and stopping shared lists) wears the device tier. Starting a share, the
+page's "Friends and connections" zone (requests, friend files, this
+house, renaming, alerts, removing, blocking) and saving or deleting a
+conversation stay on the security tier.
 
 A friend file or a message only ever travels in a POST body (preview,
 send a request, send a message) or a response body (a file just made, a
@@ -28,7 +32,11 @@ from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError
 
-from domovoi.admin_auth import require_admin_security, require_admin_security_read, require_device
+from domovoi.admin_auth import (
+    require_admin_security,
+    require_admin_security_read,
+    require_device_after_setup,
+)
 from web.backend.api.csrf_guard import require_requested_with
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -59,11 +67,13 @@ class _NoStoreRoute(APIRoute):
 router = APIRouter(prefix="/api/friend-houses", tags=["friend-houses"], route_class=_NoStoreRoute)
 READ = [Depends(require_admin_security_read)]
 WRITE = [Depends(require_requested_with), Depends(require_admin_security)]
-# What every household phone may do with existing friends (owner decision
-# 17): read the inbox and send, see friends and shared lists. The household
+# What everyone in the household may do with existing friends (owner
+# decision 17, widened 2026-11-23): read the inbox and send, see friends,
+# see, take, decline and stop shared lists (starting one stays admin). The household
 # token or an admin Bearer, header only, as the Lists API takes writes (the
-# cookie never authorises a write, so no CSRF guard is needed here).
-HOUSEHOLD = [Depends(require_device)]
+# cookie never authorises a write, so no CSRF guard is needed here). No
+# pre-setup grace: 501 until an admin exists, as at the core.
+HOUSEHOLD = [Depends(require_device_after_setup)]
 
 CORE = "/v1/admin/friend-houses"
 
@@ -131,6 +141,14 @@ async def friend_houses_status(request: Request):
     """Whether the private connection runs (and why not), this house's
     fingerprint and name, the default friend-file length and the limits."""
     return bridge_response(*await get_admin(CORE, headers=auth_forward_headers(request)))
+
+
+@router.delete("/notice", dependencies=WRITE)
+async def friend_houses_dismiss_notice(request: Request):
+    """Dismiss the page's notice (a friend file closed after failed tries)."""
+    return bridge_response(
+        *await delete_admin(f"{CORE}/notice", headers=auth_forward_headers(request))
+    )
 
 
 @router.put("/settings", dependencies=WRITE)
@@ -264,6 +282,75 @@ async def friend_houses_unfriend(friend_id: str, request: Request):
     )
 
 
+# ─── apps with friends (SDK 1.18): the security tier at both hops ────────
+# "Apps with this friend" (design FRIEND-HOUSES-PLUGINS §6.11): an admin's
+# toggle per friend, each plugin allowed or not, and Resume after a pause.
+# Never on the household tier.
+
+_SLUG = re.compile(r"^[a-z][a-z0-9_]{1,31}\Z")
+
+
+class AppsBody(BaseModel):
+    on: bool
+    apps: list[str] | None = Field(default=None, max_length=32)
+
+
+class AppBody(BaseModel):
+    allowed: bool
+
+
+def _slug(value: str) -> str:
+    if not _SLUG.match(value or ""):
+        raise HTTPException(status_code=404, detail="No such app.")
+    return value
+
+
+@router.get("/apps/notices", dependencies=READ)
+async def friend_houses_app_notices(request: Request):
+    return bridge_response(
+        *await get_admin(f"{CORE}/apps/notices", headers=auth_forward_headers(request))
+    )
+
+
+@router.get("/friends/{friend_id}/apps", dependencies=READ)
+async def friend_houses_apps(friend_id: str, request: Request):
+    fid = _id(friend_id, "friend house")
+    return bridge_response(
+        *await get_admin(f"{CORE}/friends/{fid}/apps", headers=auth_forward_headers(request))
+    )
+
+
+@router.put("/friends/{friend_id}/apps", dependencies=WRITE)
+async def friend_houses_set_apps(friend_id: str, request: Request):
+    fid = _id(friend_id, "friend house")
+    body = await _body(request, AppsBody)
+    if any(not isinstance(s, str) or not _SLUG.match(s) for s in body.get("apps") or []):
+        raise HTTPException(status_code=400, detail="That request wasn't understood.")
+    return bridge_response(
+        *await put_admin(f"{CORE}/friends/{fid}/apps", body, timeout=60.0,
+                         headers=auth_forward_headers(request))
+    )
+
+
+@router.put("/friends/{friend_id}/apps/{slug}", dependencies=WRITE)
+async def friend_houses_set_app(friend_id: str, slug: str, request: Request):
+    fid, app_slug = _id(friend_id, "friend house"), _slug(slug)
+    body = await _body(request, AppBody)
+    return bridge_response(
+        *await put_admin(f"{CORE}/friends/{fid}/apps/{app_slug}", body, timeout=60.0,
+                         headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/friends/{friend_id}/apps/{slug}/resume", dependencies=WRITE)
+async def friend_houses_resume_app(friend_id: str, slug: str, request: Request):
+    fid, app_slug = _id(friend_id, "friend house"), _slug(slug)
+    return bridge_response(
+        *await post_admin(f"{CORE}/friends/{fid}/apps/{app_slug}/resume", {},
+                          headers=auth_forward_headers(request))
+    )
+
+
 # ─── messages (F3) ───────────────────────────────────────────────────────
 # A message body only ever travels in a POST body (send) or a response
 # body (a conversation, an export): never in a URL or a log line. A
@@ -295,6 +382,12 @@ async def friend_houses_conversations(request: Request):
     return bridge_response(
         *await get_admin(f"{CORE}/conversations", headers=auth_forward_headers(request))
     )
+
+
+@router.get("/unread", dependencies=HOUSEHOLD)
+async def friend_houses_unread(request: Request):
+    """The house inbox's unread count only (Home's "needs attention")."""
+    return bridge_response(*await get_admin(f"{CORE}/unread", headers=auth_forward_headers(request)))
 
 
 @router.get("/conversations/{house}", dependencies=HOUSEHOLD)
@@ -406,7 +499,7 @@ async def friend_houses_share_list(request: Request):
     )
 
 
-@router.post("/shared-lists/{space_id}/accept", dependencies=WRITE)
+@router.post("/shared-lists/{space_id}/accept", dependencies=HOUSEHOLD)
 async def friend_houses_accept_list(space_id: str, request: Request):
     """Take a friend's list: it becomes a new list here (``name`` optional)."""
     sid = _space(space_id)
@@ -417,7 +510,7 @@ async def friend_houses_accept_list(space_id: str, request: Request):
     )
 
 
-@router.post("/shared-lists/{space_id}/decline", dependencies=WRITE)
+@router.post("/shared-lists/{space_id}/decline", dependencies=HOUSEHOLD)
 async def friend_houses_decline_list(space_id: str, request: Request):
     """Forget a friend's offer (they aren't told)."""
     sid = _space(space_id)
@@ -426,7 +519,7 @@ async def friend_houses_decline_list(space_id: str, request: Request):
     )
 
 
-@router.delete("/shared-lists/{space_id}", dependencies=WRITE)
+@router.delete("/shared-lists/{space_id}", dependencies=HOUSEHOLD)
 async def friend_houses_leave_list(space_id: str, request: Request):
     """Stop sharing. Both houses keep their own copy as an ordinary list."""
     sid = _space(space_id)

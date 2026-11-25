@@ -160,6 +160,11 @@ def refusal(pin: dict[str, Any]) -> dict[str, str] | None:
             "you set up yourself: sudo apt install xorriso.")}
     cached = iso_present(pin)
     if not cached and egress.internet_turned_off():
+        from domovoi import kit_rooms
+
+        kit = kit_rooms.note(f"Debian {pin['version']}'s installer for the room stick", ready=False)
+        if kit:
+            return {"reason": "internet_off", "message": kit}
         return {"reason": "internet_off", "message": (
             f"Internet access is off for this server (Settings → Privacy → Internet), so it can't download "
             f"Debian {pin['version']} ({_gb(pin['size'])}), which every stick starts from. "

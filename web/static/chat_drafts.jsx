@@ -33,7 +33,7 @@ const ChatDrafts = (() => {
   const WIDE_MIN = 1100;
 
   const api = {
-    get: (id) => apiGet(`/api/chat/drafts/${id}`),
+    get: (id) => apiGet(`/api/chat/drafts/${id}`, { headers: callerDeviceHeaders() }),
     thread: (tid) => apiGet(`/api/chat/threads/${tid}/drafts`, { quiet: true }),
     all: () => apiGet('/api/chat/drafts'),
     edit: (id, text, base) => apiPost(`/api/chat/drafts/${id}/versions`, {
@@ -84,8 +84,8 @@ const ChatDrafts = (() => {
   const sourceLabel = (v) => {
     if (!v) return '';
     if (v.source === 'edited') {
-      const mine = typeof DeviceIdentity !== 'undefined' && v.device_id && v.device_id === DeviceIdentity.id();
-      return mine ? 'edited by you' : `edited on ${v.device_name || v.device_id || 'another device'}`;
+      // `mine`: the server compared the version with this browser's X-Device-Id.
+      return v.mine ? 'edited by you' : `edited on ${v.device_name || 'another device'}`;
     }
     if (v.source === 'first') return 'first draft';
     const based = v.based_on && v.based_on !== v.version - 1 ? ` · based on v${v.based_on}` : '';
@@ -98,22 +98,56 @@ const ChatDrafts = (() => {
     return (typeof apiErrorText === 'function' ? apiErrorText(e, 0) : null) || 'save failed';
   };
 
-  /* The added and removed words, as elements (never HTML). */
-  const Changes = ({ ops }) => (
-    <div className="chat-draft-changes">
-      {(ops || []).map(([op, text], i) => (
-        op === '+' ? <span key={i} className="chat-draft-add">{text}</span>
-          : op === '-' ? <del key={i} className="chat-draft-del">{text}</del>
-            : <span key={i}>{text}</span>
-      ))}
-    </div>
-  );
+  /* A removed run long enough to stand as its own block: a line break in
+   * it, or GAP_WORDS words or more. */
+  const GAP_WORDS = 8;
+  const longRun = (t) => t.includes('\n') || t.trim().split(/\s+/).length >= GAP_WORDS;
+  /* The added and removed words, as elements (never HTML). A long removed
+   * run with an added run straight after it (the server's over-budget
+   * diff: everything between the shared start and end, old then new) gets
+   * a display-only paragraph gap between them, unless the line already
+   * breaks there; inline, the old last word ran into the new first one. */
+  const Changes = ({ ops }) => {
+    const list = ops || [];
+    const out = [];
+    list.forEach(([op, text], i) => {
+      out.push(op === '+' ? <span key={i} className="chat-draft-add">{text}</span>
+        : op === '-' ? <del key={i} className="chat-draft-del">{text}</del>
+          : <span key={i}>{text}</span>);
+      const next = list[i + 1];
+      if (op === '-' && next && next[0] === '+' && longRun(text)
+          && !text.endsWith('\n') && !next[1].startsWith('\n')) {
+        out.push(<span key={`gap${i}`} className="chat-draft-gap" aria-hidden="true"/>);
+      }
+    });
+    return <div className="chat-draft-changes">{out}</div>;
+  };
 
   /* Saves a version's file on this device (the server names it). */
   const download = (id, version, format) => {
     const url = api.exportUrl(id, version, format);
     if (typeof deviceDownload === 'function') deviceDownload(url);
     else window.open(url, '_blank', 'noopener');
+  };
+
+  /* The card for "print this" on a picture or document of the chat. */
+  const AttachmentCard = ({ m, onPrint, canPrint }) => {
+    const a = m.print_attachment || {};
+    return (
+      <div className="chat-draft-card" role="group" aria-label={`print: ${a.name}`}>
+        <div className="chat-draft-card-head">
+          <Icon name="printer" size={14}/>
+          <span className="chat-draft-kind">{a.kind}</span>
+          <span className="chat-draft-title" title={a.name}>{a.name}</span>
+        </div>
+        {m.content && <div className="chat-draft-line">{m.content}</div>}
+        <div className="chat-draft-actions">
+          {canPrint
+            ? <Button variant="primary" icon="printer" onClick={() => onPrint(a)}>Print</Button>
+            : <span className="chat-draft-note">no printer is set up on this home</span>}
+        </div>
+      </div>
+    );
   };
 
   /* The draft card on the reply that made a version, or asked to print. */
@@ -357,7 +391,7 @@ const ChatDrafts = (() => {
     );
   };
 
-  return { api, KIND, WIDE_MIN, DraftCard, Canvas, Changes, List, useWidthAtLeast, seen, markSeen, sourceLabel };
+  return { api, KIND, WIDE_MIN, DraftCard, AttachmentCard, Canvas, Changes, List, useWidthAtLeast, seen, markSeen, sourceLabel };
 })();
 
 window.ChatDrafts = ChatDrafts;

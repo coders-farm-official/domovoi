@@ -22,6 +22,7 @@ newest episodes; the caller checks the order it actually got (see
 
 from __future__ import annotations
 
+import bisect
 import re
 
 __all__ = ["NoCompleteItem", "cut_to_last_item"]
@@ -40,13 +41,16 @@ _ITEM_OPEN = re.compile(rb"<" + _NAME + rb"(?:item|entry)(?=[\s/>])")
 # Sections whose text is not markup.
 _OPAQUE_START = re.compile(rb"<!\[CDATA\[|<!--")
 _OPAQUE_END = {b"<![CDATA[": b"]]>", b"<!--": b"-->"}
-# Element tags in the (small) head of the document. Attribute values are
-# quoted, so a ">" inside one does not end the tag.
-_TAG = re.compile(
-    rb"<(/?)([A-Za-z_][\w.:-]*)"
-    rb"(?:\s+[^\s=/>]+(?:\s*=\s*(?:\"[^\"]*\"|'[^']*'))?)*"
-    rb"\s*(/?)>"
-)
+# The longest head (everything before the first item) that is read for
+# its open containers. Real heads are a few KB.
+MAX_HEAD_BYTES = 256 * 1024
+# Pieces of an element tag in the head, each matched anchored at one
+# position and never re-read: the head is scanned once, left to right.
+# Attribute values are quoted, so a ">" inside one does not end the tag.
+_TAG_NAME = re.compile(rb"(/?)([A-Za-z_][\w.:-]*)")
+_ATTR_NAME = re.compile(rb"\s+[^\s=/<>]+")
+_ATTR_EQ = re.compile(rb"\s*=\s*")
+_TAG_END = re.compile(rb"\s*(/?)>")
 
 
 def _opaque_spans(data: bytes) -> list[tuple[int, int]]:
@@ -87,14 +91,58 @@ def _first_real(pattern: re.Pattern[bytes], data: bytes, spans) -> re.Match[byte
     return None
 
 
+def _span_end(spans: list[tuple[int, int]], pos: int) -> int | None:
+    """The end of the span ``pos`` is inside, or None."""
+    i = bisect.bisect_right(spans, pos, key=lambda span: span[0]) - 1
+    if i >= 0 and spans[i][0] <= pos < spans[i][1]:
+        return spans[i][1]
+    return None
+
+
+def _tags(head: bytes, spans: list[tuple[int, int]]):
+    """``(closing, name, selfclosing)`` of each element tag in ``head``
+    outside CDATA and comments, in order. One pass: a position is never
+    read twice, and a malformed tag is skipped from where it stopped."""
+    pos = 0
+    n = len(head)
+    while True:
+        lt = head.find(b"<", pos)
+        if lt < 0:
+            return
+        end = _span_end(spans, lt)
+        if end is not None:
+            pos = end
+            continue
+        m = _TAG_NAME.match(head, lt + 1)
+        if m is None:
+            pos = lt + 1
+            continue
+        closing, name = m.group(1), m.group(2)
+        pos = m.end()
+        while True:
+            a = _ATTR_NAME.match(head, pos)
+            if a is None:
+                break
+            pos = a.end()
+            eq = _ATTR_EQ.match(head, pos)
+            if eq is None or eq.end() >= n or head[eq.end()] not in b"\"'":
+                continue
+            close = head.find(head[eq.end():eq.end() + 1], eq.end() + 1)
+            if close < 0:
+                return  # an unclosed quote: no tag ends after it
+            pos = close + 1
+        e = _TAG_END.match(head, pos)
+        if e is None:
+            continue  # not a tag; go on from where it stopped
+        pos = e.end()
+        yield closing, name, e.group(1)
+
+
 def _open_containers(head: bytes, spans: list[tuple[int, int]]) -> list[bytes]:
     """Names of the elements still open at the end of ``head``, outermost
     first (``[b"rss", b"channel"]``)."""
     stack: list[bytes] = []
-    for m in _TAG.finditer(head):
-        if _inside(spans, m.start()):
-            continue
-        closing, name, selfclosing = m.group(1), m.group(2), m.group(3)
+    for closing, name, selfclosing in _tags(head, spans):
         if selfclosing:
             continue
         if not closing:
@@ -125,6 +173,8 @@ def cut_to_last_item(data: bytes, *, max_items: int | None = None) -> bytes:
                 break
     if last_close is None:
         raise NoCompleteItem("no item ends in the part that was read")
+    if first.start() > MAX_HEAD_BYTES:
+        raise NoCompleteItem("the part before the first item is too long")
     containers = _open_containers(data[: first.start()], spans)
     tail = b"".join(b"</" + name + b">" for name in reversed(containers))
     return data[: last_close.end()] + b"\n" + tail + b"\n"

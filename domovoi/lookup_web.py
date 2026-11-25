@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
-from domovoi import egress, home_address, lookup, net_safety
+from domovoi import egress, home_address, lookup, net_safety, uncertainty
 from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
@@ -519,13 +519,23 @@ async def run_lookup(
     limit: int = MAX_RESULTS,
     registry: Any | None = None,
     with_extracts: bool = True,
+    web_only: bool = False,
 ) -> LookupOutcome:
     """Search the sources for ``query``: local ones only unless ``internet``
     (the caller has the person's allow). At most ``limit`` (≤ 3) results,
     the sources asked in order and no further once there are enough: a
     question the offline library answers never reaches the internet. Raises
     :class:`egress.InternetTurnedOff` when ``internet`` is asked for while
-    the household's answer is "never"."""
+    the household's answer is "never".
+
+    Only hits :func:`lookup.relevant` to the query fill the slots, so an
+    offline library that returns something for any words never keeps the
+    web from being asked. With ``internet``, a question only the live web
+    can answer (:func:`uncertainty.needs_internet`: a business, "near me",
+    news, weather, prices) asks the web sources first and skips the local
+    ones, and "near me" / "local" names the Home location
+    (:func:`with_home_place`). ``web_only`` asks the web sources alone (the
+    chat's second round when the first found nothing that answers)."""
 
     query = " ".join(str(query or "").split())[:300]
     limit = max(1, min(int(limit), MAX_RESULTS))
@@ -535,7 +545,13 @@ async def run_lookup(
     if not query:
         return outcome
     classes = lookup.CLASS_ORDER if internet else (lookup.LOCAL,)
+    if internet and (web_only or uncertainty.needs_internet(query)):
+        classes = (lookup.WEB,) if web_only else (lookup.WEB, lookup.API)
+        query = await with_home_place(query)
+        outcome.query = query
     sources = lookup.ordered_sources(registry, classes=classes, household_order=household_order())
+    if internet and lookup.WEB in classes and lookup.LOCAL not in classes:
+        sources.sort(key=lambda src: src.lookup_class != lookup.WEB)   # stable: web first
     found: list[tuple[Any, lookup.LookupHit]] = []
     seen_urls: set[str] = set()
     for source in sources:
@@ -557,7 +573,7 @@ async def run_lookup(
             log.warning("lookup source %s failed: %s", getattr(source, "slug", "?"), type(e).__name__)
             continue
         for h in (lookup._clean_hit(x) for x in (raw or [])[:lookup.MAX_HITS_PER_SOURCE]):
-            if h is None or len(found) >= limit:
+            if h is None or len(found) >= limit or not lookup.relevant(query, h, scored=not source.core):
                 continue
             key = (h.url or "").split("#")[0].rstrip("/")
             if key and key in seen_urls:
@@ -594,6 +610,25 @@ async def run_lookup(
              ",".join(sorted({r.source for r in outcome.results})) or "nothing",
              "used" if outcome.internet_used else "not used")
     return outcome
+
+
+async def with_home_place(query: str) -> str:
+    """``query`` with the household's Home location in place of "near me"
+    / "local" ("local restaurants" -> "restaurants in Springfield, Illinois").
+    Unchanged with no such words or no Home location set."""
+    if not uncertainty.is_near_here(query):
+        return query
+    try:
+        from domovoi import weather
+
+        place = await weather.household_place()
+    except Exception as e:  # noqa: BLE001 — the search still runs, placeless
+        log.info("lookup: the Home location is unreadable: %s", type(e).__name__)
+        place = None
+    if not place or not place.get("name"):
+        return query
+    rest = uncertainty.strip_near_here(query)
+    return f"{rest} in {place['name']}".strip()[:300]
 
 
 def _sentence(text: str) -> str:

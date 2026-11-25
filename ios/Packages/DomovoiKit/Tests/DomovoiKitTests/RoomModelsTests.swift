@@ -187,6 +187,15 @@ final class RoomModelsTests: XCTestCase {
         XCTAssertFalse(RoomSounds.safeRel("/a"))
         XCTAssertFalse(RoomSounds.safeRel("a\\b"))
         XCTAssertTrue(RoomSounds.safeRel("greetings/x.mp3"))
+        // Bytes, not characters (security review 2026-11-22, L55): a "/"
+        // with a combining mark after it is one Character, but the file
+        // system still splits there.
+        XCTAssertFalse(RoomSounds.safeRel("../\u{0301}x.mp3"))
+        XCTAssertFalse(RoomSounds.safeRel("a/..\u{0301}/../x.mp3"))
+        XCTAssertFalse(RoomSounds.safeRel("a/\u{0000}x.mp3"))
+        let jail = URL(fileURLWithPath: "/tmp/room-sounds", isDirectory: true)
+        XCTAssertNil(RoomSounds.inside(jail, "../\u{0301}x.mp3"))
+        XCTAssertEqual(RoomSounds.inside(jail, "greetings/x.mp3")?.path, "/tmp/room-sounds/greetings/x.mp3")
         // An older list for the same voice is refused, and the clip stays.
         let older = FakeRoomHTTP { url in
             url.contains("manifest.sig") ? Data(core.envelope(channel: RoomIdentity.soundsChannel, manifest: [:], serial: 2).utf8) : nil

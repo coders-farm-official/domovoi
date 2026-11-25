@@ -807,7 +807,10 @@ def test_uninstall_shows_its_steps_and_no_dead_advice():
     uninstaller that has already removed itself."""
     s = SCRIPT.read_text(encoding="ascii")
     body = s[s.index("procedure CurUninstallStepChanged"):]
-    assert "ExecAndLogOutput(HelperExe, 'uninstall'" in body and "@UninstallOutput" in body
+    # S3-4: the verb is 'uninstall', with --keep-data unless the owner chose
+    # to remove everything; it still runs through ExecAndLogOutput.
+    assert "Params := 'uninstall --keep-data'" in body and "Params := 'uninstall';" in body
+    assert "ExecAndLogOutput(HelperExe, Params," in body and "@UninstallOutput" in body
     assert "ExecAndCaptureOutput(HelperExe, 'uninstall'" not in s
     assert "'progress='" in s and "ProgressBar.Position" in s
     four = body[body.index("if Code = 4 then"):body.index("if Code = 3 then")]
@@ -864,7 +867,7 @@ def test_setup_installs_starts_and_removes_the_tray():
     prep = prep[: prep.index("\nend;")]
     assert prep.index("'host-stop'") < prep.index("StopTrays;")
     un = s[s.index("procedure CurUninstallStepChanged"):]
-    assert un.index("StopTrays;") < un.index("ExecAndLogOutput(HelperExe, 'uninstall'")
+    assert un.index("StopTrays;") < un.index("ExecAndLogOutput(HelperExe, Params,")
     assert r"RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Domovoi\Tray')" in un
     assert r'Name: "{autoprograms}\Domovoi"; Filename: "{app}\DomovoiTray.exe"; Parameters: "--open"' in s
     assert "DomovoiTray.exe" in BUILD.read_text(encoding="ascii")
@@ -970,10 +973,11 @@ def test_the_update_mode_after_review_round_1():
     deinit = _pascal_block(s, "procedure DeinitializeSetup")
     assert "if HostStopped and not InstallOk and FileExists(AppHelper) then" in deinit
     assert deinit.index("RunHelper(AppHelper, 'host-start'") < deinit.index("WriteUpdateResult;")
-    nxt = _pascal_block(s, "function NextButtonClick")
+    # The downloads (RunDownloads, online only since the offline kit).
+    nxt = _pascal_block(s, "function RunDownloads")
     assert r"if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then" in nxt
-    assert nxt.index("ImagePath := ExpandConstant('{commonappdata}") < nxt.index("DownloadPage.Add('{#UbuntuUrl}'")
-    assert "'job --image ' + AddQuotes(ImagePath)" in s
+    assert nxt.index("ImagePath := ExpandConstant('{commonappdata}") < nxt.index("AddDownload('{#UbuntuUrl}'")
+    assert "'job' + OfflineArg + KitArg + IdentityJobArgs + ' --image ' + AddQuotes(ImagePath)" in s
     result = _pascal_block(s, "procedure WriteUpdateResult")
     assert r"ExpandConstant('{commonappdata}\Domovoi\updates')" in result and "Pos('..', Path) > 0" in result
 

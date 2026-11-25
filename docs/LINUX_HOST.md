@@ -341,7 +341,9 @@ which asks one more question: whether to include AI chat. Expect half an
 hour or more, most of it downloads. At the end it prints the address to
 open from a phone or computer on your network, `http://<server>:6369`,
 and how to read the setup code to claim it with
-([SETUP_RUNBOOK.md, Step 3](SETUP_RUNBOOK.md#step-3--claim-admin-and-configure-for-your-hardware)).
+([SETUP_RUNBOOK.md, Step 3](SETUP_RUNBOOK.md#step-3--claim-admin-and-configure-for-your-hardware)),
+including the command that shows it as a QR code a phone can scan
+(`python -m domovoi.setup_qr`, as the service user, in a terminal).
 If it stops, run the same command again: finished steps are skipped.
 
 **How it checks the download, before running any of it.** The commit it
@@ -380,6 +382,77 @@ Every `provision.sh` option below passes through (`--no-ai-models`,
 command installs only what it has checked, so for anything else run the
 script yourself, next. With no terminal to ask at and no `--internet`, it
 stops and says what to add.
+
+### Installing without internet
+
+A house with no internet installs from an **offline kit**: a USB stick an
+online Domovoi server made ([OFFLINE_KIT.md](OFFLINE_KIT.md)). It holds
+everything the install would otherwise download, and nothing is
+downloaded. **Ubuntu 26.04 only** (the kit carries Ubuntu 26.04's
+packages); Debian 13, Linux Mint and Pop!_OS install with internet.
+
+1. Install Ubuntu 26.04 on the computer, from Ubuntu's own installer
+   stick.
+2. Plug in the kit. Ubuntu Desktop opens it by itself (it shows up as
+   `DOMOVOIKIT`); on Ubuntu Server, mount it:
+   `sudo mkdir -p /mnt/kit && sudo mount /dev/sdX1 /mnt/kit` (`lsblk`
+   shows which `sdX` it is).
+3. Run the installer on the stick:
+
+   ```bash
+   sudo bash /media/alex/DOMOVOIKIT/linux/install.sh --kit
+   ```
+
+   (`/mnt/kit/linux/install.sh --kit` on a server.) It asks the same two
+   questions; the internet one defaults to **No, keep everything in the
+   house**. Leave the stick in until it is done. Without questions:
+   `sudo bash .../linux/install.sh --kit --timezone Europe/Berlin --yes`
+   (and any `provision.sh` option, as above).
+
+**What it checks before it runs anything from the stick**, each step
+before the next:
+
+1. **Checksums.** `kit.json`, the release's signed manifest and Domovoi's
+   source (`source/domovoi.bundle`) against the stick's `SHA256SUMS`, so a
+   bad copy is caught at once ("This stick has a damaged file: ... Make
+   the stick again."). Checksums only catch damage; they are not trust.
+2. **The release signature.** `release/DomovoiSetup.manifest.json` must be
+   signed with Domovoi's release key (the one the script carries, as for
+   the online install) and name the release and commit `kit.json` names.
+3. **That commit.** The source is cloned from the bundle (git checks
+   every object) and checked out at exactly that commit. The `install.sh`
+   you ran must be that release's own.
+4. **The whole stick,** with the checker from that commit
+   (`domovoi/offline_kit`), never with code that is loose on the stick:
+   every file and every part of a split file, and nothing extra.
+5. **Every pin.** `provision.sh` from that commit runs with
+   `--offline-kit`, and each step checks the file it installs against the
+   same pin as online: apt against Ubuntu's and Docker's signed indexes,
+   the Python packages against the lock's hashes, Ollama and each AI
+   model, Whisper, the voices, the wake word, the phone app (with the
+   release key) and the database images (by digest).
+
+A kit that doesn't fit is refused in plain words, before anything is
+changed: one made by a newer Domovoi, one for a Mac only, one missing a
+part the install needs ("The kit has no AI models. Install with
+--no-ai-models, or make a kit with AI chat ticked."), an `install.sh` from
+another release, or a system other than Ubuntu 26.04. A computer that
+already runs Domovoi updates from a newer kit on the dashboard, not here.
+
+**What is different afterwards.** The search helper is not on a kit (it
+needs internet anyway), and neither is Docker's GPU runtime for the
+wake-word trainer: training uses the CPU until an update with internet
+adds it. The checkout's `origin` is still GitHub, so a house that later
+gets internet updates as usual.
+
+**The first hop is trust in the stick.** A changed stick could carry a
+changed `install.sh`, and nothing on the stick can prove otherwise: use a
+kit from a house you trust, and compare `install.sh`'s SHA-256 with the
+release page if you can.
+
+By hand, `provision.sh --offline-kit DIR` does the install from a kit at
+`DIR` (below); it checks every file against the pins but not the release
+signature, which is `install.sh --kit`'s job.
 
 ### Or run the install script yourself
 
@@ -715,6 +788,14 @@ RestartSec=3
 [Install]
 WantedBy=default.target
 ```
+
+On a box with 24 GB of memory or more, or NVIDIA GPUs with room to
+spare, the installer adds one line under `ExecStart=` so Ollama answers
+more than one request at once (a voice turn needn't wait behind a chat
+reply): `Environment=OLLAMA_NUM_PARALLEL=2` (3 from 48 GB, 4 with room
+on the GPUs). Each extra request costs about 1.2 GB of memory; see
+[CPU_HOST.md, "Answers at once"](CPU_HOST.md#answers-at-once) for the
+tiers and their cost.
 
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now ollama
@@ -1409,8 +1490,8 @@ Linux server has no such ceiling in Domovoi.
 
 ### Friend Houses' firewall
 
-Friend Houses ("serverless messaging and friend system between
-households") is off until an admin turns it on. When it runs, the core
+Friend Houses (messages and shared lists with friends’ houses, house
+to house, with no company server in between) is off until an admin turns it on. When it runs, the core
 starts C tor in a container of its own, `domovoi-tor`, on a Docker network
 of its own: `domovoi-fh`, subnet `172.31.254.0/24`, bridge interface
 `domovoi-fh0`. Tor needs the internet, so that container can't go without
@@ -1436,7 +1517,9 @@ else:
    the home network, other containers, and the Windows or Mac host behind
    a WSL or VM gateway. The jump is in `FORWARD` as well as `DOCKER-USER`,
    so it holds where Docker hooks no `DOCKER-USER` (its nftables backend).
-3. **IPv6:** the same rules, should the network ever get IPv6.
+3. **IPv6:** the network has no IPv6, so everything it sends over IPv6
+   is dropped, global addresses included. Without `ip6tables` there are
+   no IPv6 rules, and the state file says `ipv6=absent`.
 
 Tor relays have public addresses, so the internet still works. `apply`
 refills `DOMOVOI-FH` from scratch and inserts each jump only once, so
@@ -2788,6 +2871,62 @@ in this order.
 ---
 
 <a id="two-more-linux-notes"></a>
+
+## Uninstalling, and reinstalling without losing your rooms
+
+Every room is set up to trust this server's **identity**, a key in the
+service user's `~/.domovoi/server-identity.json` (mode 0600), made on the
+first start. A fresh install makes a new one, and the rooms then refuse
+it: they show a teal light and say "my server has changed" instead of
+connecting ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#keeping-the-house-identity-across-a-reinstall)).
+Keep the identity and they reconnect by themselves.
+
+**Uninstall** (1.5.0):
+
+```bash
+sudo bash /opt/domovoi/scripts/linux/uninstall.sh                     # asks; keep data is the default
+sudo bash /opt/domovoi/scripts/linux/uninstall.sh --keep-data --yes   # unattended
+sudo bash /opt/domovoi/scripts/linux/uninstall.sh --remove-everything # asks you to type "remove everything"
+sudo bash /opt/domovoi/scripts/linux/uninstall.sh --dry-run           # says what it would do
+```
+
+- **Keep my data** (the default): Domovoi's services and timers are stopped
+  and disabled, their unit files, sudo grants (`domovoi-restart`,
+  `domovoi-update`) and helpers under `/usr/local/lib/domovoi-*` removed, and
+  its containers stopped. Kept where they are, and listed by the script with
+  their paths: the identity (its fingerprint is printed), the database (the
+  `domovoi_*` Docker volumes), the settings and secrets (`/opt/domovoi/domovoi/.env`,
+  `~/.domovoi`), the program folder, Domovoi's records in `/var/lib` and `/etc`,
+  and the service user. Running the install command again picks all of it
+  up: the database, the settings and the identity, so every room reconnects.
+- **Remove everything** also deletes the database volumes and containers,
+  `~/.domovoi` with the identity, the program folder and the records. Every
+  room must then be set up again after a new install. It asks you to type
+  `remove everything` (or `--yes`); with no terminal and no `--yes` it
+  changes nothing.
+
+Either way your media folders, Docker, Ollama and its models, other
+packages and the service account itself stay; the script's last lines say
+how to remove those by hand.
+
+**A new machine, or a fresh install: restore the identity from a backup.**
+Download it first, from the old install: Settings → System → About &
+updates → **Download house identity backup** (an admin, with the password
+again). The file is the server's private key: keep it like one. Then:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh \
+  | sudo bash -s -- --restore-identity /home/alex/domovoi-house-identity.json
+```
+
+The backup is checked (its format, and that its keys belong together)
+before Domovoi first starts, and the install stops, changing nothing of
+the identity, if it isn't a usable one or if this computer already has a
+different identity (by hand: `cd /opt/domovoi && sudo -u domovoi .venv/bin/python
+-m domovoi.server_identity --restore-identity FILE --replace-existing`,
+which keeps the old key beside the new one). The rooms reconnect; the
+database starts fresh. Delete the backup from wherever you copied it once
+the install is done, or keep it somewhere only you can open.
 
 ## More Linux notes
 

@@ -88,6 +88,7 @@ import asyncio
 import ipaddress
 import logging
 import socket
+import time
 from dataclasses import dataclass
 from typing import Any, Iterable
 from urllib.parse import urljoin, urlsplit
@@ -98,6 +99,11 @@ IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 ALLOWED_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 MAX_REDIRECTS = 5
+
+#: A whole fetch's budget in :func:`fetch_bytes`, in multiples of its
+#: ``timeout`` (which httpx applies per read): a body that arrives a byte
+#: at a time never trips the per-read timeout.
+FETCH_DEADLINE_TIMEOUTS = 4
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
@@ -134,6 +140,9 @@ _BLOCKED_V6: tuple[ipaddress.IPv6Network, ...] = tuple(
     )
 )
 _NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
+# A known limit (docs/SECURITY_PRIVACY.md): a GLOBAL IPv6 address counts as
+# public, the server's own and its LAN neighbours' included. Nothing here
+# reads the prefixes on the server's interfaces.
 
 
 # ─── Errors ───────────────────────────────────────────────────────────────
@@ -165,6 +174,24 @@ class ResponseTooLarge(OutboundFetchError):
         self.max_bytes = max_bytes
 
 
+class UnsupportedContentEncoding(OutboundFetchError):
+    """The body came in a Content-Encoding the fetcher does not read:
+    anything but none or exactly one of gzip / x-gzip / deflate (and, for
+    :func:`iter_capped`, anything but none)."""
+
+    def __init__(self, url: str, encoding: str) -> None:
+        super().__init__(f"unsupported content encoding {encoding!r}: {url}")
+        self.url = url
+        self.encoding = encoding
+
+
+def _content_codings(response: Any) -> list[str]:
+    """The response's Content-Encoding as a list of codings, lower case,
+    ``identity`` left out (it is no coding)."""
+    header = response.headers.get("content-encoding") or ""
+    return [c for c in (p.strip().lower() for p in header.split(",")) if c and c != "identity"]
+
+
 # ─── Address classification ───────────────────────────────────────────────
 
 
@@ -183,6 +210,26 @@ def is_public_address(address: IPAddress | str) -> bool:
             return is_public_address(embedded)
         return not any(ip in net for net in _BLOCKED_V6)
     return not any(ip in net for net in _BLOCKED_V4)
+
+
+def url_without_secrets(url: str | None) -> str:
+    """``url`` as ``scheme://host[:port]/path``: no user info, query or
+    fragment, which is where a private feed carries its per-subscriber
+    token. For log lines and open reads."""
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(str(url))
+        host = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return "<unreadable url>"
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = f"{host}:{port}" if port else host
+    if not parts.scheme:
+        return netloc + parts.path
+    return f"{parts.scheme}://{netloc}{parts.path}"
 
 
 def parse_ip_literal(host: str) -> IPAddress | None:
@@ -775,6 +822,91 @@ def open_stream_sync(
     raise TooManyRedirects(f"more than {max_redirects} redirects: {url}")
 
 
+def _identity_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    """The caller's headers with ``Accept-Encoding: identity`` in place of
+    whatever they asked for."""
+    out = {k: v for k, v in (headers or {}).items() if k.lower() != "accept-encoding"}
+    out.update(IDENTITY_ENCODING)
+    return out
+
+
+async def open_raw_stream(
+    client: Any,
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    max_redirects: int = MAX_REDIRECTS,
+) -> Any:
+    """:func:`open_stream` for a body read as it comes, with no total cap
+    (a radio station never ends): asks for ``identity`` and refuses an
+    answer in any Content-Encoding (closed, then
+    :class:`UnsupportedContentEncoding`), so nothing ever inflates it.
+    Read it with :func:`iter_raw`; the caller owns the response."""
+    response = await open_stream(
+        client, url, method=method, headers=_identity_headers(headers),
+        max_redirects=max_redirects,
+    )
+    codings = _content_codings(response)
+    if codings:
+        await response.aclose()
+        raise UnsupportedContentEncoding(str(response.url), ", ".join(codings))
+    return response
+
+
+def open_raw_stream_sync(
+    client: Any,
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    max_redirects: int = MAX_REDIRECTS,
+) -> Any:
+    """Blocking twin of :func:`open_raw_stream` for an ``httpx.Client``;
+    read with :func:`iter_raw_sync`."""
+    response = open_stream_sync(
+        client, url, method=method, headers=_identity_headers(headers),
+        max_redirects=max_redirects,
+    )
+    codings = _content_codings(response)
+    if codings:
+        response.close()
+        raise UnsupportedContentEncoding(str(response.url), ", ".join(codings))
+    return response
+
+
+def _raw_check(response: Any) -> None:
+    codings = _content_codings(response)
+    if codings:
+        raise UnsupportedContentEncoding(str(response.url), ", ".join(codings))
+
+
+async def iter_raw(response: Any, chunk_size: int = 65536):
+    """A response's body as it came over the wire, never decoded (an
+    encoded answer is :class:`UnsupportedContentEncoding`). A response
+    already read whole (as a mock transport answers; no network does) is
+    handed out from its content."""
+    _raw_check(response)
+    if getattr(response, "is_stream_consumed", False):
+        body = response.content
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+        return
+    async for chunk in response.aiter_raw(chunk_size):
+        yield chunk
+
+
+def iter_raw_sync(response: Any, chunk_size: int = 65536):
+    """Blocking twin of :func:`iter_raw`."""
+    _raw_check(response)
+    if getattr(response, "is_stream_consumed", False):
+        body = response.content
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+        return
+    yield from response.iter_raw(chunk_size)
+
+
 @dataclass(frozen=True)
 class FetchResult:
     url: str            # the URL that answered (after any redirects)
@@ -822,9 +954,14 @@ async def fetch_bytes(
     The request asks for gzip; ``max_bytes`` counts DECODED bytes, and a
     gzip or deflate body is inflated here a bounded step at a time
     (:class:`_CappedBody`), so a small compressed body that inflates to
-    gigabytes stops at the cap without ever being held whole."""
+    gigabytes stops at the cap without ever being held whole.
+
+    The whole fetch has a deadline, :data:`FETCH_DEADLINE_TIMEOUTS` times
+    ``timeout``: past it, ``httpx.ReadTimeout``, as a stalled read gets, or
+    with ``truncate=True`` the bytes that have arrived, marked truncated."""
     import httpx
 
+    deadline = time.monotonic() + timeout * FETCH_DEADLINE_TIMEOUTS
     own = client is None
     if own:
         client = httpx.AsyncClient(timeout=timeout)
@@ -834,9 +971,11 @@ async def fetch_bytes(
             if not truncate and _declared_too_large(response, max_bytes):
                 raise ResponseTooLarge(str(response.url), max_bytes)
             body = _CappedBody(response, max_bytes, truncate)
-            chunks = response.aiter_raw(chunk_size) if body.raw else response.aiter_bytes(chunk_size)
+            chunks = response.aiter_raw(chunk_size) if body.raw else _consumed(response)
             async for chunk in chunks:
                 if body.add(chunk):
+                    break
+                if _past_deadline(deadline, timeout, body):
                     break
             content, truncated = body.finish()
         finally:
@@ -858,9 +997,11 @@ def fetch_bytes_sync(
     truncate: bool = False,
 ) -> FetchResult:
     """Blocking twin of :func:`fetch_bytes` (for code already running in a
-    worker thread, such as the feedparser callers), ``truncate`` included."""
+    worker thread, such as the feedparser callers), ``truncate`` and the
+    deadline included."""
     import httpx
 
+    deadline = time.monotonic() + timeout * FETCH_DEADLINE_TIMEOUTS
     own = client is None
     if own:
         client = httpx.Client(timeout=timeout)
@@ -870,10 +1011,12 @@ def fetch_bytes_sync(
             if not truncate and _declared_too_large(response, max_bytes):
                 raise ResponseTooLarge(str(response.url), max_bytes)
             body = _CappedBody(response, max_bytes, truncate)
-            chunks = response.iter_raw(chunk_size) if body.raw else response.iter_bytes(chunk_size)
+            chunks = response.iter_raw(chunk_size) if body.raw else [response.content]
             for chunk in chunks:
                 if body.add(chunk):
                     # Stop reading: closing the response drops the rest.
+                    break
+                if _past_deadline(deadline, timeout, body):
                     break
             content, truncated = body.finish()
         finally:
@@ -882,6 +1025,25 @@ def fetch_bytes_sync(
     finally:
         if own:
             client.close()
+
+
+def _past_deadline(deadline: float, timeout: float, body: "_CappedBody") -> bool:
+    """True when the whole-fetch deadline has passed and the caller asked for
+    ``truncate``: what arrived so far is kept, marked truncated. Without
+    ``truncate``, ``httpx.ReadTimeout``."""
+    if time.monotonic() > deadline:
+        if body.truncate:
+            body.truncated = True
+            return True
+        import httpx
+
+        raise httpx.ReadTimeout(
+            f"the answer took over {timeout * FETCH_DEADLINE_TIMEOUTS:g} s to arrive"
+        )
+
+
+async def _consumed(response: Any):
+    yield response.content
 
 
 def _result(response: Any, content: bytes, truncated: bool) -> FetchResult:
@@ -894,6 +1056,10 @@ def _result(response: Any, content: bytes, truncated: bool) -> FetchResult:
         etag=response.headers.get("etag"),
         last_modified=response.headers.get("last-modified"),
     )
+
+
+# The request headers for a body read through :func:`iter_capped`.
+IDENTITY_ENCODING = {"Accept-Encoding": "identity"}
 
 
 def _with_gzip(headers: dict[str, str] | None) -> dict[str, str]:
@@ -909,13 +1075,14 @@ class _CappedBody:
     """A response body collected decoded, never more than ``max_bytes`` + 1
     bytes of it in memory.
 
-    gzip and deflate are inflated HERE, from the raw stream, with zlib's
-    ``max_length``: httpx's own decoder inflates a whole network chunk at
-    once, and 64 KB of a gzip bomb is ~64 MB decoded. Any other encoding
-    (the request asks only for gzip/deflate) goes through httpx's decoders
-    (``raw`` is False then). Over the cap: :class:`ResponseTooLarge`, or
-    with ``truncate`` the first ``max_bytes`` bytes and ``add`` answers
-    True (stop reading)."""
+    The body is always read raw and gzip or deflate is inflated HERE, with
+    zlib's ``max_length``: httpx's own decoder inflates a whole network
+    chunk at once, and 64 KB of a gzip bomb is ~64 MB decoded. The
+    Content-Encoding is read as a list: none, or exactly one of gzip /
+    x-gzip / deflate; anything else (two codings, an unknown one) is
+    :class:`UnsupportedContentEncoding`, never handed to httpx's decoders.
+    Over the cap: :class:`ResponseTooLarge`, or with ``truncate`` the
+    first ``max_bytes`` bytes and ``add`` answers True (stop reading)."""
 
     def __init__(self, response: Any, max_bytes: int, truncate: bool) -> None:
         import zlib
@@ -925,7 +1092,10 @@ class _CappedBody:
         self.truncate = truncate
         self.buf = bytearray()
         self.truncated = False
-        encoding = (response.headers.get("content-encoding") or "").strip().lower()
+        codings = _content_codings(response)
+        if len(codings) > 1 or (codings and codings[0] not in ("gzip", "x-gzip", "deflate")):
+            raise UnsupportedContentEncoding(self.url, ", ".join(codings))
+        encoding = codings[0] if codings else ""
         self._deflate = encoding == "deflate"
         self._started = False
         if encoding in ("gzip", "x-gzip"):
@@ -934,11 +1104,12 @@ class _CappedBody:
             self._z = zlib.decompressobj()
         else:
             self._z = None
-        if getattr(response, "is_stream_consumed", False):
-            # Already read whole (a response built from bytes, as a mock
-            # transport answers): httpx decoded it; take it as it is.
+        # Read raw, unless already read whole (a response built from bytes,
+        # as a mock transport answers; no network does): httpx decoded it
+        # then, under the encoding checked above, and it is taken as is.
+        self.raw = not getattr(response, "is_stream_consumed", False)
+        if not self.raw:
             self._z = None
-        self.raw = self._z is not None
 
     def _take(self, piece: bytes) -> bool:
         self.buf += piece
@@ -985,11 +1156,25 @@ class _CappedBody:
 async def iter_capped(response: Any, max_bytes: int, chunk_size: int = 65536):
     """Yield a streaming response's body chunks, raising
     :class:`ResponseTooLarge` once more than ``max_bytes`` have passed
-    (checked against the declared length first)."""
+    (checked against the declared length first). The body is passed on
+    as it came: open the stream with :data:`IDENTITY_ENCODING` as its
+    headers; an encoded answer is :class:`UnsupportedContentEncoding`."""
+    codings = _content_codings(response)
+    if codings:
+        raise UnsupportedContentEncoding(str(response.url), ", ".join(codings))
     if _declared_too_large(response, max_bytes):
         raise ResponseTooLarge(str(response.url), max_bytes)
+    if getattr(response, "is_stream_consumed", False):
+        # Already read in full (a response built from bytes, as in tests);
+        # the encoding was checked above, so its content is the raw body.
+        body = response.content
+        if len(body) > max_bytes:
+            raise ResponseTooLarge(str(response.url), max_bytes)
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+        return
     total = 0
-    async for chunk in response.aiter_bytes(chunk_size):
+    async for chunk in response.aiter_raw(chunk_size):
         total += len(chunk)
         if total > max_bytes:
             raise ResponseTooLarge(str(response.url), max_bytes)
@@ -1080,6 +1265,7 @@ __all__ = [
     "OutboundFetchError",
     "OutboundTarget",
     "ResponseTooLarge",
+    "UnsupportedContentEncoding",
     "TooManyRedirects",
     "UnsafeOutboundURL",
     "acheck_outbound_url",
@@ -1095,6 +1281,7 @@ __all__ = [
     "is_public_address",
     "is_safe_outbound_url",
     "parse_allow_entries",
+    "IDENTITY_ENCODING",
     "iter_capped",
     "open_stream",
     "open_stream_sync",

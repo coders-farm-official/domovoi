@@ -113,6 +113,27 @@ class RoomIdentityTest {
         assertTrue(e.message!!.contains("could not reach"))
     }
 
+    /** Security review 2026-11-22, L58: a named plain-http server is
+     *  dialled at the address it resolved to, and the proof is asked for
+     *  that address; literals and https keep what was written. */
+    @Test
+    fun aNamedServerIsDialledAtTheAddressItResolvedTo() {
+        val dns = mapOf("domovoi.local" to listOf("fe80::1%wlan0", "192.168.1.30"))
+        fun resolve(h: String) = dns[h].orEmpty()
+        assertEquals("http://192.168.1.30:6370", RoomIdentity.dialBase("http://domovoi.local:6370", ::resolve))
+        assertEquals("192.168.1.30:6370", RoomIdentity.dialedAddress(RoomIdentity.dialBase("http://domovoi.local:6370", ::resolve)))
+        assertEquals("http://[fe80::1]:80", RoomIdentity.dialBase("http://v6.local") { listOf("FE80::1%wlan0") })
+        assertEquals("http://192.168.1.31:6370", RoomIdentity.dialBase("http://192.168.1.31:6370") { error("not asked") })
+        assertEquals("http://[fd00::5]:6370", RoomIdentity.dialBase("http://[fd00::5]:6370") { error("not asked") })
+        assertEquals("https://domovoi.example:6370", RoomIdentity.dialBase("https://domovoi.example:6370") { error("not asked") })
+        try {
+            RoomIdentity.dialBase("http://gone.local:6370") { emptyList() }
+            org.junit.Assert.fail("a name that resolves to nothing is refused")
+        } catch (e: RoomIdentity.IdentityException) {
+            assertEquals("could not find gone.local on this network", e.message)
+        }
+    }
+
     @Test
     fun dialedAddressesAreSpelledLikeThePis() {
         assertEquals("192.168.1.30:6370", RoomIdentity.dialedAddress("http://192.168.1.30:6370"))

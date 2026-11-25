@@ -19,6 +19,9 @@ Channels emitted (core; enabled plugins add their own via manifest
 * ``satellites.wifi`` — per-room WiFi telemetry from the admin snapshot
 * ``satellites.display`` — per-room screen/kiosk state video satellites
   report (display toggles, kiosk-browser death/recovery)
+* ``satellites.media`` — which rooms show photo and video results on a
+  screen now (1.5.0): ``{room: results id}``, a digest, never a caption;
+  the kiosk page reads ``GET /api/satellites/{room}/media``
 * ``satellites.pending`` — unprovisioned satellites presenting a USB
   adoption volume on the server (plug/unplug/status flips)
 * ``people.last_seen`` — fires when a person's ``last_seen_at`` advances
@@ -65,6 +68,9 @@ Channels emitted (core; enabled plugins add their own via manifest
   digest (counts, id sums, the newest ``updated_at`` of lists and items),
   never a name or an item; fires on every list or item write, by voice or
   from any screen, and an open Lists page reads the lists again
+* ``support_sessions`` — the satellite support sessions open now (1.5.0:
+  ``{id, satellite_id, room_id, ends_at, state}``), from the admin
+  snapshot; every page's "Support session open" banner rides it
 * ``nav_layout`` — the household's web menu (V045, Settings → App layout):
   the layout ``GET /api/nav-layout`` returns, null for the default; fires
   when an admin saves or resets it, and every open dashboard redraws its
@@ -241,6 +247,11 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # core's lists handler) or from the dashboard and the apps, fires
     # `lists_changed`; an open Lists page reads again on `lists.changed`.
     "lists_changed": "lists",
+    # Media understanding (V078, domovoi/media_understanding/): the
+    # runner's progress (at most every 10 s), its pause for a voice turn,
+    # a catalogue walk, a switch or an excluded folder. Settings → Photos
+    # and videos reads again on `media_understanding.changed`.
+    "media_understanding_changed": "media_understanding",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -461,6 +472,15 @@ class StatePollLoop:
                 # kiosk-death/recovery; the satellites page (and the kiosk
                 # display page itself) refetch on it.
                 ("satellites.display", snapshot.get("satellite_display") or {}),
+                # Photo and video results on a room's screen (1.5.0,
+                # domovoi/room_media.py): a digest, {room: results id},
+                # never a caption. The kiosk page reads its room's results
+                # from GET /api/satellites/{room}/media on it.
+                ("satellites.media", room_media_digest(snapshot)),
+                # Support sessions open now (1.5.0, domovoi/support_sessions.py):
+                # ids, the satellite and when it ends. Every page's banner
+                # rides `support_sessions.changed`.
+                ("support_sessions", snapshot.get("support_sessions") or []),
             ):
                 async with self._diff_lock:
                     old_value = self._previous.get(key)
@@ -473,6 +493,22 @@ class StatePollLoop:
 
 
 # ─── Snapshot helpers ──────────────────────────────────────────────────────
+
+
+def room_media_digest(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """``{room: results id}`` for the rooms whose screen shows photo and
+    video results now (the snapshot's ``room_media``): what the
+    ``satellites.media`` push carries, never a caption or a thumbnail."""
+    rooms = (snapshot or {}).get("room_media") or {}
+    if not isinstance(rooms, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for room, m in rooms.items():
+        rid = m.get("id") if isinstance(m, dict) else m
+        if isinstance(rid, int) and not isinstance(rid, bool):
+            out[str(room)] = rid
+    return out
+
 
 
 async def _snapshot_acquisitions() -> list[dict[str, Any]]:

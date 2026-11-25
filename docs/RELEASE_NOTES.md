@@ -4,6 +4,1375 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Friend Houses: apps with friends, sending and the page
+
+- **What changed.** Plugins can now send as well as receive: SDK 1.18's
+  `friends()` lists the friends a plugin may mail (by the plugin's own id
+  for each), `send_mail` queues mail for one, and the new `send_image`
+  sends a picture, which the friend's house opens only in that friend's
+  decode-only container and hands its plugin as a PNG Domovoi wrote itself
+  (at most 768 pixels a side, no metadata). `on_friends_changed` handlers
+  run when the list may have changed. The Friend Houses page has
+  **Apps with this friend** in each friend's row and a notices card in
+  "Friends and connections" (paused mail with **Resume now**, apps waiting
+  to be allowed, Docker problems); an admin's Home lists the same notices.
+  New route: `GET /v1/admin/friend-houses/apps/notices` and its dashboard
+  mirror (security tier).
+- **What to know.** Migration V085 adds the mail kind (data or image). A
+  plugin holding the `friend_houses` permission has every reply of its
+  voice handlers filtered before a room says it (wake phrases and the
+  assistant's name removed, at most 400 characters), and the chat history
+  and conversation log keep "[text from a friend house]" unless the plugin
+  gives its own history line; its plain `sdk.speech` lines get the same
+  cap. `friends()`, `send_mail` and `send_image` refuse a request that came
+  in on a route anyone on the network can call (an `@open_endpoint`, or a
+  GET that is neither `@device_endpoint` nor behind `admin_required`).
+  `friends()` is empty while Friend Houses is off or dark. Plugin ids for
+  friends are keyed by their own derived key now, so an id a 1.5.0
+  development build handed out before this change is different; nothing
+  stores them on the server.
+
+## 1.5.0 (unreleased) — Friend Houses: apps with friends
+
+- **What changed.** Plugins with the `friend_houses` permission can now
+  receive mail from the same plugin in a friend's house ("apps with
+  friends"). An admin turns **"Apps with this friend"** on per friend and
+  allows each such plugin for that friend; a plugin installed later starts
+  allowed for nobody until an admin confirms it. Turning it on is
+  announced like a new friend. Mail is stored before it is acknowledged,
+  decoded only in that friend's own decode-only container, and handed to
+  the plugin with every piece of text marked as a friend's. A friend whose
+  mail keeps failing for one plugin is paused for that plugin only (an
+  hour, doubling to a day) and the admin is told why, including when a
+  mail made Domovoi restart; other friends carry on. Plugin mail also
+  gets a per-friend budget of 16 MiB an hour. New admin routes:
+  `GET`/`PUT /v1/admin/friend-houses/friends/{id}/apps`,
+  `PUT …/apps/{slug}` and `POST …/apps/{slug}/resume` (security tier at
+  both hops, and their `/api/friend-houses/...` mirrors on the dashboard).
+- **What to know.** Migration V084 adds the tables. Turning apps off with
+  a friend, revoking an app, disabling or uninstalling the plugin, or
+  removing or blocking the friend deletes that app's waiting mail with the
+  friend; going dark keeps it until it expires (3 days at most). Disabling
+  a plugin now waits for an install or upgrade in progress. Sending and the
+  dashboard's apps section are in the entry above. The listener's image is
+  rebuilt once after the upgrade (its code changed).
+
+## 1.5.0 (unreleased) — Plugins: SDK 1.18 for apps with friends
+
+- **What changed.** The plugin SDK is 1.18. A plugin with the
+  `friend_houses` permission gets `sdk.friend_houses` (its friends, sending
+  and receiving mail with the same plugin in friend houses), `FriendText`
+  for words a friend supplied (never kept in the chat history; filtered of
+  wake phrases before a room says them) and its own id for each friend.
+  The install screen now says what a `friend_houses` plugin does with
+  friend houses, and flags one that also has routes anyone on the network
+  can call; the core logs a warning when it loads one.
+- **What to know.** Receiving, sending and the Friend Houses page's "Apps
+  with this friend" are in the entries above. A plugin that asks for
+  `domovoi_api = ">=1.18"` won't load on an older core.
+
+## 1.5.0 (unreleased) — Friend Houses: plugin mail on the wire
+
+- **What changed.** Friend Houses learned the wire for plugin mail ("apps
+  with friends"): a plugin mail envelope kind, a `CAPS` frame in which a
+  house tells a friend its protocol number and which of its apps that
+  friend may mail (sent only to friends an admin turned "Apps with this
+  friend" on for; never plugin versions), and a `MESSAGE_NACK` frame that
+  refuses one plugin mail with a reason and a wait. The listener sorts
+  plugin mail from people's messages before spending any budget and gives
+  it budgets of its own (2,400 an hour per friend and app, 3,600 per friend,
+  7,200 and 64 MiB per house); people's 60 messages an hour per friend now
+  count text and list changes only. The listener's friend list carries
+  each friend's allowed apps (`"apps"` in `friends.json`).
+- **What to know.** Plugin mail never reaches the house inbox; what is
+  accepted is described under "apps with friends" above. Houses before 1.5.0 are
+  unaffected: people's messages, lists and presence work as before in a
+  mixed pair, an older house is never sent the new frames on a connection
+  that carries people's messages, and one that closes on `CAPS` is
+  recorded as older, not offline. The listener's image is rebuilt once
+  after the upgrade (its code changed).
+
+## 1.5.0 (unreleased) — Plugins: decode-only containers
+
+- **What changed.** A plugin can declare an `[isolated]` decoder: a
+  function in its own `domovoi_isolated_<slug>` package that runs outside
+  the core, in containers the core builds from the plugin's decoder files
+  on its own pinned Debian base, one per friend (no network, read-only, no
+  mounts, no capabilities, a fixed unprivileged user, memory, process, CPU
+  and file caps), talking over stdin and stdout only. The core checks every
+  answer (size, depth, value counts, string and key lengths, characters,
+  numbers), re-serializes it and checks it against the schema the plugin
+  registered. A plugin with the new `friend_houses` permission must declare
+  one (its install is refused otherwise); the Friend Houses features for
+  plugins come with SDK 1.18. Images never come out of a container as
+  files: the container answers raw pixels (PNG, JPEG or WebP in, at most 4
+  megapixels, first frame, at most 768 pixels a side), and the core writes
+  the PNG itself.
+- **What to know.** The containers are named `domovoi-plugin-dec-<slug>-<n>`
+  (`n` 0 to 3); the container guard watches them, expects exactly the image
+  the core built, and reports any other container under that prefix. A
+  container starts for a friend's first item and stops after 2 minutes
+  idle; at most 8 run at once (128 MB each). A friend whose items keep
+  crashing a decoder is paused for that plugin for an hour, and the item
+  is dropped after two crashes; other friends carry on. The image is built
+  (with Docker, downloading Debian packages) the first time it is needed,
+  and only when the internet answer isn't "never" and, for a
+  `friend_houses` plugin, Friend Houses is on and a friend has "Apps with
+  this friend" on; again after an upgrade or when 30 days old; it is
+  removed with the plugin. The build is capped at 1 GB of memory and a low
+  CPU weight, which needs Docker's classic builder (`DOCKER_BUILDKIT=0`,
+  still in Docker 29; BuildKit ignores the caps): on a Docker without it
+  the image isn't built and the plugin's decoder reports why. Without
+  Docker nothing is decoded. Plugins without the table are unchanged.
+
+## 1.5.0 (unreleased) — Photos and videos
+
+Domovoi now works out what is in the photos in Pictures and the videos in
+Videos, on the server, so you can find them by words, times, places and
+people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
+
+- **The catalogue and the runner.** The core keeps a catalogue of the
+  image and video files in the household's libraries (migration V078):
+  photos and videos in Pictures, plugins' media folders and plugged-in
+  removable drives, and the videos in Videos, Music, Audiobooks, Podcasts
+  and Documents, walked by `stat()` once an hour, and one background runner for everything it works
+  out about them, which also runs the videos attached in chat (first, as
+  before; the `chat_video` worker is now `media_understanding`). The runner
+  works at night (the household's quiet hours) and, by day, only on new
+  files, after 10 quiet minutes; it gives way to every voice turn, waits
+  for memory before using the vision model, reads at most 20 MB/s, and caps
+  the time it spends on one video. Settings → Chat & AI → Photos and videos
+  shows the progress, the switches, Pause, Run now, Rescan, the per-video
+  frame cap (Automatic or manual) and excluded folders: any library or a
+  folder in one, which deletes what was worked out there, faces and places
+  included, after a confirm (`POST /api/media-understanding/excluded` needs
+  `confirm_delete: true` then, else `409` with the file count). While a
+  backlog is left, Home shows "Understanding your photos: N of M", linking
+  to that card. A house that
+  upgrades starts with "Understand photos and videos" **off** until an
+  admin turns it on; a new install starts with it on. Faces and photo
+  locations are off for everyone. Nothing is written into the media files.
+- **Photos.** For each photo: the date it was taken (from its EXIF data,
+  else the file's time), one sentence of what it might show and up to 12
+  tags (one call to the household's existing vision model, `qwen3-vl:2b` on
+  a CPU server or the larger one a GPU house picked in Settings → Models),
+  and, only when that model says the photo has writing in it, the exact
+  text, read by Tesseract (the package the scan reader already installed;
+  nothing new to install). `GET /api/media/search` (paired devices) finds
+  photos and videos by those words, their file and folder names, and a time
+  said plainly ("dog at the beach last summer", "Christmas 2021", "2023").
+  Descriptions come from a small model, are shown as "Might show: ...", and
+  are sometimes wrong. With the household's AI features off there are no
+  descriptions: Tesseract then reads every photo and keeps only a confident
+  reading; turning AI on later, or changing the vision model, queues the
+  descriptions again for the next nights.
+- **Videos.** The runner finds the scene changes, transcribes what is said
+  (the first two hours of a video), has the vision model describe keyframes
+  picked at scene changes (how many depends on the server's measured speed,
+  the video's length and its scenes: up to 120 on a CPU-only server), and
+  writes a short summary and a suggested title. With a big backlog (25 or
+  more videos waiting) each video first gets a quick pass with about a
+  quarter of the frames, and a later pass adds the rest. A search can tell
+  the moment in the video that matched. Transcripts run even with AI
+  features off (captions and summaries don't). A video ffmpeg can't read is
+  skipped and marked with a code (`video-unreadable`, `video-no-picture`,
+  `video-too-big` past 8K). On a CPU-only server a long video's first look
+  takes minutes and its full pass tens of minutes, all in the night window,
+  pausing for every voice turn.
+- **Faces and people.** With **Recognize faces** on (off by default, admin
+  only), the server finds faces in photos and in video keyframes (one row
+  per appearance: first to last sighting, `media_faces.end_s`, and
+  `appearances` on a person's items), and groups the same person's faces as they arrive and
+  again each night. Groups are named with the same people voice ID knows.
+  New routes under `/api/faces` (API_REFERENCE §3.5c1c): the household
+  views, names, confirms, says "not this person" and hides; merging or
+  splitting a named person's faces is admin; guests and shared screens get
+  nothing. "Forget my face" (admin, or the person's own claimed phone)
+  deletes their faces and keeps them from being learned again. Turning
+  faces off deletes every face, group and embedding, but keeps the forget
+  list (owner decision, 2026-11-22), so forgetting stays permanent:
+  deleting it too would let a forgotten person be learned again from the
+  same photos once faces were turned back on. Both confirms say so.
+  Turning faces on makes the server download two models once, about 39 MB,
+  from GitHub (OpenCV Zoo's YuNet, MIT, and SFace, Apache-2.0; pinned by
+  SHA-256; never under internet access "No"); then every photo and video
+  already analysed is queued again for faces only, at night. SFace's model
+  card doesn't name its training data (docs/LICENSES.md). There is no
+  export of face data; database backups include it.
+- **Photo locations.** With **Use photo locations** on (off by default,
+  admin only), the server keeps each photo's EXIF GPS position and names
+  the town it was taken in, on the server, from GeoNames' list of towns
+  over 1,000 people. Search finds photos by the place ("photos from
+  Portland") and "at home" finds the ones taken near the Home location
+  (Settings → Household), meaning within 10 km, which is a town, not your
+  address. Search answers carry `place` and `near_home`, never a
+  coordinate; a shared screen gets neither. Turning it on downloads the
+  town list once, about 11 MB, from the Internet Archive's copy of
+  GeoNames' files (CC BY 4.0; pinned by SHA-256; never under internet
+  access "No", where places stay unnamed), then reads again where the
+  photos already looked at were taken (the first 256 KB of each, at night).
+  No position is ever sent anywhere. Turning it off deletes every stored
+  position and place name (it asks first). Videos keep no location.
+- **The Photos and Faces pages.** The Media group has two new pages.
+  **Photos** (`#photos`) shows every photo and video catalogued, newest
+  first, loading as you scroll, with a search box; a photo opens its
+  details (what it might show, its tags, the text found in it, its date),
+  a video opens the player at the moment the search matched. **Faces**
+  (`#faces`) lists the people named in the photos, unnamed groups to name
+  (the small ones behind "show more"), and each person's photos and videos
+  with **yes, <name>** / **not this person** on the faces Domovoi
+  suggested, and **Forget my face**. Merge, split, moving a named person's
+  faces and showing a hidden group again are for an admin only.
+  `GET /api/media/search` and `GET /api/faces/people/{id}/items` also take
+  `cursor` and answer `has_more` / `next_cursor` (API_REFERENCE). Faces is
+  on the menu only while **Recognize faces** is on, and never for a guest
+  or on a shared screen. With understanding off, or nothing looked at yet,
+  Photos says so and links to Settings → Chat & AI → Photos and videos.
+  `photos` and `faces` are now core routes: a plugin page on either route
+  is refused at install, enable and boot, like the other core pages.
+- **Asking by voice and in chat.** "Show me photos of the beach from last
+  summer", "find the video where we sang happy birthday", "do we have any
+  pictures from Christmas" work by voice (new core handler `media_search`,
+  band 305, offline) and in a home-server chat. The answer says how many
+  were found and that they're on the Photos page; by voice, to someone it
+  recognizes with a phone marked as theirs, it then offers "Want them on
+  your phone?" and a yes sends a "Photos: …" chat with the result cards to
+  their phones through the help desk's send-to-your-phone path (same
+  notification and limits; never for a guest). The search words never reach
+  a log: the access log blanks `q` on `/api/media/search` at every level,
+  DEBUG included. A chat reply also carries
+  result cards (`stats.media` / the message's `media`: thumbnail, "might
+  show", date, a video's moment). In a chat that mentions photos or videos,
+  the model may ask for the search itself (`FIND_MEDIA: ...`); the app runs
+  it. With understanding off the answer is "Photo understanding is off; an
+  admin can turn it on in Settings.", and before anything has been looked
+  at, "I haven't looked through your photos yet." A name finds that
+  person's photos only with faces on, and only for a voice Domovoi
+  recognizes, a phone's chat mic or a chat that isn't on a shared screen; a
+  guest voice or a shared screen gets no person-based results. Captions,
+  tags and text from pictures reach a later chat turn's model only inside a
+  fenced block it is told never to obey, and such a turn is not offered
+  lookups.
+- **Results as cards, and on a room's screen.** The dashboard's chat draws
+  a reply's results as cards: a thumbnail, "Might show: ...", the date and,
+  on a video, a time badge for its best moment. A photo opens the picture;
+  a video opens the player at that moment. Asked by voice in a room with a
+  screen (a phone or tablet in room mode, or a video satellite's kiosk),
+  the results show there for 90 seconds: the `room_display` frame has a new
+  `media` part (null otherwise), with thumbnails on the new open route
+  `GET /v1/room-media/{token}` (a random token, 10 minutes), and the kiosk
+  reads `GET /api/satellites/{room}/media` on the `satellites.media` push.
+  A room without a screen gets nothing new. A guest's voice never puts
+  photos filtered by a person's face on a screen. The results go with the
+  next frame sent for another reason (music, a timer), newer results, or
+  after 90 seconds. Clients from before this ignore `media`; the Android and
+  iPhone room modes and chats draw it in their own release. Captions are a
+  picture model's words and every screen draws them as text.
+
+## 1.5.0 (unreleased) — Security: photos, faces and room screens
+
+- **What changed.** Findings of the 2026-11-23 security review on the photo
+  and video work (H1, H4, M9, M10, M11 and the media lows).
+- **Room screens.** The open status snapshot now says only which rooms
+  show photo results (`{room: results id}`); what was said, captions,
+  names, dates and paths come from the device-read
+  `GET /v1/admin/room-media/{room_id}`. A room screen's thumbnail token
+  works only while its results are on the screen, is answered `no-store`
+  and is blanked in the log.
+- **Nightly face re-group** runs in a short-lived child process at low
+  priority whose maths library is held to one thread (set before numpy
+  loads, so no helper package is needed), a blocked neighbour search, at
+  most 20,000 faces a night, pausing for voice; the night is marked done
+  before it starts.
+- **Forget my face.** A phone's claim must be older than the person's
+  oldest confirmed face (else admin); moving someone's face to another
+  person, and naming, merging, splitting or confirming in a hidden group,
+  are admin. Admins can list and undo forgotten faces
+  (`GET` / `DELETE /api/faces/denylist`). Forgetting a face, and faces
+  off, strip chat replies' person results; deleting a person un-names
+  their faces.
+- **Missing is not deleted.** A file the hourly look doesn't see is marked
+  missing (V080) and deleted only after three complete looks and a day
+  (two weeks for a mass loss). An empty mount point, an unreadable folder
+  or the file cap never deletes analysis, face confirmations or names. A
+  file only touched keeps its results; a move across libraries is matched.
+- **Smaller.** The face stage skips photos over 80 MiB and HEIC/HEIF/TIFF;
+  library reads run in a worker thread; only regular files are
+  catalogued; library videos keep to a container and codec allow-list;
+  a video's faces pass and transcript have their own time budget; a cloud
+  or off-network vision model skips library work; "Rescan" is admin; an
+  unrecognized voice gets the same refusal for any household name; an
+  edge-of-calendar EXIF date or a non-UTF-8 file name no longer fails.
+- SECURITY_PRIVACY.md ("Photos and videos", "Faces and people", "The room
+  display"), API_REFERENCE.md, PHOTOS_AND_VIDEOS.md.
+
+## 1.5.0 (unreleased) — A QR code for the setup code
+
+- **What changed.** Where the setup code is shown (the core's terminal
+  banner and `--reset-admin` in a terminal, the Windows installer's last
+  page under **Set up from a phone**, and the new
+  `python -m domovoi.setup_qr` the Linux installer now names), a QR code
+  is shown with it. A phone's camera opens the dashboard with the code
+  already in the claim form. The code rides in the address's `#` part
+  only (`http://<server>:6369/#setup-code=<code>`), which no request
+  carries, and the page clears it from the address bar at once.
+- **What to know.** No endpoint returns the code, and its 24-hour window
+  and single use are unchanged; the claim still posts it to
+  `POST /api/auth/setup` as typing does. A phone app that opens
+  dashboard links itself needs to pass the `#setup-code=` fragment through
+  unchanged (and never move it into a path or query) for the form to fill
+  in.
+
+## 1.5.0 (unreleased) — A room can have several satellites
+
+- **What changed.** A room is a place; a satellite is a device in it, and
+  a room can now hold several (a Pi on the counter, a phone on the shelf).
+  Satellite ids and pairings are unchanged (migration V073: every existing
+  satellite keeps its id, and its room is the one it was). In a room with
+  several satellites, one wake word starts **one** turn: the first
+  satellite to hear it chimes and records, the others stay quiet and send
+  up to two seconds of the command, and the microphone that heard you best
+  is transcribed once. Music, answers, timers, alarms, announcements and
+  plugins' speech play from every speaker in the room in sync, and rooms
+  that share a queue or a group play in sync with each other. The room's
+  drawer (Settings → Rooms) lists its satellites, moves one to another
+  room, approves a new one into a room, and has **Tune the speakers**.
+- **What to know.** Nothing changes for a room with one satellite except
+  that its music starts about half a second after it's asked for. A
+  satellite or phone app from before 1.5.0 can't claim a wake word or
+  play in sync: a duplicate recording from it is dropped, and it plays the
+  room's sound only when it is the room's only satellite, and the drawer
+  says **Update the app on this phone.** under it. Speaker tuning plays a
+  short audible chirp; it runs on its own once when a satellite joins or
+  moves into a room, only while the room is idle and never in quiet hours
+  (it waits for them to end), and **Settings → Rooms → Tune speakers on
+  their own** turns that off. The phone apps say "the Kitchen", never
+  "satellite".
+- **Also in rooms.** **Add a satellite to the Kitchen** in a room's drawer
+  makes the setup code for one more satellite there ("Kitchen 2"), and
+  its approval card has the Kitchen pre-selected, older phone apps
+  included. **Rooms that can hear this one** links rooms whose satellites
+  hear the same wake word into one turn; the Rooms page suggests a link
+  after a few such wakes, and **Keep them separate** is remembered. Turns
+  say which satellite heard best ("Answered in the Kitchen. Heard best by
+  Kitchen phone.").
+  Steps and troubleshooting:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites),
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md#rooms-with-several-satellites),
+  [ROOM_AUDIO_PROTOCOL.md](ROOM_AUDIO_PROTOCOL.md).
+
+## 1.5.0 (unreleased) — Security: the player relay, plugin update sources, offline kit packages
+
+- **What changed.** Items of the 2026-11-23 security review on 1.5.0
+  code. The core's player relay asks a station for uncompressed audio and
+  refuses any compressed answer, reading raw bytes in small chunks (H2);
+  a station has 15 seconds to start answering, a stalled stream ends
+  after 30 seconds, and a stop ends a stalled stream at once (M4). A
+  relay link presented by any address but the room's player's, or with a
+  forwarding header, is refused without ending the room's stream, and
+  the access log no longer holds it, nor do the open now-playing and
+  queue reads or the play history (L23, L24); a relay is made only for
+  a room with a music player, after the outbound check (L25). No raw
+  internet address stays in a room's music queue: anything that adds one
+  is refused or goes through the relay, and each room's queue is checked
+  at core start, at every start of its player and when a group hands its
+  queue to another room, an internet entry being moved onto the relay or
+  removed; a queued station renews its relay link when it plays again,
+  so it resumes after a restart (L20). Plugins installed from GitHub are
+  pinned to their repository when the install is confirmed, and an
+  update from the same address is held to that pin whichever download it
+  uses (M6). Plugin
+  update checks pin each plugin's GitHub repository by its numeric ids:
+  a repository that moved, changed owner or was re-registered under the
+  same name reads "the repository moved or changed owner" and offers no
+  update, and the update's download is refused (M6). The update trust
+  screen lists a changed publisher and any new permission; a check
+  answer is dropped when the plugin was reinstalled from another repo
+  (L36), and one unreadable answer no longer stops the other plugins'
+  checks (L37). Installing from an offline kit stops when a package
+  folder on the stick is a link or has a name apt doesn't use, and apt
+  runs with unsigned sources refused (M12); the kit checker names
+  links and unlisted folders, and Windows Setup refuses such a stick
+  before it uses anything on it, naming what it found (links and
+  junctions, entries kit.json doesn't account for, an odd package
+  folder name; only the system's own files, and its own folders at a
+  drive's top, are let be); Whisper's files come off a stick only by
+  name (L39). Windows Setup deletes its copy of the house identity
+  backup once the restore is recorded (L42).
+- **What to know.** The first update check after upgrading pins each
+  plugin's repository as it is then, in the database (migration V081);
+  pins a 1.5.0 test build kept in `~/.domovoi/plugin_repo_pins.json` are
+  imported once and the file renamed `.imported`. A station queued before
+  the upgrade is kept when the room's play history names it, else it is
+  removed from the queue at the first start: play it again by name.
+  A plugin whose repository really moved shows "the repository moved or
+  changed owner": reinstall it from the new address to pin that one. A
+  plugin card on Home runs as part of the dashboard, like plugin pages:
+  "household-tier data only" is a rule for plugin authors, not a control
+  (L38, now said in PLUGIN_DEVELOPMENT.md).
+
+## 1.5.0 (unreleased) — Security: pairing proof v2, chat reads, music-mix claim key
+
+- **What changed.** Three items of the 2026-11-22 security review (L9,
+  L39, L40). The approval exchange a room device runs with a server it
+  found by itself also binds its pairing token (`/v1/health` now says
+  `pairing_proof: 2`); a 1.5.0 core still approves 1.4.0 devices, and a
+  1.5.0 device still runs the old exchange with a 1.4.0 core. Chat reads
+  (`GET /api/chat/threads/{id}/messages`, `GET /api/chat/drafts/{id}`)
+  no longer return the device id of each message or draft version: each
+  row says `mine` instead, for the id in the caller's own `X-Device-Id`
+  header. Changing a person's own music-mix sliders from their phone or
+  browser now needs that device's claim key (`X-Domovoi-Claim-Key`), as
+  clearing their listening history does.
+- **What to know.** A phone app that does not yet send `X-Device-Id` on
+  those chat reads shows no "this phone" / "edited by you" marks until it
+  does. A phone app that does not yet send its claim key on the music-mix
+  change is refused with `claim_key_required` (an admin can still make
+  the change); the web dashboard sends it already. A browser or phone
+  that said "this is me" before claims had keys says it again once.
+
+## 1.5.0 (unreleased) — Every speaker in a room plays together
+
+- **What changed.** In a room with several satellites, music, radio,
+  podcasts, answers, timers, alarms, announcements and plugins' speech
+  play from every speaker at the same moment, and pause, skip, stop and
+  volume land on all of them together. A satellite on 1.5.0 plays the
+  room's music through the core's synced player (`/v1/room-audio`) even
+  when it is the room's only device; answers in a one-satellite room
+  still come straight down its own connection.
+- **What to know.** Music starts about half a second after it is asked
+  for (it used to buffer for a few seconds). The wake word during an
+  answer stops it on every speaker; the music plays on. An older
+  satellite or phone app that can't play in sync plays the room's sound
+  only when it is the room's only device. Satellites still install
+  `mpg123`: it plays the greetings and the offline clip, and music from a
+  core older than 1.5.0. Rooms sharing a queue, or grouped, play in
+  sync with each other too: the core decodes the host's music once and
+  every following room plays the same sample at the same moment; a room
+  joining mid-song comes in where the song is, and an answer or a wake
+  word in one room ducks only that room. A grouped room whose devices
+  can't play in sync keeps its own stream player, as before (not in step
+  with the others).
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#a-room-with-several-speakers).
+
+## 1.5.0 (unreleased) — Noise cleanup before speech to text, an experiment (off)
+
+- **What changed.** New setting `stt_denoise` (`STT_DENOISE`; Settings →
+  Configuration → Speech-to-text, advanced): `off` (the default) or
+  `spectral` (a built-in filter). When on, a spoken command's audio is
+  cleaned before Whisper hears it; the wake word, voice recognition and
+  command recordings keep the raw audio, and any error falls back to it.
+- **What to know.** Nothing changes unless you turn it on. On synthetic
+  party noise `spectral` was neutral; RNNoise cut off command starts and
+  is not offered (a saved `rnnoise` reads as off). The default waits for
+  the XVF3800 room test.
+  [SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md#a-command-in-a-loud-room).
+
+## 1.5.0 (unreleased) — A command in a loud room is said back, and asked about first
+
+- **What changed.** When a room is too loud for the capture to end (it
+  runs to the 30 s cap), a 1.5.0 satellite says where your speech began
+  and the server transcribes only the few seconds from there. A command
+  at the start that only reads something is answered after "It's loud in
+  here. I heard: ...". One that would change the house (music, lists,
+  timers, messages, plugins) is asked about first: "It's loud in here.
+  Should I ...?", and runs only on a yes within a minute.
+- **What to know.** Before 1.5.0 such a command ran at once; it now
+  waits for the yes. True background talk is still ignored. An older
+  satellite is transcribed whole, as before. New `utterance_end` field
+  `first_voiced_frame`; new `Handler.read_only` (plugins: set it on a
+  handler whose fast paths only read, or the loud-room question is asked
+  first). The XVF3800 DSP boot default (`MIC_DSP_DEFAULT_PRESET`) exists
+  but is empty until the noisy-room test decides it; denoising is not on.
+  [SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md#a-command-in-a-loud-room).
+
+## 1.5.0 (unreleased) — Several satellites in one room, managed from Settings → Rooms
+
+- **What changed.** Settings → Rooms now lists each room with the
+  satellites in it. Open a room to rename a satellite, move it to another
+  room or a new one, or rename, add or delete a room. Approving a new
+  satellite asks "Which room is it in?" (the room it asked for is
+  pre-selected). Rooms that share a name are offered for a merge.
+- **What to know.** These controls are for a signed-in admin; everyone
+  else sees the list. Nothing merges on its own: the merge happens only
+  when an admin presses **Merge into one** and confirms. Moving a
+  satellite keeps its history with the old room, forgets the voices it
+  learned there (enrolled voices stay) and clears its speaker tuning. A
+  room can be deleted only when it is empty. The phone apps have no
+  admin screens and say "the Kitchen", never "satellite".
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites).
+
+## 1.5.0 (unreleased) — Rooms play internet radio through the core
+
+- **What changed.** A room's music player no longer fetches an internet
+  radio station itself. The radio plugin (1.5.2) hands it a one-use URL on
+  the core, and the core fetches the station, every redirect checked, and
+  passes the audio on. Before, the player made its own request to the
+  station and followed its own redirects, unchecked. FM is unchanged.
+- **What to know.** The player reaches the core on port 6370 from its
+  container: on Linux, in the Windows installer's WSL distro and in the
+  Mac VM it dials its Docker network's gateway, so a host firewall must
+  let the Docker bridge reach port 6370. A station a room was playing is
+  not resumed after its player restarts (the relay URL is spent): play it
+  again. The radio
+  plugin now needs SDK 1.15 (new: `playback.player_route`).
+  SECURITY_PRIVACY.md, "Radio streams".
+
+## 1.5.0 (unreleased) — Reinstall without losing your rooms
+
+- **What changed.** Rooms trust one server by its identity, and a reinstall
+  used to make a new one, so every room then refused the house. Now:
+  - **Uninstalling keeps your data by default**, the identity included.
+    Linux has an uninstaller, `sudo bash /opt/domovoi/scripts/linux/uninstall.sh`
+    (keep data, or `--remove-everything`, which asks you to type it); the
+    Windows uninstaller asks first, and keeping moves the data to an
+    administrators-only `C:\ProgramData\Domovoi-kept-<time>` that the next
+    Setup offers to use. Installing again brings everything back and the
+    rooms reconnect by themselves.
+  - **House identity backup**: Settings → System → About & updates →
+    **Download house identity backup** (admins, with the password typed
+    again). Give it to a new install, `install.sh --restore-identity FILE`
+    or Windows Setup's **Restore the house identity from a backup file**,
+    and the rooms trust it. The file is checked before it is used.
+  - **A room whose server changed says so**: a teal light (not the
+    "no server" orange) and "My Domovoi server has changed… please set me
+    up again", once, then at most every 12 hours, and whenever you say the
+    wake word. It still refuses the new server: set it up again, or restore
+    the identity. New: `POST /v1/admin/server-identity/backup` and
+    `/api/config/server-identity/backup`, the canned line
+    `server_changed.mp3`, the satellite LED state `server_changed`.
+- **What to know.** The backup file is the server's private key: anyone
+  with it can pass for your house to your rooms, so keep it like a
+  password. A restore never replaces a different identity already on the
+  server. Rooms re-pinning over the network was rejected on purpose.
+  LINUX_HOST.md and WINDOWS_HOST.md ("…without losing your rooms"),
+  SECURITY_PRIVACY.md ("Keeping the house identity across a reinstall").
+
+## 1.5.0 (unreleased) — Plugins forget people too (SDK 1.17)
+
+- **What changed.** When someone says "forget me", an admin deletes a
+  person on People, or an admin deletes all voice history, plugins are
+  now told: the core emits `core.voice_history_deleted` with
+  `{person_id}` (`None` for all of it) once the deletion has committed.
+  A delete made on the dashboard while the core is down is announced
+  when the core is back. Plugins can also read "Keep voice history" as
+  `sdk.core_config.voice_history_keep`. Security review M8: a plugin
+  could keep a lookup history that "forget me" never reached.
+- **What to know.** A plugin that stores anything tied to a person must
+  delete it on this event and keep nothing longer than
+  `voice_history_keep` (PLUGIN_DEVELOPMENT.md §4.21). The daily trim
+  sends no event. Migration V079 adds the small `voice_history_forgets`
+  table the core announces from.
+
+## 1.5.0 (unreleased) — Any plugin can play a remote URL through the core (SDK 1.16)
+
+- **What changed.** The relay that plays internet radio in a room is now
+  the core's, for any plugin: `sdk.playback.relay_url(room_id, url,
+  kind="file"|"radio")` returns a URL on the core (`GET
+  /v1/player-relay/<token>`) to hand a room's player instead of the
+  remote URL. `kind="file"` serves byte ranges, so a player can seek in
+  and resume a file; `kind="radio"` is the one-connection stream with ICY
+  titles. The radio plugin (1.5.4, needs SDK 1.16) uses it and no longer
+  has its own `/v1/plugins/radio/player-relay/<token>` route.
+- **What to know.** A plugin from outside this repo that hands a room's
+  player a remote URL should use it: feature-test
+  `getattr(sdk.playback, "relay_url", None)` and fall back to the direct
+  play on older cores (PLUGIN_DEVELOPMENT.md §4.5).
+
+## 1.5.0 (unreleased) — Support sessions: an admin's shell on one satellite
+
+- **What changed.** For the rare fault the Diagnostics tab can't explain,
+  an admin can open a shell on one satellite from its drawer's Settings tab
+  (**Open support session**), as the satellite's own service account,
+  not root. It is off for every satellite until an admin turns on
+  **Allow support sessions** for that one. New: the `support_shell` hello
+  key and the `support_*` frames (docs/uml/satellite-protocol.md), the
+  routes under `/v1/admin/satellites/{id}/support/*` and
+  `/v1/admin/support-sessions` with their `/api/...` twins, the state
+  socket's `support_sessions` channel, and migration V077.
+- **What to know.** Opening one needs a password sign-in in the last five
+  minutes AND the password typed again; a phone's day grant never opens
+  one. A session lasts at most 30 minutes, closes after 10 without typing,
+  and ends with any disconnect or restart; the satellite then restarts its
+  service. The room hears one line when it starts and ends, its light
+  breathes magenta, and every dashboard shows a banner with **End** that
+  anyone in the house can press; saying "end support session" in the room
+  works too. Everything is recorded (Settings → System → Support
+  sessions), with passwords typed at a hidden prompt and known secrets
+  blanked where Domovoi can tell; transcripts are kept 30 days. Only a
+  Raspberry Pi on a card prepared by Domovoi whose account can't use sudo
+  offers it, so press **Upgrade satellite** first; spare computers and
+  phones don't. The light's colour and pace still want a check on real
+  hardware. SECURITY_PRIVACY.md, "Support sessions".
+- **Security review fixes (2026-11-23).** Every frame that arms, opens or
+  types into a shell is now signed by the server's identity key for that
+  satellite and that connection, and the satellite refuses anything else
+  (an unsigned, replayed, stale or other-satellite frame); the satellite
+  keeps its own copy of the switch, set only by a signed frame; and while
+  it offers sessions its light can't be turned off from the network. A
+  device offers sessions only with the root-owned server pin and no known
+  way from its account to root, so **cards prepared before 1.5.0 don't
+  offer them** (their provisioning unit and their `xvf_host` sudoers line
+  are such ways; the card-side fix isn't built yet). The transcript can't
+  be stopped by a printed key marker or by turning echo off, and what it
+  blanks still counts toward its 8 MB. The shell's user can no longer hold
+  the end off: typed input can't freeze the satellite, a systemd watchdog
+  restarts a frozen or stopped client with everything in its unit, and a
+  failed restart exits so systemd clears it. Also: the terminal socket
+  needs the opener's own sign-in as well as the ticket, a terminal's
+  automatic answers don't count as activity, satellite output can't open
+  links, the opening line is said before any input reaches the shell, no
+  drop-in call starts during a session, and removing a satellite ends its
+  session. `domovoi-satellite.service` gains `NotifyAccess=main`.
+- **Signed both ways, and nothing left behind (2026-11-23).** What the
+  satellite sends about a session (the output, the echo state, its own
+  close, its answer to an open) is now signed by the satellite's own
+  support key, in one rising sequence per connection, so a host in the
+  middle of the LAN can't change the transcript or end a session with a
+  forged close; the core refuses such frames, logs them without their
+  content and ignores them. The key is made on the satellite and sent in
+  its hello; the core **pins it when Allow support sessions is turned on**
+  (migration V082, `satellites.support_key`), so the switch can only be
+  turned on while the satellite is connected, and a satellite that later
+  presents another key (a reflashed card) gets no session until the switch
+  is turned off and on again. The shell now runs in a sandbox of its own
+  (user, mount and PID namespaces): every folder is read-only to it, its
+  home and temp folder are a private in-memory folder that disappears with
+  the session however it ends, and it can't read the device's key. A
+  satellite that can't build the sandbox doesn't offer sessions. The
+  shell can read the satellite's settings but no longer change them; use
+  the dashboard. Both the sandbox and the signing want a check on real
+  hardware.
+- **The support key is pinned when the pairing is approved (2026-11-23).**
+  The satellite's support key now rides its pairing request: a device that
+  proves its approval binds the key into that exchange (`/v1/health` now
+  says `pairing_proof: 3`; a 1.5.0 core still approves devices running
+  versions 1 and 2), and the core pins it when the admin approves, so a
+  key swapped on the way fails the approval instead of being trusted. A
+  request approved by its code pins the key its hello carried (migration
+  V083). A re-pair pins the key again. A satellite that later presents
+  another key gets no support session, the switch won't turn on for it,
+  its voice use is unchanged, and its room drawer says "this satellite's
+  support key changed; re-pair it to use support sessions". Turning the
+  switch off no longer forgets the key. A satellite paired before this has
+  no key pinned until it is re-paired; turning its switch on still trusts
+  the key it presents at that moment, and the dashboard asks first and
+  says so.
+
+## 1.5.0 (unreleased) — Diagnostics for a satellite, in its room drawer
+
+- **What changed.** A room's drawer has a **Diagnostics** tab: **Run all**
+  shows, from the device itself, its recent log lines, its network (Wi-Fi
+  signal, address, gateway, DNS and latency to the server; the network's
+  name only as a short hash), disk, memory, load, CPU temperature and
+  uptime, its audio devices, its versions, its service restarts and last
+  exit, and on an XVF3800 its active mic DSP preset with the five values
+  the chip holds. Each result has a time, can be run again on its own, and
+  **Copy** puts them all on the clipboard. New: `POST
+  /v1/admin/satellite/{room}/diagnostics` and `.../diagnostics/{probe}`
+  (admin), and their `/api/satellites/...` twins.
+- **What to know.** Read-only, from a fixed list of named probes: no
+  command can be typed or sent, and the device refuses a name it doesn't
+  know. Tokens, keys and passwords are taken out on the device and again
+  on the server. Admin only, and rate-limited per satellite. The tab shows
+  only for a connected satellite on code that declares it (a new
+  `diagnostics` hello key), so press **Upgrade satellite** on older ones;
+  phones in room mode don't offer it. SECURITY_PRIVACY.md,
+  "Satellite diagnostics".
+- **Security review fixes (2026-11-23).** A satellite's answer can no
+  longer stall the server: the cleaning rules are bounded, answers are cut
+  to size before they run, and the cleaning runs off the event loop with a
+  deadline. The Wi-Fi network's name is also taken out of the recent-logs
+  probe and hashed with a key of the house's; multi-word secrets are
+  blanked to the end of the line; and the satellite limits probe requests
+  itself.
+
+## 1.5.0 (unreleased) — Friend Houses: the friend code is 6 digits
+
+- **What changed.** When two houses become friends, both now show a
+  **6-digit** code (it was 4), which makes a swapped friend file far
+  harder to get past a comparison. This is a new version of the way
+  friend requests are made (pairing version 2); friend files made from
+  1.5.0 on carry it, under the house's signature.
+- **What to know.** Both houses need 1.5.0 or later to **add** a friend:
+  importing an older house's friend file says "Your friend's Domovoi
+  needs updating to add friends.", and an older house importing a new
+  file is told it "is from a newer Domovoi". A request imported before
+  this house updated shows the same message and stops retrying; once
+  the other house has updated, ask it for a new friend file. There is no
+  fallback to 4 digits. Friends you already have are unaffected: they
+  keep messaging, and keep the 4-digit code they were shown. Migration
+  V075 lets the stored code be 4 or 6 digits. SECURITY_PRIVACY.md,
+  "Pairing versions, and no way back to 4 digits".
+
+## 1.5.0 (unreleased) — Plugin update checks on the Plugins page
+
+- **What changed.** A plugin installed from GitHub is checked once a day
+  for a newer `vX.Y.Z` release on its repo; the Plugins page shows
+  **update X.Y.Z** with the release notes (plain text) and an **Update to
+  X.Y.Z** button, plus **check for updates** to ask now. A zip install
+  whose manifest homepage is a GitHub repo gets **check GitHub for
+  updates**. New: `GET /v1/plugins/updates`, `POST
+  /v1/plugins/updates/check` (admin), and their `/api/plugins/updates`
+  twins.
+- **What to know.** Nothing updates by itself: the button runs the usual
+  GitHub upgrade at that tag, trust screen and confirm included. It
+  installs the release's `<slug>-X.Y.Z.zip` when its SHA-256 matches the
+  release's `SHA256SUMS` (a mismatch stops it), else the tag's source, and
+  says which. The
+  check reaches only `api.github.com`, with no credentials, and never
+  with the internet answered **No**. A private or unreachable repo reads
+  "can't check for updates", not "up to date". `updates` is now a
+  reserved plugin slug. INTERNET.md, and PLUGIN_DEVELOPMENT.md,
+  "Publishing so updates are found".
+
+## 1.5.0 (unreleased) — Update a house with no internet from a newer offline kit
+
+- **What changed.** Settings → System → About & updates → **Update from an
+  offline kit** (admins): plug the newer kit's stick into any computer and
+  choose its folder in the browser. The server first reads `kit.json` and
+  refuses, in one sentence, a kit that is older than or the same as the
+  release it runs, a kit for another machine, a server that doesn't follow
+  stable or has no update service, and a disk without room for the
+  update. It then asks only for what it lacks: the release's signed
+  manifest, the source, the Python packages it doesn't have at the kit's
+  versions, the container images Docker doesn't hold by their pinned
+  digests, the music player image, Ubuntu's packages when one the update
+  installs is missing, and the phone app when the kit's is newer. The
+  upload goes in pieces and picks up where it stopped after a reload or a
+  dropped connection (choose the folder again); each file is held to
+  `kit.json`'s size and SHA-256, and the release signature is checked as
+  soon as it arrives. **Update now** fetches the kit's release from its
+  bundle (it must be the signed manifest's commit, built on what runs now,
+  and signed by an allowed signer while signing is enforced), moves the
+  checkout to it and starts the update unit, which installs the wheels,
+  images and Ubuntu packages from the uploaded copy, each against the
+  release's own pins, with no internet. After a good update the rooms'
+  files of a kit made with Rooms ticked go in (`python -m domovoi.kit_rooms
+  install`, held to the new release's pins; only those the server lacks
+  are sent, and a kit without `rooms/` leaves them as they were), the phone
+  app goes in through the same check as an admin's upload, and the
+  uploaded copy is removed; **cancel** removes it at any time but during the update.
+- **What to know.** It works with internet access set to No. A kit never
+  downgrades. Models, voices and the other files an install copies are not
+  part of an update (an online update doesn't download them either). The
+  update keeps a copy of the venv while it changes the Python packages, so
+  a rollback can put it back with no internet: the disk check counts it.
+  `apply-update.sh` also takes `DOMOVOI_OFFLINE_SOURCE=<kit folder>` for an
+  administrator's own run. OFFLINE_KIT.md, "Updating from a kit".
+
+## 1.5.0 (unreleased) — Add rooms with no internet, from an offline kit
+
+- **What changed.** A kit made with **Rooms** ticked carries what a new
+  room installs, under `rooms/`: the Windows room Setup
+  (`DomovoiSatelliteSetup.exe`) with the Windows laptop's Python and
+  packages, a Linux computer's own Python and its packages (one wheel per
+  package for every `satellite/locks/pc-*.txt`), the Raspberry Pi card's
+  packages and every pinned openWakeWord model, and Debian's installer for
+  the room stick. Each is held to its pin in the release (`kit.json`
+  names it); the Pi's packages have none and are marked "from the house
+  that made this kit". The kit builder fetches what the server lacks
+  first, as "get the Windows files" and preparing a Pi's card would.
+  Installing from the kit puts them where the server serves them (in the
+  phone-app step, each checked again against this release's pins), so
+  Settings → Household → Rooms adds a Windows PC, a Linux computer and a
+  Raspberry Pi with no internet, under internet access "No". New open
+  routes `GET /v1/satellite-linux/wheels/{lock}/` (pip's `--find-links`
+  page, offered only when every package of that lock is here) and
+  `GET /v1/satellite-linux/wheels/{lock}/{name}`; `install-pc.sh` uses
+  them when the server offers them, else PyPI, `--require-hashes` either
+  way.
+- **What to know.** The room stick for an old computer still needs
+  internet in that room: Debian installs over the network. A Linux
+  computer needs its own sound packages (PortAudio, mpg123, the ALSA
+  utilities), which most desktops already have. A server installed from a
+  kit made without Rooms says so where it used to say only "internet
+  access is off" (the add-a-room cards, the room stick, the Pi card),
+  with what brings them: a kit with Rooms ticked, or internet for a
+  while. Rooms now also brings the Windows runtime (about 96 MB), the
+  Linux Python (about 66 MB) and the Linux packages; the card's size is
+  an estimate until the server has looked those packages up once.
+
+## 1.5.0 (unreleased) — Install Domovoi on Windows with no internet, from an offline kit
+
+- **What changed.** `DomovoiSetup.exe` installs from an offline kit: run
+  `release\DomovoiSetup.exe` on the stick and it says "Installing from the
+  offline kit. No internet needed." Setup on a PC with no internet also
+  offers **Use an offline kit...** to choose the stick's folder. Before it
+  changes anything, Setup checks the stick's checksums, the release
+  signature on the kit's manifest (the key Setup already pins for updates),
+  that the kit is the same release as the Setup (tag and commit), that the
+  parts are there, and the disk. It then takes WSL and Ubuntu's image from
+  the stick, each checked against Setup's pins, and DomovoiHost opens the
+  stick read-only inside Domovoi's Linux system for `provision.sh
+  --offline-kit`, which checks everything else as on Linux.
+- **What to know.** Use the Setup on the stick: another release's Setup
+  refuses the kit. Keep the stick plugged in until Setup finishes (it is
+  needed again after the restart for WSL too). The kit must be on the stick
+  or a folder on this PC every account can read, not a network folder. The
+  internet question starts at "No". Nothing on Windows reaches the internet
+  in kit mode: a download would be a fault, and Setup stops on it.
+  WINDOWS_HOST.md, "Installing without internet".
+- **Needs from the kit builder.** The kit has to carry `linux/provision.sh`
+  at the release commit (Setup checks it against its own pin); kits made
+  before that are refused with "missing Domovoi's install script".
+
+## 1.5.0 (unreleased) — Install Domovoi on Linux with no internet, from an offline kit
+
+- **What changed.** A computer with Ubuntu 26.04 and no internet installs
+  Domovoi from an offline kit, a USB stick an online Domovoi server makes:
+  `sudo bash /media/alex/DOMOVOIKIT/linux/install.sh --kit`. Before it
+  runs anything from the stick it checks the stick's checksums, the
+  release signature on the kit's manifest (Domovoi's release key, as the
+  online install), the source at the signed commit, and every file with
+  the checker from that commit; the install then checks each file against
+  the same pins as online, and nothing reaches the internet.
+  `provision.sh --offline-kit DIR` is the step underneath.
+- **What to know.** Ubuntu 26.04 only; other Linux systems still install
+  with internet, and Windows and Mac follow. The internet question
+  defaults to "No" from a kit. Not on the kit: the search helper and the
+  wake-word trainer's GPU runtime (training uses the CPU until an update
+  with internet). A kit that doesn't fit (a newer Domovoi's, a Mac-only
+  one, one without AI models when AI is wanted, a damaged stick) is
+  refused in plain words before anything changes. LINUX_HOST.md,
+  "Installing without internet".
+- **Also.** provision.sh now installs `dosfstools` and `mtools` (the
+  server makes a kit's FAT32 image with them), and puts the service user
+  in the `ollama` group with the `ollama` account's home open to that
+  group (not to others), so the server can put the AI models it already
+  has on a kit instead of downloading them again. A box set up before
+  gets both when provision.sh runs again (Windows Setup's repair, or by
+  hand); the dashboard's update doesn't add them yet.
+
+## 1.5.0 (unreleased) — A server can make an offline kit
+
+- **Plugins can add a card to Home (SDK 1.14).** A plugin declares
+  `[[web.home_cards]]` in its manifest and registers the component from its
+  panel bundle; Home shows it quietly (a card with nothing to show, or that
+  fails, leaves no trace). Nothing changes for a house with no such plugin.
+  See docs/PLUGIN_DEVELOPMENT.md.
+
+- **What changed.** Settings → System → **Offline kit** (admins): the
+  server writes a USB stick image with everything an install downloads
+  (the installers, Domovoi's source, the Ubuntu and Docker packages, the
+  Python packages, the database images, Ollama and the AI models, the
+  speech models, the wake words, the phone app, WSL and Ubuntu for
+  Windows, the Mac parts when ticked, what rooms need), for a house that
+  is never online. The household writes it with Raspberry Pi Imager, like
+  the room stick. Installing from the stick arrives with the installers'
+  part of 1.5.0; docs/OFFLINE_KIT.md says what works so far.
+- **What to know.** A kit is made only from a server on the stable
+  channel, at a release; a server behind the latest release is warned and
+  may go on. The server needs the `dosfstools` and `mtools` packages (the
+  next dashboard update or Restart installs them on a server set up
+  before 1.5.0, from Ubuntu's archive, and puts the core's account in the
+  `ollama` group so it copies the models this server has instead of
+  downloading them again; on a server you set up yourself,
+  `sudo apt install dosfstools mtools`) and Docker's containerd image store (the default of the Docker that
+  provision.sh installs). A kit is about 12 GB for a PC with AI, pictures
+  and rooms (a 16 GB stick), about 3.3 GB without AI; the image is deleted
+  by itself after 3 days. On a Windows or Mac server, Domovoi's disk grows
+  by the image's size and doesn't shrink by itself: delete the kit once
+  the stick is written. Some files on a kit (the Domovoi wake word) may
+  only be shared for free: don't sell a stick.
+
+## 1.5.0 (unreleased) — Admin on a phone for the rest of the day (server side)
+
+- **What changed.** After signing in as admin with the password, a phone
+  may keep admin for the rest of the day behind its fingerprint or Face ID:
+  it asks the server for a **phone grant** (`POST /api/auth/phone-grant`,
+  only within 5 minutes of a password sign-in) and later swaps it for a
+  fresh admin sign-in (`POST /api/auth/phone-grant/exchange`). A grant is
+  bound to the phone's device id and ends 24 hours after it was issued,
+  whatever happens. Migration V074 adds the `admin_phone_grants` table.
+- **What to know.** Settings → Advanced lists the phones under "Admin on
+  phones", each with a revoke. Changing the admin password, or
+  `--reset-admin`, ends every grant. The phone apps use it from their next
+  release; until then the list stays empty.
+
+## 1.4.1 (unreleased) — Chat lookups reach the web
+
+- **What changed.** A chat lookup with the internet allowed now reaches
+  web search when the offline library has nothing relevant. Before, the
+  library's first three results, related or not, filled every slot, so the
+  web was never asked and the reply was "I couldn't find that in what I
+  looked up."
+- **What changed.** Every lookup source's results pass a relevance check
+  before they are read or cited. A plugin source's 0–1 `score` decides it
+  (under 0.3 is dropped; 0 means no score). Otherwise the title and snippet
+  must share the question's key words. A reply that couldn't find the
+  answer lists no sources.
+- **What changed.** Questions about businesses, opening hours, "near me",
+  news, weather and prices go to web sources first and skip the offline
+  library. "Near me" and "local" are searched with the Home location.
+  With the internet set to "never", such a question gets "I need the
+  internet for that" instead of an unrelated library answer.
+- **What changed.** When the first lookup doesn't answer the question and
+  the chat allows the internet, the chat runs one more lookup with web
+  sources only. A short follow-up such as "how about now?" after a lookup
+  repeats that lookup.
+- **What changed.** The dashboard chat's internet chip says "internet:
+  ask first" when Domovoi asks before going online. "internet off" now
+  means the household's internet answer is "never".
+- **For plugin authors.** `LookupHit.score` is a 0–1 relevance for plugin
+  sources; `POST /v1/phone/lookup` takes an optional `web_only`.
+
+## 1.4.1 (unreleased) — Printing, videos, scans and Windows update hardening
+
+- **The list of a person's voice samples now needs a household device**, like the
+  rest of their People page.
+- **Printer discovery on a Mac install** counts only the Mac's own home
+  network as home, and never dials the Mac itself through the VM's
+  networks.
+- **Printer discovery reads network answers within limits**: a bounded
+  amount of work per answer, at most 32 answers kept from any one
+  address, and answers from outside the home network dropped.
+- **The Windows update copies the downloaded Setup more strictly**: each
+  file is opened without following a link and checked to be the file it
+  names, and a refused update removes every file it copied.
+- **Installing a plugin from GitHub** refuses a branch or tag name with
+  empty or `.`/`..` parts, so the download always comes from the
+  repository shown on the install screen.
+- **News feed discovery** reads only the first 256 KB of a page, scans
+  it in a worker thread and in time that grows only with its length.
+- **A room's satellite settings** (how its microphone listens, among
+  others) can be changed only once an admin password exists, like
+  recording a wake word; before setup and after `--reset-admin` saving
+  them asks for the admin setup first.
+- **Friend Houses read-outs** also leave out words that sound like a wake
+  word when the house says them, not only ones spelled like it, and the
+  stock wake words' names on their own.
+- **"Say that again" after a friend house's message or a shared list's
+  items** repeats them without adding them to the conversation the AI
+  model reads or to what the memory pass looks at; "double check that"
+  still declines them.
+- **The dashboard logs it** if it can't keep its port-80 permission away
+  from the programs it starts.
+- **Video poster frames**: every spelling of one file's path shares one
+  cached poster, and the frame is made at low priority, at most two at a
+  time, ended at its time limit.
+- **Video in chat reads the helper programs' output within limits**: the
+  upload check asks only for the fields it uses, the scene scan stops
+  reading its log at a cap, and a job's frame grabs have an overall time
+  budget.
+- **Scan reading**: a page is saved only while the scan still has the
+  bytes it was read from, the read, summary and text of a scan whose file
+  changed since answer 404 as the by-path lookup already did, and asking
+  for a read of a file over the 1 GB limit is refused before the file is
+  hashed (an unchanged file is not hashed again).
+- **The phone app's speech-recognition libraries are rebuilt in CI** from
+  their recorded recipe, weekly and whenever they change, and must match
+  their committed checksums byte for byte.
+
+- **Voice goes first with the house's AI model**: a bedtime story being
+  written, a memory pass or a news briefing stops when a room hears its
+  wake word and carries on after the answer, and a typed chat reply or a
+  chat title waits for a spoken answer in progress, so a question asked
+  out loud no longer waits behind them.
+- **The AI models answer more than one request at once on bigger
+  servers**: two with 24 GB of memory, three with 48 GB, four with NVIDIA
+  GPUs that have room, one below 24 GB as before. Each extra one takes
+  about 1.2 GB of memory (about twice that with an 8192-token routing
+  window; a server without the room stays a step lower). It takes effect
+  at the next update, which restarts the model service once.
+
+## 1.4.1 (unreleased) — Dashboard update fixes
+
+- **What changed.** Restarting the server for an update no longer makes
+  open dashboard tabs say "plugins changed — reload to get the new pages"
+  when no plugin changed; only a real upgrade of a plugin the tab already
+  runs asks for a reload.
+- **What changed.** Every confirmation and name prompt in the dashboard
+  (update, restart, delete, remove, rename and the rest) is now a dialog
+  inside the page. Some embedded browsers and phone web views dismissed the
+  browser's own pop-ups unseen, so pressing "Update Domovoi" did nothing.
+- **What changed.** The Version card in Settings → About & updates reads
+  the server again after it restarts, so it shows the new version and a
+  fresh update check without a manual reload.
+
+## 1.4.1 (unreleased) — A busy machine no longer restarts the core
+
+- **What changed.** The core no longer restarts itself when the database
+  is slow to answer because the machine is busy; it still restarts when
+  the core itself is stuck. When the database probe gets no answer, the
+  core now asks again on a separate connection of its own: only if that
+  one answers does the miss count toward a restart. The core log says
+  when the database itself was slow, and a stall report now includes the
+  machine's I/O and memory pressure and load average on Linux.
+
+
+## 1.4.1 (unreleased) — A slow start no longer switches a plugin off
+
+- **What changed.** A plugin that took a long time to load on a busy
+  start (right after installing several plugins and restarting, say) was
+  shown as "load error" and disabled, and you had to turn it on again by
+  hand. It now stays on and shows a small "loaded slowly" note on its
+  card. The wait is judged on the work the plugin itself did, not on how
+  busy the computer was. Real faults still switch a plugin off.
+- **Radio 1.5.1.** The Plugins page and Radio's own help no longer name
+  the online song-identification service; they just say "an online
+  song-identification service".
+
+## 1.4.1 (unreleased) — Microphone presets for XVF3800 satellites
+
+- **What changed.** Signed in as admin, an XVF3800 satellite's Settings tab
+  has a **Microphone DSP** block: factory settings or presets B, C and D for
+  noisy rooms, the values the array read back, and a **Mark** field that
+  stamps a note into the satellite's and the server's logs. Runtime only;
+  nothing is saved to the array.
+- **What to do.** Press **Upgrade satellite** on each XVF3800 satellite once
+  the server runs 1.4.1; the block appears after it reconnects. Other
+  satellites don't show it.
+
+## 1.4.1 (unreleased) — Tighter checks on recording, live state and satellite setup
+
+- **Recording wake-word clips needs the admin sign-in.** Starting a
+  wake-word recording take now needs an admin, also before setup and after
+  `--reset-admin` (it answers 501 until someone signs in), like a drop-in.
+- **The dashboard's live updates check where they come from, and keep
+  checking.** The live-state connection accepts the dashboard's sign-in
+  cookie only from the dashboard's own page, and it ends within about 30
+  seconds of a sign-out or a household-token rotation.
+- **Satellite hellos are bounded.** An oversized first message from a
+  device is closed unread, the hardware address and kind a waiting device
+  reports are stored only in their known shape, and at most 32 devices can
+  wait for approval at once (a new one past that is asked to try again).
+- **Satellites read a server's health answer within limits.** A room
+  device looking for its server reads at most 64 KiB of each answer under
+  one deadline, and a network search can no longer be held open by one
+  slow host. This ships with the satellite code update.
+
+## 1.4.1 (unreleased)
+
+- Radio 1.5.3 (SDK 1.13.1): station streams, for the song sampler and the
+  browser player alike, are asked for uncompressed and read exactly as
+  sent; a station that answers compressed is refused. Model, voice,
+  lyrics, font and plugin downloads read their bodies the same way. New
+  for plugins: `net_safety.open_raw_stream` and `iter_raw`.
+
+- Holiday questions work offline: "how many days until New Year's Day",
+  "when is Thanksgiving", "what day is Easter next year" answer with the
+  date and the day count. The built-in table covers the common public
+  holidays and observances of the US, Canada, the UK, Ireland, Australia
+  and New Zealand, plus Easter and the days counted from it, and uses the
+  country of the Home location (the US when none is set). "This year" for
+  a holiday that already passed says how many days ago it was.
+
+- A spoken "Should I remember that?" offer no longer rides on the answer
+  to a question. It comes after a remark or a chat, at most once a day per
+  person, and never for something Domovoi already knows (your name, a
+  fact it remembers). A one-word "yes" to it now saves the fact. A plain
+  fact question from someone Domovoi recognizes gets the same prompt as
+  anyone's; their remembered facts go in only when the question is about
+  them.
+
+- Spoken suggestions (meals, restaurants, gifts, music, things to do) for
+  someone Domovoi recognizes use their remembered tastes and diet again;
+  plain fact questions still don't. Remembered allergies and diets are
+  never cut when a profile is long. After a food suggestion, when someone
+  in the house has a remembered allergy or diet, Domovoi adds one line: to
+  a voice it doesn't recognize, that nobody's allergies were taken into
+  account (naming no one and no allergy); to someone it knows, what the
+  others need ("Heads up: not all of these are peanut-free."), naming no
+  one.
+
+- A chat draft's changes view on the dashboard leaves a paragraph gap
+  between a long removed passage and the added text after it, so the old
+  last word no longer runs into the new first word.
+
+- A room device set up for a different Domovoi server (another house, or
+  this one before it was reinstalled) used to only blink "no server". Its
+  address is now listed under Settings → Rooms, with the advice to set it
+  up again for this server. The room still trusts only its own server.
+
+- The Documents editor runs on Tiptap 3 (3.33.1, was 2.27.3). Documents,
+  saving and co-editing work as before; the accepted Tiptap advisory
+  (GHSA-cp6q-959q-f8rh) is fixed in this version, so its exception is gone.
+  A span nested in a coloured span now keeps both styles when pasted.
+- Room devices looking for every house count a server only when its
+  identity proof is bound to the address they dialled, and the server
+  signs the approval-proof form only bound to one.
+- Friend Houses: a friend request broken off partway counts as a try on
+  the friend file; the file closes after three, and the asking house stops
+  retrying on its own after one (the request says to withdraw it and try
+  again).
+- Friend Houses: the check that pings friends has one deadline per ping,
+  and each stage of the retry loop has a deadline, so one friend can't
+  hold up the others.
+- Friend Houses: wake phrases are taken out of a friend's text more
+  loosely, after the speech cleaner, and from the whole sentence read
+  aloud (messages and shared lists).
+- Friend Houses: a friend's messages and names read aloud stay out of the
+  chat model's history, and "double check that" declines such a reply.
+- Friend Houses: a friend set to "say who it's from" or "read aloud" now
+  shows, during quiet hours, when new messages will be said (or that only
+  some rooms are quiet), and a message that wasn't said because of quiet
+  hours is marked "held for quiet hours" in Messages.
+- Friend Houses: messages that came during quiet hours are said in each
+  room when its own quiet hours end, if they are still unread (once per
+  room); Home's "needs attention" counts unread Friend Houses messages and
+  links to them; and the Friend Houses page now starts with Messages.
+- Friend Houses: the page is open to everyone in the household. Messages
+  and Shared lists (taking, declining and stopping a shared list with an
+  existing friend) need only the household's paired browser or phone;
+  starting a share stays with the admin. Requests, friend files, this
+  house, the friends list and blocking sit in a "Friends and connections"
+  section at the bottom that asks for the admin sign-in when opened.
+- A guest's "play this one" on a room that stopped in the meantime is
+  refused, so a guest never starts a stopped room.
+- A room's queue looks up the songs it can't place by path in one query
+  instead of one per entry, and a guest's queue and Up next reads leave out
+  the "why this song?" text, which comes from a listener's history.
+- The privacy page no longer says the room-queue blocks stop a device that
+  calls the core directly: the dashboard checks them, the core doesn't.
+- Radio 1.5.2: a failed station-directory search no longer logs what was
+  searched, and the log scrub blanks those search words in the directory's
+  URLs; a now-playing poll has a whole-poll deadline, so a station that
+  sends a byte now and then can't stall polling for every station.
+- The open plugin list and manifest say only that a plugin's server web
+  module failed to load; the error text is shown to an admin.
+- Feed and page fetches have a deadline for the whole answer, not just per
+  read. The privacy page notes that a global IPv6 address of the server or
+  a neighbour counts as public for outbound fetches.
+- The podcast list shows a feed URL without its query or user info (where
+  a private feed keeps its token) to a caller without the household token,
+  and podcast log lines leave them out too.
+- Listens posted by phones and browsers have a house-wide daily cap beside
+  the per-device one.
+
+## 1.4.1 (unreleased) — Sign-in, room pairing and drop-in checks
+
+- **Changing the admin password** checks the old password under the same
+  backoff as the sign-in form: after a wrong old password, the next try
+  waits (`429` with `Retry-After`).
+- **The dashboard's log** quotes the request path in its "refused" lines,
+  so a path can't start a new log line.
+- **Security docs**: the admin idle hour is restarted by any successful
+  admin write, including one that answers `"ok": false`; the house-wide
+  sign-in ceiling and what it costs are described; the short address
+  switch is listed among the admin-gated controls; and a hostile server
+  that stays on the network can hold a device asking every house from
+  answering until the server's address is typed in its setup portal.
+- **Room approval** binds a room only to the device whose request the
+  code was checked against: if another device took the request over in
+  between, nothing is bound and the request stays waiting.
+- **Settings → Rooms** no longer advises trusting an address a room
+  dialled that isn't the server's own unless someone set a room up with
+  it; otherwise it may be a relay.
+- **Drop-in from a phone**: `phone_id` must be a device id (the shape the
+  chat mic's voice turns already take) and may not name a connected room;
+  anything else is closed with `bad_phone_id`. The open snapshot names a
+  phone in a call `phone`, not by its device id.
+- **Satellite hellos**: `synced_sha` is kept only when it is a short
+  version label; anything else reads as unknown.
+- **Satellites** (with the satellite code update): a device approved by
+  asking every house remembers that server proves approvals, so its later
+  hellos never carry its approval code; and a pushed wake word whose name
+  isn't a wake-word name is ignored, as is such a name saved earlier (the
+  configured word is used).
+
+## 1.4.1 (unreleased) — Friend Houses: tighter limits
+
+- **Friend Houses waits for an admin after a reset.** If the admin
+  password is reset (`--reset-admin`), phones and the dashboard can't read
+  or send friend messages, see the friend list or use shared lists until
+  someone signs in as admin again.
+- Friend Houses writes Tor's config and key files through a fresh,
+  exclusively created temp file, and a key file with an unexpected name
+  is ignored instead of stopping the update.
+- The Friend Houses listener closes the oldest connection that hasn't
+  finished its handshake when its slots fill up, and closes a connection
+  that sends far more pings than a house ever does.
+- The Friend Houses firewall drops every IPv6 packet from its network
+  (the network has no IPv6), and its state file says `ipv6=absent` where
+  `ip6tables` isn't installed.
+- With the internet answer "never", Friend Houses stops Tor before it
+  reads the database, so a database outage can't keep it running.
+- Shared lists: an offer withdrawn before it was accepted is forgotten,
+  and old applied changes are pruned by count. When a friend's edit to an
+  item wins, the item shows as from a friend house, not as the household
+  member who first added it.
+- **Removing or blocking a friend stops sharing lists with that house.**
+  Each house keeps its own copy as an ordinary list, and messages or list
+  changes still waiting to go to that house are dropped, so nothing goes
+  out if you become friends again later.
+- New-friend and shared-list announcements that no room heard (no room
+  connected, or all quiet or busy) wait and are tried again.
+- Docs: the friend list's 4-digit code is readable by household phones;
+  only marking it verified needs an admin.
+
+## 1.4.1 (unreleased) — Queue, downloads, podcast and Word export hardening
+
+- **Up next** trims only songs a room was heard playing. Jumping ahead in a
+  long queue no longer lets the songs it passed be trimmed as played.
+- **Radio**: the docs now say exactly what the stream redirect check
+  covers. It judges the server's own request; the room's player makes its
+  own. Nothing changed in how stations play.
+- **Download queue**: `GET /v1/acquisitions` and `GET /api/acquisitions`
+  stay open, but a caller who is not admin gets `requested_by` and
+  `origin_ref` as `null` and `error` as a fixed sentence. An admin still
+  reads the raw values.
+- **Podcasts**: `GET /api/podcasts/positions/{episode_id}` is a device-tier
+  read now, like the audiobook one. The episode list stays open, but
+  `position_sec` is filled in only for a caller with a household
+  credential.
+- **Word export**: a Word copy of a Markdown or text file, and a chat
+  draft's file, are built off the dashboard's main loop, and one longer
+  than 20,000 lines is refused with `413`.
+
+## 1.4.1 (unreleased) — Home location, in Settings → Household
+
+- **What changed.** The household's town has its own place: Settings →
+  Household → **Home location**, one field where you start typing and pick
+  your town from a list ("Denver, Colorado, US"). Weather answers and local
+  news use it. The list comes with Domovoi (GeoNames, CC BY 4.0), so what
+  you type never leaves the house. It replaces **Local news location** in
+  Settings → System → Advanced → News, which is gone.
+- **Carried over once.** On the first start of 1.4.1, the text you had in
+  Local news location becomes your Home location. When it clearly names one
+  town, that town is picked for you. When it doesn't ("Springfield": there
+  are several), the text is kept and the field asks you to pick your town
+  from the list; until then weather and news use the text as before. With
+  nothing there, Home location starts empty.
+- **What to know.** Only an admin can change it; every household device can
+  see it. Plugins: `core_config.news_location` still works and is now the
+  Home location's name; the whole place, coordinates included, is
+  `sdk.household.home_location()` (SDK 1.13,
+  [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
+
+## 1.4.1 (unreleased) — Weather answers are back
+
+- **What changed.** "What's the weather today?" now has your server's own
+  search service look up your place with Open-Meteo (free for personal,
+  non-commercial use; data CC BY 4.0), or wttr.in when Open-Meteo has no
+  answer, and answers with the current temperature and conditions (in
+  Fahrenheit for a US place). The place is the
+  **Home location** in Settings → Household (above). With
+  Settings > Privacy > Internet on "always", Domovoi no longer asks "want me
+  to check?" first. With no place set it says where to set it. If the
+  weather sources return nothing, it falls back to a general web search as
+  before. It used to find encyclopedia pages and say it had no real-time
+  information.
+- **What to know.** Set your Home location to get a local answer. The bundled search service restarts once on update to pick
+  up the new weather source. An installed weather plugin takes over
+  weather questions and core steps aside.
+
+## 1.4.1 (unreleased) — "Print this" works on a picture or file in a chat
+
+Attach a picture or a document to a chat and say "print this" (or "print
+it", "can you print this please?"): Domovoi now opens the Print dialog on
+that attachment instead of the chat model answering that it can't print.
+With both a draft and an attachment in the chat, the one you attached with
+that message is printed, otherwise the newer of the two. The chat model is
+also told that printing is Domovoi's job. The phone apps show this card
+once they update.
+
+## 1.4.1 (unreleased) — A chime before announcements and broadcasts
+
+A room now plays a short two-note chime before an announcement or a
+broadcast speaks, so people catch the first words. That covers "tell the
+kitchen dinner is ready", Broadcast, timers and reminders, and plugin
+announcements; normal answers never get it. It plays on every kind of room
+(Raspberry Pi, spare PC, phone in room mode) with no update on the room.
+To turn it off, untick "Chime before announcements" in Settings, Voice &
+speech (`announce_chime_enabled`).
+
+## 1.4.1 (unreleased) — A new plugin's page shows up without a restart or reload
+
+Installing or enabling a plugin from the Plugins page now adds its page and
+menu item to the dashboard right away, in every open tab. Nothing needs a
+restart, and no reload either. Before, the menu stayed as it was until the
+page was reloaded. An upgrade of a plugin whose page a tab already runs
+still asks for a reload (and a restart when its server side changed), as
+before.
+
+## 1.4.1 (unreleased) — Settings search finds every setting
+
+- **What changed.** Searching Settings for a word like "news", "town" or
+  "weather" now finds the Home location. The search also looks at each
+  setting's group, its help text and a few extra words it can be known by,
+  shows more results, and tries again if the list of settings was not ready
+  the first time you typed.
+- **What to know.** Nothing to do.
+
+## 1.4.1 (unreleased) — Feed and download reads are bounded more tightly
+
+- The part of a podcast or news feed before its first item is read in one
+  pass and capped at 256 KiB; a feed with a longer head is reported as too
+  large, as an over-size feed already is.
+- Outbound fetches accept no Content-Encoding or exactly one of gzip or
+  deflate, always inflate it under the caller's byte cap, and refuse any
+  other encoding; podcast episode downloads ask for an unencoded body.
+- Plugin acquisitions get a time and size budget (Settings: `acquisition_max_seconds`,
+  default 1 hour; `acquisition_max_bytes`, default 1 GiB; 0 turns one off). One over
+  the budget ends as failed and its file is not kept. Adding by link without an
+  admin session is limited to 10 waiting links at a time.
+
+## 1.4.1 (unreleased) — Room names are checked more strictly when a satellite connects
+
+- **What changed.** Room names are checked more strictly when a satellite
+  connects: lowercase letters, digits, `_` and `-`, up to 32 characters,
+  starting with a letter or digit. The dashboard's room addresses take the
+  same rule.
+- **What to know.** Nothing to do. Every way of setting up a room already
+  makes names like these.
+
+## 1.4.1 (unreleased) — A refused plugin install says which package clashes
+
+- **What changed.** When a plugin is refused because its requirements would
+  change a package Domovoi already uses, the Plugins page now names each
+  package ("certifi: the plugin wants 2026.6.17, Domovoi has 2026.10.23",
+  up to five, then "and N more") and says to ask the plugin's publisher for
+  a version built for this Domovoi. It used to give only a general sentence.
+- **What to know.** Nothing to do. Plugin authors: compile the lock with
+  `pip-compile -c requirements-linux-py314.lock`
+  ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)).
+
+## 1.4.1 (unreleased) — "My name is …" again replaces a short room sample
+
+Saying "my name is …" again in a room that doesn't recognize your voice,
+and answering yes to "Is that you?", now replaces your old short sample for
+that room instead of adding a second one beside it. It asks you to count to
+ten first, and your old sample stays unless the new recording holds more of
+your voice. Your samples from other rooms, and other people's, are never
+touched. A room that already has a good (4 seconds or longer) sample of you
+still adds, as before. The API docs also gave the wrong default for the
+voice match threshold: it is 0.58, not 0.75.
+
+A short room sample no longer stands in for your whole voice in that room.
+Before, if a room had any sample of you, even a one-second clip, you were
+judged against that room's samples alone. Now that only happens when one of
+them holds at least 4 seconds of speech; otherwise all your samples count,
+so a good sample from another room still helps you be recognized. A room
+with only short samples of you also learns again: it may ask "By the way,
+was that you?" when it nearly recognized you, and after three clear
+recognitions in a row it replaces the short sample, but only with a
+recording that holds more of your voice. A good sample is never changed.
+
+"Was that you?" can now only be answered by that person. The voice that
+says yes must sound at least about as much like them as the voice the
+question was about, and not like anyone else in the house. Otherwise
+nothing is saved and Domovoi says it will ask them itself next time. A bare
+"yes" is often too short to tell whose voice it is, so say "yes, that was
+me" instead.
+
+## 1.4.1 (unreleased) — Music no longer goes silent after a question
+
+- **What changed.** Music no longer goes silent after a question while it
+  plays. A room could end a voice turn with the dashboard saying "playing"
+  and nothing coming out of the speaker, and "play" didn't bring it back.
+  Now every turn brings the music back, including one the satellite
+  drops (nothing was said, it heard its own reply, it was too noisy). A
+  room whose satellite can't play the stream says "paused" on the
+  dashboard instead of "playing", and "play" there starts the satellite's
+  player again. A satellite that loses its connection to the server during
+  a question gets its music back once it reconnects.
+- **Satellites.** Update the satellites as well: they now tell the server
+  when music they were sent will not play, and count music as playing only
+  once sound actually arrives from the stream (a stream that connects and
+  sends nothing is given up on after 4 seconds instead of being counted as
+  playing).
+
 ## 1.4.1 (unreleased) — The wake-word trainer image moves to torch 2.14
 
 The trainer image's pinned packages had known security advisories (torch
@@ -1979,6 +3348,7 @@ Stand By Me"). When a media-provider plugin finds nothing that carries the
 words you asked for, the answer is "I couldn't find anything called …";
 the media-provider plugin's next release stops streaming an unrelated
 result in that case.
+
 ## 2026-11-12 — Music keeps going after a streamed song
 
 When a song you don't have is streamed into a room (say "play" a song
@@ -8090,6 +9460,7 @@ In this order (`curl -s http://<server>:6370/v1/stats/latency?since=<restart tim
   again (`voiced_after_end_ms`, `listened_after_end_ms`). Its
   `utterance_end` for such a capture comes that much later; nothing waits
   for it. An older core ignores the fields.
+
 ## 2026-09-30 — Timers and reminders reach the whole house
 
 ### Do this once, after upgrading

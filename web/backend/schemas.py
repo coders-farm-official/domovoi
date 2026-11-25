@@ -13,8 +13,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from domovoi.config import Settings as _CoreSettings
 from domovoi.models import MAX_CONFIG_CHANGES
 from domovoi.up_next.service import ContextIn as UpNextContext
+
+# The core default (not the live, possibly overridden, value): the OpenAPI
+# dump must not depend on the machine that ran it.
+_VOICE_MATCH_THRESHOLD_DEFAULT = _CoreSettings.model_fields[
+    "voice_profile_match_threshold"
+].default
 
 
 # ─── Music ────────────────────────────────────────────────────────────────
@@ -494,17 +501,19 @@ class Session(BaseModel):
 
 
 class VoiceMatchInfo(BaseModel):
-    """How voice identification scored a satellite turn (V049). ``outcome``:
+    # An f-string ``__doc__`` (pydantic reads it as the schema description)
+    # so the default threshold quoted here is the config's own, never a copy.
+    __doc__ = f"""How voice identification scored a satellite turn (V049). ``outcome``:
     "confident" | "match" (somebody was named) | "ambiguous" (two people too
     close to tell apart: nobody named) | "no_match" (the closest was under
     the threshold) | "too_short" (the recording was too short to embed) |
     "no_embedding" (the embedder gave nothing) | "no_samples" (nobody
     enrolled yet) | "timeout" | "denylist" (an opted-out voice) | "error".
     The closest person and the runner-up with their scores (cosine, 0..1;
-    the match threshold is ``voice_profile_match_threshold``, 0.75 by
-    default) are set for the first four and "noisy" (music or
-    a TV under the voice: scored, nobody named; 1.3.0); a person since
-    forgotten reads null. Names are the people's current names."""
+    the match threshold is ``voice_profile_match_threshold``,
+    {_VOICE_MATCH_THRESHOLD_DEFAULT} by default) are set for the first four
+    and "noisy" (music or a TV under the voice: scored, nobody named;
+    1.3.0); a person since forgotten reads null. Names are the people's current names."""
     outcome: str
     best_person_id: int | None = None
     best_name: str | None = None
@@ -555,6 +564,17 @@ class ConversationTurn(BaseModel):
     # 2026-11-11). Admins only (web/backend/voice_match.py): null for every
     # other caller, for older rows and for turns not from a satellite.
     voice_match: VoiceMatchInfo | None = None
+    # Rooms with several satellites (V073, 1.5.0): the device that owned
+    # the turn and the one whose microphone was transcribed (the one that
+    # heard the person best). None for older rows.
+    satellite_id: str | None = None
+    mic_satellite_id: str | None = None
+    # The room's name and the transcribed mic's display name ("Kitchen
+    # phone"): set when the room has several satellites or the mic was
+    # not the turn's owner, for "Answered in the Kitchen. Heard best by
+    # Kitchen phone." None otherwise.
+    room_name: str | None = None
+    heard_by: str | None = None
 
 
 class RecentlyPlayed(BaseModel):
@@ -736,6 +756,27 @@ class Satellite(BaseModel):
     # before) and for an offline room.
     board: str | None = None
     supports: list[str] | None = None
+    # The CONNECTED device declared ``diagnostics`` (1.5.0): it answers the
+    # read-only probes, so the drawer offers its Diagnostics tab. False
+    # offline and for a device that didn't declare it (every older one).
+    diagnostics: bool = False
+    # Support sessions (1.5.0): the "Allow support sessions" switch (off by
+    # default) and whether the CONNECTED device declared support_shell (a
+    # Pi on a prepared card whose account can't use sudo).
+    support_allowed: bool = False
+    support_shell: bool = False
+    # Whether a support key is pinned for the device (at its pairing's
+    # approval, or by the switch for one paired before that): when not,
+    # turning the switch on trusts the key it presents then, and the
+    # dashboard's confirm dialog says so. ``support_key_changed``: the
+    # CONNECTED device presents a key other than the pinned one (no
+    # support sessions until it is re-paired; voice use is unaffected).
+    support_key_pinned: bool = False
+    support_key_changed: bool = False
+    # Whether the CONNECTED satellite declared mic_dsp (an XVF3800 with
+    # xvf_host, 1.4.1): only then does its Settings tab offer the admin
+    # Microphone DSP presets (GET/POST /api/satellites/{room}/mic_dsp).
+    mic_dsp: bool = False
     # A code upgrade under way or just finished (SatelliteUpgrade), from the
     # Domovoi server snapshot; null when there is none. While ``state`` is
     # ``running`` the dashboard and the app keep the room's Upgrade button
@@ -1262,8 +1303,12 @@ class SpareDeviceEnrolRequest(BaseModel):
     second network card). The answer is the enrolment payload, the Linux
     install command and what the QR code carries."""
 
-    room: str = Field(..., min_length=1, max_length=64)
+    room: str | None = Field(default=None, max_length=64)
     core: str | None = Field(default=None, max_length=256)
+    # "Add a satellite to the Kitchen" (1.5.0): the existing room's id. The
+    # server then names the device itself ("Kitchen 2", or `room` again
+    # when it names a code made before) and the payload carries `in=`.
+    in_room: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,31}$")
 
 
 class SatelliteApproveRequest(BaseModel):
@@ -1275,6 +1320,11 @@ class SatelliteApproveRequest(BaseModel):
     compares it in constant time and counts the attempt."""
 
     code: str = Field(..., min_length=1, max_length=16, pattern=r"^[0-9]+$")
+    # 1.5.0, "Which room is it in?": an existing room's id OR a name for a
+    # new room (not both). Neither: the room the device asked for, if it
+    # exists, else a room of its own.
+    room_id: str | None = Field(default=None, max_length=120)
+    new_room_name: str | None = Field(default=None, max_length=120)
 
 
 class AdoptRequest(BaseModel):
@@ -1508,6 +1558,18 @@ class RoomVoiceRequest(BaseModel):
     # A registered voice's name; null: the server's own voice (a phone in
     # room mode only: a Pi keeps a named voice of its own).
     voice: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class MicDspRequest(BaseModel):
+    """An XVF3800 DSP preset, by NAME only (the Domovoi server checks it
+    against its list; the satellite against its fixed table)."""
+    preset: str = Field(..., min_length=1, max_length=32)
+
+
+class MicDspMarkRequest(BaseModel):
+    """A test marker for the satellite's and the server's logs. The Domovoi
+    server escapes control characters and cuts it to 120 characters."""
+    text: str = Field(..., min_length=1, max_length=1000)
 
 
 class ConfigUpdateRequest(BaseModel):

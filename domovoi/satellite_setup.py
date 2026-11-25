@@ -302,13 +302,13 @@ def _get(url: str, dest: Path | None, limit: int) -> bytes | str:
     body = bytearray()
     written = 0
     with _client() as client:
-        response = net_safety.open_stream_sync(client, url)
+        response = net_safety.open_raw_stream_sync(client, url)
         try:
             if response.status_code != 200:
                 raise ValueError(f"HTTP {response.status_code}")
             f = open(dest, "wb") if dest is not None else None
             try:
-                for chunk in response.iter_bytes(1 << 20):
+                for chunk in net_safety.iter_raw_sync(response, 1 << 20):
                     written += len(chunk)
                     if written > limit:
                         raise ValueError(f"larger than {limit} bytes")
@@ -426,8 +426,15 @@ def status(*, probe: bool = True) -> dict[str, Any]:
         "windows_install": windows,
         "fetchable": fetchable,
         "internet_off": egress.internet_turned_off(),
+        "kit_note": None if windows else _kit_note(rec is not None),
         "fetch": dict(_job),
     }
+
+
+def _kit_note(ready: bool) -> str | None:
+    from domovoi import kit_rooms
+
+    return kit_rooms.note("the Windows room Setup", ready=ready)
 
 
 def fetch() -> tuple[bool, str]:
@@ -440,8 +447,8 @@ def fetch() -> tuple[bool, str]:
         return False, ("this server came with Domovoi's Windows Setup, which brings the spare-PC room Setup "
                        "with it: run the newest DomovoiSetup.exe to update it")
     if egress.internet_turned_off():
-        return False, ("internet access is off (Settings → Privacy → Internet), so this server can't download "
-                       "the Windows Setup")
+        return False, (_kit_note(False) or "internet access is off (Settings → Privacy → Internet), so this "
+                       "server can't download the Windows Setup")
     dest = _bucket()
     problems: list[str] = []
     for label, base in sources(release_tag()):

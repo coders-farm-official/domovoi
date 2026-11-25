@@ -236,7 +236,8 @@ $manifestArg = '/win32manifest:' + $manifest
 # Domovoi's icon (installer\art\make_art.py makes it from docs/assets/domovoi-icon.png).
 $iconArg = '/win32icon:' + (Join-Path $here 'installer\art\domovoi.ico')
 Invoke-Csc (Join-Path $bin 'DomovoiHost.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })) (@($manifestArg, $iconArg) + $keyArg)
-Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })) (@($manifestArg, $iconArg) + $keyArg)
+# The helper draws the setup-code QR (helper\SetupQr.cs) with the tray's encoder.
+Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName }) + @(Join-Path $here 'tray\Qr.cs')) (@($manifestArg, $iconArg) + $keyArg)
 # The tray: a Windows app (no console), its own manifest (DPI aware), the
 # icon embedded for the notification area too.
 $traySrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'tray') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })
@@ -257,9 +258,10 @@ if (-not $SkipTests) {
     # The tray's too (TrayTests.cs: its card goldens, tests\card-goldens.json,
     # and QrReference.cs, matrices from an independent QR encoder).
     # LanNameTests.cs: the network name (domovoi/lan_name/vectors.json).
+    # KitTests.cs: the offline kit, against tests\kit-fixture (signed like release-sig).
     # UpdateTests.cs: the Windows update, its signatures checked against
     # tests\release-sig (a throwaway key's; the test exe embeds no release key).
-    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs', 'UpdateTests.cs', 'LanNameTests.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
+    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs', 'UpdateTests.cs', 'LanNameTests.cs', 'KitTests.cs', 'KeepIdentityTests.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
     Invoke-Csc $testExe ($common + $helperSrc + $hostSrc + $traySrc + $testSrc) (@("/r:$sma", '/main:Tests', $trayIcon) + $trayRefs)
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "unit tests failed" }

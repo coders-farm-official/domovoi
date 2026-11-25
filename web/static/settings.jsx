@@ -907,6 +907,86 @@ const AdminSection = ({ setupAsked = false }) => {
   );
 };
 
+/* ---- Phone grants (V074, 1.5.0) ------------------------------------- */
+/*
+ * A phone that signed in as admin with the password may keep a grant
+ * for the rest of the day behind its fingerprint (or Face ID), and swap it
+ * for a fresh admin sign-in when the idle hour has lapsed. Listed here
+ * beside the admin sign-in, each with a revoke: revoking ends the grant
+ * and any admin sign-in the phone made with it. A password change ends
+ * them all. Shown only while this tab is signed in (the list is admin).
+ */
+const fmtGrantWhen = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const clock = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return sameDay ? clock : `${d.toLocaleDateString([], { weekday: 'short' })} ${clock}`;
+};
+
+const PhoneGrantsCard = () => {
+  const { items: grants, loading, refresh } =
+    useApiList('/api/auth/phone-grants', { quiet: true, pickItems: (x) => (x && x.grants) || [] });
+  const [busy, setBusy] = React.useState(null);   // grant id mid-revoke
+  const [error, setError] = React.useState(null);
+  const revoke = async (g) => {
+    setBusy(g.id); setError(null);
+    try {
+      await apiDelete(`/api/auth/phone-grants/${g.id}`);
+      refresh();
+    } catch (e) {
+      setError(`revoke failed: ${apiErrorText(e)}`);
+    } finally { setBusy(null); }
+  };
+  const live = grants.filter((g) => g.live);
+  return (
+    <Card title="Admin on phones"
+          sub="Phones that signed in as admin with the password and keep it for the rest of the day behind a fingerprint or Face ID. Revoking one signs that phone out; changing the password signs them all out.">
+      {error && (
+        <div className="phone-grants-error"
+             style={{ padding: '8px 16px', fontSize: 12, color: 'var(--err-ink)' }}>{error}</div>
+      )}
+      {loading && grants.length === 0 ? (
+        <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
+      ) : live.length === 0 ? (
+        <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          No phone is signed in as admin for the day.
+        </div>
+      ) : (
+        <table className="tbl phone-grants">
+          <thead><tr>
+            <th>phone</th><th>until</th><th>last used</th><th className="actions"></th>
+          </tr></thead>
+          <tbody>
+            {live.map((g) => (
+              <tr key={g.id}>
+                <td>
+                  <div style={{ fontWeight: 500 }}>{g.label}</div>
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{g.device_id}</div>
+                </td>
+                <td className="mono">{fmtGrantWhen(g.expires_at)}</td>
+                <td className="mono">{g.last_used_at ? fmtGrantWhen(g.last_used_at) : 'not yet'}</td>
+                <td className="actions">
+                  <Button disabled={busy === g.id} onClick={() => revoke(g)}>
+                    revoke
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+};
+
+// Only while this tab is signed in: the list is an admin read.
+const PhoneGrantsSlot = () => {
+  const reload = useAdminReloadState();
+  if (!reload.signedIn) return null;
+  return <div data-settings-mark="phone-grants"><PhoneGrantsCard/></div>;
+};
+
 // "running 2h 14m" — coarse on purpose: this answers "did it restart when I
 // thought it did?", not "how long exactly".
 const fmtUptime = (sec) => {
@@ -1270,11 +1350,12 @@ const VersionSection = () => {
     onSettled: () => { setStatus(null); return refreshCore(); },
   });
 
-  const check = async () => {
+  const check = async ({ quiet = false } = {}) => {
     setChecking(true); setStatus(null);
     try {
       const res = await apiPost('/api/config/version/check', {});
       setStatus(res);
+      if (quiet) return;
       if (res && res.error) {
         fire(`update check failed: ${res.error}`);
       } else if (!res || !res.upstream) {
@@ -1285,11 +1366,34 @@ const VersionSection = () => {
         fire(versionCheckWords(res));
       }
     } catch (e) {
-      reportMutationFailure(fire, 'update check', e);
+      if (!quiet) reportMutationFailure(fire, 'update check', e);
     } finally {
       setChecking(false);
     }
   };
+
+  // The core restarted under this open card (an update started in another
+  // browser, a restart by hand, or this tab's own whose follow it missed):
+  // what the card holds (the old version, "12 commits behind" from a check
+  // against the old code) is stale. The core's start moving (or the commit
+  // it runs) is the signal: drop the old check and ask again. While the
+  // core is away the card asks every few seconds, so it notices the
+  // return without a reload.
+  const bootKey = core ? `${core.started_at == null ? '' : core.started_at}|${core.sha || ''}` : null;
+  const seenBoot = React.useRef(null);
+  React.useEffect(() => {
+    if (bootKey == null) return;
+    const had = seenBoot.current;
+    seenBoot.current = bootKey;
+    if (had == null || had === bootKey) return;
+    setStatus(null);
+    if (!internetOff) check({ quiet: true });
+  }, [bootKey]);
+  React.useEffect(() => {
+    if (!coreDown) return undefined;
+    const t = setInterval(() => { refreshCore(); }, 4000);
+    return () => clearInterval(t);
+  }, [coreDown]);
 
   // Follow the other channel. Nothing moves now: the server makes the
   // local branch at the code it runs and tracks origin/<channel>; the
@@ -1297,7 +1401,7 @@ const VersionSection = () => {
   const [switching, setSwitching] = React.useState(false);
   const switchChannel = async (to) => {
     if (!to || !core || to === core.channel) return;
-    if (!window.confirm(to === 'stable'
+    if (!await askConfirm(to === 'stable'
       ? 'Follow the stable channel: Domovoi releases only?\n\nNothing changes now. ' +
         'The update check then offers each new release. If this server already ' +
         'runs newer code than the latest release, updates resume with the next ' +
@@ -1319,6 +1423,27 @@ const VersionSection = () => {
       }
     } catch (e) {
       reportMutationFailure(fire, 'channel switch', e);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  // "Keep following main": the server records main as the household's
+  // choice (git config domovoi.intendedChannel; switch_channel to the
+  // channel it already follows does only that), so the stable nudge below
+  // doesn't come back for a house that is on main on purpose.
+  const keepMain = async () => {
+    setSwitching(true);
+    try {
+      const res = await apiPost('/api/config/version/channel', { channel: 'main' });
+      if (res && res.ok) {
+        fire('staying on main');
+        await refreshCore();
+      } else {
+        fire(`not saved: ${(res && res.error) || 'unknown'}`);
+      }
+    } catch (e) {
+      reportMutationFailure(fire, 'channel choice', e);
     } finally {
       setSwitching(false);
     }
@@ -1416,7 +1541,7 @@ const VersionSection = () => {
   // update unit (backup, migrations, roll back); elsewhere the pull and the
   // restart stay two steps (pull, below).
   const updateOnePress = async () => {
-    if (!window.confirm(macStep
+    if (!await askConfirm(macStep
       ? 'Update Domovoi?\n\n' +
         'First the Linux part: Domovoi pulls the latest code, then backs up, applies it and restarts ' +
         '(the rooms, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
@@ -1488,7 +1613,7 @@ const VersionSection = () => {
   };
 
   const pull = async () => {
-    if (!window.confirm(
+    if (!await askConfirm(
       'Update Domovoi?\n\n' +
       'This puts the newest version on the Domovoi server but does not start it yet — ' +
       'this panel will then offer the restart that does. Rooms can be ' +
@@ -1606,6 +1731,11 @@ const VersionSection = () => {
     sig.status === 'verified'
       ? { tone: 'ok', label: 'signed',
           title: `the checked-out commit is signed by ${sig.signer || 'an allowed key'} (${sig.allowed_signers})` }
+      // On the main channel the checked-out commit is a merge on main, not a
+      // signed release: expected, so say so calmly unless signing is enforced.
+      : (channel === 'main' && !sig.enforced)
+      ? { tone: 'idle', label: 'main channel: not a signed release (expected)',
+          title: 'this server follows main, whose commits are not signed releases; switch to stable for signed releases' }
       : { tone: sig.enforced ? 'err' : 'warn',
           label: sig.status === 'unsigned' ? 'unsigned' : 'signature not verified',
           title: sig.enforced
@@ -1879,6 +2009,11 @@ const VersionSection = () => {
           Domovoi {releaseOut} is out:{' '}
           {canSwitch ? 'switch to stable above to follow releases from now on.'
                      : 'an admin can switch it to stable here.'}
+          {canSwitch && (
+            <>{' '}Or <Button variant="ghost" disabled={mode === 'busy' || switching}
+                             onClick={keepMain}>Keep following main</Button>{' '}
+              if this server is meant to get every change.</>
+          )}
         </div>
       )}
       {aheadOfRelease && mode === 'check' && (
@@ -2187,6 +2322,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
   return (
     <React.Fragment>
     <div data-settings-mark="admin"><AdminSection setupAsked={setupAsked}/></div>
+    <PhoneGrantsSlot/>
     {/* The server's name on the home network: under Admin, above the
      * configuration (owner, 2026-11-12; it was in About & updates). */}
     <div data-settings-mark="network-name"><NetworkNameCard/></div>
@@ -4134,6 +4270,112 @@ const ServerFingerprint = () => {
         will talk to no other server. It is printed on the card &mdash; if the two
         ever disagree, the room is being answered by something else.
       </div>
+      <IdentityBackup/>
+    </div>
+  );
+};
+
+/* The house identity backup (1.5.0, S3-4): this server's PRIVATE key as a
+ * file, so a reinstall can be given it (install.sh --restore-identity, or
+ * Windows Setup's restore) and every room keeps trusting the house. Admins
+ * only, and the server asks for the password again (and a sign-in within
+ * five minutes). The file is handed to the browser and kept nowhere. */
+const IdentityBackup = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    try { return Auth.subscribe(force); } catch { return undefined; }
+  }, []);
+  const [open, setOpen] = React.useState(false);
+  const [password, setPassword] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [stale, setStale] = React.useState(false);
+  const [done, setDone] = React.useState(false);
+  let admin = false;
+  try { admin = !!Auth.isLoggedIn(); } catch { admin = false; }
+  if (!admin) return null;
+  const close = () => { setOpen(false); setPassword(''); setError(null); setStale(false); };
+  const download = async () => {
+    if (!password || busy) return;
+    setBusy(true); setError(null); setStale(false);
+    try {
+      const r = await apiFetchRaw('/api/config/server-identity/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try { const j = await r.json(); if (j && typeof j.detail === 'string') detail = j.detail; } catch { /* not JSON */ }
+        throw new Error(detail);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'domovoi-house-identity.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setDone(true);
+      close();
+    } catch (e) {
+      const text = (e && e.message) || String(e);
+      setStale(/sign in with the password again/.test(text));
+      setError(text);
+    } finally {
+      setPassword('');
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 8 }} data-settings-mark="identity-backup">
+      <div style={{ fontSize: 12, color: 'var(--fg)', marginBottom: 4 }}>House identity backup</div>
+      <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginBottom: 6 }}>
+        Reinstalling Domovoi makes a new identity, and every room set up for this one then
+        refuses it. Keep a backup, and give it to the new install
+        (<code>install.sh --restore-identity</code>, or Setup's restore on Windows): the rooms
+        reconnect by themselves.
+        {done && <strong style={{ color: 'var(--fg)' }}> Downloaded: move it somewhere only you can open.</strong>}
+      </div>
+      {!open ? (
+        <Button icon="download" onClick={() => { setOpen(true); setDone(false); }}>
+          Download house identity backup
+        </Button>
+      ) : (
+        <div role="group" aria-label="Download house identity backup"
+             style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 10,
+                      border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+                      background: 'var(--warn-soft)' }}>
+          <div style={{ fontSize: 12, color: 'var(--fg)' }}>
+            <strong>This file is the server's private key.</strong> Anyone who has it can
+            pretend to be this house to your rooms. Don't email it, share it or leave it in
+            Downloads: keep it on a USB stick in a drawer or in a password manager.
+          </div>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+            <span>Admin password</span>
+            <input type="password" className="input" autoComplete="current-password" value={password}
+                   autoFocus onChange={(e) => setPassword(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') download(); }}/>
+          </label>
+          {error && <div style={{ color: 'var(--err-ink)', fontSize: 12 }}>{error}</div>}
+          {stale && (
+            <div>
+              <button type="button" className="home-link"
+                      onClick={() => { try { Auth.requestLogin(); } catch { /* no auth module */ } }}>
+                sign in again
+              </button>
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button icon="x" onClick={close} disabled={busy}>Cancel</Button>
+            <Button variant="primary" icon="download" disabled={!password || busy} onClick={download}>
+              {busy ? 'Preparing…' : 'Download'}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -4447,6 +4689,7 @@ const AboutPanel = () => {
     const st = Auth.status;
     household = !!(Auth.isPaired() || Auth.isLoggedIn() || (st && (st.authenticated || st.setup_complete === false)));
   } catch { household = false; }
+  const KitUpdateCard = window.OfflineKitUpdateCard;
   return (
     <>
       <AboutCard/>
@@ -4459,6 +4702,9 @@ const AboutPanel = () => {
           </Card>
         )}
       </div>
+      {/* offline_kit.jsx registers it (1.5.0): a house with no internet
+          updates from a newer kit's stick. */}
+      {KitUpdateCard && <div data-settings-mark="offline-update"><KitUpdateCard/></div>}
     </>
   );
 };
@@ -5357,6 +5603,7 @@ const PhoneBarCard = ({ fire }) => {
   const shared = useSharedScreen();
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
   const ai = useAiFeatures();
+  useFacesPage();   // Faces comes and goes with the switch (navItemsFor reads it)
   const items = navItemsFor(manifest, { shared, ai });
   const saved = usePhoneBar();
   const bar = phoneBarRoutes(items, saved);
@@ -5496,6 +5743,7 @@ const NavLayoutCard = ({ fire }) => {
   const saved = useNavLayout();
   const shared = useSharedScreen();
   const ai = useAiFeatures();
+  useFacesPage();   // Faces comes and goes with the switch (navItemsFor reads it)
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
   // Every page this server has (nothing hidden: the layout is the house's),
   // and the ones this screen shows (the preview, as this browser draws it).
@@ -6073,12 +6321,12 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'home-location', 'calendars', 'media-folders', 'music-mix', 'queue-history', 'printers', 'friend-houses'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
-  { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
+  { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat', 'photos-and-videos'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
-  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'app-layout', 'advanced'] },
+  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'app-layout', 'advanced', 'support-sessions'] },
 ];
 
 const SETTINGS_SECTIONS = [
@@ -6094,6 +6342,12 @@ const SETTINGS_SECTIONS = [
   { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
     sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
     words: 'device devices phone phones browser browsers name rename household token pair pairing guest guests queue files shared screen tablet app android' },
+  // home_location.jsx registers it (1.4.1): the household's town, for
+  // weather and local news; "Local news location" in Advanced → News until
+  // then, so its search words came with it.
+  { id: 'home-location', label: 'Home location', optional: true,
+    sub: 'The town weather answers and local news are for.',
+    words: 'news location town city weather home place local' },
   // calendar.jsx registers it (1.3.0): calendars by link and phones' shared
   // calendars, read-only.
   { id: 'calendars', label: 'Calendars', optional: true,
@@ -6116,10 +6370,11 @@ const SETTINGS_SECTIONS = [
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
-  // friend_houses.jsx registers it (F2): friend files, requests, friends
-  // (admin; off by default).
+  // friend_houses.jsx registers it (F2): messages and shared lists for the
+  // household; friend files, requests, friends behind the admin sign-in
+  // (off by default).
   { id: 'friend-houses', label: 'Friend Houses', optional: true,
-    sub: 'Serverless messaging and friend system between households.',
+    sub: 'Message and share lists with friends’ houses, house to house, with no company server in between.',
     words: 'friend friends house houses household households friending friend file invite request requests tor fingerprint code verify' },
   { id: 'app-layout', label: 'App layout', aliases: ['phone-bar', 'phonebar'],
     sub: 'The menu every browser on this Domovoi shows (admin), and this browser’s phone bar.',
@@ -6142,6 +6397,11 @@ const SETTINGS_SECTIONS = [
   { id: 'chat', label: 'Chat', optional: true,
     sub: 'A heads-up before shaky results, in this browser.',
     words: 'chat conversation heads-up heads up warning warn warnings trust shaky calculate exactly reliable' },
+  // media_understanding.jsx registers it (1.5.0): what the house works
+  // out about its photos and videos, in the background.
+  { id: 'photos-and-videos', label: 'Photos and videos', optional: true,
+    sub: 'Find photos and videos by what is in them: switches, progress, faces, locations and excluded folders.',
+    words: 'photos photo pictures picture videos video understand understanding captions describe faces face recognize recognise people locations places gps exclude folders backlog night rescan frames' },
   { id: 'internet', label: 'Internet',
     sub: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
     words: 'internet online offline network web connection search helper' },
@@ -6158,12 +6418,22 @@ const SETTINGS_SECTIONS = [
   { id: 'about', label: 'About & updates',
     sub: 'What Domovoi is, its name on your network, the version it runs, and its updates.',
     words: 'about version update updates upgrade check pull restart channel stable main release manual licence licences license fingerprint network name local domovoi.local mdns hostname address bonjour' },
+  // offline_kit.jsx registers it (1.5.0): a USB stick for a house with
+  // no internet (admin).
+  { id: 'offline-kit', label: 'Offline kit', optional: true, aliases: ['kit'],
+    sub: 'A USB stick that sets up Domovoi in a house with no internet: the models, the phone app and the installers.',
+    words: 'offline kit usb stick no internet install installer copy models phone app imager raspberry pi image air gapped' },
   { id: 'health', label: 'Health', optional: true,
     sub: 'Every check on this Domovoi, green or not: the server, updates, rooms, plugins, internet and containers.',
     words: 'health status problems problem check checks containers container guard incident incidents tamper disk database server attention' },
   { id: 'advanced', label: 'Advanced', aliases: ['configuration', 'config'],
     sub: 'The admin account, and every setting of the Domovoi server — for when you know what you are changing.',
     words: 'advanced configuration config settings admin password sign in setup claim database port ports path acoustid' },
+  // support_session.jsx registers it (1.5.0): the audit list of satellite
+  // support sessions and their transcripts (admin).
+  { id: 'support-sessions', label: 'Support sessions', optional: true,
+    sub: 'Every shell an admin opened on a satellite, and its transcript — admins only.',
+    words: 'support session sessions shell terminal ssh satellite transcript audit admin remote' },
 ];
 
 // Cards inside a section the search can jump to (#settings/<section>/<mark>
@@ -6265,11 +6535,15 @@ const settingsSearchIndex = (groups, fields) => {
       // The media paths are edited in Household → Media folders.
       if (f.group === 'Paths' && shown.has('media-folders')) {
         out.push({ key: `media-folders/${f.name}`, label: f.label, where: shown.get('media-folders'),
-                   route: 'settings/media-folders', words: `${f.name.replace(/_/g, ' ')} media folders` });
+                   route: 'settings/media-folders',
+                   words: `${f.name.replace(/_/g, ' ')} media folders ${(f.keywords || []).join(' ')}` });
         return;
       }
+      // Found by its name, group title, its own aliases (``keywords`` from
+      // the schema) and the words of its help, not only by its label.
       out.push({ key: `advanced/${f.name}`, label: f.label, where: shown.get('advanced'),
-                 route: `settings/advanced/${f.name}`, words: `${f.name.replace(/_/g, ' ')} ${f.group || ''}` });
+                 route: `settings/advanced/${f.name}`,
+                 words: `${f.name.replace(/_/g, ' ')} ${f.group || ''} ${(f.keywords || []).join(' ')} ${f.help || ''}` });
     });
   }
   return out;
@@ -6277,7 +6551,7 @@ const settingsSearchIndex = (groups, fields) => {
 
 /* The best matches for `query`: every word typed must start a word of
  * the entry; its own name beats its group and its keywords. */
-const settingsSearch = (index, query, limit = 8) => {
+const settingsSearch = (index, query, limit = 12) => {
   const q = settingsWords(query);
   if (!q.length) return [];
   const phrase = q.join(' ');
@@ -6302,13 +6576,17 @@ const SettingsSearch = ({ groups }) => {
   // Advanced's settings join the index the first time someone searches
   // (quiet: a browser that may not read them simply finds fewer).
   const [fields, setFields] = React.useState(null);
-  const asked = React.useRef(false);
+  // A read that failed (not signed in yet, the server busy) is tried again
+  // on the next keystroke after a few seconds, never latched as "no settings".
+  const asked = React.useRef(0);
+  const got = React.useRef(false);
   const askFields = () => {
-    if (asked.current) return;
-    asked.current = true;
+    const now = Date.now();
+    if (got.current || now - asked.current < 4000) return;
+    asked.current = now;
     apiGet('/api/config/editable', { quiet: true })
-      .then((r) => setFields((r && r.fields) || []))
-      .catch(() => setFields([]));
+      .then((r) => { got.current = !!(r && r.fields && r.fields.length); setFields((r && r.fields) || []); })
+      .catch(() => setFields((cur) => cur || []));
   };
   const index = React.useMemo(() => settingsSearchIndex(groups, fields), [groups, fields]);
   const hits = settingsSearch(index, q);

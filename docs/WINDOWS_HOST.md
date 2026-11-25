@@ -12,8 +12,8 @@ Domovoi is running, and prepares satellite cards
 
 **Its programs are not code-signed yet, so Windows
 asks before it runs them ([Unsigned](#unsigned)), and a few things the
-finished installer will do are not in it yet, such as keeping your data
-through an uninstall ([Not in this build](#not-in-this-build)). It
+finished installer will do are not in it yet
+([Not in this build](#not-in-this-build)). It
 installs a release and then follows a release channel
 ([Updates and the release channel](#updates-and-the-release-channel)).
 Installing the server by hand on Windows, as in the
@@ -43,7 +43,7 @@ house's other PCs with no internet needed.
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
-| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models; about 4.5 GB if you leave out AI chat and questions) | Afterwards Domovoi works with or without it, as you answer in Setup. |
+| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models; about 4.5 GB if you leave out AI chat and questions), or an offline kit instead ([Installing without internet](#installing-without-internet)) | Afterwards Domovoi works with or without it, as you answer in Setup. |
 | Docker Desktop, Ollama for Windows, your own WSL distros | Fine alongside | Setup checks the ports Domovoi needs, not which programs you run. A program holding one of them gets a pop-up naming it, with Retry and Cancel. |
 | Smart App Control | Must be off | It blocks unsigned programs, and this build is unsigned. See [Unsigned](#unsigned). |
 
@@ -178,7 +178,10 @@ signature, before it runs it.
    way: passwords, tokens and setup codes are blanked as far as Setup can
    recognise them.
 9. **Shows your setup code** once, with a **Copy** button, **Open
-   Domovoi**, and the steps to the admin account in the dashboard's own
+   Domovoi**, **Set up from a phone** (1.5.0: a QR code of the dashboard's
+   address on your network with the code in its `#` part, which a phone's
+   camera opens with the code filled in; shown when Setup knows this PC's
+   network address), and the steps to the admin account in the dashboard's own
    words. The code works for 24 hours (a restart of the service writes a
    fresh one). **Open Domovoi** copies the code too and opens the
    dashboard, which greets you with **Welcome to Domovoi!**, its
@@ -202,6 +205,94 @@ signature, before it runs it.
    beside the clock for the account that ran Setup, and starts at every
    account's sign-in from then on ([The tray icon](#the-tray-icon)).
 
+## Installing without internet
+
+A PC with no internet installs from an **offline kit**: a USB stick an
+online Domovoi server made ([OFFLINE_KIT.md](OFFLINE_KIT.md)). Nothing is
+downloaded.
+
+1. Plug in the stick and open it in Explorer.
+2. Double-click `release\DomovoiSetup.exe`. Its first page says
+   **Installing from the offline kit. No internet needed.**
+3. Answer the pages as above. The internet question starts at **No. Keep
+   everything in the house.**; the AI question can only be **No** when
+   the kit has no AI models.
+4. Leave the stick in until the last page. If Windows restarts to turn on
+   Virtual Machine Platform or WSL, Setup starts again after you sign in
+   and uses the same stick.
+
+Setup on a PC with no internet that wasn't started from a stick stops at
+its first check with **Use an offline kit...**: choose the stick's top
+folder, the one with `kit.json` in it. `DomovoiSetup.exe /kit=E:` does the
+same from a prompt. A kit copied to a folder on this PC works too, if
+every account on the PC can read that folder (the service's own account
+opens it); a network folder doesn't.
+
+**What Setup checks before it changes anything** (the helper's
+`kit-check`, `windows/common/OfflineKit.cs`), each step before the next:
+
+1. **Checksums.** `kit.json` and the release's signed manifest against the
+   stick's `SHA256SUMS`. They only catch a bad copy or a dying stick.
+2. **The kit.** A kit format this Setup reads, made for "A Windows or
+   Linux PC". Then what is on the stick: no link of any kind (a symlink,
+   a junction or any other reparse point; none is walked into), nothing
+   `kit.json` doesn't account for, and no package folder under `apt\`
+   with a name apt doesn't use, in the kit checker's words
+   ([OFFLINE_KIT.md, What the checks prove](OFFLINE_KIT.md#what-the-checks-prove)).
+   The system's own files (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`
+   and the like) are let be in any folder as plain files, and its own
+   folders (`System Volume Information`, `$RECYCLE.BIN` and the few others
+   listed there) only at the top of the drive, when the kit is the drive
+   itself.
+3. **The release signature.** `release\DomovoiSetup.manifest.json` must be
+   signed with Domovoi's release key, the one this Setup already pins for
+   the Windows update ([The release key](#the-release-key)), name the
+   release and commit `kit.json` names, and that commit must be the one
+   this Setup installs: the kit and the Setup are the same release.
+4. **The parts.** Ubuntu's WSL image and `linux\provision.sh` (and WSL's
+   installer, when this PC needs it), each with the SHA-256 this Setup's
+   own pins name, and every part `provision.sh` needs from a kit (the
+   source, Ubuntu's and Docker's packages, the Python packages, the images,
+   Ollama, the speech models and voices).
+5. **The disk.** About twice what the kit holds for Domovoi's Linux system,
+   plus 10 GB, and never less than the 40 GB any install needs.
+6. **Every file on the stick**, against `SHA256SUMS` (a few minutes).
+
+Then the install goes as online, with the files off the stick instead of
+downloads: the helper copies Ubuntu's image and `provision.sh` into
+`C:\ProgramData\Domovoi\host\in` only when they match their pins, and
+Setup checks WSL's installer the same way before `msiexec` runs it.
+Before each `provision.sh` run DomovoiHost mounts the stick read-only in
+the distro at `/mnt/domovoi-kit` (`mount -t drvfs E: ... -o ro`; WSL's
+own mounting of Windows drives stays off), runs `provision.sh
+--offline-kit /mnt/domovoi-kit`, and unmounts it when provisioning ends.
+`provision.sh` checks every file it installs against the pins in the
+release's code, as on Linux ([LINUX_HOST.md, Installing without
+internet](LINUX_HOST.md#installing-without-internet)).
+
+**No internet, enforced.** In kit mode the helper skips its internet
+check and is run with `--offline`, DomovoiHost provisions with the same
+guard, and both refuse any connection that isn't to this PC; Setup's
+downloads refuse too. Reaching one is a fault in Setup: it stops and says
+so. Inside the distro `provision.sh --offline-kit` has its own guards.
+
+**Plain refusals.** Each says what to do, before anything changes:
+
+| Setup says | Why |
+|---|---|
+| This kit holds Domovoi 1.5.0, and this Setup installs Domovoi 1.5.1: they don't go together. | Another release's Setup. Run the `DomovoiSetup.exe` on the stick. |
+| This kit was made by a newer Domovoi (kit format 2...) | The same: the Setup on the stick reads it. |
+| This kit was made for a Mac only. | Make the kit again with "A Windows or Linux PC" ticked. |
+| This kit is missing what Setup needs: ... | A part isn't on it. Make the kit again. |
+| This stick has a damaged file: ... Make the stick again. | A checksum doesn't match. |
+| This stick holds what a kit never does, so Setup used nothing from it. ... is a link, which a kit never holds. / ... is not part of the kit (kit.json doesn't list it). ... Make the stick again. | The stick was changed (or a computer added files to it). Up to five entries are named. |
+| This kit is not a Domovoi release signed with Domovoi's release key ... | Nothing on it is used. Use a kit from a house you trust. |
+| Installing from this kit needs about N GB free on C:\ ... | Free some space, or make a kit without AI chat. |
+| Domovoi couldn't open the offline kit at E:\ (is the stick still plugged in ...) | During the install: plug it back in and **Retry**. |
+
+The kit is never needed again once Setup has finished: later updates come
+from the internet, if the house allows it, or from a newer kit.
+
 ## Every change on the PC, and how uninstall undoes it
 
 | Change | Uninstall |
@@ -212,7 +303,7 @@ signature, before it runs it.
 | Account rights through LSA: `SeServiceLogonRight`, and `SeDenyInteractiveLogonRight`, `SeDenyRemoteInteractiveLogonRight`, `SeDenyNetworkLogonRight`. Run `DomovoiSetup.exe /nodenylogon=1` to leave the three deny rights out, on a first install or over an existing one (it takes back ones granted before). | Every right of the account's SID is removed, with its entry in the policy. |
 | Its profile, made by Windows when the service first signs in: `C:\Users\domovoi-svc`, or `C:\Users\domovoi-svc.<PC name>` if a folder of that name is already there (the service writes its `.wslconfig` into whichever it is, and the uninstaller finds it by the account's SID); it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted. Right after unregistering the distro the service ends that account's own WSL session (`wsl --shutdown` run as `domovoi-svc`, see below), then the uninstaller waits up to two minutes for Windows to let go of the profile. This comes after the account is deleted; if Windows still holds the profile then, a one-time startup task, **`DomovoiRemoveProfile`** (runs as SYSTEM), deletes it at the next restart and then deletes itself. It touches only that profile, only once its account is gone, and if it can't tell (or the profile is in use) it waits for the next boot. |
 | Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on no other service: it waits for WSL itself, see *Windows updated WSL* under [When something goes wrong](#when-something-goes-wrong); restarted by Windows after any failure, after 10 s, 30 s, then every 60 s), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
-| WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
+| WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | **Keep my data** (the default): stopped by the service, not unregistered, and its disk moved to an administrators-only `C:\ProgramData\Domovoi-kept-<time>` for the next Setup ([Uninstalling](#uninstalling)). **Remove everything**: unregistered by the service, as its owner, first. Either way, until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-ShortAddress-80` (the short address, below), `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | Windows Defender Firewall rule **`Domovoi-mDNS-5353`**: inbound UDP 5353 for `C:\Program Files\Domovoi\DomovoiHost.exe` only, from the local subnet, on **Private and Domain** networks (not Public), so other devices on your home network find this PC as `domovoi.local` ([The network name](#the-network-name)). Not added when the PC has no private address. | Removed with the Hyper-V rules (`Remove-NetFirewallRule -Name 'Domovoi-mDNS-5353'`); DomovoiHost's goodbye went out when the service stopped. |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
@@ -289,12 +380,62 @@ what is already gone.
   (administrators only), the uninstall carries on, and its last message
   names that folder. Delete it when you no longer need it.
 
-This build has no "keep my data" uninstall: uninstalling deletes the
-database, history, voice profiles and the server's identity, so satellites
-must be paired again after a reinstall. Keep-data uninstall comes later.
+**Keep my data, or remove everything** (1.5.0). The uninstaller asks first:
+
+- **Keep my data (recommended)**, the default. DomovoiHost stops Domovoi's
+  Linux system without unregistering it (start parameter `release-keep`)
+  and ends its account's WSL session; the uninstaller then moves the
+  distro's disk, with the database, settings and the house's identity, to
+  `C:\ProgramData\Domovoi-kept-<date>-<time>\ext4.vhdx` (administrators
+  only), and its last message names that folder. Everything else in the
+  table goes as before; the distro's registration goes with the hidden
+  account's profile. Installing Domovoi again offers to use it
+  ([Reinstalling without losing your rooms](#reinstalling-without-losing-your-rooms)).
+  Delete the folder if you won't install Domovoi again.
+- **Remove everything** deletes the database, history, voice profiles and
+  the house's identity with the distro (`wsl --unregister`), after a second
+  confirmation; every room must then be set up again after a new install.
+  Setup's own undo of a failed first install removes everything
+  (`/KEEPDATA=0`); a silent uninstall otherwise keeps the data.
+
+To see what uninstall would do: add `--keep-data` to the dry run below for
+the default.
 
 To see what uninstall would do without doing it, from an administrator
 prompt: `"C:\Program Files\Domovoi\DomovoiSetupHelper.exe" uninstall --dry-run`.
+
+### Reinstalling without losing your rooms
+
+Every room is set up to trust this house's **identity**, a key the server
+makes on its first start and keeps inside Domovoi's Linux system. A plain
+new install makes a new one, and the rooms then refuse it: they show a
+teal light and say "my server has changed" instead of connecting. Setup's
+page **Your house's identity** (after the media folder; not shown when
+Setup repairs or updates an install) brings the old one back:
+
+- **Use the data kept from the last install (recommended)**, picked when
+  Setup finds a `C:\ProgramData\Domovoi-kept-<time>` a keep-data uninstall
+  left (administrators only, owned by Administrators, not a link; the newest
+  one). Setup moves its disk into `C:\ProgramData\Domovoi\distro` (its
+  access rules reset to that folder's, for the new hidden account), and
+  DomovoiHost imports it in place (`wsl --import-in-place`) instead of the
+  Ubuntu image; `provision.sh` then repairs and updates it like any
+  existing install. The database, settings and identity come back, and the
+  rooms reconnect by themselves. Its checkout is the earlier install's, so
+  it updates from there (Settings > System > About & updates).
+- **Restore the house identity from a backup file**: the file from Settings
+  > System > About & updates > **Download house identity backup** on the old
+  install. Setup checks its shape and shows its fingerprint; DomovoiHost
+  copies it into the distro, root-only, and `provision.sh --restore-identity`
+  checks the key pair and installs it before Domovoi first starts (a file
+  that isn't a working key stops the install). The rooms reconnect; the
+  database starts fresh. Setup keeps a copy in `C:\ProgramData\Domovoi\host\in`
+  (administrators and the hidden account only) until the install is
+  uninstalled; keep or delete your own copy as you would a private key.
+- **Start fresh**, the default when nothing was kept.
+
+After a restart in the middle of Setup the choice carries on (`/usekept=`,
+`/identity=`).
 
 ## The tray icon
 
@@ -377,8 +518,8 @@ An install made by a 1.0.0-rc1 or rc2 Setup has no icon. Either:
   runs it once. A later Setup with the icon takes over and removes these
   copies.
 
-Uninstalling and installing again also works, but deletes Domovoi's data
-(there is no keep-data uninstall yet).
+Uninstalling (keeping the data) and installing again also works: Setup
+offers the kept data, so nothing is lost.
 
 ### For developers
 
@@ -564,6 +705,12 @@ assistant rarely does). Domovoi trims that cache itself, handing back what
 is over a few GB every 2 minutes ([LINUX_HOST.md, The file-cache
 trim](LINUX_HOST.md#the-file-cache-trim)). A household that wants more
 raises it on the card.
+
+**How many answers at once.** The share also sets how many requests the
+AI models answer at once, so a spoken question needn't wait behind a chat
+reply: one under 24 GB, two from 24 GB, three from 48 GB, and four when
+the PC's NVIDIA GPUs have room. Each extra one costs about 1.2 GB of the
+share ([CPU_HOST.md, "Answers at once"](CPU_HOST.md#answers-at-once)).
 
 **How it reaches the PC.** The dashboard can't write a Windows file, and
 nothing inside the distro can either. The core writes the admin's choice
@@ -848,7 +995,6 @@ you share them.
 - Whether everything starts before anyone signs in after a reboot, and
   whether the GPU is used then, is still being proven.
 - Code signing (on hold): see [Unsigned](#unsigned).
-- Keep-data uninstall and reinstall onto kept data.
 - The optional details page after the internet question (town, state,
   AcoustID key); set them in the dashboard.
 

@@ -185,7 +185,7 @@ async def test_a_blocked_house_cant_ask_again(house) -> None:
     made = await fr.make_invite()
     statement = house.them.address_statement(ONION_A, 300)
     await fr.on_request({"event": "request", "invite": made["id"], "statement": statement.to_bytes().hex(),
-                         "reach_private": (b"\x09" * 32).hex(), "name": "Smiths", "code": "1111"})
+                         "reach_private": (b"\x09" * 32).hex(), "name": "Smiths", "code": "111111"})
     assert await fr.list_requests() == []
     assert len(await fr.list_invites()) == 1  # not used up by a blocked house
 

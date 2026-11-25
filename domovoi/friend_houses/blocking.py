@@ -59,12 +59,15 @@ async def is_blocked(house_key: bytes) -> bool:
 
 
 async def block(friend_id: str, *, keep_messages: bool = True, new_address: bool = True) -> dict[str, Any]:
-    from domovoi.friend_houses import messages, store
+    from domovoi.friend_houses import messages, plugin_mail, store
 
     async with _db() as s:
         friend = await store.friend(s, friend_id)
         if friend is None:
             raise BlockError("No such friend house.")
+        # Apps with friends (§6.9): the closure in this transaction; the
+        # friend row's delete cascades to its pairs, mail and sender.
+        pairs = await plugin_mail.close_pairs(s, friend_id=friend_id)
         await s.execute(text(
             "INSERT INTO friend_houses_blocked (house_key, name) VALUES (:h, :n) "
             "ON CONFLICT (house_key) DO NOTHING"), {"h": friend.house_key, "n": friend.local_name})
@@ -74,6 +77,7 @@ async def block(friend_id: str, *, keep_messages: bool = True, new_address: bool
         if new_address:
             await s.execute(text(
                 "UPDATE friend_houses_friends SET announce_needed = TRUE WHERE state = 'active'"))
+    await plugin_mail.after_close(pairs)
     deleted = 0 if keep_messages else await messages.delete_conversation(friend.house_key)
     log.warning("Friend Houses: a friend house was blocked%s",
                 "; moving this house to a new address" if new_address else "")

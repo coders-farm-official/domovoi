@@ -237,7 +237,9 @@ async def test_fh9_silent_connections_give_their_slots_back(tmp_path, monkeypatc
         for _, w in idle:
             w.write(fs.PREFACE)
         await asyncio.sleep(0.1)
-        assert state._open == fl.MAX_CONNECTIONS and state._open_pairing == 0  # pairing has its own
+        # At most MAX_HANDSHAKING of them wait at once: older ones were
+        # closed to make room.
+        assert 0 < state._open <= fl.MAX_HANDSHAKING and state._open_pairing == 0  # pairing has its own
         await asyncio.sleep(0.6)
         assert state._open == 0
         sess = await _call(_port(main), them, their_hello, fs.Friend(us.house_key, us.session_key))
@@ -342,7 +344,7 @@ async def test_fh11_an_asked_house_cant_take_a_friends_entry(house, monkeypatch)
     monkeypatch.setattr(svc, "_inputs", with_a_clash)
     await svc.reconcile()
     entry = _listed(house)[friend.session_key.hex()]
-    assert entry == {"house": friend.house_key.hex(), "pending": False}
+    assert entry == {"house": friend.house_key.hex(), "pending": False, "apps": []}
 
 
 # ─── FH-7: what reaches text-to-speech carries no wake phrase ─────────────

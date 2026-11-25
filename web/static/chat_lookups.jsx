@@ -12,8 +12,9 @@
  *
  * The chip reads GET /api/chat/internet (the household's internet answer
  * and its "Always allow internet") and the thread's internet_allowed:
- * "internet off" (Domovoi asks first), "internet on for this chat", or
- * "internet always on". Tapping it turns "on for this chat" on or off.
+ * "internet off" (the household's answer is "never"), "internet: ask
+ * first" (Domovoi asks before it looks anything up online), "internet on
+ * for this chat", or "internet always on". Tapping it turns "on for this chat" on or off.
  * Chats that went online carry a globe in the list (used_internet).
  */
 
@@ -52,7 +53,7 @@ const chatInternetChip = (info, thread) => {
     return { label: 'internet on for this chat', on: true, fixed: false,
              title: 'This chat looks things up without asking. Tap to have it ask first again.' };
   }
-  return { label: 'internet off', on: false, fixed: false,
+  return { label: 'internet: ask first', on: false, fixed: false,
            title: 'Domovoi asks before it looks anything up online. Tap to allow it in this chat.' };
 };
 

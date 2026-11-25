@@ -401,7 +401,7 @@ music player, which the container guard would otherwise keep expecting.
 | It doesn't start: "no pinned Domovoi server identity" | A spare computer never trusts the first server that answers. Re-run the install command from the dashboard. |
 | It doesn't start: "its settings … don't load" (the tray, or `--status`) | A value in `~/.domovoi/config.toml` it refuses, named in the message (an audio device name that is not a plain ALSA one, say). Fix it, then `systemctl --user start domovoi-satellite`: it stays stopped until then rather than retrying every few seconds. |
 | No sound at the sign-in screen | See *Sound* above (automatic sign-in for its account). |
-| Anything else | `journalctl --user -u domovoi-satellite -e` (headless: `sudo journalctl -u domovoi-satellite -e`), and the live log in the dashboard's room drawer. |
+| Anything else | The room drawer's **Diagnostics** tab (1.5.0): **Run all** shows the device's recent log lines, network (signal, address, gateway, DNS and latency to the server), disk, memory, load and temperature, audio devices, versions and service restarts, read-only, with **Copy** for a bug report. Then `journalctl --user -u domovoi-satellite -e` (headless: `sudo journalctl -u domovoi-satellite -e`), and the live log in the drawer. |
 
 ## Phones and tablets (room mode)
 
@@ -1226,3 +1226,149 @@ the refusals, the "already a room" page, the Wi-Fi switch),
 never for a household: `DOMOVOI_USB_STICK_REPACK` (run repack.py
 elsewhere, for a core with no xorriso) and `DOMOVOI_USB_STICK_DEBUG=1` (the
 kit's serial markers).
+
+## Rooms and their satellites
+
+A *room* is a place; a *satellite* is a device in one room. Since 1.5.0 a
+room can hold several (a Pi on the counter and a phone on the shelf).
+Manage them in **Settings → Rooms**, as a signed-in admin.
+
+### Adding a second satellite to a room
+
+1. Open the room (**Settings → Rooms**, then the Kitchen) and press
+   **Add a satellite to the Kitchen**. The **add a spare device** card
+   opens with a code made for it: the new device gets a name of its own
+   ("Kitchen 2", rename it later) and the code says which room it joins.
+   Use the code the usual way (the install command on a laptop, the QR
+   code on a phone). A Pi set up through its own setup portal, or a
+   device you already set up under any name, works too: go to step 2.
+2. When it asks for approval, type its code under **waiting for
+   approval**. The card asks **Which room is it in?** and has the Kitchen
+   pre-selected for a device made with **Add a satellite to the Kitchen**,
+   an older phone app included. For any other device, pick the existing
+   room instead of a new one.
+3. It joins the room's wake words, voice and music at once. From then on
+   the room's sound plays from both ([below](#a-room-with-several-speakers))
+   and one wake word starts one turn
+   ([below](#which-satellite-answers)).
+
+To move a satellite later, open its room (**Settings → Rooms**) and use
+the satellite's **Move to another room**; pick a room or make a new one.
+What moves and what stays is in the next list.
+
+### Managing rooms and satellites
+
+- **Open a room** to see its satellites: name, what it is, whether it is
+  connected, and which one currently speaks for the room.
+- **Rename** a satellite (an unnamed one reads "Satellite for the
+  Kitchen"), or **move** it to another room or a brand-new one. Its
+  history stays with the old room, voices it learned there are forgotten
+  (enrolled voices stay), and its speaker tuning is cleared.
+- **Add a room**, **rename** it, or **delete** it once it is empty.
+- **Merge**: when two rooms share a name, the page offers to merge them.
+  Nothing merges until you press **Merge into one** and confirm.
+- **Approving a new satellite** asks "Which room is it in?": an existing
+  room, a new one, or a room of its own. A device made with **Add a
+  satellite to the Kitchen** has the Kitchen pre-selected.
+- **Rooms that can hear this one**: see
+  [Rooms that hear each other](#rooms-that-hear-each-other).
+- **Recent turns**: in a room with several satellites, the drawer and its
+  **Conversations** say which satellite heard the person best: "Answered
+  in the Kitchen. Heard best by Kitchen phone."
+- **Update the app on this phone.** shows under a phone whose app is from
+  before 1.5.0 when it shares the room's wake word with other satellites
+  (a Pi or laptop on older software reads **Update the software on this
+  satellite.**). It still works; its duplicate recordings are dropped
+  until it is updated.
+
+Everyone else, and the phone apps, see only rooms ("the Kitchen"); the
+word "satellite" stays on the admin screens.
+
+### A room with several speakers
+
+Every satellite in a room plays the room's sound **together, in sync**:
+
+- **Music, radio, podcasts, audiobooks and Sleep sounds** play from every
+  speaker in the room at once. Pause, skip, stop and volume change on all
+  of them at the same moment.
+- **Answers, timers, alarms, announcements, intercom and plugins' speech**
+  play from every speaker too. Music dips under the words and comes back
+  after.
+- When someone says the wake word, the music goes quiet on every speaker
+  while Domovoi listens and answers, then carries on.
+- Saying the wake word during an answer, a timer or an announcement stops
+  it on every speaker (music keeps playing). Any satellite in the room
+  hears it.
+- The wake chime or greeting plays only on the satellite that heard you.
+- A **drop-in call** stays on one satellite (the one it was placed with);
+  the room's music stops for the call and comes back after it.
+- A Bluetooth speaker or headphones on a device are that device's own
+  business: Domovoi plays through whatever output the device uses.
+- An **older satellite or phone app** that can't play in sync plays the
+  room's sound only when it is the room's only device. Update it to have
+  it join in.
+
+### Which satellite answers
+
+When two satellites in a room hear the same wake word, Domovoi answers
+**once**, not twice:
+
+- The first satellite to hear it takes the turn: it chimes (or greets) and
+  records. In the room's drawer it shows **speaks for the room**.
+- The other satellites that heard it stay silent: no chime, and their
+  light fades. For up to two seconds of your command they send what they
+  hear, and Domovoi transcribes the **microphone that heard you best**
+  (usually the closest), once. Their audio is then thrown away.
+- Nothing waits for this: the first satellite answers its wake word at
+  once. If the server doesn't answer within a fraction of a second, a
+  satellite acts as if it were alone.
+- After a quiet satellite's recording it listens for the wake word again
+  after one second.
+- A satellite from before 1.5.0 can't take part in this. If it starts
+  recording while another satellite already has the turn, the server drops
+  its recording. The room's drawer says **Update the app on this phone.**
+  (or **Update the software on this satellite.**) under it.
+
+A room with one satellite never does any of this.
+
+### Rooms that hear each other
+
+One turn per wake word works **within a room**. Two rooms with an open
+doorway between them can both hear "hey Domovoi" and both answer. To make
+that one turn, open one of them and, under **Rooms that can hear this
+one**, press **Add a room** and pick the other. From then on a wake word
+heard in both is answered once, by the satellite that heard it best, in
+the room that satellite is in. Remove a room from the list (it asks first)
+to make them separate again.
+
+You don't have to find these pairs yourself: when satellites in two rooms
+keep waking on the same "hey Domovoi" (three times in two weeks), the
+Rooms page suggests linking them: **Link them** links them, **Keep them
+separate** dismisses the suggestion for good (you can still link them in
+the room's drawer). Only admins see the suggestion and the buttons.
+
+### Tuning the speakers
+
+Speakers in one room can sit a few milliseconds apart because each
+device's audio output has its own delay. In the room's drawer (admin),
+**Tune the speakers** has each speaker play a short chirp, audible, in
+turn while the others listen, and works out each speaker's delay from
+that. It is a button of two or more speakers that are connected and new
+enough to take part, and it refuses while something is playing in the
+room. It says what it tuned and what kept its old setting (a speaker the
+others couldn't hear clearly keeps its previous one).
+
+The same tuning also runs **on its own** once when a satellite joins a
+room that already has a speaker, or is moved into one: about fifteen
+seconds after it connects (satellites arriving together share one run),
+and only while the room is idle, with nothing playing and nobody talking
+to Domovoi. It never chirps in the room's quiet hours: a run due then
+waits until they end. A room that stays busy is tried again for a few
+minutes and then left for **Tune the speakers**. To stop it, turn off
+**Settings → Rooms → Tune speakers on their own** (on by default); the
+button keeps working either way.
+
+A room with one satellite works as before, with answers starting as fast
+as ever. Its music now plays through the same synced player (a moment
+later at the start, about half a second, instead of a few seconds of
+buffering). How the timing works: [ROOM_AUDIO_PROTOCOL.md](ROOM_AUDIO_PROTOCOL.md).

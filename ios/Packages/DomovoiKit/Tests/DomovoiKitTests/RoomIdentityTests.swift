@@ -94,6 +94,27 @@ final class RoomIdentityTests: XCTestCase {
         }, containing: "different server")
     }
 
+    /// Security review 2026-11-22, L58: a named plain-http server is dialled
+    /// at the address it resolved to, and the proof is asked for that
+    /// address; literals and https keep what was written.
+    func testANamedServerIsDialledAtTheAddressItResolvedTo() throws {
+        let dns = ["domovoi.local": ["fe80::1%en0", "192.168.1.30"]]
+        let resolve: (String) -> [String] = { dns[$0] ?? [] }
+        XCTAssertEqual("http://192.168.1.30:6370", try RoomIdentity.dialBase("http://domovoi.local:6370", resolve: resolve))
+        XCTAssertEqual(
+            "192.168.1.30:6370",
+            try RoomIdentity.dialedAddress(RoomIdentity.dialBase("http://domovoi.local:6370", resolve: resolve))
+        )
+        XCTAssertEqual("http://[fe80::1]:80", try RoomIdentity.dialBase("http://v6.local") { _ in ["FE80::1%en0"] })
+        let never: (String) -> [String] = { _ in XCTFail("not asked"); return [] }
+        XCTAssertEqual("http://192.168.1.31:6370", try RoomIdentity.dialBase("http://192.168.1.31:6370", resolve: never))
+        XCTAssertEqual("http://[fd00::5]:6370", try RoomIdentity.dialBase("http://[fd00::5]:6370", resolve: never))
+        XCTAssertEqual("https://domovoi.example:6370", try RoomIdentity.dialBase("https://domovoi.example:6370", resolve: never))
+        XCTAssertThrowsError(try RoomIdentity.dialBase("http://gone.local:6370") { _ in [] }) { error in
+            XCTAssertEqual((error as? RoomIdentity.Failure)?.message, "could not find gone.local on this network")
+        }
+    }
+
     func testDialedAddressesAreSpelledLikeThePis() throws {
         XCTAssertEqual("192.168.1.30:6370", try RoomIdentity.dialedAddress("http://192.168.1.30:6370"))
         XCTAssertEqual("domovoi.local:80", try RoomIdentity.dialedAddress("http://Domovoi.LOCAL/"))

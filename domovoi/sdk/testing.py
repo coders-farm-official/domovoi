@@ -23,6 +23,7 @@ from domovoi.models import Response
 from domovoi.now_playing import NowPlayingRegistry
 from domovoi.sdk.coreconfig import CoreConfigView
 from domovoi.sdk.facade import EventsView, NowPlayingView
+from domovoi.sdk.friend_houses import FriendHousesAPI
 from domovoi.sdk.http import HttpFactory
 from domovoi.sdk.observability import get_logger
 
@@ -50,7 +51,30 @@ class RecordingPlayback:
             music_stream_url=f"http://stub-mpd/{room_id}",
         )
 
+    async def player_route(self, room_id: str) -> Any:
+        """SDK 1.15: loopback both ways, as under USE_STUBS. Not recorded
+        in ``calls``."""
+        from domovoi.player_route import PlayerRoute
+
+        return PlayerRoute(host="127.0.0.1", peer="127.0.0.1")
+
+    async def relay_url(self, room_id: str, remote_url: str, *, kind: str = "file") -> str:
+        """SDK 1.16: a real relay token (domovoi/player_relay.py) on the
+        loopback route above, so a test can open it against the core's
+        router. Not recorded in ``calls``."""
+        from domovoi import player_relay
+
+        return player_relay.mint(room_id, remote_url, await self.player_route(room_id), kind=kind)
+
+    def relay_target(self, player_url: str | None) -> str | None:
+        from domovoi import player_relay
+
+        return player_relay.target_for(player_url)
+
     async def stop(self, room_id: str) -> Response:
+        from domovoi import player_relay
+
+        player_relay.revoke_room(room_id)
         self.calls.append({"action": "stop", "room_id": room_id})
         return Response(text="Stopped.", music_action="stop")
 
@@ -189,6 +213,59 @@ class StubSDK:
         self.state: dict[str, Any] = {}
         self.speech = RecordingSpeech()
         self.http = HttpFactory(self.version)
+        # SDK 1.18: friends() answers ``friend_houses.friends_list`` (set
+        # it), send_mail / send_image check their arguments as the core
+        # does and record what they would queue in ``friend_houses.sent``;
+        # on_mail records its handler and schema.
+        self.friend_houses = RecordingFriendHouses(slug)
+
+
+class RecordingFriendHouses(FriendHousesAPI):
+    """``sdk.friend_houses`` for a plugin's unit tests: no database, no
+    friend. ``friends_list`` is what ``friends()`` answers; ``sent``
+    records ``(kind, house_id, payload or image, options)``."""
+
+    def __init__(self, slug: str) -> None:
+        super().__init__(slug, permitted=True, register=False)
+        self.friends_list: list[Any] = []
+        self.sent: list[tuple[str, str, Any, dict[str, Any]]] = []
+
+    async def friends(self):
+        return list(self.friends_list)
+
+    async def send_mail(self, house_id, payload, *, ttl_s=259_200, replace_key=None):
+        import secrets
+
+        self._need_permission()
+        self._check_send(house_id, ttl_s, replace_key)
+        from domovoi.sdk.friend_houses import PAYLOAD_MAX, TooLarge
+
+        if not isinstance(payload, (bytes, bytearray)):
+            raise TypeError("payload is bytes, rebuilt from validated values")
+        if not payload:
+            raise ValueError("payload is empty")
+        if len(payload) > PAYLOAD_MAX:
+            raise TooLarge(f"payload is {len(payload)} bytes; at most {PAYLOAD_MAX}")
+        self.sent.append(("mail", house_id, bytes(payload),
+                          {"ttl_s": ttl_s, "replace_key": replace_key}))
+        return secrets.token_hex(16)
+
+    async def send_image(self, house_id, image, *, tag, ttl_s=259_200, replace_key=None):
+        import secrets
+
+        from domovoi.friend_houses import envelope as fe
+        from domovoi.sdk.friend_houses import PAYLOAD_MAX, FriendImage, TooLarge
+
+        self._need_permission()
+        self._check_send(house_id, ttl_s, replace_key)
+        raw = image.png if isinstance(image, FriendImage) else image
+        if not isinstance(raw, (bytes, bytearray)) or not raw:
+            raise TypeError("an image is a FriendImage or this plugin's own image bytes")
+        if len(fe.image_payload(tag, bytes(raw))) > PAYLOAD_MAX:
+            raise TooLarge("the tag and image are over 16,384 bytes")
+        self.sent.append(("image", house_id, image,
+                          {"tag": tag, "ttl_s": ttl_s, "replace_key": replace_key}))
+        return secrets.token_hex(16)
 
 
 def make_stub_sdk(slug: str = "testplugin", **kwargs: Any) -> StubSDK:

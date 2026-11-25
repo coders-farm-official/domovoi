@@ -30,13 +30,15 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 from sqlalchemy import text
 
+from domovoi.room_ids import require_room_id_path
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
 from domovoi.cover_art_writer import cover_cache_file
 from domovoi.library_cover_version import cover_url
+from domovoi.player_relay import redact as redact_relay
 from web.backend.api import music_search, paging
 from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 from web.backend.api.paging import SortKey
@@ -69,7 +71,10 @@ from web.backend.schemas import (
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/music", tags=["music"])
+router = APIRouter(
+    prefix="/api/music", tags=["music"],
+    dependencies=[Depends(require_room_id_path)],
+)
 
 # ─── Auth tiers (REV-1) ────────────────────────────────────────────────────
 # Playing, queueing, tagging and uploading music are ORDINARY household
@@ -1899,8 +1904,57 @@ def _no_cover() -> JSONResponse:
     )
 
 
+def _cover_thumb_source(
+    embedded: tuple[bytes, str] | None,
+    folder: tuple[Path, os.stat_result, str] | None,
+    cached: tuple[Path, os.stat_result, str] | None,
+) -> bytes | Path | None:
+    """The picture a sized cover is made from: the one the full route would
+    serve, in the same order (embedded, then the folder image, then
+    Domovoi's own copy)."""
+    if embedded is not None:
+        return embedded[0]
+    if folder is not None:
+        return folder[0]
+    if cached is not None:
+        return cached[0]
+    return None
+
+
+def _make_cover_thumb(src: bytes | Path, dest: Path, max_edge: int) -> bool:
+    """A cover shrunk to ``max_edge`` as WebP, written whole or not at all.
+
+    The same Pillow path as the picture library's thumbnails
+    (:func:`web.backend.api.images._make_thumb`: only the library picture
+    formats, nothing over ``image_safety.MAX_IMAGE_PIXELS``), into a
+    temporary name that is renamed into place, so a second request for the
+    same cover never reads a half-written file. Blocking: the ``pictures``
+    pool."""
+    from web.backend.api.images import _make_thumb
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f"{dest.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
+    source = io.BytesIO(src) if isinstance(src, bytes) else src
+    try:
+        if not _make_thumb(source, tmp, max_edge):  # type: ignore[arg-type]
+            return False
+        os.replace(tmp, dest)
+        return True
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 @router.get("/library/{track_id}/cover")
-async def track_cover(track_id: int, request: Request):
+async def track_cover(
+    track_id: int,
+    request: Request,
+    size: str | None = Query(
+        default=None,
+        description="A small copy for a list or a player: s (160 px), m (320), "
+                    "l (512) or xl (768) on the long edge, as WebP. Omitted: the "
+                    "picture as it is, which can be several megabytes.",
+    ),
+):
     """A library track's cover art, read from the file on request: the
     picture built into it (ID3 APIC — the front cover when it marks one —
     MP4 ``covr``, FLAC pictures, Vorbis/Opus ``METADATA_BLOCK_PICTURE`` or
@@ -1916,10 +1970,23 @@ async def track_cover(track_id: int, request: Request):
     phone's lock screen can't send a credential. The id resolves the path
     from the database, containment-checked inside MUSIC_DIR (400 outside
     it, as for ``/audio``); nothing is stored on disk. Tags are read in the
-    two-thread ``tags`` pool, once per file version (:func:`_embedded_cover`)."""
+    two-thread ``tags`` pool, once per file version (:func:`_embedded_cover`).
+
+    ``size`` (2026-11-22): a list draws a cover at about 50 points, and the
+    picture inside a file is often a 1-2 MB scan, so a page of 50 rows
+    fetched tens of megabytes to show thumbnails. With a size the answer is
+    a WebP no bigger than that edge, made once per cover version and kept
+    under ``image_thumbs_dir/covers/<size>`` (named by the full cover's
+    ETag, so a new picture makes a new file), with its own ETag. A picture
+    that can't be shrunk is served as it is."""
     import anyio
 
+    from domovoi import executors
     from domovoi.config import settings as core_settings
+    from web.backend.api.images import THUMB_SIZES
+
+    if size is not None and size not in THUMB_SIZES:
+        raise HTTPException(status_code=400, detail=f"size must be one of {sorted(THUMB_SIZES)}")
 
     target = await _library_file_path(track_id)
     music_root = Path(core_settings.music_dir).expanduser().resolve(strict=False)
@@ -1933,11 +2000,31 @@ async def track_cover(track_id: int, request: Request):
     cached = await anyio.to_thread.run_sync(cover_cache_file, track_id)
     if cached is not None:
         etag = etag[:-1] + "-c%d" % cached[1].st_mtime_ns + '"'
+    full_etag = etag
+    thumb: Path | None = None
+    if size is not None:
+        etag = etag[:-1] + f"-{size}" + '"'
+        thumb = (
+            Path(core_settings.image_thumbs_dir).expanduser() / "covers" / size
+            / f"{hashlib.sha1(full_etag.encode()).hexdigest()}.webp"
+        )
     headers = {"ETag": etag, "Cache-Control": _COVER_CACHE_CONTROL}
     if _etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
 
-    embedded = await _embedded_cover(target, etag)
+    if thumb is not None and thumb.is_file():
+        return FileResponse(thumb, media_type="image/webp", headers=headers)
+
+    embedded = await _embedded_cover(target, full_etag)
+    if thumb is not None and size is not None:
+        source = _cover_thumb_source(embedded, folder, cached)
+        if source is not None and await executors.run(
+            "pictures", _make_cover_thumb, source, thumb, THUMB_SIZES[size],
+        ):
+            return FileResponse(thumb, media_type="image/webp", headers=headers)
+        # Not decodable as a library picture: the cover as it is, under the
+        # full picture's own ETag (what is sent is that picture).
+        headers["ETag"] = full_etag
     if embedded is not None:
         data, mime = embedded
         return Response(content=data, media_type=mime, headers=headers)
@@ -2192,7 +2279,8 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
         except (TypeError, ValueError):
             duration_sec = None
         song_model = NowPlayingSong(
-            file=str(song_dict.get("file", "")),
+            # A relay entry's token is never in this open read (L23).
+            file=redact_relay(str(song_dict.get("file", ""))),
             title=song_dict.get("Title") or song_dict.get("title"),
             artist=song_dict.get("Artist") or song_dict.get("artist"),
             album=song_dict.get("Album") or song_dict.get("album"),

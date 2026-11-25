@@ -349,6 +349,8 @@ class SpareDeviceEngine:
         led = getattr(getattr(self, "_leds", None), "state", "idle")
         busy = (
             led in ("listening", "dropin", "recording")
+            # A quiet stream (1.5.0): the LED only fades, the mic still streams.
+            or bool(getattr(getattr(self, "_claims", None), "quiet_active", False))
             or getattr(getattr(self, "wake_recording", None), "is_set", lambda: False)()
             or getattr(getattr(self, "chat_active", None), "is_set", lambda: False)()
             or getattr(getattr(self, "dropin_active", None), "is_set", lambda: False)()

@@ -14,6 +14,7 @@ process is running or not.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,6 +32,7 @@ from domovoi import voice_history
 from domovoi.db.repositories import PeopleRepository, VoiceProfilesRepository
 from web.backend import voice_match
 from web.backend.db import session_scope
+from web.backend.domovoi_client import auth_forward_headers, post_admin
 from web.backend.schemas import (
     ConversationTurn,
     Favorite,
@@ -49,6 +51,7 @@ from web.backend.schemas import (
 )
 
 router = APIRouter(prefix="/api/people", tags=["people"])
+log = logging.getLogger(__name__)
 
 # ─── Auth tiers (REV-1) ────────────────────────────────────────────────────
 # A person's memories, favorites and preferences are their own household
@@ -383,7 +386,9 @@ async def _caller_is_admin(request: Request) -> bool:
     return await check_admin_request(request) in ("ok", "cookie-only", "pre-setup")
 
 
-@router.get("/{person_id}/profiles", response_model=list[VoiceProfile])
+@router.get(
+    "/{person_id}/profiles", response_model=list[VoiceProfile], dependencies=READ
+)
 async def list_profiles(person_id: int, request: Request) -> list[VoiceProfile]:
     """A person's voice samples (metadata only, never an embedding),
     newest first, each with its ``source``: ``satellite`` or ``phone``
@@ -392,7 +397,8 @@ async def list_profiles(person_id: int, request: Request) -> list[VoiceProfile]:
     deletes one with ``DELETE …/profiles/{profile_id}`` (a claim goes with
     what rooms learned through it).
 
-    Open, but trimmed for a caller who isn't an admin (N4): no ``room_id``
+    A household device's read, like the rest of the People page, and trimmed
+    for a caller who isn't an admin (N4): no ``room_id``
     on a phone sample (it is ``phone-<device id>``), and no claim details
     (where, by whom)."""
     admin = await _caller_is_admin(request)
@@ -473,7 +479,7 @@ async def list_voice_rooms(person_id: int) -> list[VoiceRoom]:
     "/{person_id}", status_code=204,
     dependencies=[Depends(require_admin_mutation)],
 )
-async def delete_person(person_id: int) -> None:
+async def delete_person(person_id: int, request: Request) -> None:
     """The same delete as the voice "forget me" path (which runs it only
     for a voice that matches the person's own samples; this is the
     admin's way), in one transaction:
@@ -488,15 +494,38 @@ async def delete_person(person_id: int) -> None:
       the row (FK cascades). What other tables keep of them (a chat-mic
       message's speaker mark, an alias they taught, a phone or browser
       claimed as theirs, a room's music being for them) lapses to NULL.
+
+    Plugins are told (SDK 1.17, ``core.voice_history_deleted``) by the
+    core, the process their event bus lives in: the forget is recorded in
+    this transaction, and after the commit this asks the core to announce
+    it (``POST /v1/admin/voice-history/announce-forgets``). If the core is
+    down, the delete still succeeds and the core announces it when back.
     """
+    from domovoi.media_understanding.faces import unname_faces
+
     async with session_scope() as s:
         await voice_history.delete_person_history(s, person_id)
+        await unname_faces(s, person_id)            # their faces become unnamed
         result = await s.execute(
             text("DELETE FROM people WHERE id = :id"), {"id": person_id}
         )
         if (result.rowcount or 0) == 0:
             # Nothing was theirs either (the FK); raising rolls it back.
             raise HTTPException(status_code=404, detail=f"person {person_id} not found")
+    # Committed: ask the core to tell plugins now (SDK 1.17,
+    # core.voice_history_deleted). The forget is already recorded in the
+    # transaction above (voice_history_forgets), so a core that is down
+    # announces it at its next start or hourly tick instead; the delete
+    # never waits on, or fails with, the core.
+    status, _ = await post_admin(
+        "/v1/admin/voice-history/announce-forgets", {},
+        timeout=5.0, headers=auth_forward_headers(request),
+    )
+    if status != 200:
+        log.info(
+            "people: core not told of person %d's forget now (status %s); "
+            "it announces it at its next start or tick", person_id, status,
+        )
 
 
 @router.delete(

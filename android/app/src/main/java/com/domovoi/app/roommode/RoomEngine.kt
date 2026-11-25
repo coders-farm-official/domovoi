@@ -326,13 +326,20 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
             // While parked or refused, the screen keeps saying so (and the
             // code) through each retry.
             update { if (it.link is Link.AwaitingApproval || it.link is Link.Rejected || it.link is Link.Conflict) it else it.copy(link = Link.Connecting) }
-            val identity = withContext(Dispatchers.IO) {
+            // This round dials one address, and the proof is asked for that
+            // address (RoomIdentity.dialBase).
+            val dialed = withContext(Dispatchers.IO) {
                 runCatching {
-                    RoomIdentity.verifyServer(enrol.coreUrl, enrol.fingerprint) { url ->
+                    val e = enrol.copy(coreUrl = RoomIdentity.dialBase(enrol.coreUrl) { host ->
+                        net.getAllByName(host).mapNotNull { it.hostAddress }
+                    })
+                    RoomIdentity.verifyServer(e.coreUrl, e.fingerprint) { url ->
                         RoomModels.get(client, url, limit = 64 * 1024).toString(Charsets.UTF_8)
                     }
+                    e
                 }
             }
+            val identity = dialed
             if (identity.isFailure) {
                 val why = (identity.exceptionOrNull() as? RoomIdentity.IdentityException)?.message ?: "the server did not answer"
                 Log.w(TAG, "identity: $why")
@@ -340,9 +347,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
                 backoff = waitBackoff(backoff, 60_000L)
                 continue
             }
-            syncModels(client, enrol)
-            checkAppOffer(client, enrol)
-            when (val result = session(client, enrol)) {
+            val round = dialed.getOrThrow()
+            syncModels(client, round)
+            checkAppOffer(client, round)
+            when (val result = session(client, round)) {
                 "ready" -> {
                     backoff = 1_000L
                     closed?.await()

@@ -50,10 +50,13 @@ _PENDING: set[asyncio.Task] = set()
 def is_internet_entry(uri: object) -> bool:
     """A queue entry MPD would fetch from the internet: a URL (it has a
     scheme) whose host is not on this network, under never. Library
-    files are relative paths and never match."""
+    files are relative paths and never match. A relay URL on the core
+    (domovoi/player_relay.py) is judged by the remote URL it stands for."""
     if not isinstance(uri, str) or "://" not in uri:
         return False
-    return egress.check_destination(uri) is not None
+    from domovoi import player_relay
+
+    return egress.check_destination(player_relay.target_for(uri) or uri) is not None
 
 
 async def purge_room(room_id: str, client: Any) -> int:

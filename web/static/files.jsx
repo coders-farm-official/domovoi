@@ -229,8 +229,8 @@ const TextEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) =>
 
   // This editor saves on the Save button, NOT automatically — so guard Close
   // when there are unsaved edits rather than dropping them silently.
-  const requestClose = () => {
-    if (dirty && !window.confirm('You have unsaved changes. Discard them and close?')) return;
+  const requestClose = async () => {
+    if (dirty && !await askConfirm('You have unsaved changes. Discard them and close?')) return;
     onClose();
   };
 
@@ -1587,7 +1587,7 @@ const FilesPage = () => {
 
   // "+ New" (Documents library) — create then open the right editor.
   const onCreate = async (kind) => {
-    const name = window.prompt(`New ${kind === 'doc' ? 'document' : kind} name:`);
+    const name = await askPrompt(`New ${kind === 'doc' ? 'document' : kind} name:`, { confirmLabel: 'Create' });
     if (!name) return;
     try {
       const row = await apiPost('/api/documents/create', { name, kind });

@@ -66,6 +66,9 @@ const playerUrls = {
   audio: (trackId) => absMedia(`/api/music/library/${trackId}/audio`),
   // Versioned (?v=, V059) through the shared builder, so a cover the
   // Cover Art Archive or an Undo changed is fetched anew (components.jsx).
+  // Unsized: one item is drawn at several sizes (the bar's 44px tile, the
+  // sheet's 200px one, the OS media controls), and each sizes it there
+  // with coverUrlAtSize.
   cover: (trackId, coverV) => libraryCoverUrl(trackId, coverV),
 };
 
@@ -701,7 +704,7 @@ const _castFollowRoom = (queue, index, np) => {
  * (before, a 200 carrying "I couldn't reach the music player.", which every
  * hand-off took for "paused"); a 2xx saying `ok: false` is refused too. */
 const _roomControl = async (verb, roomId) => {
-  const r = await apiPost(`/api/music/${verb}/${roomId}`);
+  const r = await apiPost(`/api/music/${verb}/${encodeURIComponent(roomId)}`);
   if (r && r.ok === false) throw new Error(`${verb} didn't happen in ${roomId}`);
   return r;
 };
@@ -1558,18 +1561,18 @@ const PlaybackProvider = ({ children }) => {
   }, [queue, loadAndPlay, target]);
 
   function play() {
-    if (target.kind === 'room') { apiPost(`/api/music/resume/${target.roomId}`).catch(() => {}); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/resume/${encodeURIComponent(target.roomId)}`).catch(() => {}); return; }
     const el = activeEl();
     if (el) { el.play().then(() => setStatus('playing')).catch(() => {}); }
     else if (current) loadAndPlay(current);
   }
   function pause() {
-    if (target.kind === 'room') { apiPost(`/api/music/pause/${target.roomId}`).catch(() => {}); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/pause/${encodeURIComponent(target.roomId)}`).catch(() => {}); return; }
     const el = activeEl();
     if (el) { el.pause(); setStatus('paused'); saveSpokenPosition(true); }
   }
   function stop() {
-    if (target.kind === 'room') { apiPost(`/api/music/stop/${target.roomId}`).catch(() => {}); setStatus('stopped'); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/stop/${encodeURIComponent(target.roomId)}`).catch(() => {}); setStatus('stopped'); return; }
     const g = graphRef.current;
     if (g) g.els.forEach((el) => { try { el.pause(); } catch {} });
     ListenLog.close();
@@ -1598,7 +1601,7 @@ const PlaybackProvider = ({ children }) => {
     // While casting: the room's next song. The core follows the queue the
     // room was cast (since 2026-10-01; before, skip swapped it for one
     // random library track).
-    if (target.kind === 'room') { apiPost(`/api/music/skip/${target.roomId}`).catch(() => {}); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/skip/${encodeURIComponent(target.roomId)}`).catch(() => {}); return; }
     ListenLog.skip();
     const ni = index + 1;
     if (ni < queue.length) advanceTo(ni, { crossfade: false });
@@ -1612,7 +1615,7 @@ const PlaybackProvider = ({ children }) => {
     // previoustrack all land here. It used to post skip — previous moved the
     // room FORWARD — and then did nothing while there was no previous
     // route. Same as the Android app (PlayerController.prev).
-    if (target.kind === 'room') { apiPost(`/api/music/previous/${target.roomId}`).catch(() => {}); return; }
+    if (target.kind === 'room') { apiPost(`/api/music/previous/${encodeURIComponent(target.roomId)}`).catch(() => {}); return; }
     // Restart current if >3s in, else go to previous.
     const el = activeEl();
     if (el && el.currentTime > 3) { el.currentTime = 0; return; }
@@ -1682,8 +1685,11 @@ const PlaybackProvider = ({ children }) => {
     try {
       // No `type`: a library cover is whatever the file carries (JPEG,
       // PNG, WebP). A cover the page already knows is missing isn't offered.
-      const artwork = item.coverUrl && !coverMisses.has(item.coverUrl)
-        ? [{ src: item.coverUrl, sizes: '512x512' }] : [];
+      // A library cover asks for the largest thumbnail (xl, 768px): a lock
+      // screen or a car display draws it big; audiobook and podcast
+      // artwork is passed through as it is.
+      const artwork = item.coverUrl && !coverMissed(item.coverUrl)
+        ? [{ src: coverUrlAtSize(item.coverUrl, 'xl'), sizes: '768x768' }] : [];
       navigator.mediaSession.metadata = new window.MediaMetadata({
         title: item.title || 'unknown',
         artist: item.artist || '',
@@ -2787,11 +2793,13 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed,
 /* Cover tile — the item's cover (a library track's comes from the file
  * itself, see CoverArt in components.jsx) over the player's own fallback:
  * the warm gradient for a track, a sunken tile with a radio glyph for a
- * live stream. A cover that 404s stays on the fallback, quietly. */
+ * live stream. A cover that 404s stays on the fallback, quietly. A library
+ * cover asks for the thumbnail that fits the tile (coverUrlAtSize: the bar's
+ * 44px gets s, the sheet's 200px gets l). */
 const CoverTile = ({ item, size = 44, radius = 'var(--r-sm)' }) => {
   const live = !!item && item.seekable === false;
   const grad = 'linear-gradient(135deg, oklch(0.86 0.06 75), oklch(0.62 0.14 50))';
-  return <CoverArt src={(item && item.coverUrl) || null} size={size} radius={radius}
+  return <CoverArt src={coverUrlAtSize((item && item.coverUrl) || null, size)} size={size} radius={radius}
                    icon={live ? 'radio' : 'music'} background={live ? 'var(--sunken)' : grad}
                    iconColor="inherit"/>;
 };

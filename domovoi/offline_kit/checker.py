@@ -172,23 +172,51 @@ def _check_stored(report: Report, root: Path, path: str, size: int, sha: str,
     return True
 
 
+def _parents(rel: str) -> list[str]:
+    parts = rel.split("/")[:-1]
+    return ["/".join(parts[: i + 1]) for i in range(len(parts))]
+
+
 def _unlisted(root: Path, listed: set[str], joined_names: set[str]) -> list[str]:
+    """Everything on the stick kit.json doesn't account for: unlisted
+    files, links and other non-regular entries (a link to a folder is not
+    walked into, so it is named here), and folders that hold nothing of
+    the kit (M12: a linked or empty folder under ``apt/`` would otherwise
+    pass unseen)."""
     out = []
+    listed_dirs = {d for p in listed for d in _parents(p)}
+    with_files: set[str] = set()
+    seen_dirs: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = Path(dirpath).relative_to(root).as_posix()
         if rel_dir == ".":
             dirnames[:] = [d for d in dirnames if d not in fmt.OS_LITTER_DIRS]
         dirnames.sort()
+        for name in list(dirnames):
+            rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+            if os.path.islink(os.path.join(dirpath, name)):
+                dirnames.remove(name)
+                out.append(f"{rel} is a link, which a kit never holds.")
+            else:
+                seen_dirs.append(rel)
         for name in sorted(filenames):
             if fmt.is_os_litter(name):
                 continue
             rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+            with_files.update(_parents(rel))
+            full = os.path.join(dirpath, name)
+            if os.path.islink(full) or not os.path.isfile(full):
+                out.append(f"{rel} is a link or not a plain file, which a kit never holds.")
+                continue
             if rel in listed:
                 continue
             if rel in joined_names:
                 out.append(f"{rel} is here whole, but kit.json says it is stored in parts only.")
             else:
                 out.append(f"{rel} is not part of the kit (kit.json doesn't list it).")
+    for rel in seen_dirs:
+        if rel not in listed_dirs and rel not in with_files:
+            out.append(f"{rel}/ is not part of the kit (kit.json lists nothing in it).")
     return out
 
 

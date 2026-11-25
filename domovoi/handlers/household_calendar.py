@@ -217,6 +217,8 @@ class CalendarHandler(Handler):
     #   look for a song called "anything on friday". Every pattern is
     #   anchored on calendar words or ends in a closed day phrase.
     priority_band = 175
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Calendar", tone="info")
     example_phrases = (
         "what's on my calendar today",

@@ -116,8 +116,33 @@
       "assumed_without_supports": false,
       "hello_key": "dropin_ready"
     },
+    "room_audio": {
+      "unlocks": "the device plays the room's synced sound from `/v1/room-audio/{satellite_id}` (1.5.0, docs/ROOM_AUDIO_PROTOCOL.md): the room's music, replies and timers go to it there",
+      "assumed_without_supports": false,
+      "hello_key": "room_audio"
+    },
+    "diagnostics": {
+      "unlocks": "the `diag_request` frame (one read-only probe by name, answered by `diag_result`) and the room drawer's Diagnostics tab (1.5.0); never assumed without the hello key or `supports`",
+      "assumed_without_supports": false,
+      "hello_key": "diagnostics"
+    },
+    "support_shell": {
+      "unlocks": "`support_open` / `support_input` / `support_resize` / `support_close` (an admin's support session, 1.5.0); the satellite's Open support session",
+      "assumed_without_supports": false,
+      "hello_key": "support_shell"
+    },
     "room_display": {
       "unlocks": "the `room_display` frame (this room's music, timers and alarms, and one going off) and the `room_control` frame back; a paired room only; never assumed without `supports`",
+      "assumed_without_supports": false,
+      "hello_key": null
+    },
+    "mic_dsp": {
+      "unlocks": "`set_mic_dsp` / `mic_dsp_mark` (XVF3800 DSP presets, admin only); the Settings tab's Microphone DSP block",
+      "assumed_without_supports": false,
+      "hello_key": "mic_dsp"
+    },
+    "wake_claim": {
+      "unlocks": "1.5.0: the device claims each wake in a room whose `claim` is true (`wake_claim`), and takes `wake_grant`, `capture_keep` and the `claim` form of `end_capture` (one turn per wake word, domovoi/wake_claims.py)",
       "assumed_without_supports": false,
       "hello_key": null
     }
@@ -180,6 +205,33 @@
     ],
     "room_display": [
       "room_display"
+    ],
+    "diag_request": [
+      "diagnostics"
+    ],
+    "set_mic_dsp": [
+      "mic_dsp"
+    ],
+    "mic_dsp_mark": [
+      "mic_dsp"
+    ],
+    "support_open": [
+      "support_shell"
+    ],
+    "support_input": [
+      "support_shell"
+    ],
+    "support_resize": [
+      "support_shell"
+    ],
+    "support_close": [
+      "support_shell"
+    ],
+    "wake_grant": [
+      "wake_claim"
+    ],
+    "capture_keep": [
+      "wake_claim"
     ]
   },
   "config_section_ability": {
@@ -214,12 +266,22 @@
         "speech_pause": true,
         "capture_control": true,
         "announce_after_session_end": true,
-        "dropin_ready": true
+        "dropin_ready": true,
+        "diagnostics": true,
+        "mic_dsp": false,
+        "support_shell": false
       },
       "ready": {
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "kitchen",
+        "satellite_id": "kitchen",
+        "room": {
+          "room_id": "kitchen",
+          "name": "kitchen",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -240,6 +302,7 @@
           "chat_mode",
           "code_sync",
           "config",
+          "diagnostics",
           "display",
           "dropin_ready",
           "leds",
@@ -258,7 +321,11 @@
         ],
         "not_allowed": [
           "full_duplex",
-          "room_display"
+          "mic_dsp",
+          "room_audio",
+          "room_display",
+          "support_shell",
+          "wake_claim"
         ],
         "frames_sent": [
           "restart",
@@ -272,12 +339,21 @@
           "sounds_changed",
           "set_display",
           "end_capture",
-          "announcement"
+          "announcement",
+          "diag_request"
         ],
         "frames_never": [
           "chat_start",
           "dropin_start",
-          "room_display"
+          "room_display",
+          "set_mic_dsp",
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": {},
         "config_hidden_sections": [],
@@ -295,7 +371,8 @@
           "announce": true,
           "drop_in": false,
           "wake_record": true,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": true
         }
       },
       "health": {
@@ -414,19 +491,30 @@
         "speech_pause": true,
         "capture_control": true,
         "announce_after_session_end": true,
-        "dropin_ready": true
+        "dropin_ready": true,
+        "diagnostics": true,
+        "mic_dsp": true,
+        "support_shell": true
       },
       "ready": {
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "living-room",
+        "satellite_id": "living-room",
+        "room": {
+          "room_id": "living-room",
+          "name": "living-room",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
           "end_capture",
           "music_failed",
           "health",
-          "log_push"
+          "log_push",
+          "mic_dsp"
         ]
       },
       "expect": {
@@ -440,16 +528,19 @@
           "chat_mode",
           "code_sync",
           "config",
+          "diagnostics",
           "display",
           "dropin_ready",
           "full_duplex",
           "leds",
           "logs",
+          "mic_dsp",
           "mic_gain",
           "plugin_payloads",
           "restart",
           "sounds",
           "speech_pause",
+          "support_shell",
           "time_sync",
           "turn_progress",
           "voice",
@@ -458,7 +549,9 @@
           "wifi"
         ],
         "not_allowed": [
-          "room_display"
+          "room_audio",
+          "room_display",
+          "wake_claim"
         ],
         "frames_sent": [
           "restart",
@@ -474,10 +567,19 @@
           "chat_start",
           "dropin_start",
           "end_capture",
-          "announcement"
+          "announcement",
+          "diag_request",
+          "set_mic_dsp",
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close"
         ],
         "frames_never": [
-          "room_display"
+          "room_display",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": {},
         "config_hidden_sections": [],
@@ -495,7 +597,8 @@
           "announce": true,
           "drop_in": true,
           "wake_record": true,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": true
         }
       },
       "health": {
@@ -615,6 +718,7 @@
         "capture_control": true,
         "announce_after_session_end": true,
         "dropin_ready": true,
+        "diagnostics": true,
         "board": "linux_pc",
         "supports": [
           "restart",
@@ -626,12 +730,21 @@
           "sounds",
           "voice",
           "turn_progress"
-        ]
+        ],
+        "mic_dsp": false,
+        "support_shell": false
       },
       "ready": {
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "study",
+        "satellite_id": "study",
+        "room": {
+          "room_id": "study",
+          "name": "study",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -648,6 +761,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "diagnostics",
           "dropin_ready",
           "logs",
           "restart",
@@ -665,6 +779,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "diagnostics",
           "dropin_ready",
           "logs",
           "restart",
@@ -680,10 +795,14 @@
           "display",
           "full_duplex",
           "leds",
+          "mic_dsp",
           "mic_gain",
           "plugin_payloads",
+          "room_audio",
           "room_display",
+          "support_shell",
           "time_sync",
+          "wake_claim",
           "wifi"
         ],
         "frames_sent": [
@@ -697,13 +816,22 @@
           "wake_models_changed",
           "sounds_changed",
           "end_capture",
-          "announcement"
+          "announcement",
+          "diag_request"
         ],
         "frames_never": [
           "set_display",
           "chat_start",
           "dropin_start",
-          "room_display"
+          "room_display",
+          "set_mic_dsp",
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -727,7 +855,8 @@
           "announce": true,
           "drop_in": false,
           "wake_record": true,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": true
         }
       },
       "health": {
@@ -831,6 +960,7 @@
         "capture_control": true,
         "announce_after_session_end": true,
         "dropin_ready": true,
+        "diagnostics": true,
         "board": "windows_pc",
         "supports": [
           "restart",
@@ -842,12 +972,21 @@
           "sounds",
           "voice",
           "turn_progress"
-        ]
+        ],
+        "mic_dsp": false,
+        "support_shell": false
       },
       "ready": {
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "den",
+        "satellite_id": "den",
+        "room": {
+          "room_id": "den",
+          "name": "den",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -864,6 +1003,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "diagnostics",
           "dropin_ready",
           "logs",
           "restart",
@@ -881,6 +1021,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "diagnostics",
           "dropin_ready",
           "logs",
           "restart",
@@ -896,10 +1037,14 @@
           "display",
           "full_duplex",
           "leds",
+          "mic_dsp",
           "mic_gain",
           "plugin_payloads",
+          "room_audio",
           "room_display",
+          "support_shell",
           "time_sync",
+          "wake_claim",
           "wifi"
         ],
         "frames_sent": [
@@ -913,13 +1058,22 @@
           "wake_models_changed",
           "sounds_changed",
           "end_capture",
-          "announcement"
+          "announcement",
+          "diag_request"
         ],
         "frames_never": [
           "set_display",
           "chat_start",
           "dropin_start",
-          "room_display"
+          "room_display",
+          "set_mic_dsp",
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": {
           "plugin_payloads": false
@@ -943,7 +1097,8 @@
           "announce": true,
           "drop_in": false,
           "wake_record": true,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": true
         }
       },
       "health": {
@@ -1057,6 +1212,13 @@
         "type": "ready",
         "protocol_version": "0.1",
         "room_id": "nursery",
+        "satellite_id": "nursery",
+        "room": {
+          "room_id": "nursery",
+          "name": "nursery",
+          "shared": false,
+          "claim": false
+        },
         "audio_sample_rate_in": 16000,
         "features": [
           "speech_pause",
@@ -1096,15 +1258,20 @@
           "chat_mode",
           "code_sync",
           "config",
+          "diagnostics",
           "display",
           "leds",
           "logs",
+          "mic_dsp",
           "mic_gain",
           "plugin_payloads",
           "restart",
+          "room_audio",
+          "support_shell",
           "time_sync",
           "turn_progress",
           "voice",
+          "wake_claim",
           "wake_clips",
           "wifi"
         ],
@@ -1125,7 +1292,16 @@
           "start_wake_recording",
           "stop_wake_recording",
           "set_display",
-          "chat_start"
+          "chat_start",
+          "diag_request",
+          "set_mic_dsp",
+          "mic_dsp_mark",
+          "support_open",
+          "support_input",
+          "support_resize",
+          "support_close",
+          "wake_grant",
+          "capture_keep"
         ],
         "upgrade_extra": null,
         "config_hidden_sections": null,
@@ -1139,7 +1315,8 @@
           "announce": true,
           "drop_in": true,
           "wake_record": false,
-          "wake_push": true
+          "wake_push": true,
+          "diagnostics": false
         }
       },
       "health": {
@@ -1200,5 +1377,300 @@
         }
       }
     }
+  },
+  "room_turns": {
+    "about": [
+      "One turn per wake word (1.5.0), docs/uml/satellite-protocol.md 'One turn per wake word'.",
+      "Two satellites in one room, both with wake_claim. Read by domovoi/tests/test_wake_claims.py;",
+      "slice 4 (satellite/) and the phone apps build their claim side against these frames."
+    ],
+    "hello_supports_adds": "wake_claim",
+    "pi_hello_supports": [
+      "restart",
+      "code_sync",
+      "plugin_payloads",
+      "config",
+      "wifi",
+      "mic_gain",
+      "leds",
+      "display",
+      "logs",
+      "wake_clips",
+      "wake_models",
+      "sounds",
+      "voice",
+      "time_sync",
+      "chat_mode",
+      "announce_after_session_end",
+      "turn_progress",
+      "wake_claim"
+    ],
+    "pi_hello_supports_about": "A 1.5.0 Pi (satellite/client.py) declares a list so it can name wake_claim: everything a hello without one was assumed to have, plus wake_claim. The devices above are Pis and PCs from before 1.5.0; a 1.5.0 one sends their hello with this list (a Pi) or hello_supports_adds appended (a PC).",
+    "ready_room": {
+      "room_id": "kitchen",
+      "name": "Kitchen",
+      "shared": true,
+      "claim": true
+    },
+    "ready_features_adds": "wake_claim",
+    "claim": {
+      "type": "wake_claim",
+      "claim": 7,
+      "word": "hey_jarvis",
+      "score": 0.91,
+      "floor_dbfs": -52.0
+    },
+    "claim_late": {
+      "type": "wake_claim",
+      "claim": 3,
+      "word": "hey_jarvis",
+      "score": 0.88,
+      "floor_dbfs": -47.5
+    },
+    "grant_owner": {
+      "type": "wake_grant",
+      "claim": 7,
+      "turn": "t1",
+      "role": "owner"
+    },
+    "grant_quiet": {
+      "type": "wake_grant",
+      "claim": 3,
+      "turn": "t1",
+      "role": "quiet",
+      "stream_ms": 2000
+    },
+    "owner_utterance_start": {
+      "type": "utterance_start",
+      "trigger": "wake_word",
+      "claim": 7,
+      "utt": 1,
+      "wake_word": "hey_jarvis",
+      "wake_score": 0.91
+    },
+    "capture_keep": {
+      "type": "capture_keep",
+      "claim": 3,
+      "turn": "t1"
+    },
+    "end_capture_quiet": {
+      "type": "end_capture",
+      "claim": 3
+    },
+    "quiet_end": {
+      "type": "quiet_end",
+      "claim": 3,
+      "frames": 52,
+      "reason": "stopped"
+    },
+    "barge_in_claim": {
+      "type": "wake_claim",
+      "claim": 4,
+      "word": "hey_jarvis",
+      "score": 0.8,
+      "floor_dbfs": -40.0,
+      "barge_in": true
+    },
+    "response_start_room_audio_adds": {
+      "room_audio": true
+    },
+    "response_end_room_audio_adds": [
+      "play_end_us"
+    ],
+    "duplicate_dropped_response_end": {
+      "type": "response_end",
+      "interrupted": true,
+      "expect_followup": false,
+      "ignored": true,
+      "duplicate": true
+    },
+    "constants": {
+      "stream_ms": 2000,
+      "join_window_ms": 1500,
+      "score_window_ms": 1500,
+      "min_scored_ms": 300,
+      "fail_open_ms": 150,
+      "cooldown_ms": 1000,
+      "level_percentile": 90
+    }
+  },
+  "noisy_rooms": {
+    "about": [
+      "Noisy rooms (1.5.0), docs/uml/satellite-protocol.md 'Noisy rooms'. A capture cut off at its",
+      "cap names where its speech began; the core transcribes a few seconds from there",
+      "(domovoi/loud_room.py). Read by domovoi/tests/test_loud_room.py and",
+      "satellite/tests/test_utterance_end_capture_fields.py."
+    ],
+    "capped_utterance_end": {
+      "type": "utterance_end",
+      "greeting_played": false,
+      "utt": 3,
+      "frames": 1000,
+      "last_voiced_frame": 999,
+      "first_voiced_frame": 12,
+      "exit_reason": "max_record_seconds",
+      "voiced_frames": 960,
+      "trailing_silent_frames": 0,
+      "silence_limit_frames": 40
+    },
+    "capped_utterance_end_older_satellite": {
+      "type": "utterance_end",
+      "greeting_played": false,
+      "utt": 3,
+      "frames": 1000,
+      "last_voiced_frame": 999,
+      "exit_reason": "max_record_seconds",
+      "voiced_frames": 960,
+      "trailing_silent_frames": 0,
+      "silence_limit_frames": 40
+    },
+    "window_sec": 5.0,
+    "lead_sec": 0.3,
+    "heard_line_example": "It's loud in here. I heard: what time is it.",
+    "ask_line_example": "It's loud in here. Should I play some jazz in the kitchen?",
+    "no_line": "Okay, I won't."
+  },
+  "pairing_proof": {
+    "about": "The approval exchange (satellite/pairing_proof.py, docs/uml/satellite-protocol.md). Version 2 (1.5.0) binds SHA-256(pairing_token) into the transcript: transcript = 'domovoi-pairing-proof-v2' || lp(sha256(token), 32 bytes) || lp(room_id) || lp(fingerprint) || lp(X) || lp(Y) || lp(Z) || lp(w); lp = 8-byte little-endian length, then the bytes; X, Y, Z, w as 256-byte big-endian; K = SHA-256(transcript); device tag = HMAC-SHA256(K, 'device confirms'), server tag = HMAC-SHA256(K, 'server confirms'). Version 1 is the same without the token field, under 'domovoi-pairing-proof-v1'. Version 3 (1.5.0) also binds the hello's support_key string (UTF-8, as sent; empty for a device that sends none) right after the token hash, under 'domovoi-pairing-proof-v3': transcript = 'domovoi-pairing-proof-v3' || lp(sha256(token)) || lp(support_key) || lp(room_id) || ...; the core pins that key when the run approves the device. A device adds hello_v2_adds only for a server whose /v1/health SIGNED pairing_proof >= 2, hello_v3_adds (instead) only for one that signed >= 3. The vector's elements are placeholders for the transcript only (hex, no leading zeros).",
+    "version": 3,
+    "supported": [
+      1,
+      2,
+      3
+    ],
+    "hello_v2_adds": {
+      "pairing_proof": 2
+    },
+    "hello_v3_adds": {
+      "pairing_proof": 3
+    },
+    "v2_tag_vector": {
+      "room_id": "kitchen",
+      "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "token": "placeholder-pairing-token",
+      "token_hash": "d4e709efcb626cc9210675e65456f481cc18126d65a6ff44224cf733d601e240",
+      "x": "20",
+      "y": "80",
+      "z": "800",
+      "w": "75bcd15",
+      "device_tag": "8f79d661cb5c3ac00b310d5721c99338aef7f51bb158bab31305e6d5e0a3b1d1",
+      "server_tag": "669d77f82ec6ff9aa75ffedc245e220c44d67b406809079cc61b68b91106e95e"
+    },
+    "v3_tag_vector": {
+      "room_id": "kitchen",
+      "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "token": "placeholder-pairing-token",
+      "token_hash": "d4e709efcb626cc9210675e65456f481cc18126d65a6ff44224cf733d601e240",
+      "x": "20",
+      "y": "80",
+      "z": "800",
+      "w": "75bcd15",
+      "support_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "device_tag": "b4ed3ed91dbac18a7ba254212601ccc0e134d9dc8115a82fb38153c690aa8299",
+      "server_tag": "83b75b9dcb11ce2c2d0f828085d9ef0585aa0d40eae192f6a97d938f0d7018b9",
+      "no_key_device_tag": "4703028b45f9581c5d97f603e38be819fd18bb11ad8fc2e207231a68557600a1",
+      "no_key_server_tag": "9544010d9011bec7e9fbf6e486ee43812eeea28892b9b7e88da574663c08478e"
+    }
+  },
+  "room_display_frames": {
+    "about": [
+      "The room display frame (domovoi/room_display.py, docs/uml/satellite-protocol.md 'The room",
+      "display'). 1.5.0 adds one key, `media`: photo and video results asked for by voice in the",
+      "room (domovoi/room_media.py), null otherwise. A 1.4.0 client reads only `client_keys_1_4_0`",
+      "and ignores every other key, so `with_media` reads to it exactly as `before_media`. Read by",
+      "domovoi/tests/test_room_media.py; the room-mode apps' tests may read it too. Tokens here are",
+      "placeholders."
+    ],
+    "client_keys_1_4_0": [
+      "type",
+      "sent_at_ms",
+      "now_playing",
+      "timers",
+      "ringing"
+    ],
+    "before_media": {
+      "type": "room_display",
+      "sent_at_ms": 123456789,
+      "now_playing": null,
+      "timers": [
+        {
+          "id": 7,
+          "kind": "timer",
+          "label": "pasta",
+          "remaining_ms": 299000,
+          "total_ms": 600000
+        }
+      ],
+      "ringing": null
+    },
+    "with_media": {
+      "type": "room_display",
+      "sent_at_ms": 123456789,
+      "now_playing": null,
+      "timers": [
+        {
+          "id": 7,
+          "kind": "timer",
+          "label": "pasta",
+          "remaining_ms": 299000,
+          "total_ms": 600000
+        }
+      ],
+      "ringing": null,
+      "media": {
+        "id": 7,
+        "said": "I found 12 photos that might show the beach, from last summer. They're on the Photos page.",
+        "count": 12,
+        "more": false,
+        "expires_in_ms": 90000,
+        "items": [
+          {
+            "kind": "image",
+            "thumb": "/v1/room-media/PLACEHOLDERtokenAAAAAAAAAAAAAAAA",
+            "caption": "A beach with a red umbrella.",
+            "date": "2025-07-14",
+            "at_s": null
+          },
+          {
+            "kind": "video",
+            "thumb": "/v1/room-media/PLACEHOLDERtokenBBBBBBBBBBBBBBBB",
+            "caption": null,
+            "date": "2025-08-02",
+            "at_s": 42.0
+          }
+        ]
+      }
+    },
+    "media_cleared": {
+      "type": "room_display",
+      "sent_at_ms": 123456789,
+      "now_playing": null,
+      "timers": [
+        {
+          "id": 7,
+          "kind": "timer",
+          "label": "pasta",
+          "remaining_ms": 299000,
+          "total_ms": 600000
+        }
+      ],
+      "ringing": null,
+      "media": null
+    },
+    "media_item_keys": [
+      "kind",
+      "thumb",
+      "caption",
+      "date",
+      "at_s"
+    ],
+    "media_keys": [
+      "id",
+      "said",
+      "count",
+      "more",
+      "expires_in_ms",
+      "items"
+    ]
   }
 }

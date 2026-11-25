@@ -102,8 +102,13 @@ def _draft_row(r: Any) -> dict[str, Any]:
     return d
 
 
-def _version_row(r: Any) -> dict[str, Any]:
+def _version_row(r: Any, me: str | None = None) -> dict[str, Any]:
+    """A version as clients read it. The editing device's id stays in the
+    database (L39): ``mine`` says whether ``me`` (the caller's own id) made
+    it, ``device_name`` names the device otherwise."""
     d = dict(r)
+    stored = d.pop("device_id", None)
+    d["mine"] = bool(me) and stored == me
     d["created_at"] = _iso(d.get("created_at"))
     d["saved"] = _json(d.get("saved")) or []
     d["words"] = blocks.word_count(d.get("body") or "")
@@ -126,18 +131,19 @@ _VERSION_FROM = "chat_draft_versions v LEFT JOIN devices dv ON dv.device_id = v.
 _OWNER = "(SELECT owner_person_id FROM devices WHERE device_id = :dev)"
 
 
-async def _versions(s: Any, draft_id: int) -> list[dict[str, Any]]:
+async def _versions(s: Any, draft_id: int, me: str | None = None) -> list[dict[str, Any]]:
     rows = (await s.execute(text(
         f"SELECT {_VERSION_COLS} FROM {_VERSION_FROM} WHERE v.draft_id = :id ORDER BY v.version"),
         {"id": draft_id})).mappings().all()
-    return [_version_row(r) for r in rows]
+    return [_version_row(r, me) for r in rows]
 
 
-async def _version(s: Any, draft_id: int, version: int | None) -> dict[str, Any] | None:
+async def _version(s: Any, draft_id: int, version: int | None,
+                   me: str | None = None) -> dict[str, Any] | None:
     q = (f"SELECT {_VERSION_COLS} FROM {_VERSION_FROM} "
          "WHERE v.draft_id = :id " + ("AND v.version = :v" if version else "ORDER BY v.version DESC LIMIT 1"))
     r = (await s.execute(text(q), {"id": draft_id, "v": version})).mappings().first()
-    return _version_row(r) if r else None
+    return _version_row(r, me) if r else None
 
 
 async def latest_draft(thread_id: int) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -183,6 +189,8 @@ class DraftTurn:
     base: dict[str, Any] | None = None       # the version revised / printed
     #: The reply when no model is asked (the print card's line).
     immediate: str | None = None
+    #: A chat attachment to print instead of a draft: {token, name, kind}.
+    attachment: dict[str, str] | None = None
     #: One or more passes, each the messages for one model call.
     passes: list[list[dict[str, str]]] = field(default_factory=list)
     #: The section split of a long version (revise in parts).
@@ -201,6 +209,8 @@ class DraftTurn:
                 "based_on": based_on, "newer": newer}
 
     def immediate_card(self) -> dict[str, Any]:
+        if self.attachment is not None:
+            return {"print_attachment": self.attachment}
         b = self.base or {}
         return self.card(int(b.get("version") or 1), int(b.get("words") or 0))
 
@@ -357,6 +367,33 @@ async def draft_in_thread(thread_id: int, draft_id: int) -> bool:
                                 {"d": draft_id, "t": thread_id})).first() is not None
 
 
+async def attachment_print_turn(thread_id: int, question: str, *, current: bool) -> DraftTurn | None:
+    """"print this" with an attachment to print, or None. The rule: an
+    attachment sent with the message is the one; otherwise the newer of the
+    thread's last attachment and its latest draft (a tie goes to the
+    draft). ``current``: this message carries an image or document."""
+    if not phrases.print_request(question):
+        return None
+    async with session_scope() as s:
+        row = (await s.execute(text(
+            "SELECT images, documents, created_at FROM chat_messages WHERE thread_id = :t AND role = 'user' "
+            "AND (images IS NOT NULL OR documents IS NOT NULL) ORDER BY id DESC LIMIT 1"), {"t": thread_id})).first()
+        if row is None:
+            return None
+        if not current:
+            newest = (await s.execute(text(
+                "SELECT updated_at FROM chat_drafts WHERE thread_id = :t ORDER BY updated_at DESC LIMIT 1"),
+                {"t": thread_id})).scalar()
+            if newest is not None and newest >= row[2]:
+                return None
+    images, docs = row[0] or [], row[1] or []
+    item, kind = (images[-1], "image") if images else (docs[-1], "document")
+    name = str(item.get("name") or ("picture" if kind == "image" else "document"))
+    return DraftTurn(action="print", thread_id=thread_id, kind="attachment", template="", title=name,
+                     request=question, attachment={"token": item["token"], "name": name, "kind": kind},
+                     immediate=f"Here's {name}, ready to print. Check the preview, then press Print.")
+
+
 async def plan_turn(thread_id: int, question: str, revise_draft: int | None = None,
                     device_id: str | None = None) -> DraftTurn | None:
     """How ``question`` in ``thread_id`` is a draft turn, or None: "print
@@ -454,16 +491,20 @@ def _with_changes(versions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 @router.get("/drafts/{draft_id}", dependencies=READ)
-async def get_draft(draft_id: int) -> dict[str, Any]:
+async def get_draft(draft_id: int, request: Request = None) -> dict[str, Any]:  # type: ignore[assignment]
     """The draft and every version (oldest first): its markdown, the plain
     text the changes view shows (``display``), and ``changes`` against the
     version before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``
-    removed; null for v1)."""
+    removed; null for v1). No device ids: each version says ``mine``
+    (made from the ``X-Device-Id`` the caller names) and ``device_name``."""
+    from web.backend.api.chat import caller_id
+
+    me = caller_id(request)
     async with session_scope() as s:
         d = await _draft(s, draft_id)
         if d is None:
             raise HTTPException(status_code=404, detail="draft not found")
-        versions = await _versions(s, draft_id)
+        versions = await _versions(s, draft_id, me)
     tpl = [{"id": t.id, "label": t.label} for t in templates.for_kind(d["kind"])]
     # Off the event loop: each diff is bounded (diff.WORK_BUDGET), but a
     # draft can have many versions.
@@ -515,6 +556,9 @@ async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> 
             if latest is not None and latest["version"] != body.base_version:
                 return _stale(latest["version"])
             if latest is not None and latest["body"] == text_:
+                from web.backend.api.chat import caller_id
+
+                latest = await _version(s, draft_id, None, caller_id(request) or device)
                 return {"version": latest, "unchanged": True}
             version = (latest["version"] if latest else 0) + 1
             await s.execute(text(
@@ -524,13 +568,23 @@ async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> 
             await s.execute(text("UPDATE chat_drafts SET updated_at = now() WHERE id = :d"), {"d": draft_id})
             await _notify(s, "draft-edited")
             await s.commit()
-            v = await _version(s, draft_id, version)
+            v = await _version(s, draft_id, version, device)
     except IntegrityError:
         async with session_scope() as s:
             latest = await _version(s, draft_id, None)
         return _stale(latest["version"] if latest else body.base_version)
     v["change"] = await asyncio.to_thread(diff.change_line, latest["body"] if latest else "", text_)
     return {"version": v}
+
+
+async def render_file(markdown: str, template_id: str, fmt: str, title: str) -> bytes:
+    """:func:`render` for a route: the length checked first, then built in
+    the documents pool, never on the event loop."""
+    from domovoi import executors
+    from web.backend.api.documents import assert_docx_lines
+
+    assert_docx_lines(markdown)
+    return await executors.run("documents", render, markdown, template_id, fmt, title)
 
 
 def render(markdown: str, template_id: str, fmt: str, title: str) -> bytes:
@@ -598,7 +652,7 @@ async def save_draft(draft_id: int, body: SaveBody, request: Request) -> dict[st
         d, v = await _target(s, draft_id, body.version)
     fmt = body.format or kinds.default_format(d["kind"])
     tpl = _template_for(d, body.template)
-    data = render(v["body"], tpl, fmt, d["title"])
+    data = await render_file(v["body"], tpl, fmt, d["title"])
     check = ats.check(data, fmt, v["body"])
     rel = _write_into_chat_folder(file_name(d["title"], v["version"], fmt), data)
     entry = {"format": fmt, "rel_path": rel, "check": check.as_json(), "template": tpl,
@@ -621,7 +675,7 @@ async def export_draft(draft_id: int, version: Optional[int] = Query(None, ge=1)
     async with session_scope() as s:
         d, v = await _target(s, draft_id, version)
     fmt = format or kinds.default_format(d["kind"])
-    data = render(v["body"], _template_for(d, template), fmt, d["title"])
+    data = await render_file(v["body"], _template_for(d, template), fmt, d["title"])
     name = file_name(d["title"], v["version"], fmt)
     from urllib.parse import quote
 
@@ -642,7 +696,7 @@ async def _print(core_path: str, draft_id: int, body: PrintDraftBody, request: R
 
     async with session_scope() as s:
         d, v = await _target(s, draft_id, body.version)
-    data = render(v["body"], _template_for(d, body.template), "pdf", d["title"])
+    data = await render_file(v["body"], _template_for(d, body.template), "pdf", d["title"])
     return await printers.forward_print_bytes(
         core_path, request, data, file_name(d["title"], v["version"], "pdf"),
         title=f"{d['title']} v{v['version']}", printer_id=body.printer_id, options=body.options, timeout=120.0)
@@ -658,3 +712,34 @@ async def print_draft_preview(draft_id: int, body: PrintDraftBody, request: Requ
 async def print_draft(draft_id: int, body: PrintDraftBody, request: Request):
     """Prints a version's PDF on the home's printer (after its preview)."""
     return await _print("/v1/print/jobs", draft_id, body, request)
+
+
+# ─── Printing a chat attachment ─────────────────────────────────────────
+def _attachment_file(token: str):
+    from web.backend.api import chat as _chat
+    from web.backend.api import chat_documents as _docs
+
+    return _chat._upload_path(token) or _docs.doc_path(token)
+
+
+async def _print_attachment(core_path: str, token: str, body: PrintDraftBody, request: Request):
+    from web.backend.api import printers
+
+    p = _attachment_file(token)
+    if p is None:
+        raise HTTPException(status_code=404, detail="that attachment is no longer on this Domovoi")
+    return await printers.forward_print_bytes(
+        core_path, request, p.read_bytes(), p.name, title=p.stem, printer_id=body.printer_id,
+        options=body.options, timeout=120.0)
+
+
+@router.post("/attachments/{token}/print/preview", dependencies=DEVICE)
+async def print_attachment_preview(token: str, body: PrintDraftBody, request: Request):
+    """The Print dialog's preview of a chat attachment (a picture or document)."""
+    return await _print_attachment("/v1/print/preview", token, body, request)
+
+
+@router.post("/attachments/{token}/print/jobs", dependencies=DEVICE, status_code=202)
+async def print_attachment(token: str, body: PrintDraftBody, request: Request):
+    """Prints a chat attachment on the home's printer (after its preview)."""
+    return await _print_attachment("/v1/print/jobs", token, body, request)

@@ -81,8 +81,28 @@ async def insert_friend(s: AsyncSession, *, id: str, house_key: bytes, session_k
 
 
 async def delete_friend(s: AsyncSession, friend_id: str) -> bool:
-    res = await s.execute(text("DELETE FROM friend_houses_friends WHERE id = :i"), {"i": friend_id})
-    return bool(res.rowcount)
+    """Remove a friend (unfriend or block). What was still waiting to go to
+    that house never goes, even if it is friended again later: queued
+    messages are marked not delivered, and lists shared with it stop being
+    shared (both copies stay as ordinary lists)."""
+    row = (await s.execute(text(
+        "DELETE FROM friend_houses_friends WHERE id = :i RETURNING house_key"),
+        {"i": friend_id})).first()
+    if row is None:
+        return False
+    house = bytes(row[0])
+    await s.execute(text(
+        "UPDATE friend_houses_messages SET state = 'failed', "
+        "last_error = 'Not delivered: the house was removed' "
+        "WHERE house_key = :h AND direction = 'out' AND state = 'queued'"), {"h": house})
+    await s.execute(text(
+        "DELETE FROM friend_houses_space_ops o USING friend_houses_spaces sp "
+        "WHERE sp.id = o.space_id AND sp.house_key = :h AND o.direction = 'out' "
+        "AND o.state = 'queued'"), {"h": house})
+    await s.execute(text(
+        "UPDATE friend_houses_spaces SET state = 'left', local_list_id = NULL "
+        "WHERE house_key = :h AND state = 'active'"), {"h": house})
+    return True
 
 
 async def mark_verified(s: AsyncSession, friend_id: str) -> bool:
@@ -116,6 +136,13 @@ async def set_epoch(s: AsyncSession, epoch: bytes, marker: str) -> None:
         ),
         {"e": epoch, "m": marker},
     )
+
+
+async def set_marker(s: AsyncSession, marker: str) -> None:
+    """A fresh restore marker, same epoch (written at every core start,
+    before the file: M1 of the slice-4 re-check)."""
+    await s.execute(text(
+        "UPDATE friend_houses_state SET marker = :m, updated_at = now() WHERE id = 1"), {"m": marker})
 
 
 # ─── friend files (V067) ──────────────────────────────────────────────────

@@ -650,7 +650,8 @@ def keep_bind_capability_from_children() -> bool:
     switch can bind port 80 again later, and out of every child. Linux
     4.3 and later; elsewhere (or on failure) a no-op. True when cleared.
     Call it from the main thread before anything starts a thread: the
-    capability sets are per thread, and new threads copy their creator's."""
+    capability sets are per thread, and new threads copy their creator's.
+    A failure on Linux is logged: the children would keep the capability."""
     if not sys.platform.startswith("linux"):
         return False
     try:
@@ -658,9 +659,13 @@ def keep_bind_capability_from_children() -> bool:
 
         libc = ctypes.CDLL(None, use_errno=True)
         rc = libc.prctl(_PR_CAP_AMBIENT, _PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not clear the ambient capability set (%s); programs this process starts may inherit it", type(e).__name__)
         return False
-    return rc == 0
+    if rc != 0:
+        log.warning("could not clear the ambient capability set (prctl returned %s); programs this process starts may inherit it", rc)
+        return False
+    return True
 
 
 __all__ = [

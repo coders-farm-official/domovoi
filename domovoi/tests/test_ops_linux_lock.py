@@ -194,7 +194,9 @@ def test_update_unit_and_compile_script_agree_on_the_lock() -> None:
     assert "NODEPS_LOCK=requirements-linux-py314-no-deps.lock" in compile_sh
     assert "requirements-no-deps.in" in compile_sh and NODEPS_IN.is_file()
     assert "DEPS_NODEPS_LOCK=${DOMOVOI_DEPS_NODEPS_LOCK-requirements-linux-py314-no-deps.lock}" in script
-    assert 'pip_as install --require-hashes --no-deps -r "$REPO_DIR/$DEPS_NODEPS_LOCK"' in script
+    # From an offline kit PIP_SRC is --no-index --find-links <the kit's wheels>; empty otherwise.
+    assert ('pip_as install ${PIP_SRC[@]+"${PIP_SRC[@]}"} --require-hashes --no-deps -r "$REPO_DIR/$DEPS_NODEPS_LOCK"'
+            in script)
 
 
 def test_an_update_uses_the_lock_only_when_opted_in() -> None:

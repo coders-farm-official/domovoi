@@ -2,13 +2,18 @@
 track drawer, the room now-playing cards and the player.
 
 Every one of them draws ``/api/music/library/{id}/cover`` (read from the
-file on request, 404 when there is none) through ``CoverArt``
+file on request, 404 when there is none) through ``CoverArt``, asking for
+the thumbnail that covers its tile at 2x (``?size=`` s 160px, m 320, l 512,
+xl 768; ``coverBucket``) instead of the original picture, which can be
+1.5 MB: a table cell, a drawer or a room card gets ``s``, the expanded
+player's 200px tile ``l``, the OS media controls ``xl``.
 (web/static/components.jsx): an <img> with its width and height set up
 front so a row never jumps, ``loading="lazy"`` and ``decoding="async"``,
 over a quiet placeholder that stays when the picture 404s. A cover that
 failed is remembered for the page's life, so the same track rendered again
 — a re-render, a page flipped back to, another row — never asks again, and
-nothing is logged from the page.
+nothing is logged from the page. A miss is remembered per track (and
+cover version), not per size: a track with no art has none at any size.
 
 Driven through domovoi/tests/jsx_interact_harness.js (the dashboard's own
 Babel, a small stateful React). An <img>'s load / error is fired by hand,
@@ -30,6 +35,7 @@ MUSIC = ["web/static/components.jsx", "web/static/music.jsx"]
 PLAYER = ["web/static/components.jsx", "web/static/player.jsx"]
 
 COVER6 = "/api/music/library/6/cover"
+COVER6_S = COVER6 + "?size=s"
 TRACK = {"id": 6, "title": "Warm Stones", "artist": "Hearth Ensemble", "album": "By The Hearth",
          "duration_sec": 200, "file_path": "/music/hearth_06.mp3", "added_at": "2026-09-01T00:00:00Z",
          "added_via": "manual", "favorited": False, "source": None, "source_id": None, "enriched_at": None}
@@ -54,7 +60,9 @@ globalThis.console = { log: __say('log'), info: __say('info'), warn: __say('warn
 """
 
 HELPERS = r"""
-const imgs = (src) => h.findAll((e) => e.type === 'img' && (!src || String(e.props.src).endsWith(src)));
+// `src` without a query matches the cover's path, whatever its ?v= / ?size=.
+const imgs = (src) => h.findAll((e) => e.type === 'img' && (!src
+  || String(e.props.src) === src || String(e.props.src).split('?')[0].endsWith(src)));
 const covers = () => h.findAll((e) => e.type === 'span' && e.props['data-cover'] != null)
   .map((e) => ({ state: e.props['data-cover'], size: e.props.style.width,
                  bg: e.props.style.background,
@@ -101,6 +109,18 @@ SWAP = r"""(() => function CoverSwap() {
     React.createElement('button', { title: 'to-8', onClick: () => setSrc('/api/music/library/8/cover') }),
     React.createElement(CoverArt, { src, size: 44 }),
     React.createElement(CoverArt, { src: '/api/music/library/6/cover', size: 72 }));
+})()"""
+
+# A 40px row's cover beside, after a click, the same track at 200px (same
+# version, then a newer one) and another track at 200px.
+MISS_SIZES = r"""(() => function MissSizes() {
+  const [big, setBig] = React.useState(false);
+  return React.createElement('div', null,
+    React.createElement('button', { title: 'big', onClick: () => setBig(true) }),
+    React.createElement(CoverArt, { src: libraryCoverUrl(6, 2, 40), size: 40 }),
+    big && React.createElement(CoverArt, { src: libraryCoverUrl(6, 2, 200), size: 200 }),
+    big && React.createElement(CoverArt, { src: libraryCoverUrl(6, 3, 200), size: 199 }),
+    big && React.createElement(CoverArt, { src: libraryCoverUrl(7, 2, 200), size: 198 }));
 })()"""
 
 
@@ -187,6 +207,34 @@ SCENARIOS = {
             return { first, after: covers(), logs: logs() };
         """,
     },
+    # The expanded player's 200px tile asks for a large thumbnail, the
+    # cover's version kept ahead of the size.
+    "player_tile_sheet": {
+        "files": PLAYER, "component": "CoverTile", "setup": QUIET,
+        "props": {"item": {"coverUrl": COVER6 + "?v=3", "seekable": True}, "size": 200},
+        "script": HELPERS + "h.render(); return { attrs: imgs().map(imgAttrs) };",
+    },
+    # The helpers themselves: the bucket for a tile, and what a URL becomes.
+    "helpers": {
+        "files": [MUSIC[0]], "component": "CoverArt", "setup": QUIET,
+        "props": {"src": None},
+        "script": r"""
+            const W = h.global('window');          // components.jsx's exports
+            const bucket = W.coverBucket, at = W.coverUrlAtSize, key = W.coverMissKey, lib = W.libraryCoverUrl;
+            return {
+              buckets: [32, 40, 52, 56, 72, 80, 81, 160, 161, 256, 257, 1000, 'xl', 'm']
+                .map((c) => [c, bucket(c)]),
+              urls: [at('/api/music/library/6/cover', 40),
+                     at('/api/music/library/6/cover?v=3', 200),
+                     at('/api/music/library/6/cover?v=3&size=s', 'xl'),
+                     at('/api/audiobooks/9/cover', 40),
+                     at('/api/podcasts/subscriptions/2/artwork', 40),
+                     at(null, 40)],
+              keys: [key('/api/music/library/6/cover?v=3&size=l'), key('/api/music/library/6/cover?size=s')],
+              lib: [lib(6, 2, 40), lib(6, undefined, 200), lib(6, 2), lib(null, 2, 40)],
+            };
+        """,
+    },
     "player_tile_stream": {
         "files": PLAYER, "component": "CoverTile", "setup": QUIET,
         "props": {"item": {"coverUrl": None, "seekable": False}, "size": 44},
@@ -223,15 +271,33 @@ SCENARIOS = {
                      after: covers().find((c) => c.size === 44).state };
         """,
     },
+    # A cover that 404'd at one size is not asked for at another (the row's
+    # s, then the player's l), but a new version of it is, and so is
+    # another track's.
+    "miss_is_per_track": {
+        "files": [MUSIC[0]], "component": MISS_SIZES, "setup": QUIET + RECORD_IMGS,
+        "script": HELPERS + r"""
+            h.render();
+            await fail('/api/music/library/6/cover?v=2&size=s');
+            h.global('__imgs').length = 0;
+            await h.click({ type: 'button', title: 'big' });
+            const asked = h.global('__imgs').map((i) => i.src);
+            return { asked, covers: covers(), logs: logs() };
+        """,
+    },
 }
 
 
 @pytest.fixture(scope="module")
-def driven() -> dict:
+def driven(tmp_path_factory) -> dict:
     node = shutil.which("node")
     assert node, "node is required to drive web/static JSX (see jsxcheck)"
+    # The scenarios go in a file (`@<path>`), as the other harness tests do:
+    # on the command line they pass Windows' 32 KB limit (WinError 206).
+    spec = tmp_path_factory.mktemp("cover-art") / "scenarios.json"
+    spec.write_text(json.dumps(SCENARIOS), encoding="utf-8")
     proc = subprocess.run(
-        [node, str(HARNESS), str(REPO_ROOT), json.dumps(SCENARIOS)],
+        [node, str(HARNESS), str(REPO_ROOT), "@" + str(spec)],
         capture_output=True, text=True, encoding="utf-8", timeout=180,
     )
     assert proc.returncode == 0, proc.stderr
@@ -247,8 +313,8 @@ LAZY = {"loading": "lazy", "decoding": "async", "alt": ""}
 def test_table_cell_leads_with_a_sized_lazy_cover(driven):
     r = driven["cell"]
     assert r["count"] == 2                                # one per width; CSS shows one
-    assert r["desk"] == {"src": COVER6, "width": 40, "height": 40, **LAZY}
-    assert r["phone"] == {"src": COVER6, "width": 32, "height": 32, **LAZY}
+    assert r["desk"] == {"src": COVER6_S, "width": 40, "height": 40, **LAZY}   # the small thumbnail
+    assert r["phone"] == {"src": COVER6_S, "width": 32, "height": 32, **LAZY}
     assert r["inRow"] and r["deskInTrackCell"] and r["phoneUnderPlay"]
     assert r["headers"] == ["track", "duration"]          # no new column
     phone, desk = r["covers"]
@@ -295,14 +361,14 @@ def test_one_tracks_404_does_not_hide_another_tracks_cover(driven):
 
 def test_drawer_shows_the_cover_instead_of_the_gradient_square(driven):
     r = driven["drawer"]
-    assert r["attrs"] == [{"src": COVER6, "width": 72, "height": 72, **LAZY}]
+    assert r["attrs"] == [{"src": COVER6_S, "width": 72, "height": 72, **LAZY}]
     assert r["gradients"] == 0
 
 
 def test_room_cards_show_the_cover_of_the_library_file_they_play(driven):
     r = driven["rooms"]
     srcs = sorted(a["src"] for a in r["imgs"])
-    assert srcs == ["/api/music/library/6/cover", "/api/music/library/9/cover"]   # office, garage
+    assert srcs == ["/api/music/library/6/cover?size=s", "/api/music/library/9/cover?size=s"]   # office, garage
     assert all(a["height"] == 52 and a["loading"] == "lazy" for a in r["imgs"])
     states = sorted(c["state"] for c in r["covers"])
     assert states == ["loading", "loading", "none", "none"]                       # den (stream), attic (idle)
@@ -312,7 +378,7 @@ def test_room_cards_show_the_cover_of_the_library_file_they_play(driven):
 
 def test_player_tile_draws_the_cover_and_falls_back_quietly(driven):
     r = driven["player_tile"]
-    assert r["first"]["attrs"] == [{"src": COVER6, "width": 44, "height": 44, **LAZY}]
+    assert r["first"]["attrs"] == [{"src": COVER6_S, "width": 44, "height": 44, **LAZY}]   # the bar: small
     (c,) = r["after"]
     assert c["state"] == "none" and "linear-gradient" in c["bg"] and c["icons"] == ["music"]
     assert r["logs"] == []
@@ -340,9 +406,62 @@ def test_a_tile_moving_to_a_new_cover_starts_over_invisible(driven):
 
 def test_media_session_never_offers_a_known_missing_cover():
     src = (REPO_ROOT / "web/static/player.jsx").read_text(encoding="utf-8")
-    assert "item.coverUrl && !coverMisses.has(item.coverUrl)" in src
+    assert "item.coverUrl && !coverMissed(item.coverUrl)" in src
+    # ...asks for the largest thumbnail: a lock screen draws it big.
+    assert "[{ src: coverUrlAtSize(item.coverUrl, 'xl'), sizes: '768x768' }]" in src
     # ...and declares no type: a library cover is whatever the file carries
     # (JPEG, PNG, WebP), so a hard-coded image/jpeg would mislabel most PNGs.
     block = src[src.index("const updateMediaSession"):]
     block = block[:block.index("new window.MediaMetadata")]
     assert "type:" not in block.split("const artwork", 1)[1]
+
+
+def test_the_expanded_player_asks_for_a_large_cover(driven):
+    assert driven["player_tile_sheet"]["attrs"] == [
+        {"src": COVER6 + "?v=3&size=l", "width": 200, "height": 200, **LAZY}]
+
+
+def test_the_size_is_the_smallest_bucket_covering_the_tile_at_2x(driven):
+    r = driven["helpers"]
+    assert dict((str(c), b) for c, b in r["buckets"]) == {
+        "32": "s", "40": "s", "52": "s", "56": "s", "72": "s", "80": "s",
+        "81": "m", "160": "m", "161": "l", "256": "l", "257": "xl", "1000": "xl",
+        "xl": "xl", "m": "m"}
+    assert r["urls"] == [
+        "/api/music/library/6/cover?size=s",
+        "/api/music/library/6/cover?v=3&size=l",
+        "/api/music/library/6/cover?v=3&size=xl",         # one size, replaced
+        "/api/audiobooks/9/cover",                        # audiobooks and podcasts as they were
+        "/api/podcasts/subscriptions/2/artwork",
+        None]
+    assert r["keys"] == ["/api/music/library/6/cover?v=3", "/api/music/library/6/cover"]
+    assert r["lib"] == ["/api/music/library/6/cover?v=2&size=s",
+                        "/api/music/library/6/cover?size=l",
+                        "/api/music/library/6/cover?v=2",          # no size: the original
+                        None]
+
+
+def test_a_miss_is_remembered_per_track_not_per_size(driven):
+    r = driven["miss_is_per_track"]
+    assert "/api/music/library/6/cover?v=2&size=l" not in r["asked"]   # same track, same version
+    assert "/api/music/library/6/cover?v=3&size=l" in r["asked"]       # a new version is asked for
+    assert "/api/music/library/7/cover?v=2&size=l" in r["asked"]       # another track is untouched
+    states = {c["size"]: c["state"] for c in r["covers"]}
+    assert states == {40: "none", 200: "none", 199: "loading", 198: "loading"}
+    assert r["logs"] == []
+
+
+def test_every_music_cover_the_dashboard_draws_is_sized():
+    """No library cover URL is built by hand without a size (the room
+    display, which doesn't load components.jsx, asks for xl itself)."""
+    import re
+    static = REPO_ROOT / "web/static"
+    for name in ("music.jsx", "library_tools.jsx"):
+        src = (static / name).read_text(encoding="utf-8")
+        calls = re.findall(r"libraryCoverUrl\(([^()]*)\)", src)
+        assert calls, name
+        assert all(c.count(",") == 2 for c in calls), (name, calls)
+    display = (static / "display.jsx").read_text(encoding="utf-8")
+    assert "/api/music/library/${trackId}/cover?size=xl" in display
+    player = (static / "player.jsx").read_text(encoding="utf-8")
+    assert "<CoverArt src={coverUrlAtSize((item && item.coverUrl) || null, size)} size={size}" in player

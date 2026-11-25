@@ -436,15 +436,20 @@ class _Store:
     ``old``: Resemblyzer's, from before 1.3.0), and the denylist by tag."""
 
     def __init__(self) -> None:
-        self.profiles: list[tuple[int, int, bytes, str | None]] = []
-        self.old: list[tuple[int, int, bytes, str | None]] = []
+        # (id, person_id, embedding, room_id, sample_seconds)
+        self.profiles: list[tuple[int, int, bytes, str | None, float | None]] = []
+        self.old: list[tuple[int, int, bytes, str | None, float | None]] = []
         self.deny: dict[str, list[bytes]] = {_TAG: [], _OLD_TAG: []}
         self.touched: list[int] = []
         self.asked: list[str] = []
 
-    def enroll(self, person_id: int, v: np.ndarray, room: str | None, *, old: bool = False) -> None:
+    def enroll(
+        self, person_id: int, v: np.ndarray, room: str | None, *, old: bool = False,
+        secs: float | None = 10.0,
+    ) -> None:
+        """A sample; a good one (10 s of speech) unless ``secs`` says otherwise."""
         rows = self.old if old else self.profiles
-        rows.append((len(self.profiles) + len(self.old) + 1, person_id, _blob(v), room))
+        rows.append((len(self.profiles) + len(self.old) + 1, person_id, _blob(v), room, secs))
 
     def count(self, person_id: int) -> int:
         return sum(1 for p in self.profiles if p[1] == person_id)
@@ -474,11 +479,15 @@ def store(monkeypatch) -> _Store:
             return list(self._rows(model))
 
         async def phone_matching_rows(self, model):
-            return [(i, p, e, r, "satellite") for i, p, e, r in self._rows(model)]
+            return [(i, p, e, r, "satellite") for i, p, e, r, _s in self._rows(model)]
 
-        async def add(self, *, person_id, embedding, model, room_id, sample_seconds, claim_of=None):
+        async def room_samples(self, person_id, room_id, model):
+            return [(i, s) for i, p, _e, r, s in self._rows(model) if p == person_id and r == room_id]
+
+        async def add(self, *, person_id, embedding, model, room_id, sample_seconds, claim_of=None,
+                      satellite_id=None, learned=False):
             rows = self._rows(model)
-            rows.append((len(st.profiles) + len(st.old) + 1, person_id, embedding, room_id))
+            rows.append((len(st.profiles) + len(st.old) + 1, person_id, embedding, room_id, sample_seconds))
             return rows[-1][0]
 
         async def person_samples(self, person_id, model):
@@ -488,7 +497,7 @@ def store(monkeypatch) -> _Store:
 
             return [
                 VoiceSample(id=i, embedding=e, source="satellite", room_id=r, claimed=False, claim_of=None)
-                for i, p, e, r in self._rows(model) if p == person_id
+                for i, p, e, r, _s in self._rows(model) if p == person_id
             ]
 
     class _Denylist:
@@ -568,7 +577,7 @@ async def test_confident_matches_learn_a_new_room_once(store, monkeypatch) -> No
     assert store.count(1) == 1                     # not yet
     await identify(b"", embedding=clear, room_id="basement")
     assert store.count(1) == 2                     # third in a row: saved
-    assert store.profiles[-1][1:] == (1, _blob(clear), "basement")
+    assert store.profiles[-1][1:4] == (1, _blob(clear), "basement")
 
     for _ in range(6):                             # basement is learned
         await identify(b"", embedding=clear, room_id="basement")
@@ -610,13 +619,15 @@ async def test_no_room_no_learning(store, monkeypatch) -> None:
 @pytest.fixture(autouse=True)
 def _reset_learning_counter():
     """Each test gets a fresh in-memory counter — the module-level dict
-    persists across tests in the same run otherwise."""
+    persists across tests in the same run otherwise (both dicts)."""
     _CONFIDENT_HITS.clear()
+    voice_identifier._CONFIDENT_VOICES.clear()
     yield
     _CONFIDENT_HITS.clear()
+    voice_identifier._CONFIDENT_VOICES.clear()
 
 
-async def _enroll_sarah(db_session, room: str = "kitchen") -> int:
+async def _enroll_sarah(db_session, room: str = "kitchen", secs: float = 10.0) -> int:
     embedding = await StubVoiceEmbedder().embed(_SARAH)
     sarah_id = await PeopleRepository(db_session).create(name="Sarah")
     await VoiceProfilesRepository(db_session).add(
@@ -624,7 +635,7 @@ async def _enroll_sarah(db_session, room: str = "kitchen") -> int:
         embedding=embedding.astype(np.float32).tobytes(),
         model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
         room_id=room,
-        sample_seconds=1.0,
+        sample_seconds=secs,
     )
     await db_session.commit()
     return sarah_id
@@ -723,11 +734,14 @@ from domovoi.voice_identifier import room_person_scores  # noqa: E402
 
 
 def test_room_person_scores_use_this_rooms_samples_when_there_are_any() -> None:
-    """A person heard in this room is held to how they sound here; anyone
-    else to all their samples."""
+    """A person with a good (4 s or more) sample in this room is held to
+    how they sound here; anyone else to all their samples."""
     office, garage = _unit(1, 0, 0), _unit(0, 1, 0)
     other = _unit(0, 0, 1)
-    samples = [(1, _blob(office), "office"), (1, _blob(garage), "garage"), (2, _blob(other), "office")]
+    samples = [
+        (1, _blob(office), "office", 10.5), (1, _blob(garage), "garage", 4.0),
+        (2, _blob(other), "office", 12.8),
+    ]
     here = room_person_scores(garage, samples, room_id="garage")
     assert here[1] == pytest.approx(1.0, abs=1e-5)       # the garage sample alone
     assert here[2] == pytest.approx(0.0, abs=1e-5)
@@ -807,3 +821,121 @@ async def test_a_person_held_to_this_rooms_samples_clears_a_higher_bar(store, mo
     assert (await identify(b"", embedding=near, room_id="garage")).person_id is None
     clear = _unit(0.79, 0, 0.6131)
     assert (await identify(b"", embedding=clear, room_id="garage")).person_id == 1
+
+
+# ─── 1.4.1: a short room sample doesn't hold a person to the room ──────────
+#
+# Owner decision 2026-11-22. A person is held to a room's own samples only
+# when one of them holds ROOM_SAMPLE_GOOD_SEC (4 s) of speech; a room whose
+# samples of them are all shorter scores them against all their samples, and
+# still learns them, replacing the short ones only with more speech.
+
+
+def test_a_short_office_sample_scores_the_turn_against_all_samples() -> None:
+    """The 0.53 case: a 1.17 s office sample and a 10.5 s dining-room one.
+    The office turn is scored against both, at the plain bar."""
+    office, dining = _unit(1, 0, 0), _unit(0, 1, 0)
+    samples = [(1, _blob(office), "office", 1.17), (1, _blob(dining), "dining-room", 10.5)]
+    turn = _unit(0, 1, 0)
+    scores = room_person_scores(turn, samples, room_id="office")
+    assert scores[1] == pytest.approx(np.sqrt(0.5), abs=1e-5)   # the centroid of both
+    scored = voice_identifier._score_turn(VoicePrint(current=turn), samples, room_id="office")
+    assert scored.bars[1] == pytest.approx(voice_identifier.settings.voice_profile_match_threshold)
+    assert scored.good_rooms == {1: {"dining-room"}}
+    # An unrecorded length counts as short too.
+    unrecorded = [(1, _blob(office), "office", None), (1, _blob(dining), "dining-room", 10.5)]
+    assert room_person_scores(turn, unrecorded, room_id="office") == scores
+
+
+def test_a_good_office_sample_still_holds_the_turn_to_the_office() -> None:
+    office, dining = _unit(1, 0, 0), _unit(0, 1, 0)
+    for secs in (4.0, 12.0):
+        samples = [(1, _blob(office), "office", secs), (1, _blob(dining), "dining-room", 10.5)]
+        turn = _unit(0, 1, 0)
+        assert room_person_scores(turn, samples, room_id="office")[1] == pytest.approx(0.0, abs=1e-5)
+        scored = voice_identifier._score_turn(VoicePrint(current=turn), samples, room_id="office")
+        settings = voice_identifier.settings
+        assert scored.bars[1] == pytest.approx(
+            settings.voice_profile_match_threshold + settings.voice_profile_same_room_margin,
+        )
+    assert voice_identifier.ROOM_SAMPLE_GOOD_SEC == 4.0
+
+
+async def _room_rows(db_session, person_id: int) -> list[tuple[int, str | None, float | None, bool]]:
+    rows = await db_session.execute(
+        text(
+            "SELECT id, room_id, sample_seconds, claimed_at IS NOT NULL FROM voice_profiles "
+            "WHERE person_id = :id ORDER BY id"
+        ),
+        {"id": person_id},
+    )
+    return [(int(r[0]), r[1], r[2], bool(r[3])) for r in rows.all()]
+
+
+async def _add_sample(db_session, person_id: int, pcm: bytes, room: str, secs: float) -> int:
+    embedding = await StubVoiceEmbedder().embed(pcm)
+    sample_id = await VoiceProfilesRepository(db_session).add(
+        person_id=person_id,
+        embedding=embedding.astype(np.float32).tobytes(),
+        model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+        room_id=room,
+        sample_seconds=secs,
+    )
+    await db_session.commit()
+    return sample_id
+
+
+def _confident(monkeypatch) -> None:
+    monkeypatch.setattr(voice_identifier.settings, "voice_profile_match_threshold", 0.95)
+    monkeypatch.setattr(
+        voice_identifier.settings, "voice_profile_drift_near_threshold_margin", 0.01
+    )
+    monkeypatch.setattr(voice_identifier.settings, "voice_profile_drift_reenroll_after", 3)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_short_sample_room_relearns_only_after_three_confident_matches(
+    db_session, monkeypatch,
+) -> None:
+    """Sarah's garage sample is a one-second clip. Three confident matches
+    in a row there (a second of speech each: three in all) replace it with
+    their clips together; her kitchen sample and Priya's garage sample are
+    untouched."""
+    _confident(monkeypatch)
+    sarah = await _enroll_sarah(db_session)                     # kitchen, 10 s
+    short = await _add_sample(db_session, sarah, _SARAH, "garage", 1.0)
+    priya = await PeopleRepository(db_session).create(name="Priya")
+    await db_session.commit()
+    await _add_sample(db_session, priya, _BOB, "garage", 1.0)
+    priya_before = await _room_rows(db_session, priya)
+    kitchen_before = [r for r in await _room_rows(db_session, sarah) if r[1] == "kitchen"]
+
+    for _ in range(2):
+        assert (await identify(_SARAH, room_id="garage")).person_id == sarah
+    assert [r[0] for r in await _room_rows(db_session, sarah) if r[1] == "garage"] == [short]
+
+    assert (await identify(_SARAH, room_id="garage")).person_id == sarah
+    garage = [r for r in await _room_rows(db_session, sarah) if r[1] == "garage"]
+    assert len(garage) == 1
+    new_id, _room, secs, claimed = garage[0]
+    assert new_id != short and secs == pytest.approx(3.0) and claimed
+    assert [r for r in await _room_rows(db_session, sarah) if r[1] == "kitchen"] == kitchen_before
+    assert await _room_rows(db_session, priya) == priya_before
+    assert _CONFIDENT_HITS == {} and voice_identifier._CONFIDENT_VOICES == {}
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_short_sample_room_keeps_its_sample_without_more_speech(
+    db_session, monkeypatch,
+) -> None:
+    """The run holds three seconds; the room's sample has 3.5: kept."""
+    _confident(monkeypatch)
+    sarah = await _enroll_sarah(db_session)
+    short = await _add_sample(db_session, sarah, _SARAH, "garage", 3.5)
+    for _ in range(3):
+        await identify(_SARAH, room_id="garage")
+    assert [(r[0], r[2]) for r in await _room_rows(db_session, sarah) if r[1] == "garage"] == [
+        (short, 3.5),
+    ]

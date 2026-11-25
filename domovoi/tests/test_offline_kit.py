@@ -1,7 +1,9 @@
 """The offline kit's format and checker (domovoi/offline_kit; docs/OFFLINE_KIT.md).
 
 Pure file tests: no DB, no network. Kits are written with a tiny
-``part_size`` so splitting is tested with bytes, not gigabytes. The release
+``part_size`` so splitting is tested with bytes, not gigabytes (the 1 MiB
+floor a reader holds kit.json to is lowered here, and tested on its own
+below). The release
 signature is checked with the throwaway key and manifests ssh-keygen made
 for the Windows tray's tests (windows/tests/release-sig/).
 """
@@ -31,6 +33,14 @@ BLOB = bytes(range(256)) * 39 + b"tail"  # 9988 bytes: parts of 4000, 4000, 1988
 BLOB_PATH = "ollama/models/blobs/sha256-" + hashlib.sha256(BLOB).hexdigest()
 
 
+REAL_MIN_PART_SIZE = fmt.MIN_PART_SIZE
+
+
+@pytest.fixture(autouse=True)
+def _tiny_parts(monkeypatch):
+    monkeypatch.setattr(fmt, "MIN_PART_SIZE", 1)
+
+
 def _components() -> list[Component]:
     return [
         Component("guide", "START-HERE", VERSION, "MIT",
@@ -57,7 +67,7 @@ def _make(tmp_path: Path, **kw) -> Path:
     root = tmp_path / "DOMOVOIKIT"
     write_kit(root, version=VERSION, commit=COMMIT, components=kw.pop("components", _components()),
               includes=["ai"], android_version_code=261120010,
-              created_at="2026-11-22T10:15:00Z", part_size=PART, **kw)
+              created_at="2026-11-22T10:15:00Z", part_size=kw.pop("part_size", PART), **kw)
     return root
 
 
@@ -137,8 +147,9 @@ def test_cli_verify_ok_and_exit_codes(tmp_path: Path, capsys) -> None:
 
 
 def test_checker_runs_with_the_standard_library_alone(tmp_path: Path) -> None:
-    """-S: no site-packages, as on a bare box with only Python."""
-    root = _make(tmp_path)
+    """-S: no site-packages, as on a bare box with only Python (its own
+    process: the real 1 MiB part floor)."""
+    root = _make(tmp_path, part_size=REAL_MIN_PART_SIZE)
     key = tmp_path / "k.pub"
     key.write_text(TEST_KEY, encoding="ascii")
     p = subprocess.run([sys.executable, "-S", "-m", "domovoi.offline_kit", "verify", str(root),
@@ -277,6 +288,23 @@ def test_extra_files(tmp_path: Path) -> None:
         "speech/extra.onnx is not part of the kit (kit.json doesn't list it).",
         f"{BLOB_PATH} is here whole, but kit.json says it is stored in parts only.",
     ])
+
+
+def test_an_unlisted_folder_and_a_link_are_reported(tmp_path: Path) -> None:
+    """M12 (review 2026-11-23): a folder kit.json lists nothing in (an
+    extra apt suite) and a link (a linked suite folder) are named, not
+    passed because they hold no unlisted plain file."""
+    import os
+
+    root = _make(tmp_path)
+    (root / "apt" / "amd64" / "ubuntu" / "dists" / "evil").mkdir(parents=True)
+    errors = _check(root).errors
+    assert "apt/amd64/ubuntu/dists/evil/ is not part of the kit (kit.json lists nothing in it)." in errors
+    try:
+        os.symlink(root / "wake", root / "wake-link", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system can't make a link here")
+    assert "wake-link is a link, which a kit never holds." in _check(root).errors
 
 
 def test_every_problem_is_reported_not_just_the_first(tmp_path: Path) -> None:
@@ -560,7 +588,45 @@ def test_ed25519_rfc8032_vectors() -> None:
     assert not ed25519_verify(key, b"\x72", good[:32] + s.to_bytes(32, "little"))
 
 
+# ── kit.json can't make a reader do unbounded work ──────────────────────
+
+
+@pytest.mark.parametrize("part_size,size,expect", [
+    (1, 10**15, "part_size must be a whole number of bytes from 1048576"),
+    (REAL_MIN_PART_SIZE, 1024**4 + 1, "size must be a whole number of bytes, at most"),
+    (REAL_MIN_PART_SIZE, 1024**4, "it splits into 1048576 parts, kit.json lists 3"),
+])
+def test_part_counts_are_bounded_and_arithmetic(tmp_path: Path, monkeypatch, part_size, size, expect) -> None:
+    root = _make(tmp_path)
+    doc = _doc(root)
+    monkeypatch.setattr(fmt, "MIN_PART_SIZE", REAL_MIN_PART_SIZE)
+    monkeypatch.setattr(fmt, "part_sizes", lambda *a: pytest.fail("a reader must not list the parts"))
+    doc["part_size"] = part_size
+    entry = next(e for c in doc["components"] for e in c["files"] if e.get("parts"))
+    entry["size"] = size
+    problems, _ = fmt.validate(doc)
+    assert any(expect in p for p in problems), problems
+
+
+def test_an_oversized_kit_json_is_refused_unread(tmp_path: Path) -> None:
+    root = _make(tmp_path)
+    with open(root / "kit.json", "r+b") as f:
+        f.truncate(fmt.MAX_KIT_JSON + 1)
+    errors = _check(root).errors
+    assert errors and "kit.json is bigger than any kit's" in errors[0]
+
+
 # ── write_kit refuses what it can't write ───────────────────────────────
+
+
+def test_a_file_that_doesn_t_match_its_expected_sha256_is_refused(tmp_path: Path) -> None:
+    comps = _components()
+    comps[2] = Component("ollama-model", "qwen3:4b", "sha256-abc", "Apache-2.0", [
+        Source(BLOB_PATH, b"X" + BLOB[1:], hashlib.sha256(BLOB).hexdigest())],
+        pinned_by="scripts/linux/provision-manifest.conf")
+    with pytest.raises(ValueError, match="doesn't match its pinned SHA-256"):
+        _make(tmp_path, components=comps)
+    assert not (tmp_path / "DOMOVOIKIT" / "kit.json").exists()
 
 
 def test_write_refuses_a_folder_with_files(tmp_path: Path) -> None:

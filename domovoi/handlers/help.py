@@ -63,6 +63,8 @@ class HelpHandler(Handler):
     #   poaches nothing; early, so no later band's pattern can take "what
     #   can you do".
     priority_band = 105
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Help", tone="info")
     example_phrases = ("what can you do", "what can I say")
     requires_network = "no"

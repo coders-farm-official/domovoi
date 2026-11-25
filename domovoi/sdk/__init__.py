@@ -54,7 +54,34 @@ from __future__ import annotations
 #         socket caps, message size and rate limits; open sockets closed
 #         on disable or reload). Any other plugin websocket is still
 #         refused at load, and the web process serves none.
-API_VERSION = "1.11.0"
+# 1.12.0: core_config.news_location (the household's place); a plugin that
+#         registers the "weather" capability takes weather questions over
+#         from core's built-in lookup.
+# 1.13.0: sdk.household.home_location() (the Home location: name, lat, lon,
+#         country, or None) and sdk.places.suggest(text, limit=8) (the
+#         bundled town list); core_config.news_location is now the Home
+#         location's name.
+# 1.13.1: net_safety.open_raw_stream / iter_raw (and _sync twins):
+#         open_stream that asks for identity and refuses an encoded
+#         answer, read raw with no total cap (a live stream).
+# 1.14.0: [[web.home_cards]]: a plugin card on the dashboard's Home page
+#         (window.DomovoiPlugins.<slug>.homeCards.<Component>).
+# 1.15.0: playback.player_route(room_id): how a room's music player reaches
+#         the core and the address it calls from (the radio relay).
+# 1.16.0: playback.relay_url(room_id, remote_url, kind="file"|"radio") and
+#         playback.relay_target(url): a room's player plays a remote URL
+#         through the core's checked relay (GET /v1/player-relay/<token>).
+# 1.17.0: the event core.voice_history_deleted {person_id} (None = all of
+#         it), after a person's voice history or all of it is deleted, and
+#         core_config.voice_history_keep: the hook any plugin keeping
+#         person-linked data must honour (security review M8).
+# 1.18.0: sdk.friend_houses (apps with friends, [permissions] friend_houses):
+#         friends(), send_mail(), on_mail(handler, schema),
+#         on_friends_changed(); FriendText, friend_sentence, friend_reply and
+#         per-plugin friend ids; send_image() and FriendImage (a friend's
+#         picture as the core's own PNG); every reply of a friend_houses
+#         plugin's handlers filtered for speech, a stand-in in the history.
+API_VERSION = "1.18.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -90,10 +117,20 @@ from domovoi.sdk.facade import (  # noqa: E402,F401
     PluginSDK,
     build_sdk,
 )
+from domovoi.sdk.friend_houses import (  # noqa: E402,F401
+    FriendHouse,
+    FriendHousesAPI,
+    FriendImage,
+    FriendText,
+    friend_reply,
+    friend_sentence,
+)
+from domovoi.sdk.household import HouseholdAPI, PlacesAPI  # noqa: E402,F401
 from domovoi.sdk.http import HttpFactory  # noqa: E402,F401
 from domovoi.sdk.library import LibraryAPI, LibraryTrack  # noqa: E402,F401
 from domovoi.sdk.observability import get_logger  # noqa: E402,F401
 from domovoi.sdk.playback import PlaybackAPI  # noqa: E402,F401
+from domovoi.player_relay import RelayUnavailable  # noqa: E402,F401
 from domovoi.sdk.realtime import RealtimeAPI  # noqa: E402,F401
 from domovoi.sdk.sessions import SessionAPI  # noqa: E402,F401
 from domovoi.plugin_http import device_endpoint, open_endpoint  # noqa: E402,F401
@@ -145,8 +182,15 @@ __all__ = [
     "CoreConfigView",
     "EventsView",
     "FastPath",
+    "FriendHouse",
+    "FriendHousesAPI",
+    "FriendImage",
+    "FriendText",
+    "friend_reply",
+    "friend_sentence",
     "Handler",
     "HandlerDisplay",
+    "HouseholdAPI",
     "HttpFactory",
     "Intent",
     "LibraryAPI",
@@ -159,6 +203,7 @@ __all__ = [
     "NowPlayingView",
     "net_safety",
     "egress",
+    "PlacesAPI",
     "PlaybackAPI",
     "PluginDB",
     "PluginSDK",

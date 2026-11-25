@@ -286,7 +286,7 @@ internal fun PersonMusicMixSection(personId: Long, name: String, showHead: Boole
         refused = null
         scope.launch {
             try {
-                val answer = savePersonMix(app.api, at, app.prefs.deviceId, personId, override)
+                val answer = savePersonMix(app.api, at, app.prefs.deviceId, app.prefs.claimKeyFor(at), personId, override)
                 if (app.prefs.serverUrl.value == at) {
                     saved = answer
                     toast(said)

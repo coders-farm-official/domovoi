@@ -72,6 +72,11 @@ ABILITIES: dict[str, str] = {
     "capture_control": "`end_capture` (early commit; also needs speech_pause)",
     "turn_progress": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
     "dropin_ready": "a drop-in call's audio (its start chime and the peer's relay) waits for the device's `dropin_ready`: it finishes the reply it is still playing (\"Dropping in on the kitchen\") before it opens the call",
+    "room_audio": "the device plays the room's synced sound from `/v1/room-audio/{satellite_id}` (1.5.0, docs/ROOM_AUDIO_PROTOCOL.md), so the room's music, replies and timers go to it there",
+    "diagnostics": "the `diag_request` frame (one read-only probe by name, answered by `diag_result`) and the room drawer's Diagnostics tab (1.5.0, domovoi/satellite_diagnostics.py)",
+    "mic_dsp": "`set_mic_dsp` and `mic_dsp_mark` (an XVF3800's DSP presets, picked by name from a fixed table; admin only, domovoi/mic_dsp.py)",
+    "support_shell": "the `support_open` / `support_input` / `support_resize` / `support_close` frames (an admin's support session: a shell as the satellite's service account, 1.5.0, domovoi/support_sessions.py); sent only by a Pi on a prepared card whose account is not in sudo",
+    "wake_claim": "1.5.0: the device claims each wake in a room whose `claim` is true (`wake_claim`), and takes `wake_grant`, `capture_keep` and the `claim` form of `end_capture` (one turn per wake word, domovoi/wake_claims.py)",
     "room_display": "the `room_display` frame (this room's music, timers and alarms, and one going off, for a screen in the room) and the `room_control` frame back (pause, resume, skip, previous, stop ringing); a paired room only (domovoi/room_display.py)",
 }
 
@@ -82,18 +87,28 @@ BOOLEAN_KEYS: dict[str, str] = {
     "capture_control": "capture_control",
     "announce_after_session_end": "announce_after_session_end",
     "dropin_ready": "dropin_ready",
+    "room_audio": "room_audio",
+    "diagnostics": "diagnostics",
+    "mic_dsp": "mic_dsp",
+    "support_shell": "support_shell",
 }
 
 #: Behaviours negotiated per connection by their boolean key, with or
 #: without ``supports``: never assumed.
 NEGOTIATED: frozenset[str] = frozenset(
-    {"full_duplex", "speech_pause", "capture_control", "dropin_ready"}
+    {"full_duplex", "speech_pause", "capture_control", "dropin_ready", "room_audio", "diagnostics"}
 )
 
 #: Abilities only a device that LISTS them gets (1.4.0): newer than every
 #: Pi, so never assumed for a hello without ``supports``, and with no
 #: boolean hello key either. ``room_display``: a Pi has no screen.
-DECLARED_ONLY: frozenset[str] = frozenset({"room_display"})
+#: ``mic_dsp`` (1.4.1) does have one (``"mic_dsp": true``), sent only by
+#: an XVF3800 with ``xvf_host``: never assumed, so an older Pi never sees it.
+#: ``support_shell`` (1.5.0) likewise (``"support_shell": true``), sent only
+#: by a Pi on a prepared card where ``sudo -n true`` fails: a support
+#: session is offered only to a device that said so (docs/SECURITY_PRIVACY.md,
+#: "Support sessions").
+DECLARED_ONLY: frozenset[str] = frozenset({"room_display", "mic_dsp", "support_shell", "wake_claim"})
 
 #: What a hello WITHOUT ``supports`` (every Pi in the field) is taken to
 #: have: everything the core has always pushed to a satellite. Out-of-turn
@@ -148,6 +163,25 @@ def clean_board(raw: Any) -> str | None:
         return None
     value = raw.strip()
     return value if _BOARD_RE.match(value) else None
+
+
+_MAC_RE = re.compile(r"^[0-9a-f]{2}([:-][0-9a-f]{2}){5}\Z")
+
+
+def clean_mac(raw: Any) -> str | None:
+    """A hello's ``mac`` as it may be stored and shown, or None: six
+    hex pairs, lower-cased. Free text from the device, bounded like
+    :func:`clean_board`."""
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    return value if _MAC_RE.match(value) else None
+
+
+def clean_sat_type(raw: Any) -> str:
+    """A hello's ``sat_type``: ``video`` or ``voice`` (anything else reads
+    as ``voice``, as the accepted hello treats it)."""
+    return "video" if raw == "video" else "voice"
 
 
 @dataclass(frozen=True)

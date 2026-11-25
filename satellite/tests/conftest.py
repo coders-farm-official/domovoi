@@ -54,9 +54,14 @@ a pinned fingerprint, and not an exclusion here.
 
 from __future__ import annotations
 
+import os
 import socket
 import sys
 from pathlib import Path
+
+# No room player from a test's `ready` (satellite/room_player.py): it would
+# open its own socket and output. Tests that want one build it themselves.
+os.environ.setdefault("DOMOVOI_ROOM_AUDIO", "0")
 
 import pytest
 

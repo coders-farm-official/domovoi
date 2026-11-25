@@ -37,7 +37,7 @@ development** — see the note for developers at the bottom.
   * an **audio sampler** grabs short clips with ffmpeg and runs a
     two-tier identify chain — your **local library fingerprints** first
     (free, offline, catches songs you already own), then an **online
-    song-identification service (Shazam)**.
+    song-identification service**.
 * **Detections are announced, not acted on.** Each detection is saved
   with whether the song is already in your library, and published on the
   plugin event bus (`plugin.radio.detection_recorded`). The radio plugin
@@ -164,7 +164,7 @@ through `sdk.connectivity`.
 ## Privacy & permissions (what the manifest warns about)
 
 * The sampler can send short audio clips of whatever a favorited
-  station is playing to an online song-identification service (Shazam).
+  station is playing to an online song-identification service.
   Disable with `RADIO_SAMPLER_ENABLED=false` in `radio.env` — ICY polling
   and local fingerprint matching keep working. Nothing is sent while the
   server is offline or answered No to the internet question.
@@ -222,8 +222,12 @@ apps that their own, built-in Stations screen has a server to talk to; no
 plugin can add a screen to the apps
 ([what a plugin does not get](../../docs/PLUGIN_DEVELOPMENT.md#1-concepts--what-a-plugin-can-do)).
 
-This version of the plugin (1.5.0) declares `domovoi_api = ">=1.10,<2.0"`,
-so it loads only on a Domovoi with SDK 1.10 or later (Domovoi 1.4.0).
+This version of the plugin (1.5.4) declares `domovoi_api = ">=1.16,<2.0"`,
+so it loads only on a Domovoi with SDK 1.16 or later (Domovoi 1.5.0): a
+room's music player plays an internet station through the core's player
+relay (`sdk.playback.relay_url(room, url, kind="radio")`), never by
+fetching the station itself. FM is not relayed: the player reads the tuner's own
+listener on this machine.
 
 Layout, manifest spec, and test-harness docs:
 [`docs/PLUGIN_DEVELOPMENT.md`](../../docs/PLUGIN_DEVELOPMENT.md) in the

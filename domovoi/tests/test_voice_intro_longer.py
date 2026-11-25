@@ -372,18 +372,38 @@ def quiet_rooms():
     voice_profile._ROOM_CHECK_ASKED.clear()
 
 
-async def _known_person(db_session, *rooms: str) -> tuple[int, np.ndarray]:
+async def _known_person(
+    db_session, *rooms: str, secs: float = 1.0, name: str = "Priya", level: int = 700,
+) -> tuple[int, np.ndarray]:
+    """``name`` with a ``secs`` sample per room in voice ``level`` (a
+    hundred's worth of levels is one voice), and a fresh clip of that voice."""
     pid = int((await db_session.execute(
-        text("INSERT INTO people (name) VALUES ('Priya') RETURNING id"),
+        text("INSERT INTO people (name) VALUES (:n) RETURNING id"), {"n": name},
     )).scalar_one())
     repo = VoiceProfilesRepository(db_session)
     for i, r in enumerate(rooms or ("office",)):
         await repo.add(
-            person_id=pid, embedding=(await _vec(_pcm(1.0, 700 + i))).tobytes(),
-            model=repo.EMBEDDING_MODEL_TAG, room_id=r, sample_seconds=1.0,
+            person_id=pid, embedding=(await _vec(_pcm(1.0, level + i))).tobytes(),
+            model=repo.EMBEDDING_MODEL_TAG, room_id=r, sample_seconds=secs,
         )
     await db_session.commit()
-    return pid, await _vec(_pcm(1.5, 799))
+    return pid, await _vec(_pcm(1.5, level + 99))
+
+
+async def _voice(level: int) -> np.ndarray:
+    """Another clip of voice ``level``."""
+    return await _vec(_pcm(1.2, level))
+
+
+def _yes(ctx: Context, voice: np.ndarray | None, **kw) -> Context:
+    """The yes turn, heard in ``voice`` (None: too short to embed)."""
+    update = dict(
+        embedding_bytes=None if voice is None else voice.astype(np.float32).tobytes(),
+        voice_outcome=OUTCOME_TOO_SHORT if voice is None else OUTCOME_NO_MATCH,
+        voice_speech_sec=0.4 if voice is None else 1.2,
+    )
+    update.update(kw)
+    return ctx.model_copy(update=update)
 
 
 def _ident(pid: int, voice: np.ndarray, **kw) -> IdentificationResult:
@@ -420,7 +440,7 @@ async def test_a_grey_zone_turn_asks_once_and_yes_saves_that_clip_to_that_room(
     assert pending["kind"] == "core.room_check" and pending["person_id"] == pid
 
     done = await VoiceProfileHandler().handle_choice_reply(
-        "core.room_check", pending, "Yes.", ctx, db_session,
+        "core.room_check", pending, "Yes.", _yes(ctx, await _voice(788)), db_session,
     )
     assert done.text == "Done — I'll know your voice in this room now, Priya."
     rows = (await db_session.execute(text(
@@ -480,14 +500,22 @@ async def test_a_late_yes_saves_nothing(db_session, quiet_rooms, monkeypatch) ->
 
 @requires_db
 async def test_a_room_keeps_at_most_three_samples_from_yeses(db_session, quiet_rooms) -> None:
+    """A question asked before the room learned a good sample, answered
+    after: the room has three, so nothing is added (and the good one is
+    never replaced)."""
     pid, voice = await _known_person(db_session, "office", "kitchen", "kitchen", "kitchen")
+    await db_session.execute(text(
+        "UPDATE voice_profiles SET sample_seconds = 5.0 WHERE id = (SELECT max(id) "
+        "FROM voice_profiles WHERE person_id = :p AND room_id = 'kitchen')"), {"p": pid})
+    await db_session.commit()
     ctx, _response = await _turn(db_session)
     payload = {
         "person_id": pid, "name": "Priya", "embedding_b64": voice_profile._b64_embedding(voice),
-        "expires_at": time.time() + 30, "origin": "satellite", "origin_room": "kitchen",
+        "score": 0.55, "expires_at": time.time() + 30, "origin": "satellite",
+        "origin_room": "kitchen",
     }
     done = await VoiceProfileHandler().handle_choice_reply(
-        "core.room_check", payload, "yes", ctx, db_session,
+        "core.room_check", payload, "yes", _yes(ctx, await _voice(788)), db_session,
     )
     assert done.text == "Thanks, Priya. I already know your voice in this room."
     count = (await db_session.execute(text(
@@ -517,7 +545,8 @@ NO_ASK = [
     ("under music", {"ident": {"outcome": OUTCOME_NOISY}}),
     ("two people too close", {"ident": {"outcome": OUTCOME_AMBIGUOUS, "ambiguous": True}}),
     ("an opted-out voice", {"ident": {"denylisted": True}}),
-    ("the room has a sample", {"rooms": ("office", "kitchen")}),
+    # Only short samples there ask (1.4.1); a good one doesn't.
+    ("the room has a good sample", {"rooms": ("office", "kitchen"), "secs": 5.0}),
     ("an introduction", {"response": {"matched_handler": "voice_profile"}}),
     ("another question", {"response": {"expect_followup": True}}),
     ("a silent reply", {"response": {"text": ""}}),
@@ -530,7 +559,9 @@ NO_ASK = [
 @requires_db
 @pytest.mark.parametrize("why,change", NO_ASK, ids=[w for w, _c in NO_ASK])
 async def test_no_ask_when_any_condition_fails(db_session, quiet_rooms, why, change) -> None:
-    pid, voice = await _known_person(db_session, *change.get("rooms", ()))
+    pid, voice = await _known_person(
+        db_session, *change.get("rooms", ()), secs=change.get("secs", 1.0),
+    )
     ctx, response = await _turn(db_session, change.get("room", "kitchen"), **change.get("ctx", {}))
     for key, value in change.get("response", {}).items():
         setattr(response, key, value)
@@ -567,6 +598,102 @@ async def test_the_ask_rides_on_the_turns_hooks(db_session, quiet_rooms) -> None
     assert named.text == "It's five o'clock."
 
 
+# ─── Only the asked person's voice may answer (1.4.1) ─────────────────────
+#
+# Owner decision 2026-11-22. The yes is scored like any turn in the room:
+# its score for X must be at least the asking turn's minus
+# ROOM_CHECK_YES_SLACK, and nobody else may score higher or over their bar.
+
+REFUSED_OTHER = "That didn't sound like Priya, so I won't save it. I'll ask Priya myself next time."
+
+
+async def _asked(db_session, *rooms: str, secs: float = 1.0):
+    pid, voice = await _known_person(db_session, *rooms, secs=secs)
+    ctx, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx, response=response, ident=_ident(pid, voice))
+    return pid, ctx, await _pending(db_session, ctx.session_id)
+
+
+async def _count(db_session, pid: int) -> int:
+    return (await db_session.execute(text(
+        "SELECT count(*) FROM voice_profiles WHERE person_id = :p"), {"p": pid})).scalar_one()
+
+
+@requires_db
+async def test_another_enrolled_persons_yes_is_refused_and_saves_nothing(db_session, quiet_rooms) -> None:
+    sarah, _sv = await _known_person(db_session, "kitchen", secs=10.0, name="Sarah", level=500)
+    pid, ctx, pending = await _asked(db_session)
+    sarah_before = await _count(db_session, sarah)
+    no = await VoiceProfileHandler().handle_choice_reply(
+        "core.room_check", pending, "Yes.", _yes(ctx, await _voice(588)), db_session,
+    )
+    assert no.text == REFUSED_OTHER
+    assert not no.expect_followup
+    assert await _count(db_session, pid) == 1
+    assert await _count(db_session, sarah) == sarah_before
+
+
+@requires_db
+async def test_a_yes_too_short_to_tell_whose_it_is_saves_nothing(db_session, quiet_rooms) -> None:
+    pid, ctx, pending = await _asked(db_session)
+    no = await VoiceProfileHandler().handle_choice_reply(
+        "core.room_check", pending, "Yes.", _yes(ctx, None), db_session,
+    )
+    assert no.text == (
+        "I couldn't hear enough to be sure that was you, so I won't save it. "
+        "I'll ask Priya myself next time."
+    )
+    assert await _count(db_session, pid) == 1
+
+
+@requires_db
+async def test_an_unknown_voice_that_isnt_priya_is_refused(db_session, quiet_rooms) -> None:
+    pid, ctx, pending = await _asked(db_session)
+    no = await VoiceProfileHandler().handle_choice_reply(
+        "core.room_check", pending, "Yes.", _yes(ctx, await _voice(388)), db_session,
+    )
+    assert no.text == REFUSED_OTHER
+    assert await _count(db_session, pid) == 1
+
+
+# ─── A room with only short samples asks again (1.4.1) ────────────────────
+
+LEARN_AFTER_CHECK = (
+    "Thanks, Priya. Let me learn your voice better here: count from one to "
+    "ten for me, at your normal voice."
+)
+
+
+@requires_db
+async def test_a_short_sample_room_asks_and_its_yes_learns_the_room(db_session, quiet_rooms) -> None:
+    """Priya's kitchen sample is one second long: the kitchen asks on a
+    near-miss, and her yes starts the counting that replaces that sample
+    (only with more speech: test_voice_intro_longer's "Is that you?"
+    tests run the rest). Nothing is replaced yet; her office sample and
+    other people's samples are not touched."""
+    sarah, _sv = await _known_person(db_session, "kitchen", secs=1.0, name="Sarah", level=500)
+    pid, ctx, pending = await _asked(db_session, "office", "kitchen")
+    before = (await db_session.execute(text(
+        "SELECT id, room_id, sample_seconds FROM voice_profiles WHERE person_id = ANY(:p) ORDER BY id"),
+        {"p": [pid, sarah]})).all()
+    assert pending["speech_sec"] == 1.5
+    learn = await VoiceProfileHandler().handle_choice_reply(
+        "core.room_check", pending, "Yes.", _yes(ctx, await _voice(788)), db_session,
+    )
+    assert learn.text == LEARN_AFTER_CHECK and learn.expect_followup is True
+    collecting = await _pending(db_session, ctx.session_id)
+    assert collecting["kind"] == "core.self_intro" and collecting["stage"] == "count"
+    assert collecting["learn_room"] == "kitchen"
+    priya_kitchen = (await db_session.execute(text(
+        "SELECT id FROM voice_profiles WHERE person_id = :p AND room_id = 'kitchen'"),
+        {"p": pid})).scalars().all()
+    assert collecting["replace_ids"] == [int(i) for i in priya_kitchen]
+    after = (await db_session.execute(text(
+        "SELECT id, room_id, sample_seconds FROM voice_profiles WHERE person_id = ANY(:p) ORDER BY id"),
+        {"p": [pid, sarah]})).all()
+    assert after == before
+
+
 # ─── "I already know you" in a room that hasn't learned you (2026-11-16) ──
 
 LEARN = (
@@ -577,9 +704,14 @@ LEARN = (
 
 async def _sarah(*samples: tuple[int, str, float]) -> int:
     """Sarah, with a satellite sample per ``(voice level, room, speech seconds)``."""
+    return await _named("Sarah", *samples)
+
+
+async def _named(name: str, *samples: tuple[int, str, float]) -> int:
+    """``name``, with a satellite sample per ``(voice level, room, speech seconds)``."""
     async with SessionLocal() as s:
         pid = int((await s.execute(
-            text("INSERT INTO people (name) VALUES ('Sarah') RETURNING id"),
+            text("INSERT INTO people (name) VALUES (:n) RETURNING id"), {"n": name},
         )).scalar_one())
         repo = VoiceProfilesRepository(s)
         for level, room_id, secs in samples:
@@ -645,3 +777,112 @@ async def test_a_good_sample_in_the_room_keeps_the_plain_reply(room) -> None:
     assert _reply(said) == "I already know you, Sarah."
     assert await room.pending() is None
     assert [r[1] for r in await _room_rows(pid, ROOM)] == [5.0]
+
+
+# ─── "Is that you?" re-enrolment replaces a short room sample (1.4.1) ─────
+#
+# "my name is X" in a room whose short sample of X doesn't recognize X's
+# voice goes through "I already know someone called X. Is that you?". Its
+# yes used to ADD a sample beside the short one (a 1.17 s clip kept diluting
+# the room); now it learns the room like a recognized X does: the longer
+# recording replaces X's samples in THAT room only, and only once it holds
+# more speech than they did.
+
+IS_THAT_YOU = "I already know someone called Sarah. Is that you?"
+LEARN_AFTER_YES = (
+    "Thanks, Sarah. Let me learn your voice better here: count from one to "
+    "ten for me, at your normal voice."
+)
+
+
+async def _ids(pid: int) -> list[int]:
+    async with SessionLocal() as s:
+        rows = (await s.execute(
+            text("SELECT id FROM voice_profiles WHERE person_id = :p ORDER BY id"), {"p": pid},
+        )).all()
+    return [int(r[0]) for r in rows]
+
+
+@requires_db
+async def test_unrecognised_reintroduction_replaces_the_same_rooms_short_sample(room) -> None:
+    sarah = await _sarah((700, "garage", 1.0), (701, ROOM, 1.17))
+    # Another person with a short sample in the same room: never touched.
+    priya = await _named("Priya", (500, ROOM, 1.0), (501, "garage", 1.0))
+    [(old_id, _s, _c)] = await _room_rows(sarah, ROOM)
+    garage_before = await _room_rows(sarah, "garage")
+    priya_before = await _ids(priya)
+
+    # A voice this room's short sample doesn't recognize as Sarah.
+    asked = await room.say("My name is Sarah.", _pcm(1.0, 901))
+    assert _reply(asked) == IS_THAT_YOU
+    yes = await room.say("Yes.", _pcm(1.0, 902), trigger="followup")
+    assert _reply(yes) == LEARN_AFTER_YES
+    assert (await room.pending())["stage"] == "count"
+    # Nothing replaced until the collection has more speech than the old.
+    assert [r[0] for r in await _room_rows(sarah, ROOM)] == [old_id]
+
+    done = await room.say(COUNTING, _pcm(8.0, 903), trigger="followup")
+    assert _reply(done) == "Thanks, Sarah! I'll know your voice now."
+    rows = await _room_rows(sarah, ROOM)
+    assert len(rows) == 1
+    new_id, secs, claimed = rows[0]
+    assert new_id != old_id and secs > 1.17 and claimed
+    # Her other room, and the other person, as they were.
+    assert await _room_rows(sarah, "garage") == garage_before
+    assert await _ids(priya) == priya_before
+    assert [n for _p, n in await _people()] == ["Sarah", "Priya"]
+
+
+@requires_db
+async def test_unrecognised_reintroduction_that_stops_short_keeps_the_old_sample(room) -> None:
+    sarah = await _sarah((700, "garage", 1.0), (701, ROOM, 3.0))
+    before = await _ids(sarah)
+    await room.say("My name is Sarah.", _pcm(1.0, 911))
+    yes = await room.say("Yes.", _pcm(1.0, 912), trigger="followup")
+    assert _reply(yes) == LEARN_AFTER_YES
+    # Two seconds heard, the room's sample has three: "stop" saves nothing.
+    stopped = await room.say("Stop.", _pcm(1.0, 913), trigger="followup")
+    assert _reply(stopped) == "Okay, I'll stop there. I'll still know your voice, Sarah."
+    assert await room.pending() is None
+    assert await _ids(sarah) == before
+    assert [r[1] for r in await _room_rows(sarah, ROOM)] == [3.0]
+
+
+@requires_db
+async def test_unrecognised_reintroduction_walked_away_from_keeps_the_old_sample(room) -> None:
+    sarah = await _sarah((701, ROOM, 1.0))
+    before = await _ids(sarah)
+    await room.say("My name is Sarah.", _pcm(1.0, 921))
+    await room.say("Yes.", _pcm(1.0, 922), trigger="followup")
+    # No counting ever comes: the old sample is all there is.
+    assert await _ids(sarah) == before
+
+
+@requires_db
+async def test_unrecognised_reintroduction_of_an_opted_out_voice_saves_nothing(room) -> None:
+    from domovoi.db.repositories import VoiceDenylistRepository
+
+    sarah = await _sarah((701, ROOM, 1.0))
+    before = await _ids(sarah)
+    await room.say("My name is Sarah.", _pcm(1.0, 931))
+    async with SessionLocal() as s:
+        await VoiceDenylistRepository(s).add(
+            embedding=(await _vec(_pcm(1.0, 931))).tobytes(),
+            model=VoiceDenylistRepository.EMBEDDING_MODEL_TAG,
+        )
+        await s.commit()
+    no = await room.say("Yes.", _pcm(1.0, 932), trigger="followup")
+    assert _reply(no) == "I wasn't able to save that voice profile."
+    assert await room.pending() is None
+    assert await _ids(sarah) == before
+
+
+@requires_db
+async def test_unrecognised_reintroduction_beside_a_good_sample_still_adds(room) -> None:
+    """A room with a good sample of X (4 s or more) is not relearned, the
+    recognized path's rule: the yes adds the clip as before."""
+    sarah = await _sarah((701, ROOM, 5.0))
+    await room.say("My name is Sarah.", _pcm(1.0, 941))
+    yes = await room.say("Yes.", _pcm(1.0, 942), trigger="followup")
+    assert _reply(yes) == COUNT
+    assert len(await _room_rows(sarah, ROOM)) == 2

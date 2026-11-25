@@ -35,13 +35,15 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from domovoi import egress, executors
+from domovoi import egress, executors, net_safety
 from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
-from domovoi.plugins_runtime.contracts import ContractError
+from domovoi.plugins_runtime.contracts import ContractError, friend_houses_open_routes
 from domovoi.plugins_runtime import loader as _loader
 from domovoi.plugins_runtime.loader import LOADER, code_imported, installed_root
 from domovoi.plugins_runtime.lockfile import (
@@ -991,6 +993,9 @@ async def stage_zip(
             # device_endpoints to any paired household device.
             "open_endpoints": marked["open"],
             "device_endpoints": marked["device"],
+            # SDK 1.18 (review D13): a plugin that talks to friend houses
+            # and also answers with no sign-in gets its own flag.
+            "friend_houses_open_routes": friend_houses_open_routes(manifest, marked["open"]),
             # What lands on every satellite, as root, if the admin confirms
             # (§7.5): the package list, the script, the pinned pips and the
             # size of the file payload — its own panel on the trust screen,
@@ -1115,6 +1120,25 @@ def _semver_cmp(a: str, b: str) -> int:
 
 # ─── GitHub install (§3.3) ─────────────────────────────────────────────────
 
+def _ref_is_plain(ref: str) -> bool:
+    """A branch, tag or commit name with no empty or dot segments, so the
+    archive URL built from it names the repository the user was shown."""
+    return bool(ref) and all(seg not in ("", ".", "..") for seg in ref.split("/"))
+
+
+def _codeload_url(owner: str, repo: str, ref: str) -> str:
+    """The archive URL from quoted parts; refuses one whose normalised path
+    would leave ``/{owner}/{repo}/zip/``."""
+    prefix = f"/{quote(owner, safe='')}/{quote(repo, safe='')}/zip/"
+    url = f"https://codeload.github.com{prefix}{quote(ref, safe='/')}"
+    if not httpx.URL(url).path.startswith(prefix):
+        raise InstallError(
+            "github_url_invalid",
+            "expected https://github.com/<owner>/<repo>[@ref]",
+        )
+    return url
+
+
 async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     """Resolve + download a repo archive with a streaming size cap.
     Returns (zip bytes, 'url@ref').
@@ -1131,6 +1155,15 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
     if egress.internet_turned_off():
         raise InstallError("internet_off", egress.TURNED_OFF_REASON)
     owner, repo, ref = m.group(1), m.group(2), m.group(3)
+    if (
+        not owner.strip(".")
+        or not repo.strip(".")
+        or (ref is not None and not _ref_is_plain(ref))
+    ):
+        raise InstallError(
+            "github_url_invalid",
+            "expected https://github.com/<owner>/<repo>[@ref]",
+        )
     headers = {
         "User-Agent": "domovoi/1.4.0 (+github.com/coders-farm-official/domovoi)"
     }
@@ -1144,21 +1177,33 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
                     f"could not resolve default branch ({r.status_code})",
                 )
             ref = r.json().get("default_branch") or "main"
-        url = f"https://codeload.github.com/{owner}/{repo}/zip/{ref}"
+        if not _ref_is_plain(ref):
+            raise InstallError(
+                "github_repo_unavailable", "the repository's default branch is unusable"
+            )
+        url = _codeload_url(owner, repo, ref)
         buf = bytearray()
-        async with client.stream("GET", url, headers=headers) as resp:
+        async with client.stream(
+            "GET", url, headers={**headers, **net_safety.IDENTITY_ENCODING}
+        ) as resp:
             if resp.status_code != 200:
                 raise InstallError(
                     "github_download_failed",
                     f"codeload returned {resp.status_code} for {url}",
                 )
-            async for chunk in resp.aiter_bytes():
-                buf.extend(chunk)
-                if len(buf) > MAX_ZIP_BYTES:
-                    raise InstallError(
-                        "zip_too_large",
-                        f"download exceeded {MAX_ZIP_BYTES} bytes — aborted",
-                    )
+            try:
+                async for chunk in net_safety.iter_capped(resp, MAX_ZIP_BYTES):
+                    buf.extend(chunk)
+            except net_safety.ResponseTooLarge:
+                raise InstallError(
+                    "zip_too_large",
+                    f"download exceeded {MAX_ZIP_BYTES} bytes — aborted",
+                ) from None
+            except net_safety.UnsupportedContentEncoding:
+                raise InstallError(
+                    "github_download_failed",
+                    f"codeload sent a compressed body for {url}",
+                ) from None
     return bytes(buf), f"{github_url}@{ref}"
 
 
@@ -1199,6 +1244,10 @@ async def confirm_install(
                 from_version=LOADER.imported_versions.get(slug) or result["version"],
                 to_version=result["version"],
             )
+        if result.get("installed") and staged is not None and _fh_permission(staged.manifest):
+            # Apps with friends (§6.11): a new plugin with the permission
+            # reaches no friend until an admin confirms it.
+            await _fh_hook("on_plugin_new", slug)
         return result
 
 
@@ -1424,6 +1473,38 @@ def _drop_staged(staged: StagedInstall) -> None:
     shutil.rmtree(staged.root, ignore_errors=True)
 
 
+# ─── apps with friends: the plugin mail service's lifecycle calls ──────────
+
+
+def _fh_permission(manifest: Any) -> bool:
+    perms = manifest.get("permissions") if isinstance(manifest, dict) else getattr(manifest, "permissions", None)
+    return bool((perms or {}).get("friend_houses"))
+
+
+async def _fh_hook(name: str, slug: str) -> None:
+    """Tell Friend Houses' plugin mail service (design §6.9, §6.11). Never
+    fails the lifecycle step."""
+    try:
+        from domovoi.friend_houses import plugin_mail
+
+        await getattr(plugin_mail, name)(slug)
+    except Exception as e:  # noqa: BLE001
+        log.warning("plugin %s: apps with friends wasn't told (%s): %s", slug, name, e)
+
+
+async def _fh_hook_upgrade(slug: str, old_manifest: Any, new_manifest: Any) -> None:
+    """An upgrade calls neither disable nor uninstall, so it tells the
+    service itself: the permission dropped is a closure (L12), gained is a
+    re-confirm, kept ends handler and restart pauses (L11)."""
+    had, has = _fh_permission(old_manifest), _fh_permission(new_manifest)
+    if had and not has:
+        await _fh_hook("on_plugin_off", slug)
+    elif has and not had:
+        await _fh_hook("on_plugin_new", slug)
+    elif has:
+        await _fh_hook("on_plugin_upgraded", slug)
+
+
 # ─── enable / disable (§3.4) ────────────────────────────────────────────────
 
 async def enable_plugin(slug: str) -> dict[str, Any]:
@@ -1448,17 +1529,24 @@ async def enable_plugin(slug: str) -> dict[str, Any]:
     except Exception as e:
         return {"enabled": False, "slug": slug, "status": "load_error", "error": str(e)}
     await _best_effort_resync()
+    if _fh_permission(manifest):
+        await _fh_hook("on_plugin_on", slug)
     return {"enabled": True, "slug": slug}
 
 
 async def disable_plugin(slug: str) -> dict[str, Any]:
-    row = await reg.get_plugin(slug)
-    if row is None:
-        raise InstallError("not_installed", f"plugin {slug!r} is not installed")
-    await LOADER.unload_plugin(slug)
-    await reg.set_enabled(slug, False)
-    await _best_effort_resync()
-    return {"enabled": False, "slug": slug}
+    """Disable ``slug``, under the lifecycle lock (the closure of its apps
+    with friends must not race an install or an upgrade, §6.9)."""
+    async with lifecycle_lock():
+        row = await reg.get_plugin(slug)
+        if row is None:
+            raise InstallError("not_installed", f"plugin {slug!r} is not installed")
+        await LOADER.unload_plugin(slug)
+        await reg.set_enabled(slug, False)
+        if _fh_permission(row.manifest):
+            await _fh_hook("on_plugin_off", slug)
+        await _best_effort_resync()
+        return {"enabled": False, "slug": slug}
 
 
 async def _best_effort_resync() -> None:
@@ -1502,8 +1590,15 @@ async def _uninstall_plugin_locked(slug: str, *, data: str) -> dict[str, Any]:
     # 1. Full disable teardown. A staged upgrade has nothing left to finish.
     await LOADER.unload_plugin(slug)
     LOADER.pending_restart.pop(slug, None)
+    if _fh_permission(row.manifest):
+        await _fh_hook("on_plugin_off", slug)  # one closure for its apps with friends
 
     manifest = row.manifest or {}
+    if isinstance(manifest.get("isolated"), dict):
+        # Its decode-only container and image are the core's: they go too.
+        from domovoi.plugins_runtime import isolated
+
+        await isolated.forget(slug)
     migrations_dir = (manifest.get("assets") or {}).get("migrations_dir", "migrations")
     runner = PluginMigrationRunner(slug, Path(row.install_dir) / migrations_dir)
 
@@ -1639,6 +1734,7 @@ async def _confirm_upgrade_locked(staged_id: str) -> dict[str, Any]:
                 slug, from_version=old_row.version, to_version=manifest.version
             )
         result["upgraded_from"] = old_row.version
+        await _fh_hook_upgrade(slug, old_row.manifest, manifest)
         return result
     except BaseException as e:
         # Roll back: previous dir returns, old row returns, old version
@@ -1808,9 +1904,27 @@ async def api_install(request: Request) -> dict:
             staged = await stage_zip(
                 data, source_ref=source_ref, install_source="github"
             )
+            await _stage_repo_pin(staged, staged.manifest.slug, source_ref, upgrade=False)
     except InstallError as e:
         raise _install_error_response(e)
     return {"staged_id": staged.staged_id, "preview": staged.preview}
+
+
+async def _stage_repo_pin(
+    staged: StagedInstall, slug: str, source_ref: str | None, *, upgrade: bool
+) -> None:
+    """M6: read a GitHub plugin's repository ids at staging, to pin when
+    the install is confirmed (update_check.stage_pin). A refusal drops the
+    staging."""
+    from domovoi.plugins_runtime import update_check
+
+    try:
+        await update_check.stage_pin(staged.staged_id, slug, source_ref, upgrade=upgrade)
+    except InstallError:
+        _STAGED.pop(staged.staged_id, None)
+        if getattr(staged, "root", None) is not None:
+            _drop_staged(staged)
+        raise
 
 
 @plugins_admin_router.post(
@@ -1825,10 +1939,17 @@ async def api_confirm(staged_id: str) -> dict:
     try:
         with _holding_plugin(slug, "upgraded" if upgrade else "installed"):
             if upgrade:
-                return await confirm_upgrade(staged_id)
-            return await confirm_install(staged_id)
+                out = await confirm_upgrade(staged_id)
+            else:
+                out = await confirm_install(staged_id)
     except InstallError as e:
         raise _install_error_response(e)
+    if slug is not None:
+        # M6: the repository ids read at staging become the plugin's pin.
+        from domovoi.plugins_runtime import update_check
+
+        await update_check.record_install_pin(staged_id, slug)
+    return out
 
 
 @plugins_admin_router.post(
@@ -1886,6 +2007,7 @@ async def api_upgrade(request: Request, slug: str) -> dict:
             raise _bundled_refusal(slug)
         data, source_ref, github_url, force = await _read_install_body(request)
         install_source = "zip"
+        download: dict[str, Any] | None = None
         if data is None:
             if not github_url:
                 raise InstallError(
@@ -1893,12 +2015,38 @@ async def api_upgrade(request: Request, slug: str) -> dict:
                     "send a multipart zip in field 'file' or JSON "
                     "{'github_url': ...}",
                 )
-            data, source_ref = await download_github_zip(github_url)
+            if await _wants_release_asset(request):
+                # An update from the Plugins page: the release's own zip,
+                # checked against its SHA256SUMS; the tag's source archive
+                # only when the release doesn't attach both. A mismatch
+                # stops here (update_check.download_release_asset).
+                from domovoi.plugins_runtime import update_check
+
+                try:
+                    data, source_ref, download = await update_check.download_release_asset(
+                        github_url, slug)
+                except update_check.NoReleaseAsset as e:
+                    download = {"from": "source", "reason": str(e)}
+            if data is None:
+                data, source_ref = await download_github_zip(github_url)
             install_source = "github"
         staged = await stage_zip(
             data, source_ref=source_ref, upgrade_of=slug, force_downgrade=force,
             install_source=install_source,
         )
+        if install_source == "github":
+            await _stage_repo_pin(staged, slug, source_ref, upgrade=True)
     except InstallError as e:
         raise _install_error_response(e)
-    return {"staged_id": staged.staged_id, "preview": staged.preview}
+    out: dict[str, Any] = {"staged_id": staged.staged_id, "preview": staged.preview}
+    if download is not None:
+        out["download"] = download
+    return out
+
+
+async def _wants_release_asset(request: Request) -> bool:
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - a multipart upload has no JSON body
+        return False
+    return isinstance(body, dict) and body.get("release_asset") is True

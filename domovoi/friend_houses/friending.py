@@ -12,7 +12,8 @@ limits. In plain steps, with house A inviting and house B asking:
 2. **An admin at B imports it** (:func:`preview`, then :func:`send_request`).
    B makes a Tor client key for A, authorizes it on its own onion, and asks
    on A's pairing onion (:mod:`domovoi.friend_houses.pairing`). Both houses
-   now hold the same 4-digit code. If A can't be reached, B tries again
+   now hold the same 6-digit code (4 digits for friends made before
+   1.5.0, whose pairing was v1). If A can't be reached, B tries again
    every few minutes until the file expires.
 3. **A's listener reports the request**; core uses the invite up (once,
    atomically) and lists the request for an admin (:func:`on_request`).
@@ -36,6 +37,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -146,6 +148,7 @@ async def make_invite(*, days: int | None = None, label: str | None = None,
         invite_id = secrets.token_hex(16)
         await store.insert_invite(s, invite_id=invite_id, label=label, days=days,
                                   created_by=created_by)
+        await _set_notice(s, None)  # a new file answers a "file closed" notice
     await _service().reconcile_within(60.0)
     log.info("Friend Houses: made a friend file (%d days)", days)
     return await invite_with_file(invite_id)
@@ -272,16 +275,36 @@ async def deliver_request(row: dict[str, Any]) -> bool:
     hello = await _service().my_hello()
     if keys is None or hello is None:
         return False
-    f = ff.parse(row["friend_file"])
+    try:
+        f = ff.parse(row["friend_file"])
+    except ff.BadFriendFile as e:
+        # Imported before this house updated: a v1 file, whose pairing this
+        # house no longer speaks (pairing.py, "Versions"). Not retried as
+        # a connection; the request shows why until it expires.
+        reason = str(e)[:200]
+        if row["last_error"] != reason:
+            async with _db() as s:
+                await store.update_request(s, row["id"], last_error=reason)
+        return False
     try:
         r, w = await fc.open_stream(_service().socks_path(), onion=f.pairing_address)
         code = await fp.ask(r, w, file=f, keys=keys, statement=hello.statement,
                             reach_private=row["reach_gift"], name=await house_name())
         w.close()
     except (fc.Unreachable, fp.PairingRefused) as e:
+        stop = isinstance(e, fp.PairingRefused) and e.after_nonces
         async with _db() as s:
-            await store.update_request(s, row["id"], attempts=row["attempts"] + 1,
-                                       last_error=str(e)[:200])
+            if stop:
+                # Broken off after the nonces were out: not retried on its
+                # own (each run is a try at the code). Dropping the file
+                # stops the retries; the person decides what next.
+                await store.update_request(s, row["id"], attempts=row["attempts"] + 1,
+                                           friend_file=None, last_error=STOPPED_ERROR)
+            else:
+                await store.update_request(s, row["id"], attempts=row["attempts"] + 1,
+                                           last_error=str(e)[:200])
+        if stop:
+            log.warning("Friend Houses: a friend request was broken off partway; not retrying it")
         return False
     async with _db() as s:
         # Sent: the file and our copy of the key we gave them are no longer needed.
@@ -290,6 +313,10 @@ async def deliver_request(row: dict[str, Any]) -> bool:
                                    attempts=row["attempts"] + 1)
     log.info("Friend Houses: friend request delivered (code shown on both houses)")
     return True
+
+
+STOPPED_ERROR = ("Stopped: the other house broke off partway through. Withdraw this "
+                 "request and import the friend file again, or ask for a new one.")
 
 
 # ─── 3. a request arrives (house A) ───────────────────────────────────────
@@ -308,7 +335,7 @@ async def on_request(event: dict[str, Any]) -> None:
     except (KeyError, ValueError, TypeError):
         log.warning("Friend Houses: a malformed request event was dropped")
         return
-    if statement is None or len(reach_private) != 32 or not (len(code) == 4 and code.isdigit()):
+    if statement is None or len(reach_private) != 32 or not fp.is_code(code):
         log.warning("Friend Houses: a request event failed its checks and was dropped")
         return
     from domovoi.friend_houses import blocking
@@ -331,6 +358,48 @@ async def on_request(event: dict[str, Any]) -> None:
             reach_private=reach_private, days=REQUEST_WAIT_DAYS)
     log.info("Friend Houses: a friend request arrived (%s)", fid.fingerprint(statement.house_key))
     await _service().reconcile()  # the invite is used: maybe no pairing onion now
+
+
+INVITE_CLOSED_NOTICE = ("A friend file was closed after repeated failed tries. "
+                        "If you still want to connect, make a new one.")
+
+
+async def _set_notice(s, notice: dict[str, Any] | None) -> None:
+    current = await store.household_settings(s)
+    if current.get("notice") == notice:
+        return
+    if notice is None:
+        current.pop("notice", None)
+    else:
+        current["notice"] = notice
+    await store.save_household_settings(s, current)
+
+
+async def notice() -> dict[str, Any] | None:
+    """The one notice the dashboard's Friend Houses page shows until it is
+    dismissed (or a new friend file is made): ``{"kind", "text", "at"}``."""
+    async with _db() as s:
+        value = (await store.household_settings(s)).get("notice")
+    return value if isinstance(value, dict) else None
+
+
+async def dismiss_notice() -> None:
+    async with _db() as s:
+        await _set_notice(s, None)
+
+
+async def on_invite_closed(event: dict[str, Any]) -> None:
+    """The listener closed a friend file after several requests on it were
+    broken off partway (pairing.ABANDONED_MAX): close it for good, and say
+    so on the dashboard."""
+    invite_id = str(event.get("invite", ""))
+    if len(invite_id) != 32:
+        return
+    if await cancel_invite(invite_id):
+        async with _db() as s:
+            await _set_notice(s, {"kind": "invite_closed", "text": INVITE_CLOSED_NOTICE,
+                                  "at": datetime.now(timezone.utc).isoformat()})
+        log.warning("Friend Houses: %s", INVITE_CLOSED_NOTICE)
 
 
 # ─── 4. accepting (house A) ───────────────────────────────────────────────
@@ -492,31 +561,46 @@ def _house_quiet_now() -> bool:
 
 async def announce(text: str) -> None:
     """A trust change said aloud in the rooms: now, or (in the house's
-    quiet hours) as soon as they end. Never dropped."""
+    quiet hours) as soon as they end. Never dropped: when no room was
+    reached, it waits and is tried again too."""
     if _house_quiet_now():
-        async with _db() as s:
-            current = await store.household_settings(s)
-            held = list(current.get("held_announcements") or [])[-(HELD_MAX - 1):]
-            held.append(text[:200])
-            current["held_announcements"] = held
-            await store.save_household_settings(s, current)
+        await _hold([text])
         log.info("Friend Houses: quiet hours; the announcement waits for them to end")
         return
-    await _speak(text)
+    if not await _speak(text):
+        await _hold([text])
 
 
-async def _speak(text: str) -> None:
+async def _hold(texts: list[str]) -> None:
+    async with _db() as s:
+        current = await store.household_settings(s)
+        held = list(current.get("held_announcements") or []) + [t[:200] for t in texts]
+        current["held_announcements"] = held[-HELD_MAX:]
+        await store.save_household_settings(s, current)
+
+
+async def _speak(text: str) -> bool:
+    """Whether at least one room said it."""
     try:
         from domovoi.sdk.speech import SpeechAPI
         from domovoi.speech_sanitize import sanitize_for_speech
 
-        await SpeechAPI("core").announce(None, sanitize_for_speech(text))
+        return bool(await SpeechAPI("core").announce(None, sanitize_for_speech(text)))
     except Exception as e:  # noqa: BLE001 — the log line and the status are the record
         log.info("Friend Houses: an announcement failed: %s", e)
+        return False
 
 
 async def announce_held() -> int:
-    """Say what waited for quiet hours (run by the service's retry loop)."""
+    """Say what waited for quiet hours (run by the service's retry loop):
+    the messages each room held back, as its own quiet hours end
+    (messages.say_held), then the trust changes, once the house's end."""
+    from domovoi.friend_houses import messages
+
+    try:
+        await messages.say_held()
+    except Exception:  # noqa: BLE001 — tried again on the next pass
+        log.exception("Friend Houses: saying held messages failed")
     if _house_quiet_now():
         return 0
     async with _db() as s:
@@ -526,18 +610,22 @@ async def announce_held() -> int:
             return 0
         current["held_announcements"] = []
         await store.save_household_settings(s, current)
-    for text_ in held:
-        await _speak(str(text_))
-    return len(held)
+    unsaid = [str(t) for t in held if not await _speak(str(t))]
+    if unsaid:
+        await _hold(unsaid)  # no room reached: tried again on the next pass
+    return len(held) - len(unsaid)
 
 
 async def recent_changes(days: int = 7) -> list[dict[str, Any]]:
     """Trust changes of the last week, newest first, for the dashboard's
-    and the phones' notice: new friends and lists shared with a friend."""
+    and the phones' notice: new friends, lists shared with a friend, and
+    friends an admin turned "Apps with this friend" on for (§6.11)."""
     async with _db() as s:
         rows = (await s.execute(text(
             "SELECT 'friend' AS kind, local_name, NULL AS list, added_at FROM friend_houses_friends "
             "WHERE added_at > now() - make_interval(days => :d) "
+            "UNION ALL SELECT 'apps', local_name, NULL, apps_on_at FROM friend_houses_friends "
+            "WHERE apps_on AND state = 'active' AND apps_on_at > now() - make_interval(days => :d) "
             "UNION ALL SELECT 'shared_list', f.local_name, sp.title, sp.created_at "
             "FROM friend_houses_spaces sp JOIN friend_houses_friends f ON f.id = sp.friend_id "
             "WHERE sp.origin = 'us' AND sp.state = 'active' "
@@ -562,7 +650,8 @@ async def list_requests() -> list[dict[str, Any]]:
              "their_name": r["their_name"], "name": r["local_name"],
              "fingerprint": fid.fingerprint(r["house_key"]), "code": r["code"],
              "created_at": r["created_at"].isoformat(), "expires_at": r["expires_at"].isoformat(),
-             "trying": r["direction"] == "out" and r["state"] == "unsent",
+             "trying": r["direction"] == "out" and r["state"] == "unsent"
+             and bool(r["friend_file"]) and r["last_error"] != ff.OLD_FILE,
              "last_error": r["last_error"]} for r in rows]
 
 
@@ -579,14 +668,20 @@ async def rename(friend_id: str, local_name: str) -> bool:
 async def unfriend(friend_id: str) -> bool:
     """Remove a friend. The listener refuses it from the next connection;
     Tor's key is withdrawn at the next (batched) reload."""
+    from domovoi.friend_houses import plugin_mail
+
     async with _db() as s:
         row = await store.friend(s, friend_id)
+        # Apps with friends (§6.9): the closure in the same transaction; the
+        # friend row's delete then cascades to its pairs, mail and sender.
+        pairs = await plugin_mail.close_pairs(s, friend_id=friend_id) if row is not None else []
         done = await store.delete_friend(s, friend_id)
         if done and row is not None:
             # An accept still waiting to be delivered goes too (R6 FH-11).
             await store.delete_requests_for(s, row.house_key)
     if done:
         log.warning("Friend Houses: a friend house was removed")
+        await plugin_mail.after_close(pairs)
         await _service().reconcile()
     return done
 
@@ -601,7 +696,8 @@ async def deliver_pending() -> None:
         outgoing = await store.requests(s, direction="out", states=("unsent",))
         accepts = await store.requests(s, direction="in", states=("accepted",))
     for row in outgoing:
-        await deliver_request(row)
+        if row["friend_file"]:  # none: stopped (see deliver_request)
+            await deliver_request(row)
     for row in accepts:
         await deliver_accept(row)
     if dropped:
@@ -615,6 +711,8 @@ async def on_event(event: dict[str, Any]) -> None:
             await on_request(event)
         elif kind == "accepted":
             await on_accepted(event)
+        elif kind == "invite_closed":
+            await on_invite_closed(event)
     except Exception:  # noqa: BLE001 — one bad event never stops the others
         log.exception("Friend Houses: handling a %s event failed", kind)
 

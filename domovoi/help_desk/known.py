@@ -193,7 +193,8 @@ async def gather(session: Any, *, extra_samples: Iterable[dict[str, Any]] = ()) 
     values += name_values(await _scalars(session, "SELECT name FROM people"))
     try:
         rows = (await session.execute(text(
-            "SELECT DISTINCT ON (room_id) sample FROM satellite_health ORDER BY room_id, received_at DESC"
+            "SELECT DISTINCT ON (satellite_id) sample FROM satellite_health "
+            "ORDER BY satellite_id, received_at DESC"
         ))).scalars().all()
     except Exception:  # noqa: BLE001
         await session.rollback()

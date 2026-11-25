@@ -13,7 +13,9 @@ Allowed:
   (:func:`home_networks`): on Linux the subnets routed out of the
   interface that holds the default route (``/proc/net/route``), which
   leaves Docker's bridges out by construction; elsewhere the /24 around the
-  server's LAN address (:func:`domovoi.lan_address.lan_ipv4`);
+  server's LAN address (:func:`domovoi.lan_address.lan_ipv4`); in a Mac
+  install's VM only the /24 around the Mac's address in ``lan.json``, and
+  the VM's default gateways (the Mac) count as the server's own addresses;
 * nothing else. Refused: public addresses, loopback, the server's own
   addresses, the subnet's network and broadcast addresses, link-local
   (169.254/16, which includes cloud metadata), CGNAT, multicast, other
@@ -135,8 +137,8 @@ class Target:
 # ─── The home network ────────────────────────────────────────────────────
 
 
-def _linux_routes() -> list[ipaddress.IPv4Network]:
-    """Subnets routed out of the interface holding the default route."""
+def _route_rows() -> list[tuple[str, str, str, str]]:
+    """``(iface, destination, gateway, mask)`` of each IPv4 route."""
     try:
         lines = PROC_ROUTE.read_text().splitlines()[1:]
     except OSError:
@@ -148,10 +150,34 @@ def _linux_routes() -> list[ipaddress.IPv4Network]:
             continue
         try:
             dest = struct.pack("<I", int(f[1], 16))
+            gw = struct.pack("<I", int(f[2], 16))
             mask = struct.pack("<I", int(f[7], 16))
-        except ValueError:
+        except (ValueError, struct.error):
             continue
-        rows.append((f[0], socket.inet_ntoa(dest), socket.inet_ntoa(mask)))
+        rows.append((f[0], socket.inet_ntoa(dest), socket.inet_ntoa(gw), socket.inet_ntoa(mask)))
+    return rows
+
+
+def _default_gateways() -> set[str]:
+    """The gateway of every default route (Linux; empty elsewhere)."""
+    return {gw for _i, dest, gw, mask in _route_rows()
+            if dest == "0.0.0.0" and mask == "0.0.0.0" and gw != "0.0.0.0"}
+
+
+def _host_side_lan() -> str | None:
+    """The host's LAN address from a Mac install's ``lan.json``
+    (:func:`domovoi.lan_address.host_lan_ipv4`), or None: not a VM install."""
+    try:
+        from domovoi.lan_address import host_lan_ipv4
+
+        return host_lan_ipv4()
+    except Exception:  # noqa: BLE001 — never decides by accident
+        return None
+
+
+def _linux_routes() -> list[ipaddress.IPv4Network]:
+    """Subnets routed out of the interface holding the default route."""
+    rows = [(iface, dest, mask) for iface, dest, _gw, mask in _route_rows()]
     default_ifaces = {iface for iface, dest, mask in rows if dest == "0.0.0.0" and mask == "0.0.0.0"}
     nets = []
     for iface, dest, mask in rows:
@@ -176,7 +202,13 @@ def server_lan_ipv4() -> str | None:
 
 def home_networks() -> list[ipaddress.IPv4Network]:
     """The server's home subnets (see the module note). Empty when the
-    server has no LAN address at all."""
+    server has no LAN address at all. In a Mac install's VM only the /24
+    around the host's address in ``lan.json``: the VM's own interfaces
+    are the Mac's private networks, not the home's."""
+    host_ip = _host_side_lan()
+    if host_ip:
+        addr = ipaddress.IPv4Address(host_ip)
+        return [ipaddress.IPv4Network("%s/24" % host_ip, strict=False)] if any(addr in p for p in _PRIVATE_V4) else []
     nets: list[ipaddress.IPv4Network] = []
     if sys.platform.startswith("linux"):
         nets = _linux_routes()
@@ -227,6 +259,9 @@ def own_addresses() -> set[str]:
             out.add(info[4][0])
     except OSError:
         pass
+    if _host_side_lan():
+        # In a Mac install's VM each default gateway is the Mac itself.
+        out |= _default_gateways()
     return out
 
 

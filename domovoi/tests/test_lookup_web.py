@@ -414,7 +414,8 @@ def test_a_reply_that_says_it_couldnt_find_is_the_honest_line() -> None:
     lines = lookup_answer.source_lines([R("Giant panda", "t", url="https://en.wikipedia.org/wiki/Giant_panda",
                                           site="en.wikipedia.org", licence="CC BY-SA 4.0")])
     out = lookup_answer.finish("Hmm, I couldn't find that in the text. But I think it's 42.", lines)
-    assert out.startswith(lookup_answer.COULDNT_FIND + "\n\n---") and "42" not in out
+    # What didn't answer it is not cited as a source.
+    assert out == lookup_answer.COULDNT_FIND
 
 
 @pytest.mark.parametrize(
@@ -578,3 +579,98 @@ def test_the_pace_key_is_the_normalised_credential() -> None:
     assert k({"x-device-token": "  Cork-Vine-Bison  "}, "a") == k({"x-device-token": "cork-vine-bison"}, "b")
     assert k({"authorization": "Bearer abc"}, "a") == k({"authorization": "bearer   abc "}, "b")
     assert k({"x-device-token": "cork-vine-bison"}, "a") != k({"x-device-token": "other-token-here"}, "a")
+
+
+# ── Relevance: what doesn't match never fills a slot (1.4.1) ─────────────
+
+_JUNK = [lookup.LookupHit(id=f"B/{t}", title=t, snippet="restaurants closed during the pandemic")
+         for t in ("COVID-19 pandemic in Illinois", "Criticism of fast food", "List of smoking bans")]
+
+
+def test_irrelevant_library_hits_never_hold_back_the_web(net) -> None:
+    # An offline library that returns something for any words: before the
+    # gate its three hits filled every slot and the web was never asked.
+    kiwix = _Kiwix(hits=list(_JUNK), text="The pandemic closed restaurants.")
+    net.searxng = {"infoboxes": [RED_PANDA_BOX], "results": []}
+    net.summaries["Red_panda"] = RED_PANDA_SUMMARY
+    out = _run(lookup_web.run_lookup("red panda", internet=True, registry=_registry(kiwix)))
+    assert kiwix.asked == ["red panda"]
+    assert [r.source for r in out.results] == ["wikipedia"] and out.internet_used is True
+    # Offline only: the junk is dropped, nothing is cited.
+    assert _run(lookup_web.run_lookup("red panda", internet=False, registry=_registry(kiwix))).results == []
+
+
+def test_the_relevance_gate_uses_a_plugin_score_else_the_words() -> None:
+    hit = lookup.LookupHit
+    # A plugin's 0-1 score decides (kiwix 1.3.1).
+    assert not lookup.relevant("springfield restaurants", hit(id="1", title="COVID-19 pandemic in Illinois", score=0.15))
+    assert lookup.relevant("capital of australia", hit(id="2", title="Canberra", score=lookup.RELEVANT_SCORE_MIN))
+    # No score: the title, or the title and snippet together.
+    assert lookup.relevant("red panda", hit(id="3", title="Red panda"))
+    assert not lookup.relevant("springfield restaurants", hit(id="4", title="COVID-19 pandemic in Illinois",
+                                                           snippet="restaurants were closed"))
+    assert lookup.relevant("capital of australia", hit(id="5", title="Canberra",
+                                                       snippet="Canberra is the capital city of Australia."))
+    # A core source's own scale (the manual's BM25) is not a 0-1 score.
+    assert not lookup.relevant("red panda", hit(id="6", title="Wi-Fi", score=0.9), scored=False)
+    # A query with no key words keeps everything.
+    assert lookup.relevant("what is it", hit(id="7", title="Anything"))
+
+
+def test_search_sources_counts_only_relevant_hits(net) -> None:
+    kiwix = _Kiwix(hits=list(_JUNK))
+    good = _Kiwix(hits=[lookup.LookupHit(id="9", title="Red panda", snippet="A small mammal.")])
+    good.slug = "zoo"
+    got = _run(lookup.search_sources("red panda", sources=[kiwix, good], enough=3))
+    assert [(getattr(s, "slug", ""), [h.title for h in hits]) for s, hits in got] == [("zoo", ["Red panda"])]
+
+
+def test_a_local_question_asks_the_web_first_with_the_home_place(net, monkeypatch) -> None:
+    from domovoi import weather
+
+    async def _place():
+        return {"name": "Springfield, Illinois, US", "lat": 39.8, "lon": -89.6, "query": "Springfield"}
+
+    monkeypatch.setattr(weather, "household_place", _place)
+    kiwix = _Kiwix(hits=[lookup.LookupHit(id="1", title="Restaurant", snippet="A restaurant serves food.")])
+    net.web_results = [{"title": "Best restaurants in Springfield, Illinois", "url": "https://eats.example/springfield",
+                        "content": "Ten restaurants in Springfield.", "engine": "duckduckgo"}]
+    out = _run(lookup_web.run_lookup("local restaurants", internet=True, registry=_registry(kiwix)))
+    assert kiwix.asked == []                      # the library can't know what's open nearby
+    assert [r.url for r in out.results] == ["https://eats.example/springfield"]
+    searched = [parse_qs(r.url.query.decode())["q"][0] for r in net.sent if r.url.path == "/search"]
+    assert searched and searched[0] == "restaurants in Springfield, Illinois, US"
+    assert out.query == "restaurants in Springfield, Illinois, US"
+
+
+def test_web_only_asks_the_web_sources_alone(net) -> None:
+    kiwix = _Kiwix(hits=[lookup.LookupHit(id="1", title="Red panda", snippet="s")], text="Red pandas.")
+    net.searxng = {"infoboxes": [RED_PANDA_BOX]}
+    net.web_results = [{"title": "Red pandas at the zoo", "url": "https://zoo.example/rp",
+                        "content": "Red pandas eat bamboo.", "engine": "duckduckgo"}]
+    out = _run(lookup_web.run_lookup("red panda", internet=True, registry=_registry(kiwix), web_only=True))
+    assert kiwix.asked == [] and [r.source for r in out.results] == ["web"]
+
+
+@pytest.mark.parametrize("text,needs", [
+    ("Can you research some local restaurants?", True),
+    ("what about restaurants for springfield il?", True),
+    ("is the pharmacy open now", True),
+    ("coffee near me", True),
+    ("what's the weather tomorrow", True),
+    ("what is a local variable in python", False),
+    ("who wrote hamlet", False),
+    ("red panda", False),
+])
+def test_needs_internet(text, needs) -> None:
+    from domovoi import uncertainty
+
+    assert uncertainty.needs_internet(text) is needs
+
+
+@pytest.mark.parametrize("text,bare", [
+    ("how about now?", True), ("try again", True), ("and now?", True), ("what about now", True),
+    ("what about detroit?", False), ("thanks", False), ("", False),
+])
+def test_a_bare_follow_up(text, bare) -> None:
+    assert lookup_answer.is_bare_followup(text) is bare

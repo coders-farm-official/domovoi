@@ -185,12 +185,24 @@ def test_a_reply_keeps_its_stats_and_the_sender_its_device(monkeypatch):
         assert st["context_limit"] == chat_api._HISTORY_LIMIT
         assert st["first_token_ms"] >= 0 and st["wall_ms"] >= st["first_token_ms"]
 
-        msgs = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"]
+        # L39 (1.5.0): reads carry no device ids — ``mine`` against the
+        # caller's own X-Device-Id, and the device's name.
+        msgs = c.get(f"/api/chat/threads/{t['id']}/messages",
+                     headers={"X-Device-Id": "chat-test-phone"}).json()["messages"]
         user, reply = msgs
-        assert user["device_id"] == "chat-test-phone"
+        assert "device_id" not in user and "device_id" not in reply
+        assert user["mine"] is True and reply["mine"] is False
         assert user["device_name"] == "Kitchen tablet"
         assert user["stats"] is None
-        assert reply["stats"] == st and reply["device_id"] is None
+        assert reply["stats"] == st
+        assert "device_id" not in done and done["mine"] is False
+        other = c.get(f"/api/chat/threads/{t['id']}/messages",
+                      headers={"X-Device-Id": "chat-test-other"}).json()["messages"]
+        assert [m["mine"] for m in other] == [False, False]
+        bare = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"]
+        assert [m["mine"] for m in bare] == [False, False]
+        assert all("device_id" not in m for m in other + bare)
+        assert "chat-test-phone" not in c.get(f"/api/chat/threads/{t['id']}/messages").text
 
 
 @requires_db
@@ -205,7 +217,7 @@ def test_a_malformed_device_id_is_not_kept(stub_stream, bad):
                    json={"content": "hello", "device_id": bad})
         assert r.status_code == 200
         user = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"][0]
-        assert user["role"] == "user" and user["device_id"] is None
+        assert user["role"] == "user" and "device_id" not in user and user["mine"] is False
 
 
 def test_reply_stats_leave_out_what_is_unknown() -> None:
@@ -578,3 +590,49 @@ def test_staged_pictures_never_sent_go_after_an_hour(uploads_dir, stub_stream, t
         # Deleting the chat removes the picture it carried.
         assert c.delete(f"/api/chat/threads/{t['id']}").status_code == 200
         assert not any(uploads_dir.glob(f"{sent}*"))
+
+
+# ─── Voice goes first (S3-7) ────────────────────────────────────────────────
+@requires_db
+def test_a_reply_waits_for_a_voice_turn_and_says_so(stub_stream, monkeypatch):
+    """While the core answers a voice turn, a typed reply first sends a
+    ``waiting_for_voice`` status, then waits, then streams."""
+    from web.backend.api import chat_doc_jobs as jobs_api
+
+    answers = iter([True, True, False])
+
+    async def _busy():
+        return next(answers, False)
+
+    monkeypatch.setattr(jobs_api, "voice_busy", _busy)
+    with _client() as c:
+        t = c.post("/api/chat/threads", json={}).json()
+        r = c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "hi"})
+        events = _sse_events(r.text)
+    assert events[0] == ("status", {"state": "waiting_for_voice"})
+    assert [d["text"] for ev, d in events if ev == "delta"] == ["Hello", " there"]
+
+
+@requires_db
+def test_a_refusal_never_asks_about_voice(uploads_dir, stub_stream, tags, monkeypatch):
+    """A refusal (a picture with no vision model set) is said at once,
+    voice or not: only a reply that asks the model waits."""
+    from web.backend.api import chat_doc_jobs as jobs_api
+
+    asked: list[int] = []
+
+    async def _busy():
+        asked.append(1)
+        return True
+
+    monkeypatch.setattr(jobs_api, "voice_busy", _busy)
+    monkeypatch.setattr(chat_api.core_settings, "ollama_vision_model", "")
+    with _client() as c:
+        token = _upload(c)
+        t = c.post("/api/chat/threads", json={}).json()
+        r = c.post(f"/api/chat/threads/{t['id']}/messages",
+                   json={"content": "and this?", "images": [{"token": token, "name": "x.png"}]})
+        events = _sse_events(r.text)
+    assert next(d for ev, d in events if ev == "error")["code"] == "vision_model_missing"
+    assert not any(ev == "status" for ev, _ in events)
+    assert asked == []

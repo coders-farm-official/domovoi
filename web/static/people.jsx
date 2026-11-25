@@ -818,7 +818,7 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, refused,
     } catch (e) { reportMutationFailure(fire, status === 'active' ? 'approve' : 'reject', e); }
   };
   const deleteMemory = async (mem) => {
-    if (!window.confirm(`Forget "${mem.body}"?`)) return;
+    if (!await askConfirm(`Forget "${mem.body}"?`)) return;
     try {
       await apiDelete(`/api/people/${person.id}/memories/${mem.id}`);
       fire('deleted');
@@ -840,7 +840,7 @@ const MemoryTab = ({ person, memories, favorites, preferences, loading, refused,
     } catch (e) { reportMutationFailure(fire, 'save', e); }
   };
   const deleteFavorite = async (fav) => {
-    if (!window.confirm(`Forget favorite ${fav.kind} = ${fav.value}?`)) return;
+    if (!await askConfirm(`Forget favorite ${fav.kind} = ${fav.value}?`)) return;
     try {
       await apiDelete(`/api/people/${person.id}/favorites/${fav.id}`);
       fire('deleted');
@@ -1446,7 +1446,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
   // One voice sample, either set (admin-tier on the server).
   const onDeleteSample = async (sample) => {
     const where = sample.source === 'phone' ? 'phone sample' : 'room sample';
-    if (!window.confirm(`Delete this ${where} (#${sample.id}) from ${selected ? selected.name : 'this person'}? This can't be undone.`)) return;
+    if (!await askConfirm(`Delete this ${where} (#${sample.id}) from ${selected ? selected.name : 'this person'}? This can't be undone.`)) return;
     try {
       await apiDelete(`/api/people/${sample.person_id}/profiles/${sample.id}`);
       fire(`deleted ${where} #${sample.id}`);

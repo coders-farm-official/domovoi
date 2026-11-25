@@ -136,7 +136,7 @@ const CollabHistory = ({ path, collab, onClose, fire, renderPreview }) => {
     // the document when restored: say so plainly, and only then ask the
     // server to allow it (it refuses an empty version otherwise).
     const blank = preview.status === 'ready' && !!preview.blank;
-    if (!window.confirm(blank
+    if (!await askConfirm(blank
       ? `The version from ${_collabTimeLabel(picked.at)} is empty. Restoring it clears the document. `
         + 'What the document says now is kept in the history. Clear the document?'
       : `Restore the version from ${_collabTimeLabel(picked.at)}? `

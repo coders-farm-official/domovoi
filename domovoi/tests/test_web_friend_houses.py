@@ -73,7 +73,9 @@ def test_a_friend_file_stays_in_memory_and_post_bodies() -> None:
 
 def test_the_page_says_what_friend_houses_is() -> None:
     src = _page()
-    assert "const FH_DESCRIPTION = 'Serverless messaging and friend system between households';" in src
+    assert "const FH_DESCRIPTION = 'Message and share lists with friends’ houses, house to house, with no company server in between';" in src
+    # Said once: the section subtitle, not again in the page's head.
+    assert "{FH_DESCRIPTION}.</span>" not in src
     assert "gaming" not in src.lower()
     assert "Anyone who gets this file can ask to be your friend. Nothing happens unless you accept." in src
     assert "They won’t be able to reach this house any more." in src
@@ -96,6 +98,7 @@ def test_the_section_is_registered_under_household() -> None:
 ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "status": ("GET", "/api/friend-houses", None),
     "settings": ("PUT", "/api/friend-houses/settings", {"house_name": "The Alex house"}),
+    "notice": ("DELETE", "/api/friend-houses/notice", None),
     "invites": ("GET", "/api/friend-houses/invites", None),
     "make": ("POST", "/api/friend-houses/invites", {"days": 7, "label": "for the Smiths"}),
     "invite": ("GET", "/api/friend-houses/invites/0123abcd", None),
@@ -113,6 +116,7 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     # F3: messages
     "alert": ("PUT", "/api/friend-houses/friends/fr0123abcd/alert", {"alert": "sender"}),
     "conversations": ("GET", "/api/friend-houses/conversations", None),
+    "unread": ("GET", "/api/friend-houses/unread", None),
     "conversation": ("GET", f"/api/friend-houses/conversations/{HOUSE}", None),
     "mark-read": ("POST", f"/api/friend-houses/conversations/{HOUSE}/read", None),
     "export": ("GET", f"/api/friend-houses/conversations/{HOUSE}/export", None),
@@ -129,17 +133,55 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
               {"keep_messages": False, "new_address": True}),
     "blocked": ("GET", "/api/friend-houses/blocked", None),
     "unblock": ("DELETE", f"/api/friend-houses/blocked/{HOUSE}", None),
+    # Apps with friends (SDK 1.18): admin only, at both hops
+    "apps": ("GET", "/api/friend-houses/friends/fr0123abcd/apps", None),
+    "set-apps": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps", {"on": True, "apps": ["games"]}),
+    "set-app": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps/games", {"allowed": False}),
+    "resume-app": ("POST", "/api/friend-houses/friends/fr0123abcd/apps/games/resume", None),
+    "app-notices": ("GET", "/api/friend-houses/apps/notices", None),
 }
 _IDS = sorted(ROUTES)
 
 
-# Owner decision 17: what every household phone may do with existing
-# friends wears the device tier; everything else the security tier.
+# Owner decision 17 (widened 2026-11-23): what everyone in the household
+# may do with existing friends wears the device tier; everything else, the
+# page's "Friends and connections" zone and saving or deleting a
+# conversation, the security tier.
 HOUSEHOLD_ROUTES = {
     ("GET", "/api/friend-houses"), ("GET", "/api/friend-houses/friends"),
     ("GET", "/api/friend-houses/conversations"), ("GET", "/api/friend-houses/conversations/{house}"),
+    ("GET", "/api/friend-houses/unread"),
     ("POST", "/api/friend-houses/conversations/{house}/read"), ("POST", "/api/friend-houses/messages"),
     ("GET", "/api/friend-houses/shared-lists"),
+    # Moved from the security tier on 2026-11-23 (starting a share stays admin).
+    ("POST", "/api/friend-houses/shared-lists/{space_id}/accept"),
+    ("POST", "/api/friend-houses/shared-lists/{space_id}/decline"),
+    ("DELETE", "/api/friend-houses/shared-lists/{space_id}"),
+}
+#: The dashboard mirrors the plugin mail service added (design note §6.11).
+FRIEND_APPS_ROUTES = {
+    ("GET", "/api/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/api/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/api/friend-houses/friends/{friend_id}/apps/{slug}"),
+    ("POST", "/api/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
+    ("GET", "/api/friend-houses/apps/notices"),
+}
+# What stays admin, named so a move is a decision, not a slip.
+ADMIN_ROUTES = {
+    ("DELETE", "/api/friend-houses/notice"), ("PUT", "/api/friend-houses/settings"),
+    ("GET", "/api/friend-houses/invites"), ("POST", "/api/friend-houses/invites"),
+    ("GET", "/api/friend-houses/invites/{invite_id}"), ("DELETE", "/api/friend-houses/invites/{invite_id}"),
+    ("POST", "/api/friend-houses/preview"), ("POST", "/api/friend-houses/requests"),
+    ("GET", "/api/friend-houses/requests"), ("POST", "/api/friend-houses/requests/{request_id}/accept"),
+    ("POST", "/api/friend-houses/requests/{request_id}/decline"),
+    ("DELETE", "/api/friend-houses/requests/{request_id}"),
+    ("POST", "/api/friend-houses/friends/{friend_id}/verified"), ("PATCH", "/api/friend-houses/friends/{friend_id}"),
+    ("DELETE", "/api/friend-houses/friends/{friend_id}"), ("PUT", "/api/friend-houses/friends/{friend_id}/alert"),
+    ("GET", "/api/friend-houses/conversations/{house}/export"), ("DELETE", "/api/friend-houses/conversations/{house}"),
+    ("POST", "/api/friend-houses/shared-lists"),
+    ("POST", "/api/friend-houses/friends/{friend_id}/block"), ("GET", "/api/friend-houses/blocked"),
+    ("DELETE", "/api/friend-houses/blocked/{house}"),
+    *FRIEND_APPS_ROUTES,
 }
 
 
@@ -153,7 +195,7 @@ def test_every_route_wears_its_tier() -> None:
         method = next(iter(r.methods))
         if (method, r.path) in HOUSEHOLD_ROUTES:
             household.add((method, r.path))
-            assert admin_auth.require_device in deps, r.path
+            assert admin_auth.require_device_after_setup in deps, r.path
             assert admin_auth.require_admin_security not in deps, r.path
         elif r.methods & {"POST", "PUT", "PATCH", "DELETE"}:
             assert admin_auth.require_admin_security in deps, r.path
@@ -161,6 +203,9 @@ def test_every_route_wears_its_tier() -> None:
             assert admin_auth.require_admin_security_read in deps, r.path
     assert seen == len(ROUTES)
     assert household == HOUSEHOLD_ROUTES
+    every = {(next(iter(r.methods)), r.path) for r in iter_route_contexts(web_app.routes)
+             if getattr(r, "path", "").startswith("/api/friend-houses")}
+    assert every == HOUSEHOLD_ROUTES | ADMIN_ROUTES
 
 
 @pytest.fixture
@@ -224,18 +269,15 @@ async def test_before_setup_everything_is_501(name, monkeypatch, forwarded) -> N
     install_fake_db(monkeypatch, admin=False)
     async with _client() as c:
         r = await _send(c, name)
-    if _is_household(name):
-        # The device tier keeps its pre-setup LAN grace; harmless here,
-        # since Friend Houses can't be turned on before an admin exists.
-        assert r.status_code != 501, r.text
-        return
+    # The household routes have no pre-setup grace either: after
+    # --reset-admin the friends and messages are still there.
     assert r.status_code == 501, r.text
     assert forwarded == []
 
 
 def _is_household(name: str) -> bool:
     method, path, _ = ROUTES[name]
-    pattern = path.replace(HOUSE, "{house}")
+    pattern = path.replace(HOUSE, "{house}").replace(SPACE, "{space_id}")
     return (method, pattern) in HOUSEHOLD_ROUTES
 
 
@@ -373,6 +415,214 @@ def test_the_page_says_the_message_states_and_choices_plainly() -> None:
     # The export is saved through a Blob, with a safe file name.
     assert "new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })" in src
     assert "`Friend Houses - ${fhSafe(name) || 'friend'} - " in src
+
+
+def _run_js(source: str, fn: str, cases: list) -> list:
+    """``fn(...case)`` for each case, with ``source`` (a slice of a page's
+    plain-JS helpers) loaded first, in node."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node, "node is required to run the page's helpers"
+    script = ("const window = {};\n" + source +
+              f"\nconsole.log(JSON.stringify(JSON.parse(process.argv[1]).map((c) => {fn}(...c))));")
+    out = subprocess.run([node, "-e", script, json.dumps(cases)], capture_output=True, text=True,
+                         encoding="utf-8", timeout=60, check=True)
+    return json.loads(out.stdout)
+
+
+def _fh_helpers() -> str:
+    src = _page()
+    return src[src.index("const fhClockOf = "):src.index("const FhAlertChoice = ")]
+
+
+def test_the_quiet_hours_note_shows_only_when_the_friend_speaks_and_its_quiet_now() -> None:
+    all_ = {"rooms": "all", "until": "07:00", "read_later": True}
+    some = {"rooms": "some", "until": "07:00", "read_later": True}
+    assert _run_js(_fh_helpers(), "fhQuietNote", [
+        [all_, "read"], [all_, "sender"], [all_, "inbox"], [None, "read"],
+        [some, "read"], [some, "sender"], [{**all_, "read_later": False}, "read"]]) == [
+        "Quiet hours until 7:00am: new messages will be read out at 7:00am.",
+        "Quiet hours until 7:00am: new messages will be announced at 7:00am.",
+        None,
+        None,
+        "Quiet hours in some rooms until 7:00am: new messages will be read out there at 7:00am.",
+        "Quiet hours in some rooms until 7:00am: new messages will be announced there at 7:00am.",
+        "Quiet hours until 7:00am: new messages wait in the inbox and won’t be read out later.",
+    ]
+    src = _page()
+    # From the friends payload, next to the choices.
+    assert "quiet={friends && friends.quiet_hours}" in src
+    assert "{fhQuietNote(quiet, current) && (" in src
+
+
+def test_a_held_message_says_so_and_when_it_was_read_out() -> None:
+    at = "2026-11-23T07:02:00"  # no zone: the browser's own clock, as fmtClock reads it
+    assert _run_js(_fh_helpers(), "fhHeldText", [
+        [{"direction": "in", "held": "quiet_hours", "read_out_at": None}],
+        [{"direction": "in", "held": "quiet_hours", "read_out_at": at}],
+        [{"direction": "in", "held": None, "read_out_at": None}],
+        [{"direction": "out", "held": "quiet_hours", "read_out_at": None}]]) == [
+        "held for quiet hours", "held for quiet hours · read out at 7:02am", None, None]
+    assert '{fhHeldText(m) && <span className="fh-held">· {fhHeldText(m)}</span>}' in _page()
+
+
+def test_the_sections_run_messages_then_shared_lists_then_the_admin_zone() -> None:
+    src = _page()
+    body = src[src.index("const FriendHousesPanel = "):]
+    body = body[body.rindex("{head}"):]
+    order = ["<FhInboxCard", "<FhSharedListsCard", "<FhAdminZone", "<FhRequestsCard", "<FhFriendsCard",
+             "<FhInvitesCard", "<FhAddCard", "<FhHouseCard", "<FhBlockedCard", "</FhAdminZone>"]
+    at = [body.index(tag) for tag in order]
+    assert at == sorted(at)
+    # Home's unread row lands on the Messages section.
+    assert "const FriendHousesPanel = ({ marks = [] }) => {" in src
+    assert "if (mark !== 'messages')" in src
+    # No "Admins only" page any more: the zone asks instead.
+    assert "Admins only." not in src
+
+
+# ─── the page, driven: what a household member and an admin get ──────────
+
+FH_HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
+FH_FILES = ["web/static/components.jsx", "web/static/friend_houses.jsx"]
+# Auth, scripted: `__signedIn` is this tab's admin sign-in; ensureLoggedIn
+# (the prompt) answers `__answer` and counts the asks.
+FH_AUTH = """
+globalThis.__signedIn = %s; globalThis.__answer = %s; globalThis.__asked = 0;
+globalThis.Auth = { status: {}, subscribe: () => () => {}, headers: () => ({}), modalOpen: false,
+  isLoggedIn: () => globalThis.__signedIn, canResume: () => false,
+  ensureLoggedIn: () => { globalThis.__asked += 1;
+    if (globalThis.__signedIn) return Promise.resolve(true);
+    if (globalThis.__answer) globalThis.__signedIn = true;
+    return Promise.resolve(!!globalThis.__answer); } };
+"""
+FH_API_TABLE = {
+    "GET /api/friend-houses": {"status": "on", "unread": 1, "fingerprint": "abcd"},
+    "GET /api/friend-houses/conversations": {"conversations": [
+        {"house": HOUSE, "name": "The Smiths", "friend_id": "fr0123abcd", "unread": 1, "last_id": 3,
+         "not_delivered": 0}], "unread": 1},
+    "GET /api/friend-houses/friends": {"friends": [
+        {"id": "fr0123abcd", "name": "The Smiths", "house": HOUSE, "alert": "inbox", "verified": True}],
+        "quiet_hours": None},
+    "GET /api/friend-houses/shared-lists": {"shared_lists": []},
+    "GET /api/lists": [{"id": 7, "name": "Groceries"}],
+    "GET /api/friend-houses/requests": {"requests": []},
+    "GET /api/friend-houses/invites": {"invites": []},
+    "GET /api/friend-houses/blocked": {"blocked": [{"house": "cd" * 32, "name": "Pests"}]},
+    "GET /api/config": {"internet_access": "allowed"},
+}
+FH_ADMIN_PATHS = ("/api/friend-houses/requests", "/api/friend-houses/invites", "/api/friend-houses/blocked",
+                  "/api/config/editable")
+FH_SCRIPT = """
+const zone = () => h.find((e) => e.type === 'button' && String((e.props || {}).className || '') === 'fh-zone-toggle');
+const snap = () => ({ texts: h.text(), expanded: !!zone().props['aria-expanded'],
+                      share: h.findAll((e) => e.type === 'select' || (e.type === 'button' && /^Share/.test(e.text))).length,
+                      asked: h.global('__asked'), fetched: h.hookCalls.slice() });
+h.render(); await h.settle(); h.rerender();
+const before = snap();
+await h.click((e) => e === zone());
+const after = snap();
+return { before, after };
+"""
+
+
+def _drive_panel(signed_in: bool, answer: bool) -> dict:
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node, "node is required to drive the page"
+    sc = {"files": FH_FILES, "component": "FriendHousesPanel", "props": {"marks": []},
+          "api": FH_API_TABLE, "setup": FH_AUTH % (json.dumps(signed_in), json.dumps(answer)),
+          "script": FH_SCRIPT}
+    out = subprocess.run([node, str(FH_HARNESS), str(REPO_ROOT), json.dumps({"s": sc})], capture_output=True,
+                         text=True, encoding="utf-8", timeout=120, check=True)
+    got = json.loads(out.stdout)["s"]
+    assert "__harness_error" not in got, got
+    return got
+
+
+ZONE_ORDER = ["Requests", "Friends", "Make a friend file", "Add a friend from their file", "This house",
+              "Blocked houses"]
+
+
+def _no_admin_content(snap: dict) -> None:
+    for title in ZONE_ORDER:
+        assert title not in snap["texts"], title
+    assert not [p for p in snap["fetched"] if p.startswith(FH_ADMIN_PATHS)], snap["fetched"]
+    assert not any("Admins only" in t for t in snap["texts"])
+
+
+def test_a_household_member_gets_messages_and_shared_lists_and_a_closed_zone() -> None:
+    got = _drive_panel(signed_in=False, answer=False)
+    before = got["before"]
+    assert "Messages" in before["texts"] and "Shared lists" in before["texts"]
+    assert "Friends and connections" in before["texts"]
+    assert before["expanded"] is False and before["asked"] == 0
+    _no_admin_content(before)
+    # Saving a copy, deleting a conversation and starting a share stay
+    # admin: not offered, and nothing in their place.
+    assert not any("Save a copy" in t for t in before["texts"])
+    assert not before["share"]
+    assert not any("sign in" in t.lower() for t in before["texts"])
+
+
+def test_an_admin_gets_the_share_action_in_shared_lists() -> None:
+    assert _drive_panel(signed_in=True, answer=False)["before"]["share"]
+
+
+def test_the_zone_stays_closed_when_the_sign_in_is_cancelled_or_refused() -> None:
+    # A wrong password keeps the prompt open; closing it answers false,
+    # exactly like a cancel.
+    after = _drive_panel(signed_in=False, answer=False)["after"]
+    assert after["asked"] == 1 and after["expanded"] is False
+    _no_admin_content(after)
+
+
+def test_the_zone_opens_after_a_sign_in_in_the_owners_order() -> None:
+    after = _drive_panel(signed_in=False, answer=True)["after"]
+    assert after["asked"] == 1 and after["expanded"] is True
+    at = [after["texts"].index(t) for t in ZONE_ORDER]
+    assert at == sorted(at)
+    assert after["texts"].index("Shared lists") < at[0]
+    assert {"/api/friend-houses/requests", "/api/friend-houses/invites", "/api/friend-houses/blocked"} <= set(
+        after["fetched"])
+
+
+def test_an_admin_opens_the_zone_at_once_and_it_starts_closed() -> None:
+    got = _drive_panel(signed_in=True, answer=False)
+    assert got["before"]["expanded"] is False  # collapsed on every visit
+    assert got["after"]["expanded"] is True and got["after"]["asked"] == 1
+
+
+def _home() -> str:
+    return (STATIC / "home.jsx").read_text(encoding="utf-8")
+
+
+def test_home_lists_unread_friend_houses_messages() -> None:
+    src = _home()
+    helpers = (src[src.index("const HomePlural = "):src.index("// Answered once")]
+               + src[src.index("const HOME_FH_INBOX = "):src.index("/* ---- status line")])
+    row = {"key": "fh-unread", "tone": "brand", "scope": "household",
+           "text": "2 unread Friend Houses messages", "href": "#settings/friend-houses/messages"}
+    assert _run_js(helpers, "HomeFriendHousesRow", [
+        [{"unread": 2}], [{"unread": 1}], [{"unread": 0}], [None]]) == [
+        row, {**row, "text": "1 unread Friend Houses message"}, None, None]
+    problem = {"key": "db", "text": "database"}
+    assert _run_js(helpers, "HomeWithRow", [
+        [{"mode": "rows", "rows": [problem]}, row], [{"mode": "none"}, row],
+        [{"mode": "summary", "count": 1}, row], [{"mode": "none"}, None]]) == [
+        {"mode": "rows", "rows": [problem, row]}, {"mode": "rows", "rows": [row]},
+        {"mode": "summary", "count": 1, "extra": [row]}, {"mode": "none"}]
+    # The inbox's own tier: asked only by a paired browser or an admin, and
+    # re-read with the health tick and on focus.
+    assert "useApiObject(viewer.paired || admin ? HOME_FH_INBOX : null," in src
+    assert "fhInbox.refresh(); }, HOME_HEALTH_MS);" in src
+    assert "HomeFriendHousesRow(fhInbox.data)" in src
 
 
 @pytest.mark.asyncio
@@ -550,4 +800,38 @@ async def test_an_unblock_needs_a_house_key(monkeypatch, forwarded) -> None:
         for bad in ("ab" * 31, "AB" * 32, "zz" * 32, "ab" * 33, "fr0123abcd"):
             r = await c.delete(f"/api/friend-houses/blocked/{bad}")
             assert r.status_code == 404, (bad, r.status_code)
+    assert forwarded == []
+
+
+# ─── apps with friends (SDK 1.18): admin only, once the routes exist ─────
+
+FRIEND_APPS_PLANNED = sorted(FRIEND_APPS_ROUTES)
+
+
+def test_the_apps_routes_exist_on_the_security_tier() -> None:
+    assert set(_apps_routes()) == FRIEND_APPS_ROUTES
+
+
+def test_no_apps_route_is_on_the_household_tier() -> None:
+    assert not [r for r in HOUSEHOLD_ROUTES if "/apps" in r[1]]
+    assert not set(FRIEND_APPS_PLANNED) & HOUSEHOLD_ROUTES
+
+
+def _apps_routes() -> list[tuple[str, str]]:
+    return sorted({(m, r.path) for r in iter_route_contexts(web_app.routes)
+                   if getattr(r, "path", "").startswith("/api/friend-houses") and "/apps" in r.path
+                   for m in r.methods})
+
+
+@pytest.mark.asyncio
+async def test_the_household_token_is_refused_on_every_apps_route(monkeypatch, forwarded) -> None:
+    # None exist before the plugin mail service; each one it adds is tried
+    # here with a household phone's token, and must be refused unforwarded.
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=HOUSEHOLD_TOKEN)
+    async with _client({admin_auth.DEVICE_TOKEN_HEADER: HOUSEHOLD_TOKEN}) as c:
+        for method, path in _apps_routes():
+            url = path.replace("{friend_id}", "f1").replace("{slug}", "games")
+            body = {} if method in ("PUT", "POST") else None
+            r = await (c.request(method, url, json=body) if body is not None else c.request(method, url))
+            assert r.status_code in (401, 403), (method, path, r.status_code)
     assert forwarded == []

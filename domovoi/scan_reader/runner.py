@@ -150,6 +150,12 @@ class _Gone(Exception):
     pass
 
 
+class _Superseded(_Gone):
+    """Another read of the same row (a voice "read it now" beside the
+    background read) found different bytes at the path and took the row
+    over: this one's pages are not saved under it."""
+
+
 OcrFn = Callable[..., Awaitable[ocr.PageOcr]]
 
 
@@ -211,16 +217,25 @@ def _snapshot(path: Path, work: Path) -> Path:
     return dest
 
 
+def too_large(path: Path) -> bool:
+    """The scan is over :data:`MAX_SCAN_BYTES` (checked before any hashing)."""
+    try:
+        return path.stat().st_size > MAX_SCAN_BYTES
+    except OSError:
+        return False
+
+
 async def queue_scan(rel: str, *, scan_id: str | None = None) -> str | None:
     """Queue a read of the scan at ``rel``; its id, or None when this
-    server can't read scans or the file isn't there."""
+    server can't read scans or the file isn't there. A file over the size
+    limit is queued unhashed: the read then fails with the size reason."""
     if not can_read():
         return None
     path = resolve(rel)
     if path is None:
         return None
     try:
-        sha = await asyncio.to_thread(store.sha256_of, path)
+        sha = None if too_large(path) else await asyncio.to_thread(store.current_sha, path)
     except OSError:
         return None
     return await store.queue(rel, sha256=sha, scan_id=scan_id, languages="+".join(ocr.languages()))
@@ -283,17 +298,45 @@ async def saved_pages(job_id: str) -> set[int]:
 
 
 async def save_page(job_id: str, page: int, method: str, page_text: str, confidence: float | None,
-                    words: int) -> None:
+                    words: int, *, sha: str | None = None) -> None:
+    """Save one page; ``sha``: the hash of the bytes it was read from, which
+    must still be the row's (checked under a row lock, so a read that
+    switched the row to other bytes can't interleave)."""
     async with session_scope() as s:
-        exists = (await s.execute(text("SELECT 1 FROM scan_reads WHERE id = :id"), {"id": job_id})).first()
-        if exists is None:
+        row = (await s.execute(text("SELECT sha256 FROM scan_reads WHERE id = :id FOR SHARE"),
+                               {"id": job_id})).first()
+        if row is None:
             raise _Gone()
+        if sha is not None and row[0] != sha:
+            raise _Superseded()
         await s.execute(text(
             "INSERT INTO scan_read_pages (read_id, page, method, confidence, words, text) "
             "VALUES (:id, :p, :m, :c, :w, :t) ON CONFLICT (read_id, page) DO NOTHING"),
             {"id": job_id, "p": page, "m": method, "c": confidence, "w": words, "t": page_text[:20000]})
         await s.execute(text("UPDATE scan_reads SET updated_at = now() WHERE id = :id"), {"id": job_id})
         await s.execute(text("SELECT pg_notify('scan_read_changed', :id)"), {"id": job_id})
+
+
+async def _adopt_sha(job: Job, sha: str) -> None:
+    """Make ``sha`` (the hash of the copy about to be read) the row's. When
+    the row held other bytes, their pages go in the same transaction, under
+    the row lock :func:`save_page` takes, so no page of the old bytes can
+    land under the new hash."""
+    async with session_scope() as s:
+        row = (await s.execute(text("SELECT sha256, pages FROM scan_reads WHERE id = :id FOR UPDATE"),
+                               {"id": job.id})).first()
+        if row is None:
+            raise _Gone()
+        if row[0] == sha:
+            job.pages = int(row[1] or 0)
+        else:
+            # The file changed since the read was queued: read what is there now.
+            await s.execute(text("UPDATE scan_reads SET sha256 = :sha, pages = 0, updated_at = now() WHERE id = :id"),
+                            {"id": job.id, "sha": sha})
+            await s.execute(text("DELETE FROM scan_read_pages WHERE read_id = :id"), {"id": job.id})
+            await s.execute(text("SELECT pg_notify('scan_read_changed', :id)"), {"id": job.id})
+            job.pages = 0
+    job.sha256 = sha
 
 
 class Runner(VoiceFirst):
@@ -380,7 +423,12 @@ class Runner(VoiceFirst):
         try:
             if job.attempts > MAX_ATTEMPTS:
                 raise ReadFailed(CODE_INTERRUPTED)
-            await self._read(job, work, gate=True)
+            try:
+                await self._read(job, work, gate=True)
+            except _Superseded:
+                # A read by voice found other bytes at the path and took the
+                # row over: read the file as it is now.
+                await self._read(job, work, gate=True)
             if await self._stop_requested(job):
                 raise _Cancelled()
             await self._end(job, "done")
@@ -424,14 +472,7 @@ class Runner(VoiceFirst):
         except OSError:
             raise ReadFailed(CODE_MISSING) from None
         sha = await asyncio.to_thread(store.sha256_of, path)
-        if job.sha256 and sha != job.sha256:
-            # The file changed since the read was queued: read what is there now.
-            async with session_scope() as s:
-                await s.execute(text("DELETE FROM scan_read_pages WHERE read_id = :id"), {"id": job.id})
-            job.pages = 0
-        if sha != job.sha256:
-            job.sha256 = sha
-            await _update(job.id, sha256=sha)
+        await _adopt_sha(job, sha)
         if job.pages <= 0:
             try:
                 job.pages = await pages.count(path)
@@ -459,7 +500,7 @@ class Runner(VoiceFirst):
         try:
             await pages.render(path, n, png)
         except pages.PageFailed:
-            await save_page(job.id, n, "none", "", None, 0)
+            await save_page(job.id, n, "none", "", None, 0, sha=job.sha256)
             return True
         try:
             got: ocr.PageOcr | None = await self.ocr_fn(png, hold=self.pass_hold(job) if gate else None,
@@ -470,7 +511,7 @@ class Runner(VoiceFirst):
             log.info("scan read %s: tesseract failed on page %d (%s)", job.id[:8], n, e)
             got = None
         if got is not None and ocr.readable(got):
-            await save_page(job.id, n, "ocr", got.text, got.confidence, got.words)
+            await save_page(job.id, n, "ocr", got.text, got.confidence, got.words, sha=job.sha256)
             png.unlink(missing_ok=True)
             return True
         if not gate:
@@ -484,11 +525,12 @@ class Runner(VoiceFirst):
                 said = ""
         said = (said or "").strip()
         if said and said.replace("[unclear]", "").strip():
-            await save_page(job.id, n, "vision", said, None, len(said.split()))
+            await save_page(job.id, n, "vision", said, None, len(said.split()), sha=job.sha256)
         else:
             # Not readable, and no picture model to ask (AI features off): the
             # page says it couldn't be read, never OCR's unsure guess.
-            await save_page(job.id, n, "none", "", got.confidence if got else None, 0)
+            await save_page(job.id, n, "none", "", got.confidence if got else None, 0,
+                            sha=job.sha256)
         png.unlink(missing_ok=True)
         return True
 

@@ -82,6 +82,31 @@ func settle(
     return false
 }
 
+/// Wait until `condition` holds, against a **clock deadline** rather than a
+/// count of yields: a yield loop gives up after however long its turns happen
+/// to take, which is no time at all on a fast machine and a flaky failure on
+/// a busy one. Between tries it sleeps briefly, so a stub's own round trip
+/// gets real time to land. Fails (and returns false) at the deadline.
+@MainActor
+@discardableResult
+func waitUntil(
+    _ what: String,
+    seconds: Double = 10,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ condition: @MainActor () -> Bool
+) async -> Bool {
+    let deadline = ContinuousClock.now.advanced(by: .milliseconds(Int(seconds * 1000)))
+    while ContinuousClock.now < deadline {
+        if condition() { return true }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+    if condition() { return true }
+    XCTFail("\(what) never happened within \(seconds) s", file: file, line: line)
+    return false
+}
+
 /// One request held open at the server, so a test can make something happen
 /// **inside** a round trip rather than after it.
 ///

@@ -1252,10 +1252,10 @@ extension StubHouseUITests {
     /// URL in quotation marks reads as a phrase to search for — and that is
     /// asserted here because nothing else in this file covers it.
     ///
-    /// The chip turning on is the half that matters: `internet off` and
+    /// The chip turning on is the half that matters: `internet: ask first` and
     /// `internet on for this chat` are two wordings of the same chip, so a
     /// chip reading the household's policy instead of the thread's flag would
-    /// stay on "off" through all of this.
+    /// stay on "ask first" through all of this.
     @MainActor
     func testChatMore_AllowInThisChatTurnsTheChipOn() throws {
         guard let app = openChatMore(
@@ -1274,7 +1274,7 @@ extension StubHouseUITests {
             "a page's address is quoted like a search's words"
         )
         XCTAssertTrue(
-            exactly(app, ChatMoreStringsUnderTest.internetOff).exists,
+            exactly(app, ChatMoreStringsUnderTest.internetAskFirst).exists,
             "a thread that may not go online says otherwise"
         )
 
@@ -1689,7 +1689,7 @@ extension StubHouseUITests {
         evidence(app, "chatmore-41-ordinary")
 
         XCTAssertTrue(
-            exactly(app, ChatMoreStringsUnderTest.internetOff).exists,
+            exactly(app, ChatMoreStringsUnderTest.internetAskFirst).exists,
             "an ordinary thread does not say whether it may go online"
         )
         XCTAssertTrue(
@@ -1736,7 +1736,7 @@ extension StubHouseUITests {
             ("card-title", ChatMoreStringsUnderTest.mayILookThisUp),
             ("card-query", StubChatMore.lisbonQueryQuoted),
             ("card-destination", ChatMoreStringsUnderTest.goesTo(StubChatMore.duck)),
-            ("chip", ChatMoreStringsUnderTest.internetOff),
+            ("chip", ChatMoreStringsUnderTest.internetAskFirst),
         ]
 
         var measured: [String: [String: CGSize]] = [:]
@@ -2216,6 +2216,7 @@ enum ChatMoreStringsUnderTest {
 
     static let internetOff = "internet off"
     static let internetOnForThisChat = "internet on for this chat"
+    static let internetAskFirst = "internet: ask first"
 
     static let headsUp = "heads-up"
     static let neverWarn = "don't warn me about this again"

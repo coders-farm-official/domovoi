@@ -693,6 +693,7 @@ async def test_change_password_reverifies_old() -> None:
             headers=_bearer(token),
         )
         assert r.status_code == 401
+        admin_auth.LOGIN_BACKOFF.reset()
         r = await client.post(
             "/api/auth/password",
             json={"old_password": STRONG_PW, "new_password": "a-new-password"},
@@ -702,6 +703,28 @@ async def test_change_password_reverifies_old() -> None:
         admin_auth.LOGIN_BACKOFF.reset()
         r = await client.post("/api/auth/login", json={"password": "a-new-password"})
         assert r.status_code == 200
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_change_password_old_password_check_is_throttled() -> None:
+    async with _web() as client:
+        token = await _claim_admin(client)
+        r = await client.post(
+            "/api/auth/password",
+            json={"old_password": "not-the-password", "new_password": "a-new-password"},
+            headers=_bearer(token),
+        )
+        assert r.status_code == 401
+        # The same backoff as the sign-in form: an immediate retry waits,
+        # even with the right old password.
+        r = await client.post(
+            "/api/auth/password",
+            json={"old_password": STRONG_PW, "new_password": "a-new-password"},
+            headers=_bearer(token),
+        )
+        assert r.status_code == 429
+        assert int(r.headers["retry-after"]) >= 1
 
 
 # ─── Outbound-fetch tier on add-by-url (§7.3 / §4.8) ──────────────────────
@@ -783,3 +806,17 @@ async def test_add_by_url_unauthenticated_rate_limited(monkeypatch) -> None:
             assert r.status_code == 200
     finally:
         ACQUISITIONS.unregister_fulfiller("prov")
+
+
+def test_add_by_url_refusals_never_tell_a_phone_to_sign_in_as_admin():
+    """Phones show this text as-is and can never be an admin, so neither
+    refusal may tell the reader to log in (phone admin audit, 2026-11-22)."""
+    import inspect
+
+    from domovoi import admin_auth
+
+    src = inspect.getsource(admin_auth.check_outbound_fetch)
+    assert "log in as admin" not in src
+    assert "requires an admin session" not in src
+    assert "Too many links at once. Try again in a minute." in src
+    assert "only an admin can add other links, on the dashboard." in src

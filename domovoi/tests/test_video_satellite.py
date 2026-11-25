@@ -202,15 +202,17 @@ async def test_repository_crud_roundtrip() -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_set_room_label_creates_row_for_legacy_room() -> None:
-    """Labeling a pre-V003 satellite (mpd_rooms only) creates the inventory
-    row with the voice default rather than failing."""
+    """Labeling a room known only by its music player (mpd_rooms only)
+    creates its ``rooms`` row (V073: the label is the room's name) rather
+    than failing; no device row is made up."""
+    from domovoi.db.repositories import RoomsRepository
+
     async with session_scope() as s:
         await SatellitesRepository(s).set_room_label("kitchen", "Ground Floor")
-    row = await _get_row("kitchen")
-    assert row is not None
-    assert row["room_label"] == "Ground Floor"
-    assert row["sat_type"] == "voice"
-    assert row["adopted_via"] == "manual"
+    async with session_scope() as s:
+        room = await RoomsRepository(s).get("kitchen")
+    assert room is not None and room["name"] == "Ground Floor"
+    assert await _get_row("kitchen") is None
 
 
 # ─── /v1/admin/snapshot exposure ──────────────────────────────────────────
@@ -439,7 +441,12 @@ async def test_admin_display_endpoint_paths() -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_wake_record_refused_for_mic_disabled_room() -> None:
+async def test_wake_record_refused_for_mic_disabled_room(monkeypatch) -> None:
+    from domovoi import admin_auth
+
+    # record/start is on the security tier: drive it as a signed-in admin.
+    monkeypatch.setitem(
+        core_app.dependency_overrides, admin_auth.require_admin_security, lambda: None)
     transport = ASGITransport(app=core_app)
     async with core_app.router.lifespan_context(core_app):
         fake = type("FakeSession", (), {"room_id": "den"})()

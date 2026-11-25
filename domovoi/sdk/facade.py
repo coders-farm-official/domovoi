@@ -35,12 +35,14 @@ from domovoi.events import EVENTS, EventBus, EventCallback, Subscription
 from domovoi.now_playing import NOW_PLAYING, NowPlayingStamp
 from domovoi.sdk.assets import AssetAPI
 from domovoi.sdk.coreconfig import CoreConfigView
+from domovoi.sdk.household import HouseholdAPI, PlacesAPI
 from domovoi.sdk.http import HttpFactory
 from domovoi.sdk.library import LibraryAPI
 from domovoi.sdk.observability import get_logger
 from domovoi.sdk.playback import PlaybackAPI
 from domovoi.sdk.realtime import RealtimeAPI
 from domovoi.sdk.sessions import SessionAPI
+from domovoi.sdk.friend_houses import FriendHousesAPI
 from domovoi.sdk.speech import SpeechAPI
 
 log = logging.getLogger(__name__)
@@ -215,8 +217,10 @@ class PluginSDK:
         version: str = "0.0.0",
         config: Any = None,
         data_dir: Path | None = None,
+        permissions: dict[str, Any] | None = None,
     ) -> None:
         self.slug = slug
+        friend_houses = bool((permissions or {}).get("friend_houses"))
         self.version = version
         self.log = get_logger(slug)
         self.data_dir = data_dir or (
@@ -233,12 +237,16 @@ class PluginSDK:
         self.connectivity = ConnectivityView()
         self.capabilities: CapabilityRegistry = CAPABILITIES
         self.playback = PlaybackAPI(slug)
-        self.speech = SpeechAPI(slug)
+        self.speech = SpeechAPI(slug, friend_houses=friend_houses)
         self.library = LibraryAPI(slug)
         self.realtime = RealtimeAPI(slug)
         self.assets = AssetAPI(slug)
         self.state: MutableMapping[str, Any] = _STATE_STORES.setdefault(slug, {})
         self.http = HttpFactory(version)
+        self.household = HouseholdAPI()
+        self.places = PlacesAPI()
+        # SDK 1.18: apps with friends (on_mail is delivered; friends()/send_mail later in 1.5.0).
+        self.friend_houses = FriendHousesAPI(slug, permitted=friend_houses)
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -257,6 +265,7 @@ class PluginSDK:
         registered_values.unregister_owner(self.slug)
         self.assets.remove_canned_sounds()
         _STATE_STORES.pop(self.slug, None)
+        self.friend_houses.teardown()
 
 
 def build_sdk(
@@ -265,8 +274,10 @@ def build_sdk(
     version: str = "0.0.0",
     config: Any = None,
     data_dir: Path | None = None,
+    permissions: dict[str, Any] | None = None,
 ) -> PluginSDK:
     """Construct a live facade wired to the process singletons. The
     plugin loader (later stage) is the production caller; integration
     tests use it directly."""
-    return PluginSDK(slug=slug, version=version, config=config, data_dir=data_dir)
+    return PluginSDK(slug=slug, version=version, config=config, data_dir=data_dir,
+                     permissions=permissions)

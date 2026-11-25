@@ -50,6 +50,7 @@ import logging
 import os
 import secrets
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -66,6 +67,18 @@ HEALTH_CONTEXT = b"domovoi-health-v1"
 MANIFEST_CONTEXT = b"domovoi-manifest-v1"
 # The manifest signature that also covers the list's issue time and serial.
 MANIFEST_CONTEXT_V2 = b"domovoi-manifest-v2"
+# Support-session control frames (1.5.0, satellite/support_shell.py). The
+# core's domovoi/server_identity.py holds the same string.
+SUPPORT_CONTEXT = b"domovoi-support-v1"
+#: How far a signed support frame's issue time may be from this device's
+#: clock. The per-connection nonce is what stops a replay; this only refuses
+#: a frame signed long ago (the clock is the server's, set on every connect).
+SUPPORT_MAX_SKEW_SEC = 120
+#: The direction label in what a satellite signs about a support session
+#: (with its own support key, satellite/support_shell.py): the server's
+#: frames are the context then the document, the satellite's the context,
+#: this label, then the document, so neither can stand in for the other.
+SUPPORT_FROM_SATELLITE = b"satellite-to-server"
 
 CODE_CHANNEL = "satellite-code"
 PLUGIN_CHANNEL = "satellite-plugins"
@@ -113,6 +126,9 @@ PENDING_SERVER_SIDECAR = CONFIG_DIR / "pending-server.json"
 
 HTTP_TIMEOUT_SEC = 5.0
 _CHALLENGE_BYTES = 16
+#: The most of a /v1/health answer that is read. A real one is well under
+#: a kilobyte; anything past this is not a Domovoi server's.
+HEALTH_BODY_MAX_BYTES = 64 * 1024
 
 
 # ─── primitives ───────────────────────────────────────────────────────────
@@ -221,6 +237,66 @@ def manifest_message_v2(
         "serial": int(serial),
     }
     return MANIFEST_CONTEXT_V2 + b"\n" + canonical_json(signed)
+
+
+def support_message(doc: Any) -> bytes:
+    """What the core signs for a support-session control frame."""
+    return SUPPORT_CONTEXT + b"\n" + canonical_json(doc)
+
+
+def support_reply_message(doc: Any) -> bytes:
+    """What this device signs for a support frame it sends: the context,
+    the direction label, then the canonical document."""
+    return SUPPORT_CONTEXT + b"\n" + SUPPORT_FROM_SATELLITE + b"\n" + canonical_json(doc)
+
+
+def verify_support(
+    envelope: Any, *, kind: str, expected_fingerprint: str | None,
+    satellite_id: str, nonce: str | None, now: float,
+    satellite_key: str | None = None,
+    max_skew: float = SUPPORT_MAX_SKEW_SEC,
+) -> dict[str, Any]:
+    """The signed document inside a support frame's ``signed`` field, or
+    :class:`IdentityError`.
+
+    Refused: no pinned fingerprint (nothing to check against), a missing or
+    malformed envelope, a key other than the pinned one, a bad signature, a
+    document for another kind of frame, another satellite or another
+    connection (``nonce``) or another device key (``satellite_key``: the
+    public half of this device's support key, which the server names in
+    every frame so a key swapped in the hello is caught here), and one
+    issued more than ``max_skew`` seconds from this device's clock."""
+    if not expected_fingerprint:
+        raise IdentityError("this device has no pinned server key")
+    if not satellite_key:
+        raise IdentityError("this device has no support key")
+    if not nonce:
+        raise IdentityError("no connection nonce")
+    if not isinstance(envelope, dict):
+        raise IdentityError("the frame is not signed")
+    if envelope.get("algorithm") != ALGORITHM:
+        raise IdentityError("unsupported signature algorithm")
+    public = unb64(envelope.get("public_key"))
+    signature = unb64(envelope.get("signature"))
+    doc = envelope.get("doc")
+    if public is None or signature is None or not isinstance(doc, dict):
+        raise IdentityError("the signature is malformed")
+    if fingerprint_for(public) != expected_fingerprint:
+        raise IdentityError("signed by a key other than this device's server")
+    if not verify(public, support_message(doc), signature):
+        raise IdentityError("the signature did not verify")
+    if doc.get("kind") != kind:
+        raise IdentityError("signed for another kind of frame")
+    if doc.get("satellite_id") != satellite_id:
+        raise IdentityError("signed for another satellite")
+    if doc.get("nonce") != nonce:
+        raise IdentityError("signed for another connection")
+    if doc.get("satellite_key") != satellite_key:
+        raise IdentityError("signed for another device key")
+    issued = doc.get("issued_at")
+    if not isinstance(issued, int) or isinstance(issued, bool) or abs(now - issued) > max_skew:
+        raise IdentityError("the signed frame is stale (check this device's clock)")
+    return doc
 
 
 def manifest_digest(manifest: Any) -> str:
@@ -469,6 +545,46 @@ class IdentityUnavailable(IdentityError):
     outage."""
 
 
+class DifferentServer(IdentityError):
+    """The server answered with a complete, valid proof — a signature over
+    OUR nonce and the address we dialed — for a key that is not the one
+    this device is pinned to. A different Domovoi (another house, or this
+    one reinstalled with a new identity) at that address.
+
+    Told apart from the other refusals only so the room can SAY so
+    ("my server changed, set me up again") instead of the generic
+    no-server blink. It changes nothing about trust: the caller refuses it
+    exactly as before, records nothing and never re-pins. ``fingerprint``
+    is the other server's (public) one; ``addr`` the address dialed."""
+
+    def __init__(self, message: str, *, fingerprint: str, addr: str | None) -> None:
+        super().__init__(message)
+        self.fingerprint = fingerprint
+        self.addr = addr
+
+
+# The last DifferentServer any check in this process met: (monotonic time,
+# the address dialed, the other fingerprint). Read by the client to tell
+# the room; never used for any trust decision.
+_LAST_DIFFERENT: tuple[float, str | None, str] | None = None
+
+
+def _note_different(addr: str | None, fingerprint: str) -> None:
+    global _LAST_DIFFERENT
+    _LAST_DIFFERENT = (time.monotonic(), addr, fingerprint)
+
+
+def last_different_server() -> tuple[float, str | None, str] | None:
+    """``(monotonic time, address dialed, fingerprint)`` of the last valid
+    proof for a key other than the pin, or None."""
+    return _LAST_DIFFERENT
+
+
+def forget_different_server() -> None:
+    global _LAST_DIFFERENT
+    _LAST_DIFFERENT = None
+
+
 def verify_health_document(
     doc: Any, *, challenge: str, expected_fingerprint: str | None,
     addr: str | None = None, pairing_proof: int | None = None,
@@ -544,9 +660,14 @@ def verify_health_document(
     if claimed and claimed != actual:
         raise IdentityError("the server's fingerprint does not match its key")
     if expected_fingerprint and actual != expected_fingerprint:
-        raise IdentityError(
+        # Only here, after the signature over our nonce (and, pinned, the
+        # dialed address) checked out: a host that merely says another key,
+        # or relays someone else's answer, never gets this far.
+        _note_different(addr, actual)
+        raise DifferentServer(
             f"this is a different server: {actual} is not the "
-            f"{expected_fingerprint} this device was prepared for"
+            f"{expected_fingerprint} this device was prepared for",
+            fingerprint=actual, addr=addr,
         )
     return actual
 
@@ -579,6 +700,32 @@ def verify_health_proof(
     return fingerprint, advert
 
 
+def read_health_body(r: Any, *, timeout: float,
+                     limit: int = HEALTH_BODY_MAX_BYTES) -> bytes:
+    """A /v1/health body, read under ONE deadline (``timeout``, at least a
+    second, from the first byte asked for) and at most ``limit`` bytes:
+    the socket timeout bounds each read, not a body that keeps trickling.
+    Raises :class:`IdentityError` past either. A response without
+    ``read1`` (not an HTTP one) is read whole and then held to ``limit``."""
+    read1 = getattr(r, "read1", None)
+    if read1 is None:
+        body = r.read()
+        if len(body) > limit:
+            raise IdentityError("the /v1/health answer is too large")
+        return body
+    deadline = time.monotonic() + max(float(timeout), 1.0)
+    buf = bytearray()
+    while True:
+        chunk = read1(min(16 * 1024, limit + 1 - len(buf)))
+        if not chunk:
+            return bytes(buf)
+        buf += chunk
+        if len(buf) > limit:
+            raise IdentityError("the /v1/health answer is too large")
+        if time.monotonic() > deadline:
+            raise IdentityError("the /v1/health answer took too long")
+
+
 def fetch_health(
     http_base: str, *, challenge: str, timeout: float = HTTP_TIMEOUT_SEC,
     opener=None, addr: str | None = None,
@@ -593,7 +740,7 @@ def fetch_health(
     with opener(url, timeout=timeout) as r:
         if getattr(r, "status", 200) != 200:
             raise IdentityError("the server did not answer /v1/health")
-        return json.loads(r.read().decode("utf-8", "replace"))
+        return json.loads(read_health_body(r, timeout=timeout).decode("utf-8", "replace"))
 
 
 def verify_server(

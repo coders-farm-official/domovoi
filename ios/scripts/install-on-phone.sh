@@ -113,12 +113,71 @@ cd "$ios_dir"
 say "install-on-phone.sh: generating Domovoi.xcodeproj"
 xcodegen generate --spec project.yml --project .
 
+# find_device prints the UDID of the one iPhone or iPad that is paired with
+# this Mac and reachable now (plugged in, or paired over Wi-Fi and in range).
+# It reads devicectl's JSON, not its table: the table's columns and state words
+# change between Xcode versions (Xcode 26 says "available (paired)", never
+# "connected"). It prints the hardware UDID, which both xcodebuild's
+# -destination and devicectl accept; the table's Identifier column is the
+# CoreDevice id, which devicectl accepts but xcodebuild does not.
+#
+# Exit status: 0 with one UDID on stdout, 2 when none is reachable, 3 when
+# more than one is (they are listed on stderr).
+find_device() {
+	local json status=0
+	json="$(mktemp -t domovoi-devices)" || return 2
+	if ! xcrun devicectl list devices --json-output "$json" >/dev/null 2>&1; then
+		rm -f "$json"
+		return 2
+	fi
+	/usr/bin/python3 -I - "$json" <<'PY' || status=$?
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        devices = (json.load(f).get("result") or {}).get("devices") or []
+except (OSError, ValueError, AttributeError):
+    sys.exit(2)  # unreadable answer: the caller shows devicectl's own table
+
+found = []
+for d in devices:
+    hw = d.get("hardwareProperties") or {}
+    conn = d.get("connectionProperties") or {}
+    props = d.get("deviceProperties") or {}
+    if hw.get("platform") != "iOS" or hw.get("reality") != "physical":
+        continue
+    if conn.get("pairingState") != "paired" or not hw.get("udid"):
+        continue
+    # "unavailable": devicectl cannot reach it now (unplugged, or out of
+    # Wi-Fi range). "disconnected" only means no tunnel is open yet; the
+    # build opens one.
+    if conn.get("tunnelState") == "unavailable":
+        continue
+    model = hw.get("marketingName") or hw.get("deviceType") or "?"
+    found.append((hw["udid"], props.get("name") or "?", model))
+
+if not found:
+    sys.exit(2)
+if len(found) > 1:
+    for udid, name, model in found:
+        print(f"  {udid}  {name} ({model})", file=sys.stderr)
+    sys.exit(3)
+print(found[0][0])
+PY
+	rm -f "$json"
+	return "$status"
+}
+
 if [ -z "$device" ]; then
 	say "install-on-phone.sh: looking for a connected iPhone"
-	# `devicectl list devices` prints a table; the UDID is the first column of
-	# a connected row. If this picks the wrong thing, pass --device.
-	device="$(xcrun devicectl list devices 2>/dev/null \
-		| awk '/connected/ && /iPhone/ {print $(NF-1); exit}')"
+	find_status=0
+	device="$(find_device)" || find_status=$?
+	if [ "$find_status" -eq 3 ]; then
+		die "more than one iPhone or iPad is reachable (listed above). Pick one
+with --device UDID."
+	fi
+	[ -z "$device" ] || say "install-on-phone.sh: found $device"
 fi
 if [ -z "$device" ]; then
 	say ""

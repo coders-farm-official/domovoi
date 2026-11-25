@@ -74,6 +74,8 @@ from domovoi.config import (
     ADMIN_RELOAD_WINDOW_MAX_MIN,
     HOME_PROBLEMS_VISIBILITY_CHOICES,
     QA_THINK_CHOICES,
+    STT_DENOISE_LABELS,
+    STT_DENOISE_MODES,
     MUSIC_LISTENS_KEEP_CHOICES,
     MUSIC_LISTENS_KEEP_LABELS,
     VOICE_HISTORY_KEEP_CHOICES,
@@ -141,6 +143,10 @@ class FieldSpec:
     # ("more sensitive", "fewer false wakes"). None = a number box.
     widget: Literal["slider"] | None = None
     slider_labels: tuple[str, str] | None = None
+    # Extra words the dashboard's settings search finds this field by, when
+    # they aren't in its label ("town", "weather"). Optional; sent as
+    # ``keywords`` with every field the config reads return.
+    keywords: tuple[str, ...] = ()
 
     @property
     def secret(self) -> bool:
@@ -440,6 +446,14 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "reminders still ring, and it still answers when you ask it "
         "something. Each room can keep its own hours or turn them off in its "
         "Settings tab. Applies immediately.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "announce_chime_enabled", "Chime before announcements", "Voice & speech",
+        "Play a short two-note chime before an announcement or a broadcast "
+        "speaks in a room (intercom, Broadcast, timers, plugin "
+        "announcements), so people catch the first words. Normal answers "
+        "never get it. Applies to the next announcement.",
         "bool", tier="hot",
     ),
     FieldSpec(
@@ -797,6 +811,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         slider_labels=("relays everything", "relays only loud sound"),
     ),
 
+    # ─── Rooms ─────────────────────────────────────────────────────────
+    FieldSpec(
+        "room_calibration_auto", "Tune speakers on their own", "Rooms",
+        "When a satellite joins or moves into a room with other speakers, "
+        "measure its speaker delay on its own (every speaker in the room "
+        "plays a short chirp), once the room is idle; in quiet hours it "
+        "waits for them to end. Off = only when you press Tune the speakers "
+        "in the room.",
+        "bool",
+    ),
+
     # ─── News ──────────────────────────────────────────────────────────
     FieldSpec(
         "news_auto_fetch", "Auto-fetch topic news", "News",
@@ -814,13 +839,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", min=1, max=10, unit="items", widget="slider",
         slider_labels=("fewer stories", "more stories"),
     ),
-    FieldSpec(
-        "news_location", "Local news location", "News",
-        "City or region used to build the 'local' news scope. Empty = the "
-        "general briefing skips the local block. Used to discover/select the "
-        "local RSS feed.",
-        "str", needs_internet=True,
-    ),
+    # "Local news location" (news_location) moved to Settings → Household →
+    # Home location in 1.4.1 (domovoi/home_location.py); its search words
+    # went with it (the 'home-location' section in web/static/settings.jsx).
     FieldSpec(
         "news_retention_days", "News retention", "News",
         "How long fetched news items are kept before the daily sweep deletes "
@@ -903,7 +924,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # which starts or stops the private connection.
     FieldSpec(
         "friend_houses_enabled", "Friend Houses", "Friend Houses",
-        "Serverless messaging and friend system between households. Off: "
+        "Message and share lists with friends’ houses, house to house, with "
+        "no company server in between. Off: "
         "nothing runs and nothing connects. On: this house can be friended "
         "by other Domovoi houses and reached only by them, through the Tor "
         "network (a private connection; no Coders Farm server is involved). "
@@ -1097,6 +1119,18 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "joke or a story keep their speed. "
         "Off routes the short-window text as it is.",
         "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
+        "stt_denoise", "Clean up noise before transcribing (experiment)",
+        "Speech-to-text",
+        "Off by default. An experiment for noisy rooms: 'spectral' cleans "
+        "up a spoken command's audio with a built-in filter before Whisper "
+        "hears it. Wake words and voice recognition always hear the room "
+        "as it is, and any error uses the raw audio. In a test with "
+        "synthetic party noise it neither helped nor hurt, so leave it off "
+        "unless you are comparing. Applies on the next command.",
+        "choice", section="advanced", tier="hot",
+        choices=list(STT_DENOISE_MODES), choice_labels=dict(STT_DENOISE_LABELS),
     ),
     FieldSpec(
         "speculative_stt_enabled", "Start transcribing at the first pause",
@@ -1322,6 +1356,7 @@ def widget_payload(spec: FieldSpec) -> dict[str, object]:
     )
     return {
         "step": effective_step(spec),
+        "keywords": list(spec.keywords),
         "widget": "slider" if slider else None,
         "slider_labels": list(spec.slider_labels) if slider and spec.slider_labels else None,
     }

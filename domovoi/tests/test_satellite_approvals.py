@@ -96,6 +96,28 @@ def test_a_request_shows_up_waiting():
     assert rows[0]["attempts"] == 1
 
 
+def test_the_device_s_mac_and_type_are_bounded():
+    """Free text from an unpaired device is stored only in its known
+    shape: a MAC that is not one is dropped, an unknown type reads voice."""
+    _run(_request(code=CODE, mac="x" * 5000, sat_type="y" * 5000))
+    row = _run(_pending())[0]
+    assert row["mac"] is None and row["sat_type"] == "voice"
+    _run(_request(code=CODE, mac="B8:27:EB:AA:BB:CC", sat_type="video"))
+    row = _run(_pending())[0]
+    assert row["mac"] == "b8:27:eb:aa:bb:cc" and row["sat_type"] == "video"
+
+
+def test_the_waiting_list_is_capped_for_new_rooms_only():
+    from domovoi.db import repositories
+
+    for i in range(repositories.MAX_PENDING_APPROVALS):
+        assert _run(_request(room_id=f"room{i}", token_hash=f"{i:064x}"))[0] == "parked"
+    assert _run(_request(room_id="one-more", token_hash=HASH_B)) == ("full", None)
+    # A device already waiting still refreshes its own request.
+    assert _run(_request(room_id="room0", token_hash=f"{0:064x}"))[0] == "parked"
+    assert len(_run(_pending())) == repositories.MAX_PENDING_APPROVALS
+
+
 def test_neither_the_hash_nor_the_code_is_listed():
     """The operator types the code in from the device. Printing it next to
     the approve button would make it a label again, and the hash has never
@@ -264,6 +286,34 @@ def test_after_the_window_a_different_device_takes_the_request_over():
     assert _run(_approve(code=CODE)) == "mismatch"
     assert _run(_approve(code=OTHER_CODE)) == "approved"
     assert _run(_pairing())[0] == HASH_B
+
+
+def test_a_takeover_between_the_check_and_the_bind_binds_nothing():
+    """The code is checked against the device that was read; if another
+    device took the request over before the bind, nothing is bound."""
+    _run(_request(token_hash=HASH_A, code=CODE))
+
+    async def _t():
+        async with session_scope() as s:
+            repo = SatelliteApprovalRepository(s)
+            real = s.execute
+
+            async def execute(stmt, *a, **kw):
+                result = await real(stmt, *a, **kw)
+                if "SELECT token_hash, code, proof" in str(stmt):
+                    async with engine.begin() as conn:
+                        await conn.execute(text(
+                            "UPDATE satellite_approvals SET token_hash = :h, code = :c "
+                            "WHERE satellite_id = :r"
+                        ), {"h": HASH_B, "c": OTHER_CODE, "r": ROOM})
+                return result
+
+            s.execute = execute
+            return await repo.approve(ROOM, CODE)
+
+    assert _run(_t()) == "not_pending"
+    assert _run(_pairing()) is None
+    assert _run(_get())["token_hash"] == HASH_B
 
 
 def test_a_takeover_never_keeps_the_old_code_for_a_device_that_brought_none():
