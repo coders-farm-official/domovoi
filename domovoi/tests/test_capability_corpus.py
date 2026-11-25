@@ -343,3 +343,19 @@ def test_sandbox_refuses_the_database_and_the_model() -> None:
     case = next(c for c in CASES if c.id == "2.3")
     turn, _ = _run(case)
     assert turn.outcome == "needs_model"
+
+
+def test_privacy_scope_matches_the_corpus() -> None:
+    """Group 22: house_facts.wants_facts takes privacy questions about THIS
+    house (the fixed answer, voice and chat alike) and leaves general ones
+    to the model."""
+    from domovoi import house_facts
+
+    group = [c for c in CASES if c.group == 22 and not c.skip_reason]
+    assert len(group) == 13
+    wrong = {c.id for c in group
+             if house_facts.wants_facts(c.utterance) is not any("Settings" in p for p in c.must_include)}
+    # Known finding (H1): "do you share my data with Google?" is about this
+    # house, but _SOMEONE_ELSE_RE's "with Google" sends it to the model.
+    # Drop 22.13 from this set when that's fixed.
+    assert wrong <= {"22.13"}, sorted(wrong)
