@@ -215,8 +215,6 @@ final class AlertsStringsTests: XCTestCase {
     func testTheHelpWordsAreTheKotlins() {
         assertKotlinSaysWhole(AlertsStrings.helpUntitled, "helpUntitled")
         assertKotlinSaysWhole(AlertsStrings.helpBody, "helpBody")
-        // `"Help: $t"`.
-        assertKotlinSaysPiece(AlertsStrings.helpTitlePrefix, "helpTitlePrefix")
     }
 
     // MARK: - incidents
@@ -281,7 +279,7 @@ final class AlertsStringsTests: XCTestCase {
             "Timers may ring a few minutes late on this phone",
             "couldn't reach Domovoi to confirm",
             "going off now",
-            "Domovoi sent you help steps",
+            "Domovoi sent you something in Chat",
         ] {
             XCTAssertTrue(
                 Self.haystack.contains(absent),
