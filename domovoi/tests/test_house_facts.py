@@ -165,20 +165,19 @@ def test_toggle_pairs_differ(qid, on, off) -> None:
 def test_no_answer_names_a_service_or_plugin() -> None:
     banned = ("listenbrainz", "lrclib", "musicbrainz", "cover art archive", "wikipedia", "brave",
               "searxng", "kiwix", "romm", "imagegen", "comfyui", "tor ")
-    said = [hf.answer(q, f) for q, f, _e in MATRIX] + [hf.facts_block(BASE)]
+    said = [hf.answer(q, f) for q, f, _e in MATRIX] + [hf.privacy_summary(BASE)]
     said += [c.text or "" for c in hf.CAPABILITIES]
     for line in said:
         assert not any(b in line.lower() for b in banned), line
 
 
-def test_the_facts_block_carries_the_one_instruction() -> None:
-    block = hf.facts_block(BASE)
-    assert block.endswith(
-        "Answer only from these facts. If they don't cover the question, say: "
-        "\"I'm not sure — Settings → Privacy shows exactly what's kept.\""
-    )
-    assert "- Command recordings in this room: none kept." in block
-    assert "- Internet: yes." in block
+def test_the_privacy_fallback_is_built_from_the_facts() -> None:
+    said = hf.privacy_summary(BASE)
+    assert said.startswith("Your voice never leaves the house.")
+    assert hf.answer("keep", BASE) in said
+    assert said.endswith(hf.PRIVACY_POINTER)
+    unknown = hf.HouseFacts(**{**BASE.__dict__, "internet": None})
+    assert hf.privacy_summary(unknown) == f"{hf.CANT_CHECK} {hf.PRIVACY_POINTER}"
 
 
 def test_the_qa_hedge_is_unchanged() -> None:
@@ -582,28 +581,34 @@ async def test_route_answers_with_no_model(db_session, monkeypatch, said: str, s
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_privacy_worded_question_gets_the_facts_and_an_ordinary_one_does_not(
+async def test_a_privacy_worded_question_gets_the_fixed_answer_and_an_ordinary_one_the_model(
     db_session, monkeypatch,
 ) -> None:
+    """The model never answers a privacy question: measured 2026-11-25,
+    given the facts it still made up wrong claims."""
     from domovoi import router
     from domovoi.clients.ollama import QAWithUncertainty
 
-    seen: list[str | None] = []
+    seen: list[str] = []
 
     class _QA:
         async def route(self, *a, **kw):
             return None
 
         async def qa_with_uncertainty(self, transcript, history=None, profile_prefix=None):
-            seen.append(profile_prefix)
+            seen.append(transcript)
             return QAWithUncertainty(answer="Fine.", needs_verification=False)
 
     monkeypatch.setattr(router, "get_ollama_client", lambda: _QA())
-    for said in ("Is it creepy that you are always listening?", "Why is the sky blue?"):
-        ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
-        await router.route(Intent(transcript=said, room_id="kitchen"), ctx, db_session)
-    assert seen[0] is not None and "Answer only from these facts." in seen[0]
-    assert not seen[1]
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
+    r = await router.route(Intent(transcript="Is it creepy that you are always listening?", room_id="kitchen"),
+                           ctx, db_session)
+    assert (r.matched_handler, r.matched_path) == ("house_facts", "qa")
+    assert r.text.startswith("Your voice never leaves the house.") and r.text.endswith(hf.PRIVACY_POINTER)
+    assert seen == []
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
+    await router.route(Intent(transcript="Why is the sky blue?", room_id="kitchen"), ctx, db_session)
+    assert seen == ["Why is the sky blue?"]
 
 
 def test_wants_facts_is_narrow() -> None:
@@ -674,6 +679,17 @@ def test_web_chat_answers_from_the_house(no_chat_model) -> None:
         assert _send(c, t, "Who can see my chats?").startswith("Everyone in this house:")
         msgs = c.get(f"/api/chat/threads/{t}/messages").json()["messages"]
         assert msgs[-1]["role"] == "assistant" and (msgs[-1]["stats"] or {}).get("model_role") == "house_facts"
+
+
+@requires_db
+def test_web_chat_privacy_question_gets_the_fixed_answer(no_chat_model) -> None:
+    """Outside the closed set, a privacy-worded question still never
+    reaches the model (the fixture fails any model call)."""
+    with _client() as c:
+        t = c.post("/api/chat/threads", json={}).json()["id"]
+        said = _send(c, t, "Is it creepy that you are always listening?")
+        assert said.startswith("Your voice never leaves the house.")
+        assert said.endswith(hf.PRIVACY_POINTER)
 
 
 @requires_db

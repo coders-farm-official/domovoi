@@ -1449,11 +1449,33 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
     except Exception as e:
         log.warning("profile_prefix build failed: %s", e)
         profile_prefix = ""
-    # A privacy-worded question the closed set didn't take: the house's
-    # facts go with it, as data (house_facts.with_facts_block; never fails).
+    # A privacy-worded question the closed set didn't take: a fixed answer
+    # from the house's facts, never the model's (house_facts.privacy_fallback;
+    # never fails). Measured 2026-11-25: given the facts, the model still
+    # made up wrong privacy claims.
     from domovoi import house_facts
 
-    profile_prefix = await house_facts.with_facts_block(profile_prefix, intent.transcript, ctx) or ""
+    privacy_text = await house_facts.privacy_fallback(intent.transcript, ctx)
+    if privacy_text is not None:
+        response = Response(
+            text=privacy_text,
+            session_id=session_id,
+            matched_handler="house_facts",
+            matched_path="qa",
+            online=ctx.online,
+            expect_followup=False,
+        )
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler="house_facts",
+            matched_path="qa",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
 
     # Plain QA path. The answer is spoken exactly as the model wrote it.
     # The "want me to check that online?" offer rides on it only for a

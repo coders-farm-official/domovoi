@@ -28,9 +28,10 @@ Four pieces, one module, so the facts and their wording live in ONE place:
    the Q&A model exactly as before, so its measured hedge stays the safety
    net and an unknown X never hears "No". The router keeps a "can you"
    question whole only for an X in this table (:func:`kept_question`).
-4. The backstop: a privacy-worded question outside the closed set still
-   goes to the model, with the facts appended as data and one instruction
-   (:func:`facts_block`, :func:`with_facts_block`).
+4. The fallback: a privacy-worded question outside the closed set gets a
+   fixed answer built from the same facts (:func:`privacy_summary`), never
+   a model's: measured 2026-11-25, the model given the facts still made up
+   wrong privacy claims.
 
 Replies never name a plugin or an outside service: they describe the
 feature. Every "how to get it" clause goes through
@@ -67,8 +68,8 @@ PLACE_PLUGINS = "the Plugins page"
 # downloads a library.
 PLACE_LIBRARY = "the Library page"
 
-# What the backstop tells the model to say when the facts don't cover it.
-NOT_SURE_LINE = "I'm not sure — Settings → Privacy shows exactly what's kept."
+# The last sentence of the privacy fallback (privacy_summary).
+PRIVACY_POINTER = "Settings → Privacy shows exactly what's kept and what goes online."
 CANT_CHECK = "I can't check that right now."
 
 # "Did you use the internet for that?" (D3, owner 2026-11-25).
@@ -1031,7 +1032,7 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
     return None
 
 
-# ─── The backstop: facts for the model ────────────────────────────────────
+# ─── The fallback: a fixed privacy answer, never a model's ────────────────
 
 _PRIVACY_WORDS_RE = re.compile(
     # About the assistant AND about privacy: "is it creepy that you listen",
@@ -1051,7 +1052,7 @@ _PRIVACY_WORDS_RE = re.compile(
 
 def wants_facts(transcript: str) -> bool:
     """A privacy-worded question outside the closed set ("is it creepy
-    that you listen?"): the facts go to the model with it."""
+    that you listen?"): it gets :func:`privacy_summary`, not the model."""
     return bool(_PRIVACY_WORDS_RE.search((transcript or "").lower()))
 
 
@@ -1059,59 +1060,32 @@ def _yes_no(v: bool | None, yes: str = "on", no: str = "off") -> str:
     return "unknown" if v is None else (yes if v else no)
 
 
-def facts_block(f: HouseFacts) -> str:
-    """The facts as data for the model, then its one instruction."""
-    device = {
-        SATELLITE: "a room's speaker", ROOM_PHONE: "a phone in room mode",
-        PHONE_CHAT: "the app's chat mic", WEB_CHAT: "a typed chat", OTHER: "unknown",
-    }[f.device]
-    keep = _keep_text(f.voice_keep)
-    internet = {"always": "yes", "sometimes": "sometimes (small things, when the connection is up)",
-                "never": "no, never", "": "not answered yet (used when it's there)"}
-    lines = [
-        "Facts about this house, read from its settings just now:",
-        f"- This turn comes from: {device}.",
-        "- Listening: each room listens only for the wake word, on the device; nothing is sent "
-        "until it hears it, then only to this house's own server.",
-        "- Speech is turned into text on this house's server; the voice never leaves the house.",
-    ]
-    if f.device in ROOM_DEVICES:
-        lines.append("- Command recordings in this room: " + (
-            "unknown" if f.recordings is None else
-            (f"kept for {f.recording_days or 14} days" if f.recordings else "none kept")) + ".")
-    lines += [
-        f"- Text of what's said, and the answers: kept {keep or 'unknown'}.",
-        f"- Internet: {internet.get(f.internet, 'unknown') if f.internet is not None else 'unknown'}.",
-        "- Chats on this server: every paired phone and browser in the house can read them.",
-        f"- Friend Houses: {_yes_no(f.friend_houses)}"
-        + (f", {f.friends} friend house(s); a friend's house sees only what is sent or shared "
-           "with it, and that this house is reachable" if f.friend_houses and f.friends else "") + ".",
-        f"- AI features: {_yes_no(f.ai_on)}.",
-    ]
-    if f.background is None:
-        lines.append("- Goes online on its own: unknown.")
-    else:
-        lines.append("- Goes online on its own: " + (", ".join(f.background) or "nothing") + ".")
-    lines.append(
-        "Answer only from these facts. If they don't cover the question, say: "
-        f'"{NOT_SURE_LINE}"'
-    )
-    return "\n".join(lines)
+def privacy_summary(f: HouseFacts) -> str:
+    """The fixed answer to a privacy-worded question the closed set didn't
+    take ("is it creepy that you listen?", "do you sell my data?"): what
+    leaves the house, what is kept, and where the rest is shown. Built
+    from the facts, never by a model: measured 2026-11-25 (eval_qa_guard,
+    30 seeds), llama3.2:3b given these facts as data still made up wrong
+    privacy claims ("your recordings are stored for 90 days" in a room
+    that keeps none), so no model answers a privacy question."""
+    parts = [_leaves_house(f), _keep_answer(f)]
+    if any(p == CANT_CHECK for p in parts):
+        return f"{CANT_CHECK} {PRIVACY_POINTER}"
+    return " ".join(parts + [PRIVACY_POINTER])
 
 
-async def with_facts_block(profile_prefix: str | None, transcript: str, ctx: Any) -> str | None:
-    """``profile_prefix`` with the facts block after it when ``transcript``
-    is privacy-worded; unchanged otherwise, and on any failure."""
+async def privacy_fallback(transcript: str, ctx: Any) -> str | None:
+    """:func:`privacy_summary` for a privacy-worded ``transcript``, else
+    None. Never fails: a facts read that breaks gives the can't-check line."""
     if not wants_facts(transcript):
-        return profile_prefix
+        return None
     try:
         f = await read(room_id=getattr(ctx, "room_id", None),
                        device_kind=getattr(ctx, "device_kind", None), app=getattr(ctx, "app", None))
-        block = facts_block(f)
-    except Exception as e:  # noqa: BLE001 — the question is still answered
-        log.warning("house facts: the facts block failed: %s", e)
-        return profile_prefix
-    return ((profile_prefix or "").strip() + "\n\n" + block).strip()
+    except Exception as e:  # noqa: BLE001 — still an honest answer
+        log.warning("house facts: the privacy fallback failed: %s", e)
+        return f"{CANT_CHECK} {PRIVACY_POINTER}"
+    return privacy_summary(f)
 
 
 # ─── Chat ─────────────────────────────────────────────────────────────────

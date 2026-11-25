@@ -1538,17 +1538,18 @@ async def _answer(
         system["content"] += "\n\n" + plan.rules
     if (refusal is None and plan is None and dturn is None and fixed_reply is None
             and house_facts.wants_facts(question)):
-        # A privacy-worded question the closed set didn't take: the house's
-        # facts go with it, as data, with the one instruction to answer
-        # only from them (domovoi/house_facts.py).
+        # A privacy-worded question the closed set didn't take: a fixed
+        # answer from the house's facts, no model (house_facts.privacy_summary;
+        # the model given the facts still made up privacy claims, 2026-11-25).
         try:
             facts = await house_facts.read(
                 chat=True, get_setting=house_facts.snapshot_setting(get_cached_snapshot()),
                 scope=session_scope,
             )
-            system["content"] += "\n\n" + house_facts.facts_block(facts)
-        except Exception as e:  # noqa: BLE001 — the question is still answered
-            log.warning("chat: house facts block failed: %s: %s", type(e).__name__, str(e)[:200])
+            fixed_reply = house_facts.privacy_summary(facts)
+        except Exception as e:  # noqa: BLE001 — still an honest answer
+            log.warning("chat: house facts read failed: %s: %s", type(e).__name__, str(e)[:200])
+            fixed_reply = f"{house_facts.CANT_CHECK} {house_facts.PRIVACY_POINTER}"
     # A chat with videos (chat_videos.py): a plain text turn is told what
     # was heard and what the frames might show, and answers from that.
     video_rules: str | None = None
