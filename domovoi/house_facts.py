@@ -953,8 +953,18 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
         if not f.news_on:
             return "No, the news briefing is off on this house. " + _how_to_turn_on(
                 "the news briefing", place=PLACE_ADVANCED)
-        when = ", when the connection is up" if f.internet == "sometimes" else ""
-        return f'Yes{when}. Say "{phrase}".'
+        # "Sometimes" changes no ask at the moment of asking (it only sets
+        # the online extras' defaults, config.PROFILE_DEFAULTS): the
+        # headlines are the ones the news worker fetched, and what does ask
+        # first, here as under "always", is reading a whole article online
+        # (unless "Always allow internet" is on, handlers/news.py).
+        out = f'Yes. Say "{phrase}".'
+        if f.internet == "sometimes":
+            out = (f'Yes. Say "{phrase}": I read the headlines from the last time the '
+                   "connection was up.")
+        if f.lookups_ask_first:
+            out += " I ask before reading a whole article online."
+        return out
     if cap.kind == "internet":
         if f.internet is None:
             return CANT_CHECK
@@ -964,11 +974,10 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return _ai_off_line("looking things up")
         if chat:
             ask = " I'll ask before each lookup leaves the house." if f.lookups_ask_first else ""
-            when = ", when the connection is up" if f.internet == "sometimes" else ""
-            return f'Yes{when}. Type "look up" and what you want to find.{ask}'
-        if f.internet == "sometimes":
-            return ("Yes, when the connection is up, and I ask before I go online. Ask me a "
-                    'question, then say "are you sure?" to have me check it.')
+            return f'Yes. Type "look up" and what you want to find.{ask}'
+        # A spoken lookup goes online only when asked ("are you sure?", or
+        # yes to "want me to check that online?"), under "sometimes" exactly
+        # as under "always": that answer only sets defaults.
         return 'Yes. Ask me a question, then say "are you sure?" to have me check it online.'
     if cap.kind == "chat":
         if f.ai_on is None:

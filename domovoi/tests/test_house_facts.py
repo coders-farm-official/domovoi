@@ -326,18 +326,23 @@ async def test_web_search_follows_the_internet_answer() -> None:
     assert await _cap("can you search the web") == (
         'Yes. Ask me a question, then say "are you sure?" to have me check it online.')
     assert await _cap("can you search the web", R(BASE, internet="sometimes")) == (
-        'Yes, when the connection is up, and I ask before I go online. Ask me a question, then say '
-        '"are you sure?" to have me check it.')
+        'Yes. Ask me a question, then say "are you sure?" to have me check it online.')
+    assert await _cap("can you search the web", R(BASE, internet="sometimes", device=hf.WEB_CHAT)) == (
+        'Yes. Type "look up" and what you want to find. I\'ll ask before each lookup leaves the house.')
     assert await _cap("can you search the web", R(BASE, internet="never")) == (
         f"No. This house is set to never use the internet. {INET_CHANGE}")
     assert await _cap("can you search the web", R(BASE, device=hf.WEB_CHAT)) == (
         'Yes. Type "look up" and what you want to find. I\'ll ask before each lookup leaves the house.')
     # §5.4-5.6
-    assert await _cap("can you check the news") == 'Yes. Say "what\'s the news".'
+    assert await _cap("can you check the news") == (
+        'Yes. Say "what\'s the news". I ask before reading a whole article online.')
     assert await _cap("can you check the news", R(BASE, internet="never")) == (
         f"No. This house is set to never use the internet. {INET_CHANGE}")
     assert await _cap("can you check the news", R(BASE, internet="sometimes")) == (
-        'Yes, when the connection is up. Say "what\'s the news".')
+        'Yes. Say "what\'s the news": I read the headlines from the last time the connection was '
+        "up. I ask before reading a whole article online.")
+    assert await _cap("can you check the news", R(BASE, lookups_ask_first=False)) == (
+        'Yes. Say "what\'s the news".')
     assert await _cap("can you check the news", R(BASE, news_on=False)) == (
         "No, the news briefing is off on this house. An admin can turn on the news briefing in "
         "Settings → System → Advanced.")
