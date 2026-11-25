@@ -16,11 +16,17 @@
 #   ABIS             which ABIs, space or comma separated
 #                    (default: arm64-v8a x86_64 armeabi-v7a x86)
 #   SHERPA_SRC       a sherpa-onnx checkout at SHERPA_COMMIT below
+#                    (default: the src/ submodule beside this script, when
+#                    it is checked out; see Submodules)
 #   SHERPA_DEP_EIGEN, SHERPA_DEP_JSON, SHERPA_DEP_KALDI_DECODER,
 #   SHERPA_DEP_KALDI_NATIVE_FBANK, SHERPA_DEP_KALDIFST, SHERPA_DEP_KISSFFT,
 #   SHERPA_DEP_OPENFST, SHERPA_DEP_SIMPLE_SENTENCEPIECE
 #                    checkouts of the libraries sherpa-onnx's CMake would
 #                    otherwise download, at the commits in DEPS below
+#                    (default: the deps/<name>/ submodule, when checked out)
+#   SHERPA_SUBMODULES  `no`: never use the submodules, clone what isn't
+#                    given (build-in-container.sh, whose mount of this
+#                    folder can't reach the submodules' git data)
 #   ORT_AAR          the onnxruntime-android AAR below (default: download)
 #   SHERPA_OUT       where jniLibs/<abi>/, kotlin/, LICENSE and licenses/ go
 #                    (default: this script's directory, which is where the
@@ -32,6 +38,15 @@
 # (until 1.5.0): a build that happened to have OUT set for something else
 # wrote the library there, and the APK went out without it. OUT and WORK
 # are ignored now, with a note when they are set.
+#
+# Submodules (1.5.0, for F-Droid): src/ (sherpa-onnx) and deps/<name>/
+# (each DEPS entry, by its FetchContent name) are git submodules of the
+# Domovoi repository at exactly these pins (domovoi/tests/
+# test_sherpa_submodules.py holds them together). A source the environment
+# doesn't give comes from its submodule when that is checked out
+# (`git submodule update --init android/native/sherpa-onnx`), which must
+# then be at its pinned commit with no local change, or the build stops.
+# A clone without the submodules (their folders empty) builds as before.
 #
 # Any source left unset is cloned here at its pinned commit. A given one
 # that is a git checkout must be at that commit. Each is copied into WORK at
@@ -158,6 +173,30 @@ clone() {  # repo ref dir commit
   git -C "$3" -c advice.detachedHead=false checkout -q FETCH_HEAD
   [ "$(git -C "$3" rev-parse HEAD)" = "$4" ] || die "$1 $2 is no longer commit $4"
 }
+# The submodule folder $1 for a source the environment didn't give: true
+# when it is checked out (a folder with something in it; git leaves a
+# submodule that wasn't initialised as an empty folder). Not with
+# SHERPA_SUBMODULES=no.
+submodule_ready() {  # dir
+  [ "${SHERPA_SUBMODULES:-}" != no ] || return 1
+  [ -d "$1" ] && [ -n "$(ls -A "$1" 2>/dev/null)" ]
+}
+# A checked-out submodule must be at its pin, unchanged; anything else stops
+# the build, saying how to put it right.
+check_submodule() {  # dir commit what
+  local head top fix="git submodule update --init -- ${1#"$repo_root"/}"
+  [ -e "$1/.git" ] || die "$3: $1 has files but is no git checkout, so its commit can't be checked: run $fix (or set SHERPA_SUBMODULES=no to clone it by its pin)"
+  need git
+  top=$(git -c safe.directory='*' -C "$1" rev-parse --show-toplevel 2>/dev/null) \
+    && head=$(git -c safe.directory='*' -C "$1" rev-parse HEAD 2>/dev/null) \
+    || die "$3: git can't read the submodule at $1 (its git data isn't reachable from here): run $fix, or set SHERPA_SUBMODULES=no"
+  [ "$(cd "$top" && pwd -P)" = "$1" ] || die "$3: $1 is not a checked-out submodule (git sees $top): run $fix"
+  [ "$head" = "$2" ] || die "$3: the submodule at $1 is at $head, not the pinned $2: run $fix"
+  [ -z "$(git -c safe.directory='*' -C "$1" status --porcelain --untracked-files=no 2>/dev/null)" ] \
+    || die "$3: the submodule at $1 has local changes (git -C $1 status): undo them, or run $fix"
+  echo "   $3: submodule $1 at $2"
+}
+repo_root=$(cd "$here/../../.." && pwd -P)
 # Copy a source tree without its .git.
 copy_tree() {  # from to
   rm -rf "$2"
@@ -170,6 +209,9 @@ if [ -n "${SHERPA_SRC:-}" ]; then
   SHERPA_SRC=$(cd "$SHERPA_SRC" && pwd -P)
   check_commit "$SHERPA_SRC" "$SHERPA_COMMIT" sherpa-onnx
   [ "$SHERPA_SRC" = "$WORK/sherpa" ] || copy_tree "$SHERPA_SRC" "$WORK/sherpa"
+elif submodule_ready "$here/src"; then
+  check_submodule "$here/src" "$SHERPA_COMMIT" sherpa-onnx
+  copy_tree "$here/src" "$WORK/sherpa"
 else
   clone "$SHERPA_REPO" "$SHERPA_COMMIT" "$WORK/sherpa" "$SHERPA_COMMIT"
   echo "   sherpa-onnx: cloned $SHERPA_TAG ($SHERPA_COMMIT)"
@@ -183,6 +225,9 @@ for d in "${DEPS[@]}"; do
   if [ -n "$src" ]; then
     src=$(cd "$src" && pwd -P)
     check_commit "$src" "$commit" "$name"
+  elif submodule_ready "$here/deps/$name"; then
+    src=$here/deps/$name
+    check_submodule "$src" "$commit" "$name"
   else
     src=$WORK/src/$name
     clone "$repo" "$ref" "$src" "$commit"
