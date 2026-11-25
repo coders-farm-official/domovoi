@@ -10,7 +10,7 @@ public struct Args {
     var used: Set<String> = []
 
     public static let flagNames: Set<String> = ["user-mode", "system", "repair", "remove-everything", "keep-data", "no-vision-model", "plan", "help", "json", "parse-only",
-                                                "linux-only", "linux-first", "both", "sync"]
+                                                "linux-only", "linux-first", "both", "sync", "no-kit"]
 
     public init(_ argv: [String]) throws {
         var i = 0

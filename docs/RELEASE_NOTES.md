@@ -984,6 +984,39 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   reserved plugin slug. INTERNET.md, and PLUGIN_DEVELOPMENT.md,
   "Publishing so updates are found".
 
+## 1.5.0 (unreleased) — Install Domovoi on a Mac with no internet, from an offline kit
+
+- **What changed.** `DomovoiSetup-mac.pkg` installs from an offline kit
+  made with "A Mac with an Apple chip" ticked: open
+  `release/DomovoiSetup-mac.pkg` on the stick, and the setup app's check
+  page says "Installing from the offline kit on DOMOVOIKIT, Domovoi
+  1.5.0: nothing is downloaded". It finds any `/Volumes/<name>/kit.json`
+  (`DomovoiHelper install --kit DIR` for a kit elsewhere, `--no-kit` for
+  none). Before it uses anything from the stick it checks the stick's
+  checksums, that nothing on it is a link or missing from `kit.json`, the
+  release signature on the kit's Mac manifest (the key the package already
+  pins for updates), that the kit is the package's own release (never an
+  older one), and the parts. Ubuntu's arm64 image, Ollama for macOS and the
+  speech model come off the stick against `pins.conf`; the AI models go
+  into the Mac's own Ollama folder, each manifest held to its pinned digest
+  and each blob to its name, split files joined and checked. Lima shares
+  the stick read-only with the virtual machine at `/mnt/domovoi-kit` for
+  `provision.sh --offline-kit`, and takes it out again once provisioning
+  ends (one extra restart of the virtual machine).
+- **What to know.** Keep the stick plugged in until Setup finishes. An
+  install from a kit runs Domovoi's own Ollama, not one already on the
+  Mac. A Mac kit made without AI chat is refused: it has no Ollama for
+  macOS, which every Mac install needs. Nothing on the Mac reaches the
+  internet in kit mode: no download, no internet check, no wait for the
+  virtual machine's internet. **Repair** uses a plugged-in kit of the
+  release the Mac runs, and goes on without one of another release, saying
+  why. OFFLINE_KIT.md, "Installing on a Mac".
+- **For packagers:** the package now carries
+  `share/provision-manifest.conf` (the model pins); `provision.sh
+  --offline-kit` accepts `--ollama-url` and `--vm-guard` (a Mac's virtual
+  machine): it needs no Ollama for Linux on the kit then, and finds the
+  models in the Mac's Ollama instead of copying them.
+
 ## 1.5.0 (unreleased) — Update a house with no internet from a newer offline kit
 
 - **What changed.** Settings → System → About & updates → **Update from an

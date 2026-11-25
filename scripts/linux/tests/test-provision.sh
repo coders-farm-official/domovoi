@@ -339,8 +339,10 @@ build_kit_models() {
   done
 }
 
-# make_kit DIR [noai] [novision] [tamper-model] [no-wake]: a kit of the
-# fixture origin's FIXTURE_A, written by the real write_kit.
+# make_kit DIR [noai] [novision] [tamper-model] [no-wake] [mac]: a kit of the
+# fixture origin's FIXTURE_A, written by the real write_kit. mac: a kit for a
+# Mac only (mac-arm64: arm64 packages, aarch64 wheels, the Mac's parts in
+# mac/, no Ollama for Linux).
 KIT_COMMIT=""
 make_kit() {
   local dir=$1 opts=" ${*:2} " src=$WORK/kit-src
@@ -366,27 +368,28 @@ repo, out, work, commit, opts, ollama, whisper, piper, speaker, manifest = sys.a
 sys.path.insert(0, repo)
 from domovoi.offline_kit import Component, Source, write_kit
 work = Path(work)
+mac = " mac " in opts
+arch, plat = ("arm64", "cp314-aarch64") if mac else ("amd64", "cp314-x86_64")
 pins = dict(l.split("=", 1) for l in open(manifest, encoding="utf-8").read().splitlines() if "=" in l and not l.startswith("#"))
 c = [
     Component("source", "domovoi", "9.9.9", "MIT", [Source("source/domovoi.bundle", work / "kit.bundle")]),
     Component("apt", "ubuntu", "snapshot", "LicenseRef-distro-archive", [
-        Source("apt/amd64/ubuntu/dists/resolute/InRelease", b"fixture InRelease\n"),
-        Source("apt/amd64/ubuntu/dists/resolute/main/binary-amd64/Packages", b"Package: fixture\n"),
-        Source("apt/amd64/ubuntu/pool/main/f/fixture/fixture_1_amd64.deb", b"deb")]),
+        Source(f"apt/{arch}/ubuntu/dists/resolute/InRelease", b"fixture InRelease\n"),
+        Source(f"apt/{arch}/ubuntu/dists/resolute/main/binary-{arch}/Packages", b"Package: fixture\n"),
+        Source(f"apt/{arch}/ubuntu/pool/main/f/fixture/fixture_1_{arch}.deb", b"deb")]),
     Component("apt", "docker", "snapshot", "LicenseRef-distro-archive", [
-        Source("apt/amd64/docker/gpg", b"KEY 9DC858229FC7DD38854AE2D88D81803C0EBFCD88\n"),
-        Source("apt/amd64/docker/dists/resolute/InRelease", b"fixture InRelease\n"),
-        Source("apt/amd64/docker/dists/resolute/stable/binary-amd64/Packages", b"Package: docker-ce\n")]),
-    Component("python-wheels", "cp314-x86_64", "lock", "LicenseRef-mixed-see-sbom", [
-        Source("python/cp314-x86_64/fixture-1.0-py3-none-any.whl", b"wheel"),
-        Source("python/cp314-x86_64/fastapi-1.0-py3-none-any.whl", b"wheel")]),
+        Source(f"apt/{arch}/docker/gpg", b"KEY 9DC858229FC7DD38854AE2D88D81803C0EBFCD88\n"),
+        Source(f"apt/{arch}/docker/dists/resolute/InRelease", b"fixture InRelease\n"),
+        Source(f"apt/{arch}/docker/dists/resolute/stable/binary-{arch}/Packages", b"Package: docker-ce\n")]),
+    Component("python-wheels", plat, "lock", "LicenseRef-mixed-see-sbom", [
+        Source(f"python/{plat}/fixture-1.0-py3-none-any.whl", b"wheel"),
+        Source(f"python/{plat}/fastapi-1.0-py3-none-any.whl", b"wheel")]),
     Component("container-image", "postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d", "x", "PostgreSQL",
               [Source("images/postgres.tar", b"postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d\n")]),
     Component("container-image", "flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949", "x", "Apache-2.0",
               [Source("images/flyway.tar", b"flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949\n")]),
     Component("container-image", "domovoi-mpd:latest", "x", "LicenseRef-distro-archive",
               [Source("images/domovoi-mpd_latest.tar", b"domovoi-mpd:latest\n")]),
-    Component("ollama-runtime", "ollama", "0.34.4", "MIT", [Source("ollama/ollama-linux-amd64.tar.zst", ollama.encode())]),
     Component("whisper-model", "small.en", "x", "MIT", [
         Source("speech/whisper-small.en/model.bin", whisper.encode()),
         Source("speech/whisper-small.en/config.json", b"{}")]),
@@ -395,6 +398,10 @@ c = [
         Source("phone/domovoi-1.2.0-arm64-v8a.apk", b"arm64\n"),
         Source("phone/domovoi-1.2.0-armeabi-v7a.apk", b"v7a\n")]),
 ]
+if mac:
+    c.append(Component("mac-part", "Ollama for macOS", "0.34.4", "MIT", [Source("mac/ollama-darwin.tgz", b"ollama for macOS")]))
+else:
+    c.append(Component("ollama-runtime", "ollama", "0.34.4", "MIT", [Source("ollama/ollama-linux-amd64.tar.zst", ollama.encode())]))
 if " no-wake " not in opts:
     c.append(Component("wake-word", "domovoi_v1", "x", "CC-BY-NC-SA-4.0", [Source("wake/domovoi_v1.onnx", b"wake word")]))
 for v in ("en_US-norman-medium", "en_US-kristin-medium", "en_US-ljspeech-medium"):
@@ -425,7 +432,8 @@ if " noai " not in opts:
                 files.append(Source("ollama/models/blobs/sha256-" + d, models / "blobs" / ("sha256-" + d)))
             lic = "LicenseRef-Llama-3.2-Community" if tag.startswith("llama") else "Apache-2.0"
             c.append(Component("ollama-model", tag, "x", lic, files))
-write_kit(out, version="9.9.9", commit=commit, components=c, includes=includes, created_at="2026-11-22T10:15:00Z")
+write_kit(out, version="9.9.9", commit=commit, components=c, includes=includes, created_at="2026-11-22T10:15:00Z",
+          targets=["mac-arm64"] if mac else ["pc-x86_64"])
 PY
 }
 
@@ -6116,6 +6124,53 @@ case_kit_needs_dockers_containerd_store() {
   end_case
 }
 
+# A Mac's VM (mac-installer P4): aarch64, the Mac's Ollama at --ollama-url
+# (into which the Mac's setup has copied the kit's models, at their pinned
+# digests), the VM guard. Nothing of Ollama's is installed here, nothing is
+# pulled, and nothing reaches beyond the box but the Mac's Ollama.
+mac_ollama_has_the_floor_models() {
+  local role conf=$ORIGIN/scripts/linux/provision-manifest.conf
+  : >"$STATE/ollama-models"
+  for role in qa tool vision; do
+    printf '%s %s\n' "$(sed -n "s/^tier_floor_${role}_model=//p" "$conf")" "$(sed -n "s/^tier_floor_${role}_digest=//p" "$conf")" >>"$STATE/ollama-models"
+  done
+}
+case_kit_mac_vm_uses_the_macs_ollama() {
+  kit_case kit_mac_vm_uses_the_macs_ollama mac || return 0
+  echo aarch64 >"$STATE/arch"
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  mac_ollama_has_the_floor_models
+  run_prov --offline-kit "$KIT" --internet never --tier floor --timezone Etc/UTC --ollama-url "$LIMA_URL" \
+    --vm-guard 192.168.5.0/24 --vm-guard-dns 192.168.5.3
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "said it installs from the kit" said "offline kit: Domovoi 9.9.9"
+  check "for a Mac" said "for mac-arm64"
+  check "no curl beyond the box but the Mac's Ollama" bash -c "! grep -E '^curl https?://' '$STATE/calls.log' | grep -vE '^curl (http://127\.0\.0\.1|$LIMA_URL/)'"
+  check "no pull" not_called "/api/pull"
+  check "ollama skipped" eq "$(state_of ollama)" skip
+  check "no Ollama of its own" absent "$ROOT/etc/systemd/system/ollama.service"
+  check "nothing copied into a local Ollama" absent "$ROOT/home/ollama/.ollama/models/manifests"
+  check "the models found at their pins" said "is present (digest"
+  check "the aarch64 wheels" called "python/cp314-aarch64"
+  check "HEAD is the kit's commit" eq "$(final_field head)" "\"$FIXTURE_A\""
+  end_case
+}
+
+case_kit_mac_vm_model_not_in_the_macs_ollama_stops() {
+  kit_case kit_mac_vm_model_not_in_the_macs_ollama_stops mac || return 0
+  echo aarch64 >"$STATE/arch"
+  external_ollama "$LIMA_URL" 192.168.5.2 host.lima.internal
+  : >"$STATE/ollama-models"
+  run_prov --offline-kit "$KIT" --internet never --tier floor --ollama-url "$LIMA_URL" --vm-guard 192.168.5.0/24 --vm-guard-dns 192.168.5.3
+  check "stopped" eq "$RC" 1
+  check "at the models" eq "$(final_field failed_step)" '"models"'
+  check "says the Mac's setup copies them" said "the Mac's setup copies the kit's models into its Ollama before this runs"
+  check "no pull" not_called "/api/pull"
+  end_case
+}
+
 case_kit_without_the_wake_word_warns() {
   kit_case kit_without_the_wake_word_warns no-wake || return 0
   run_prov --offline-kit "$KIT" --internet never --no-ai-models
@@ -6329,6 +6384,8 @@ CASES=(
   case_kit_download_path_stops_loudly
   case_kit_without_the_wake_word_warns
   case_kit_needs_dockers_containerd_store
+  case_kit_mac_vm_uses_the_macs_ollama
+  case_kit_mac_vm_model_not_in_the_macs_ollama_stops
 )
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite

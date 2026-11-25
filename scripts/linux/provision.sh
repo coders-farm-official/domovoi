@@ -1252,9 +1252,14 @@ fstab_source() {
 #   venv         pip install --no-index --find-links (the kit's wheels for
 #                this machine), still --require-hashes from the lock
 #   ollama       the kit's tarball, checked against the LINUX_HOST.md pin
+#                (with --ollama-url, a Mac's VM: none, Ollama runs on the Mac)
 #   models       each manifest checked against the pinned digest before
 #                anything is copied, each blob against its own name; then
-#                Ollama must list the model at the pinned digest
+#                Ollama must list the model at the pinned digest. With
+#                --ollama-url (a Mac's VM, mac-installer P4) the Mac's setup
+#                has already copied the kit's models into its own Ollama,
+#                checked the same way; here each must be listed there at
+#                its pinned digest, and nothing is copied or pulled
 #   whisper      the kit's snapshot, model.bin checked against its pin
 #   piper        the voices (PIPER_PINS: .onnx SHA-256 and size, .onnx.json
 #                git blob and size), voice ID's model (MODEL_SHA256), and
@@ -1560,9 +1565,6 @@ kit_check() {
       refuse 1 failed "This computer already runs Domovoi (commit ${t:0:12}); the kit is Domovoi $KIT_VERSION (commit ${KIT_COMMIT:0:12}). A kit sets up a new install; to update from a newer kit, use Settings > About & updates on the dashboard."
     fi
   fi
-  if [ -n "$VM_GUARD_NET" ] || [ "$OLLAMA_EXTERNAL" = 1 ]; then
-    refuse 1 failed "--offline-kit with --ollama-url or --vm-guard (a Mac's VM) is not supported yet: the offline kit installs on a PC with Ubuntu 26.04"
-  fi
   # The parts every install needs.
   kit_has source/domovoi.bundle || missing+=("Domovoi's source (source/domovoi.bundle)")
   t=$(deb_arch)
@@ -1570,7 +1572,8 @@ kit_check() {
   [ -n "$(kit_py list "apt/$t/docker/dists/")" ] && kit_has "apt/$t/docker/gpg" || missing+=("Docker's packages and key (apt/$t/docker, with gpg)")
   [ -n "$(kit_py list "python/cp314-$MACHINE_ARCH/")" ] || missing+=("the Python packages for $MACHINE_ARCH (python/cp314-$MACHINE_ARCH)")
   [ -n "$(kit_py names container-image)" ] || missing+=("the database images (images/)")
-  [ -n "$(kit_py names ollama-runtime)" ] || missing+=("Ollama (ollama/)")
+  # A Mac's VM (--ollama-url): Ollama runs on the Mac, from the kit's mac/.
+  [ "$OLLAMA_EXTERNAL" = 1 ] || [ -n "$(kit_py names ollama-runtime)" ] || missing+=("Ollama (ollama/)")
   if [ "$SKIP_MODELS" = 0 ]; then
     [ -n "$(kit_py names whisper-model)" ] || missing+=("the speech recognition model (speech/whisper-...)")
   fi
@@ -4936,7 +4939,18 @@ do_models() {
     else
       [ -z "$got" ] || warn "$tag is present with digest ${got:0:12}, not the pinned ${want:0:12}: $(kit && echo "copying it from the offline kit" || echo "pulling it again")"
       if kit; then
-        if ! kit_install_model "$tag" "$want" "$i" "$n"; then
+        local copied=1
+        if [ "$OLLAMA_EXTERNAL" = 1 ]; then
+          # A Mac's VM: the Mac's setup copies the kit's models into its own
+          # Ollama before this runs. One on the kit and not there is a fault.
+          if kit_has "$(kit_model_manifest "$tag")"; then
+            die "$tag is on the offline kit but not in the Ollama at $OLLAMA_API at the pinned build (${want:0:12}): the Mac's setup copies the kit's models into its Ollama before this runs. Run Setup again (Repair) with the stick plugged in."
+          fi
+          copied=0
+        elif ! kit_install_model "$tag" "$want" "$i" "$n"; then
+          copied=0
+        fi
+        if [ "$copied" = 0 ]; then
           # Not on the kit. Only the vision model may be missing (pictures
           # in chat unticked): the install goes on without it, as online
           # when the registry serves another build.

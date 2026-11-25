@@ -93,6 +93,9 @@ final class SetupModel: ObservableObject {
                 self.report = rep
                 if rep.installState == "installed" { self.page = .installed; self.startMenuBarIcon(); return }
                 self.page = .check
+                // From a kit Domovoi runs its own Ollama (the models come off
+                // the stick into it), so the household's is never used then.
+                if rep.kit?.ok == true { self.ollama = "own" }
                 self.conflictQueue = rep.conflicts.filter { !(self.ollama == "existing" && $0.ollamaVersion != nil) }
                 self.nextConflict()
             }
@@ -121,6 +124,12 @@ final class SetupModel: ObservableObject {
     }
 
     var canContinue: Bool { report?.ok == true }
+
+    /// The offline kit this install or repair uses (the check found it and
+    /// it can be used), or nil: an install with internet. A kit that can't
+    /// be used stops a first install at the check page (its row is red); a
+    /// repair goes on without it, and the installed page says why.
+    var kit: KitReport? { report?.kit?.ok == true ? report?.kit : nil }
 
     /// The consent page's power-failure option: behind its feature gate, and
     /// never on a laptop (Preflight: a built-in battery counts as one).
@@ -154,7 +163,8 @@ final class SetupModel: ObservableObject {
                 try JSONEncoder().encode(answers).write(to: f)
                 answersFile = f.path
             }
-            let args = SetupCommands.install(forUID: getuid(), codeTo: dir.appendingPathComponent("code").path, answersFile: answersFile)
+            let args = SetupCommands.install(forUID: getuid(), codeTo: dir.appendingPathComponent("code").path, answersFile: answersFile,
+                                             kit: kit?.root)
             steps = InstallSteps.rows(speech: packageHasSpeechService).map { StepRow(id: $0.id, label: $0.label, state: "waiting") }
             detail = "Waiting for an administrator's password..."
             page = .working

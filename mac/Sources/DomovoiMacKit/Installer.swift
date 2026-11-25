@@ -46,6 +46,17 @@ public struct InstallOptions {
     /// bytes, read once by the helper. Not part of the answers (never in
     /// the install record).
     public var restoreIdentity: Data? = nil
+    /// How the helper was asked about an offline kit (--kit DIR, --no-kit,
+    /// or neither: it looks in /Volumes). The system install resolves it
+    /// into `kit` before the run (KitSetup.resolve).
+    public var kitRequest: KitSetup.Request = .off
+    /// The offline kit this run installs from (OfflineKit.swift), checked:
+    /// the Mac's pinned files and the AI models come from it, Lima shares it
+    /// into the VM read-only, provision.sh runs --offline-kit, and nothing
+    /// reaches the internet. Nil: an install with internet.
+    public var kit: KitSource? = nil
+    /// `install --repair`: the saved answers (the words of a kit refusal).
+    public var isRepair = false
 
     public init(layout: Layout, ports: Ports, ollama: OllamaChoice, internet: String, tier: Tier, size: VMSize,
                 mediaRoot: String, mediaNames: [String], timezone: String?, share: URL, provision: ProvisionSource?,
@@ -78,6 +89,9 @@ public struct InstallOptions {
         guard ["always", "sometimes", "never"].contains(internet) else { throw HelperError("--internet is always, sometimes or never") }
         try ports.check(for: layout.mode, ownOllama: ollama == .own)
         if case .existing(let p) = ollama, p == ports.web || p == ports.core { throw HelperError("the Ollama port can't be the web or core port") }
+        if kit != nil, case .existing = ollama {
+            throw HelperError("An install from an offline kit runs Domovoi's own Ollama, with the AI models from the stick: quit the Ollama on this Mac, then run Setup again")
+        }
         if case .own = ollama, layout.mode == .user, Ports.reserved.contains(ports.ollama) {
             throw HelperError("the user mode can't run its Ollama on \(ports.ollama)")
         }
@@ -370,7 +384,7 @@ public final class Installer {
            let r = try? runner.run(lima.command(["--version"], timeout: 30)), r.ok, r.stdout.contains(pins.limaVersion) {
             return "limactl \(pins.limaVersion) already in place"
         }
-        let dl = Downloader(runner: runner, cache: layout.cache, seeds: options.seedCache, log: progress.log)
+        let dl = downloader(layout.cache)
         let tgz = try cacheFile(pins.lima, dl)
         // Only limactl and the arm64 guest agent are needed (Phase 0 S0).
         let tmp = layout.bin.appendingPathComponent(".lima-unpack")
@@ -388,6 +402,12 @@ public final class Installer {
         let v = try runner.check(lima.command(["--version"], timeout: 30), "limactl --version")
         guard v.stdout.contains(pins.limaVersion) else { throw HelperError("limactl says \(v.stdout.trimmingCharacters(in: .whitespacesAndNewlines)), not \(pins.limaVersion)") }
         return "limactl \(pins.limaVersion)"
+    }
+
+    /// Pinned files into `cache`: from the package's seed folder, else the
+    /// offline kit (kit mode: never the internet), else downloaded.
+    func downloader(_ cache: URL) -> Downloader {
+        Downloader(runner: runner, cache: cache, seeds: options.seedCache, kit: options.kit, log: progress.log)
     }
 
     func cacheFile(_ pin: Pin, _ dl: Downloader) throws -> URL {
@@ -422,7 +442,7 @@ public final class Installer {
                 throw HelperError("something already answers on 127.0.0.1:\(port) (\(before.program ?? "unknown program")): close it, or choose --ollama existing:\(port)")
             }
             if !FileManager.default.isExecutableFile(atPath: bin.path) {
-                let dl = Downloader(runner: runner, cache: layout.cache, seeds: options.seedCache, log: progress.log)
+                let dl = downloader(layout.cache)
                 let tgz = try cacheFile(pins.ollama, dl)
                 try makeDir(layout.ollamaRoot, keep: .program, step: "ollama")
                 try record(.init(kind: .tree, path: dir.path, keep: .program, step: "ollama"))
@@ -438,7 +458,11 @@ public final class Installer {
                 try record(.init(kind: .tree, path: layout.ollamaModels.path, keep: .models, step: "ollama"))
                 try FileManager.default.createDirectory(at: layout.ollamaModels, withIntermediateDirectories: false)
             }
-            try seedModelsIfEmpty()
+            if let kit = options.kit {
+                try copyKitModels(kit)
+            } else {
+                try seedModelsIfEmpty()
+            }
             try giveToRole(layout.ollamaModels, mode: 0o755, tree: true)
             excludeFromBackup(layout.ollamaModels)
             let logFile = layout.logs.appendingPathComponent("ollama.log")
@@ -510,7 +534,7 @@ public final class Installer {
             try FileManager.default.createDirectory(at: layout.sttModels, withIntermediateDirectories: false)
         }
         // Into its own folder (not the cache): the job reads it from there.
-        let dl = Downloader(runner: runner, cache: layout.sttModels, seeds: options.seedCache, log: progress.log)
+        let dl = downloader(layout.sttModels)
         let model = try dl.ensure(sp.model).url
         // Older model files (a pin bump) go once the new one is in place.
         let present = (try? FileManager.default.contentsOfDirectory(atPath: layout.sttModels.path)) ?? []
@@ -544,6 +568,20 @@ public final class Installer {
         return "the speech service isn't answering yet (see \(logFile.path)): the virtual machine recognises speech itself until it does"
     }
 
+    /// The offline kit's AI models (the tier's, as provision-manifest.conf
+    /// pins them) into Domovoi's own Ollama folder on the Mac, each checked
+    /// (KitModels). provision.sh then finds them in this Ollama at their
+    /// pinned digests and pulls nothing.
+    func copyKitModels(_ kit: KitSource) throws {
+        guard !kit.models.isEmpty else {
+            progress.log("the offline kit has no AI models: none copied")
+            return
+        }
+        progress.event(step: "ollama", state: "progress", message: "Copying the AI models from the offline kit")
+        let done = try KitModels.install(kit.models, from: kit, into: layout.ollamaModels, log: progress.log)
+        progress.log("AI models from the offline kit: \(done.joined(separator: ", "))")
+    }
+
     func seedModelsIfEmpty() throws {
         guard let seed = options.seedModels else { return }
         let fm = FileManager.default
@@ -556,12 +594,13 @@ public final class Installer {
 
     func stepVMConfig() throws -> String {
         let pins = try pins()
-        let dl = Downloader(runner: runner, cache: layout.cache, seeds: options.seedCache, log: progress.log)
+        let dl = downloader(layout.cache)
         let image = try cacheFile(pins.ubuntuImage, dl)
         // limactl reads it as the VM's account.
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: image.path)
         let yaml = try LimaTemplate.render(template: template("vm/domovoi.yaml"), size: options.size, imagePath: image.path,
-                                           imageSHA256: pins.ubuntuImage.sha256, mounts: options.media, ports: options.ports)
+                                           imageSHA256: pins.ubuntuImage.sha256, mounts: options.media, ports: options.ports,
+                                           kitMount: options.kit?.root.path)
         if !store.record.has(.file, path: layout.renderedVMConfig.path) {
             try record(.init(kind: .file, path: layout.renderedVMConfig.path, keep: .data, step: "vm-config"))
         }
@@ -580,8 +619,46 @@ public final class Installer {
     func stepVMCreate() throws -> String {
         if let s = try lima.status(Names.instance) { return "instance \(Names.instance) exists (\(s))" }
         try record(.init(kind: .limaInstance, label: Names.instance, keep: .data, step: "vm-create"))
+        // Before the create: if it stops half-way, the next run still
+        // knows the settings may share the kit in.
+        try store.update { $0.kitMount = options.kit?.root.path }
         try lima.create(Names.instance, from: layout.renderedVMConfig)
-        return "instance \(Names.instance) created"
+        return "instance \(Names.instance) created\(options.kit != nil ? ", sharing the offline kit in read-only at \(KitNames.guestMount)" : "")"
+    }
+
+    /// The VM's job file (its host agent, as the role account).
+    func vmPlist() throws -> LaunchdPlist {
+        try LaunchdPlist.render(template: template("launchd/\(Labels.vm).plist"), values: [
+            "LABEL": Labels.vm, "LIMACTL": layout.limactl.path, "INSTANCE": Names.instance,
+            "LIMA_HOME": layout.limaHome.path, "JOB_HOME": layout.jobHome.path, "LOG_FILE": layout.logs.appendingPathComponent("vm.log").path,
+        ], role: options.role)
+    }
+
+    /// Makes the VM's settings share `want` in as the offline kit (nil: no
+    /// kit). Only when they differ from what the record says they share:
+    /// then the VM is stopped (its job booted out first, or launchd would
+    /// start it again) and `limactl edit` changes the mount, which takes
+    /// effect at the next start. Returns whether it changed anything.
+    @discardableResult
+    func syncKitMount(_ want: String?) throws -> Bool {
+        guard store.record.kitMount != want, try lima.status(Names.instance) != nil else { return false }
+        progress.log(want.map { "sharing the offline kit at \($0) into the VM (read-only, at \(KitNames.guestMount)): the VM stops for it" }
+                     ?? "taking the offline kit out of the VM's settings: the VM stops for it")
+        if try launchd.state(Labels.vm) != nil { try launchd.bootout(Labels.vm, wait: 120) }
+        if try lima.status(Names.instance) == "Running" { try lima.stop(Names.instance) }
+        try lima.setKitMount(Names.instance, location: want)
+        try store.update { $0.kitMount = want }
+        return true
+    }
+
+    /// After provisioning from a kit (done or not): the kit comes out of the
+    /// VM's settings and the VM starts again without it, so it starts at the
+    /// next boot with the stick gone. The one extra restart of a kit install.
+    func releaseKit() throws {
+        guard store.record.kitMount != nil else { return }
+        try syncKitMount(nil)
+        try launchd.install(try vmPlist(), at: layout.plist(Labels.vm))
+        progress.log("the offline kit is out of the VM: \(try waitVM())")
     }
 
     func stepVMStart() throws -> String {
@@ -589,10 +666,10 @@ public final class Installer {
         if !store.record.has(.file, path: logFile.path) && !FileManager.default.fileExists(atPath: logFile.path) {
             try record(.init(kind: .file, path: logFile.path, keep: .logs, step: "vm-start"))
         }
-        let plist = try LaunchdPlist.render(template: template("launchd/\(Labels.vm).plist"), values: [
-            "LABEL": Labels.vm, "LIMACTL": layout.limactl.path, "INSTANCE": Names.instance,
-            "LIMA_HOME": layout.limaHome.path, "JOB_HOME": layout.jobHome.path, "LOG_FILE": logFile.path,
-        ], role: options.role)
+        // An existing VM (a repair) gets the kit's mount now; one an earlier
+        // run left with a kit's mount loses it.
+        try syncKitMount(options.kit?.root.path)
+        let plist = try vmPlist()
         try record(.init(kind: .launchdJob, path: layout.plist(Labels.vm).path, label: Labels.vm, domain: launchd.domain, keep: .program, step: "vm-start"))
         let jobRunning = try launchd.state(Labels.vm)?.running == true
         let vmRunning = try lima.status(Names.instance) == "Running"
@@ -681,6 +758,20 @@ public final class Installer {
 
     public var egressWait: Double = 300
 
+    // What reaches the internet from a Mac install, and what kit mode does
+    // about each (a real offline install makes no request):
+    //   - Downloader (Lima, Ollama, the Ubuntu image, the speech model):
+    //     the package's seed folder, then the kit's mac/ folder; never curl.
+    //   - waitEgress (the VM's curl to the image's host): skipped.
+    //   - provision.sh: --offline-kit, whose own guard refuses any URL but
+    //     this machine's and the Mac's Ollama.
+    //   - The setup pages' "Internet now" check (Preflight): replaced by the
+    //     kit's check when a kit is plugged in.
+    //   - The models: copied from the kit into the Mac's Ollama, so
+    //     provision.sh pulls nothing.
+    // Everything else the install asks is on this Mac (Ollama's and the
+    // speech service's loopback ports, the VM over limactl shell).
+
     /// provision.sh downloads from the start (apt first). Right after its
     /// first boot the guest's vzNAT route already answers DNS (Lima's own
     /// resolver) but TCP out of it timed out for a few minutes: apt failed
@@ -713,13 +804,37 @@ public final class Installer {
             return "skipped (no --provision-script)"
         }
         guard let ollamaURL = store.record.ollamaURL else { throw HelperError("the Ollama step didn't run") }
+        do {
+            let note = try provision(src, ollamaURL: ollamaURL)
+            try releaseKit()
+            return note
+        } catch {
+            // The VM must start without the stick, whatever happened.
+            if store.record.kitMount != nil {
+                do { try releaseKit() } catch let e { progress.log("note: taking the offline kit out of the VM failed (\(e)): the next run takes it out") }
+            }
+            throw error
+        }
+    }
+
+    func provision(_ src: ProvisionSource, ollamaURL: String) throws -> String {
         // 0755: provision.sh clones the bundle as its service user, which
         // must be able to reach it (nothing here is secret: the script, the
         // repository, the public allowed_signers). 0700 made git say the
         // bundle "does not exist" (2026-10-30).
         let mk = try lima.shell(Names.instance, ["sudo", "install", "-d", "-o", "root", "-g", "root", "-m", "0755", ProvisionSource.guestDir])
         guard mk.ok else { throw HelperError("can't make \(ProvisionSource.guestDir) in the VM: \(mk.tail)") }
-        try waitEgress()
+        if let kit = options.kit {
+            progress.log("offline kit: no internet check in the VM (nothing is downloaded); provision.sh reads the kit at \(KitNames.guestMount)")
+            // The mount is there and is this kit (a stick swapped or taken
+            // out since the check would be read here).
+            let r = try lima.shell(Names.instance, ["sudo", "test", "-f", KitNames.guestMount + "/" + KitNames.kitJSON])
+            guard r.ok else {
+                throw HelperError("The VM can't see the offline kit at \(KitNames.guestMount) (is the stick on \(kit.report.place) still plugged in?). Plug it in and run Setup again.")
+            }
+        } else {
+            try waitEgress()
+        }
         try guestInstall(src.script, ProvisionSource.guestScript)
         if let b = src.repoBundle { try guestInstall(b, ProvisionSource.guestBundle) }
         if let s = src.allowedSigners { try guestInstall(s, ProvisionSource.guestSigners) }
@@ -735,7 +850,8 @@ public final class Installer {
             if restore != nil { _ = try? lima.shell(Names.instance, ["sudo", "rm", "-f", IdentityBackup.guestFile]) }
         }
         let args = ProvisionArgs.build(source: src, answers: options.answers, ollamaURL: ollamaURL,
-                                       sttURL: store.record.sttURL, sttModel: store.record.sttModel, restoreIdentity: restore)
+                                       sttURL: store.record.sttURL, sttModel: store.record.sttModel, restoreIdentity: restore,
+                                       offlineKit: options.kit == nil ? nil : KitNames.guestMount, noAIModels: options.kit?.ai == false)
         let logFile = layout.logs.appendingPathComponent("provision.log")
         if !store.record.has(.file, path: logFile.path) {
             try record(.init(kind: .file, path: logFile.path, keep: .logs, step: "provision"))
@@ -764,6 +880,9 @@ public final class Installer {
         guard let f = final else { throw HelperError("provision.sh ended without its final line (exit \(r.status)); see \(logFile.path)") }
         guard f.result == "ok", r.ok else {
             throw HelperError("provision.sh: \(f.result ?? "?") at \(f.failedStep ?? "?"): \(f.message ?? ""); see \(logFile.path)")
+        }
+        if let k = options.kit {
+            try store.update { $0.installedFromKit = "\(k.report.version ?? "?") \(k.report.tag ?? "?") \(k.report.commit ?? "?")" }
         }
         // Never fatal (provision.sh's phone-app step): the install goes on,
         // and Setup's last page says so (SetupModel.handle).
