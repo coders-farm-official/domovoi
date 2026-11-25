@@ -92,9 +92,10 @@ import kotlinx.coroutines.launch
  *
  * Reached only while the server says it is on (the shell's gate,
  * friendhouses/FhGate). The phone holds the household token, so the
- * dashboard's admin zone ("Friends and connections"), a conversation's
- * "Save a copy" and "Delete", and starting a share are not here at all
- * ([FhWords]): no control the server would refuse.
+ * dashboard's admin zone is a third tab only while this phone also holds
+ * admin (1.5.0, FriendHousesAdminZone.kt: requests, remove, block, unblock);
+ * a conversation's "Save a copy" and "Delete", and starting a share, are not
+ * here at all ([FhWords]): no control the server would refuse.
  *
  * Every name, body, title and last_error came from another house: shown
  * only through [FhPlain], a plain-String Text (no links, no markup, line
@@ -108,6 +109,10 @@ fun FriendHousesScreen(navigate: (Route) -> Unit) {
     val status = gate.shownFor(server)
 
     var tab by rememberSaveable { mutableStateOf(FhTab.Messages) }
+    // The admin tab is there only while this phone holds admin.
+    val admin by app.admin.state.collectAsState()
+    val tabs = fhTabsFor(admin, com.domovoi.app.net.LocalSharedScreen.current)
+    if (tab !in tabs) tab = FhTab.Messages
     var open by rememberSaveable(server) { mutableStateOf<String?>(null) }
     var inbox by remember(server) { mutableStateOf<FhRead<List<FhConversation>>?>(null) }
     var shared by remember(server) { mutableStateOf<FhRead<List<FhSharedList>>?>(null) }
@@ -138,12 +143,13 @@ fun FriendHousesScreen(navigate: (Route) -> Unit) {
             status?.let { StatusLine(it) }
             status?.let { ThisWeek(it) }
             Spacer(Modifier.height(12.dp))
-            Tabs(tab, unread = status?.unread ?: 0) { tab = it }
+            Tabs(tabs, tab, unread = status?.unread ?: 0) { tab = it }
             Spacer(Modifier.height(12.dp))
             Box(Modifier.weight(1f)) {
                 when (tab) {
                     FhTab.Messages -> InboxTab(inbox) { open = it }
                     FhTab.Shared -> SharedTab(shared, server, navigate, onChanged = reload)
+                    FhTab.Connections -> FriendsAndConnectionsTab(onChanged = reload)
                 }
             }
         } else {
@@ -160,7 +166,13 @@ fun FriendHousesScreen(navigate: (Route) -> Unit) {
 /** The dashboard's sections a household phone shows, in its order. Its
  *  admin zone (requests, friends, friend files, this house, blocked
  *  houses) has no tab: the household token is refused all of it. */
-enum class FhTab(val label: String) { Messages("messages"), Shared("shared lists") }
+enum class FhTab(val label: String) {
+    Messages("messages"),
+    Shared("shared lists"),
+
+    /** Only while this phone holds admin (FriendHousesAdminZone.kt). */
+    Connections("friends & connections"),
+}
 
 /** How often the inbox and an open conversation are read again. */
 private const val INBOX_POLL_MS = 15_000L
@@ -239,12 +251,12 @@ internal fun ThisWeek(status: FhStatus) {
 }
 
 @Composable
-private fun Tabs(tab: FhTab, unread: Int, onTab: (FhTab) -> Unit) {
+private fun Tabs(tabs: List<FhTab>, tab: FhTab, unread: Int, onTab: (FhTab) -> Unit) {
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        FhTab.entries.forEach { t ->
+        tabs.forEach { t ->
             val on = t == tab
             val shape = RoundedCornerShape(999.dp)
             Row(

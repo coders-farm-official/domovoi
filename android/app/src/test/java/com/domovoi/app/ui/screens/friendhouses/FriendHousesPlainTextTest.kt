@@ -177,6 +177,6 @@ class FriendHousesPlainTextTest {
                 }
             }
         }
-        assertEquals(5, files)
+        assertEquals(6, files)
     }
 }

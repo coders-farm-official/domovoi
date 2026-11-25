@@ -29,8 +29,19 @@ class FriendHousesHouseholdTest {
     // ---- the page --------------------------------------------------------------
 
     @Test fun thePhoneShowsMessagesThenSharedListsAndNoAdminZone() {
-        assertEquals(listOf(FhTab.Messages, FhTab.Shared), FhTab.entries.toList())
-        assertEquals(listOf("messages", "shared lists"), FhTab.entries.map { it.label })
+        val out = fhTabsFor(com.domovoi.app.net.AdminSession.State.SignedOut, shared = false)
+        assertEquals(listOf(FhTab.Messages, FhTab.Shared), out)
+        assertEquals(listOf("messages", "shared lists"), out.map { it.label })
+    }
+
+    /** 1.5.0: the admin zone is a third tab only while this phone holds
+     *  admin, and never on a shared screen. */
+    @Test fun theAdminTabIsThereOnlyWithAdmin() {
+        val signedIn = com.domovoi.app.net.AdminSession.State.SignedIn("http://192.168.1.20:6369", null)
+        val kept = com.domovoi.app.net.AdminSession.State.Kept("http://192.168.1.20:6369", 1L)
+        assertEquals(listOf(FhTab.Messages, FhTab.Shared, FhTab.Connections), fhTabsFor(signedIn, shared = false))
+        assertEquals(listOf(FhTab.Messages, FhTab.Shared, FhTab.Connections), fhTabsFor(kept, shared = false))
+        assertEquals(listOf(FhTab.Messages, FhTab.Shared), fhTabsFor(signedIn, shared = true))
     }
 
     /** The admin zone, a conversation's save and delete, and starting a
@@ -39,7 +50,9 @@ class FriendHousesHouseholdTest {
     @Test fun theScreenOffersNothingOnlyAnAdminMayDo() {
         val repo = File(System.getProperty("domovoi.repo.dir") ?: error("domovoi.repo.dir is not set"))
         val dir = File(repo, "android/app/src/main/java/com/domovoi/app/ui/screens/friendhouses")
-        val code = dir.listFiles()!!.filter { it.extension == "kt" }.joinToString("\n") { f ->
+        // The admin tab's own file (shown only with admin) is held to the
+        // design's job list below instead.
+        val code = dir.listFiles()!!.filter { it.extension == "kt" && it.name != "FriendHousesAdminZone.kt" }.joinToString("\n") { f ->
             f.readLines().filterNot { it.trimStart().let { l -> l.startsWith("//") || l.startsWith("*") || l.startsWith("/*") } }
                 .joinToString("\n")
         }
@@ -48,6 +61,14 @@ class FriendHousesHouseholdTest {
             "share a list", "Only an admin can share", "An admin can", ".friends()", "FriendsTab", "FriendRow",
         )) {
             assertFalse(gone, code.contains(gone, ignoreCase = gone.first().isLowerCase()))
+        }
+        // The admin tab does design §1's Friend Houses jobs only: no friend
+        // files, renaming, verifying, this house's name, apps, save or delete.
+        val zone = File(dir, "FriendHousesAdminZone.kt").readLines()
+            .filterNot { it.trimStart().let { l -> l.startsWith("//") || l.startsWith("*") || l.startsWith("/*") } }
+            .joinToString("\n")
+        for (gone in listOf("invites", "preview", "/verified", "PATCH", "settings", "/apps", "export", "Save a copy", "\"Delete\"")) {
+            assertFalse("admin tab: $gone", zone.contains(gone))
         }
         // The empty inbox no longer points at a friends list the phone doesn't show.
         assertFalse(FhWords.NO_MESSAGES_SUB.contains("friend to"))
