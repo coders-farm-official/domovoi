@@ -105,7 +105,7 @@ More frames find more detail in a long video and cost more time.
   video where we sang happy birthday". Domovoi says how many it found and
   that they are on the Photos page. When it recognizes your voice and a
   phone is marked as yours (Settings → Household → Phones & browsers, "This
-  phone belongs to"), it asks "Want them on your phone?"; say yes and the
+  phone belongs to"), it asks "Do you want them on your phone?"; say yes and the
   results arrive on your phone as a chat, "Photos: …", with the same cards
   as a chat search. It never asks a guest or a voice it doesn't know, and
   sends only to the asker's own phones (a few times an hour at most).

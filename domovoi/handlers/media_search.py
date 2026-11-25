@@ -19,11 +19,11 @@ or a phone's chat mic (the household device tier). An unrecognized voice
 in a room is a guest here: naming a person gets "I can only look for
 photos of a person for someone I recognize." and no results.
 
-**On your phone** (design §9: "Want them on your phone?"). When there
+**On your phone** (design §9: "Do you want them on your phone?"). When there
 are results, the asker is a household voice that voice ID recognized
 (``ctx.person_id``; never a guest) and at least one phone is marked as
 theirs (Settings → Household → Phones & browsers, "This phone belongs
-to"), the answer ends "Want them on your phone?" (``core.media_send``).
+to"), the answer ends "Do you want them on your phone?" (``core.media_send``).
 A yes searches again and sends the results to THEIR phones only, through
 the help desk's send-to-their-phone path (``domovoi/help_desk/delivery.py``):
 a home-server chat titled "Photos: …" whose reply carries the result
@@ -61,7 +61,7 @@ from domovoi.models import Context, Intent, Response
 log = logging.getLogger(__name__)
 
 SEND_KIND = "core.media_send"
-OFFER_TEXT = "Want them on your phone?"
+OFFER_TEXT = "Do you want them on your phone?"
 #: The chat a send makes is titled this, then what was asked.
 TITLE_PREFIX = "Photos: "
 
@@ -164,7 +164,7 @@ class MediaSearchHandler(Handler):
         return Response(text=said, session_id=ctx.session_id, expect_followup=offer,
                         matched_handler=self.name, data={"media": data})
 
-    # ── "Want them on your phone?" ───────────────────────────────────────
+    # ── "Do you want them on your phone?" ───────────────────────────────────────
 
     @staticmethod
     async def _may_offer(found: ask.Answer, ctx: Context, session: AsyncSession) -> bool:
