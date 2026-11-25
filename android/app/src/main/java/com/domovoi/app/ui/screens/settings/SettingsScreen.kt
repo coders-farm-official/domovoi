@@ -518,6 +518,7 @@ internal fun openInBrowser(context: Context, url: String): Boolean =
 @Composable
 private fun AboutPanel(navigate: (Route) -> Unit) {
     val developerOptions by LocalApp.current.developerOptions.on.collectAsState()
+    val (admin, shared) = rememberServerAdmin()
     val fg = Domovoi.colors.fg
     val strong = SpanStyle(fontWeight = FontWeight.SemiBold, color = fg)
 
@@ -566,11 +567,15 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                         color = Domovoi.colors.fgMuted,
                     )
                     AppVersionLine()
-                    Text(
-                        "The server's build / version identifiers live on the dashboard under About & updates.",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                        color = Domovoi.colors.fgFaint,
-                    )
+                    // With admin held here the server's card below says it;
+                    // signed out the line names this phone's admin sign-in.
+                    serverBuildLine(admin, shared)?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = Domovoi.colors.fgFaint,
+                        )
+                    }
                     Button(onClick = { navigate(Route.Manual) }) {
                         Icon(
                             Icons.AutoMirrored.Filled.MenuBook,
@@ -583,6 +588,8 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
             }
         }
         item { AskForHelpCard(navigate) }
+        // The Domovoi server: install an update, restart (admin on this phone).
+        if (serverAdminHeld(admin, shared)) item { ServerUpdateCard() }
         item { AboutAppUpdateCard() }
         item { ProblemReportsCard() }
         if (assistantIn64BitAppOnly()) item { AssistantIn64BitAppNote() }
