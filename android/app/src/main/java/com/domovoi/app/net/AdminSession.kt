@@ -13,6 +13,8 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
 import java.io.IOException
+import java.lang.ref.WeakReference
+import java.util.concurrent.CopyOnWriteArrayList
 
 /*
  * Admin on this phone (1.5.0; design-notes/PHONE-ADMIN-SIGNIN.md).
@@ -32,6 +34,14 @@ import java.io.IOException
  * same address) never receives the Bearer, which is forgotten. Room mode
  * forgets it too, and no admin call goes out while the phone is a room
  * (security review 2026-11-22, L57).
+ *
+ * Forgotten at once, not only at the next call (security review 2026-11-23,
+ * L57): switching the active server or forgetting it (Prefs.setServerUrl,
+ * Prefs.forgetActiveServer), any change to the identity pins (Prefs.setPins)
+ * and entering room mode (HouseholdLock) each call [AdminSessions.forgetAll].
+ * Sign-out (L56) sends the Bearer only after the server proves the identity
+ * the session is bound to, and only while that server is still the active
+ * one and the phone is not a room; otherwise it just forgets.
  *
  * The session ends at the server: after an hour with no admin change (the
  * idle clock the login answer reports, which every admin write restarts), at
@@ -69,6 +79,8 @@ class AdminSession(
     @Volatile private var live: Live? = null
     private val _state = MutableStateFlow<State>(State.SignedOut)
     val state: StateFlow<State> = _state.asStateFlow()
+
+    init { AdminSessions.register(this) }
 
     /** True while this phone holds an admin session for the active server. */
     val signedIn: Boolean get() = liveForActive() != null
@@ -149,11 +161,29 @@ class AdminSession(
         }
     }
 
-    /** Sign out: end the session at the server (best effort), then forget it. */
+    /**
+     * Sign out: forget the session here at once, then end it at the server
+     * (best effort) under the same rules as every admin call (L56): only
+     * while the phone is not a room, only to the server that issued it while
+     * it is still the active one, and only after that server proves the
+     * identity the session is bound to. Otherwise the Bearer is just
+     * forgotten; the server ends it at its idle hour.
+     */
     suspend fun signOut() {
         val l = live ?: return forget()
         forget()
+        if (HouseholdLock.roomModeActive) return
+        if (l.server != api.baseUrl.trim().trimEnd('/')) return
+        val base = TokenScope.baseOf(l.server) ?: return
         withContext(Dispatchers.IO) {
+            val proved = try {
+                prove(base)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            if (proved != l.fingerprint || HouseholdLock.roomModeActive) return@withContext
             runCatching {
                 api.post("/api/auth/logout", null, mapOf("Authorization" to "Bearer ${l.token}"), onlyTo = l.server)
             }
@@ -194,5 +224,24 @@ class AdminSession(
                 else -> detail ?: "sign-in failed (HTTP ${e.status})"
             }
         }
+    }
+}
+
+/**
+ * Every [AdminSession] on this phone, so the three things that end them all
+ * at once (L57: a server switch, a pin change, entering room mode) reach
+ * each without holding them alive.
+ */
+object AdminSessions {
+    private val sessions = CopyOnWriteArrayList<WeakReference<AdminSession>>()
+
+    fun register(s: AdminSession) {
+        sessions.removeAll { it.get() == null }
+        sessions += WeakReference(s)
+    }
+
+    fun forgetAll() {
+        for (ref in sessions) ref.get()?.forget()
+        sessions.removeAll { it.get() == null }
     }
 }

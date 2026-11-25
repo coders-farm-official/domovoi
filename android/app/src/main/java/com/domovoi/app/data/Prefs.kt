@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.domovoi.app.listens.ListenerPicks
+import com.domovoi.app.net.AdminSessions
 import com.domovoi.app.net.ClaimBook
 import com.domovoi.app.net.DeviceOwner
 import com.domovoi.app.net.IdentityGate
@@ -378,6 +379,8 @@ class Prefs(
     fun setServerUrl(url: String): Boolean {
         val clean = ServerCredentials.normalize(url)
         if (clean.isNotBlank() && !isTrusted(clean)) return false
+        // L57: an admin sign-in belongs to the server it was made on.
+        if (clean != _serverUrl.value) AdminSessions.forgetAll()
         _serverUrl.value = clean
         _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, clean)
         recomputeListener()
@@ -507,6 +510,9 @@ class Prefs(
     }
 
     private fun setPins(next: Map<String, ServerIdentity.Pin>) {
+        // L57: an admin sign-in is bound to the identity proved then; a new
+        // or dropped pin ends it here at once.
+        if (next != _identityPins.value) AdminSessions.forgetAll()
         _identityPins.value = next
         scope.launch { context.dataStore.edit { it[kIdentityPins] = ServerIdentity.encodePins(next) } }
     }
@@ -541,6 +547,7 @@ class Prefs(
      */
     fun forgetActiveServer(): String? {
         val url = _serverUrl.value.takeIf { it.isNotBlank() } ?: return null
+        AdminSessions.forgetAll()
         _serverUrl.value = ""
         _deviceToken.value = null
         scope.launch { context.dataStore.edit { it[kServer] = "" } }

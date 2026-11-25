@@ -201,4 +201,87 @@ class AdminSessionTest {
         assertFalse(s.signedIn)
         assertEquals("Bearer ${"a".repeat(64)}", seen.last { it.path == "/api/auth/logout" }.getHeader("Authorization"))
     }
+
+    // ---- security review 2026-11-23, L56: sign-out proves the server first ----
+
+    @Test fun signOutToAServerThatNowProvesAnotherKeySendsNothing() = runBlocking {
+        val s = session()
+        s.signIn("right-password", "phone")
+        verdict = IdentityVerdict.Verified("SHA256:other", pinnedNow = true)
+        s.signOut()
+        assertFalse(s.signedIn)
+        assertTrue("the Bearer never went out", seen.none { it.path == "/api/auth/logout" })
+    }
+
+    @Test fun signOutToAServerThatCannotProveItselfSendsNothing() = runBlocking {
+        val s = session()
+        s.signIn("right-password", "phone")
+        verdict = IdentityVerdict.Legacy()
+        s.signOut()
+        assertFalse(s.signedIn)
+        assertTrue(seen.none { it.path == "/api/auth/logout" })
+    }
+
+    @Test fun signOutAfterTheServerChangedJustForgets() = runBlocking {
+        val s = session()
+        s.signIn("right-password", "phone")
+        val first = base
+        base = "http://192.0.2.1:6369"
+        s.signOut()
+        base = first
+        assertFalse(s.signedIn)
+        assertTrue(seen.none { it.path == "/api/auth/logout" })
+    }
+
+    @Test fun signOutInRoomModeJustForgets() = runBlocking {
+        val s = session()
+        s.signIn("right-password", "phone")
+        // The session survives only if room mode was set without its setter
+        // (it can't be); sign out from a room still sends nothing.
+        HouseholdLock.roomModeActive = true
+        try {
+            s.signOut()
+        } finally {
+            HouseholdLock.roomModeActive = false
+        }
+        assertTrue(seen.none { it.path == "/api/auth/logout" })
+    }
+
+    // ---- security review 2026-11-23, L57: forgotten at once ----------------
+
+    @Test fun enteringRoomModeForgetsAtOnceNotAtTheNextCall() = runBlocking {
+        val s = session()
+        s.signIn("right-password", "phone")
+        HouseholdLock.roomModeActive = true
+        HouseholdLock.roomModeActive = false
+        assertEquals(AdminSession.State.SignedOut, s.state.value)
+        assertFalse("forgotten while no call was made", s.signedIn)
+        assertTrue(seen.none { it.path == "/api/satellites/kitchen/restart" })
+    }
+
+    @Test fun forgetAllEndsEverySessionOnThePhone() = runBlocking {
+        val a = session()
+        val b = session()
+        a.signIn("right-password", "phone")
+        b.signIn("right-password", "phone")
+        AdminSessions.forgetAll()
+        assertFalse(a.signedIn)
+        assertFalse(b.signedIn)
+        assertEquals(AdminSession.State.SignedOut, a.state.value)
+        assertEquals(AdminSession.State.SignedOut, b.state.value)
+    }
+
+    /** Prefs needs an Android context, so its three hooks are held to the
+     *  source: a server switch, forgetting the server, any pin change. */
+    @Test fun prefsForgetsAdminOnAServerSwitchAndAPinChange() {
+        val src = java.io.File("src/main/java/com/domovoi/app/data/Prefs.kt").readText()
+        fun body(sig: String): String {
+            val i = src.indexOf(sig)
+            assertTrue("$sig is in Prefs.kt", i >= 0)
+            return src.substring(i, src.indexOf("\n    }", i))
+        }
+        for (sig in listOf("fun setServerUrl(", "fun forgetActiveServer(", "private fun setPins(")) {
+            assertTrue("$sig calls AdminSessions.forgetAll()", "AdminSessions.forgetAll()" in body(sig))
+        }
+    }
 }
