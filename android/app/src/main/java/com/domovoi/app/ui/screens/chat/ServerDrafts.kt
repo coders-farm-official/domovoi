@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import com.domovoi.app.AppContainer
 import com.domovoi.app.net.ApiException
 import kotlinx.coroutines.Dispatchers
@@ -57,9 +59,19 @@ internal data class PrintAttachmentRef(
  * the server's Print sheet (the home's printer). Share downloads the file
  * once into the app's cache.
  */
-internal class ServerDraftDoc(private val app: AppContainer, private val id: Long) : DraftDoc {
+internal class ServerDraftDoc(
+    private val app: AppContainer,
+    private val id: Long,
+    /** The chat is private to this phone (1.5.0): a save puts a copy where
+     *  the household can see it, so it asks first. */
+    private val privateChat: () -> Boolean = { false },
+    /** The server lets this phone write in the chat (`can_write`). */
+    private val canWrite: () -> Boolean = { true },
+) : DraftDoc {
     override val key: String = "server:${app.api.absolute("")}#$id"
     override val saveWhere: String = "your home server's Documents → From Chat"
+    override val saveAsk: String? get() = if (privateChat()) CHAT_SAVE_PRIVATE_ASK else null
+    override val writable: Boolean get() = canWrite()
 
     @Volatile private var cache: DraftView? = null
 
@@ -156,17 +168,25 @@ internal fun ServerDraftCard(
         value = runCatching { doc.firstLines(ref.version) }.getOrNull()
     }.value
     val format = if (ref.kind == "letter") "pdf" else "docx"
+    // A save from a private chat asks first (ChatPrivacy.kt).
+    var asking by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<(() -> Unit)?>(null) }
+    asking?.let { go -> SaveAsk(doc.saveAsk, onConfirm = go, onDismiss = { asking = null }) }
     DraftCard(
         DraftCardData(ref.id.toString(), ref.version, ref.kind, ref.title, ref.action, line,
             latest = newest.takeIf { it > ref.version }, firstLines = if (newest == ref.version) first else null),
         canPrint = canPrint,
         onOpen = onOpen,
-        onSave = {
-            scope.launch {
-                runCatching { doc.save(ref.version, format) }
-                    .onSuccess { toast("saved ${it.where} · ${it.check}") }
-                    .onFailure { toast(com.domovoi.app.net.failureText("save", it)) }
+        onSave = if (!doc.writable) null else {
+            val save = {
+                scope.launch {
+                    runCatching { doc.save(ref.version, format) }
+                        .onSuccess { toast("saved ${it.where} · ${it.check}") }
+                        .onFailure { toast(com.domovoi.app.net.failureText("save", it)) }
+                }
+                Unit
             }
+            val ask: () -> Unit = { if (doc.saveAsk != null) asking = save else save() }
+            ask
         },
         onShare = {
             scope.launch {
@@ -197,3 +217,17 @@ internal suspend fun sendDraftHome(app: com.domovoi.app.AppContainer, name: Stri
     }
 
 
+
+/** "Saves a copy to Documents, where the household can see it." before a
+ *  save from a private chat; [ask] null confirms nothing (it never shows). */
+@androidx.compose.runtime.Composable
+internal fun SaveAsk(ask: String?, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    if (ask == null) return
+    com.domovoi.app.ui.components.ConfirmDialog(
+        title = "save to Documents",
+        body = ask,
+        confirmLabel = "save",
+        onConfirm = onConfirm,
+        onDismiss = onDismiss,
+    )
+}

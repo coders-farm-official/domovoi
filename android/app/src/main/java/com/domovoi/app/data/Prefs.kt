@@ -8,9 +8,11 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.domovoi.app.listens.ListenerPicks
 import com.domovoi.app.net.ClaimBook
+import com.domovoi.app.net.DeviceKeyBook
 import com.domovoi.app.net.DeviceOwner
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.ServerIdentity
+import com.domovoi.app.net.newDeviceId
 import com.domovoi.app.net.TokenHealth
 import com.domovoi.app.player.LyricsNudge
 import com.domovoi.app.ui.shell.PhoneBar
@@ -66,8 +68,15 @@ class Prefs(
         PrefsVaultStore(context, CALENDAR_KEYS_FILE),
         KeystoreSealer(CALENDAR_KEYS_ALIAS, CALENDAR_KEYS_AAD),
     ) { Log.w(TAG, it.replace("token", "calendar key")) },
+    /** The device keys (private chats, 1.5.0; net/DeviceKey.kt), per
+     *  server: sealed under a Keystore key of their own, in a file of their
+     *  own, outside every backup and transfer like the tokens. */
+    private val deviceKeyVault: TokenVault = TokenVault(
+        PrefsVaultStore(context, DEVICE_KEYS_FILE),
+        KeystoreSealer(DEVICE_KEYS_ALIAS, DEVICE_KEYS_AAD),
+    ) { Log.w(TAG, it.replace("token", "device key")) },
 ) : IdentityGate.PinStore, DeveloperOptions.Store, TokenHealth.RejectedBook, ClaimBook,
-    com.domovoi.app.calendarshare.CalendarKeys {
+    com.domovoi.app.calendarshare.CalendarKeys, DeviceKeyBook {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val kServer = stringPreferencesKey("server_url")
@@ -85,6 +94,10 @@ class Prefs(
     private val kRejectedTokens = stringPreferencesKey("rejected_tokens")
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
+    /** The device id per server where it is not [kDeviceId]: a server whose
+     *  device key this phone lost gets a new one (net/DeviceKey.kt). Not a
+     *  secret: the id is sent on every queue add. */
+    private val kDeviceIds = stringPreferencesKey("device_ids")
     /** The one "listening as" pick from before 2026-11-12 (all servers);
      *  moved into [kListenerPicks] for the active server at start. */
     private val kListener = stringPreferencesKey("listener_person")
@@ -106,6 +119,7 @@ class Prefs(
     private val kNavGroupsOpen = stringPreferencesKey("nav_groups_open")
     private val kChatPlace = stringPreferencesKey("chat_place")
     private val kChatServerShareSeen = booleanPreferencesKey("chat_server_share_seen")
+    private val kChatPrivateNoteSeen = booleanPreferencesKey("chat_private_note_seen")
     private val kChatPins = stringPreferencesKey("chat_pins")
     private val kVoiceChoice = stringPreferencesKey("voice_choice")
     private val kVoiceInfo = stringPreferencesKey("voice_server_info")
@@ -165,6 +179,19 @@ class Prefs(
     /** The calendar key held per server (never logged, never shown). */
     @Volatile
     private var calendarKeys: Map<String, String> = emptyMap()
+
+    /** The device key held per server (never logged, never shown). */
+    @Volatile
+    private var deviceKeys: Map<String, String> = emptyMap()
+
+    /** Bumped whenever a device key comes or goes, so Chat redraws what it
+     *  says about privacy. Carries no key. */
+    private val _deviceKeysChanged = MutableStateFlow(0)
+    val deviceKeysChanged: StateFlow<Int> = _deviceKeysChanged
+
+    /** Device ids by server, where one differs from [baseDeviceId]. */
+    @Volatile
+    private var deviceIds: Map<String, String> = emptyMap()
 
     /** Bumped whenever a claim key comes or goes, so a screen that shows
      *  "can't prove it yet" follows. Carries no key. */
@@ -250,6 +277,11 @@ class Prefs(
     private val _chatServerShareSeen = MutableStateFlow(false)
     val chatServerShareSeen: StateFlow<Boolean> = _chatServerShareSeen
 
+    /** The private-chats note pointing at the phone's own chat was shown
+     *  once (ui/screens/chat/ChatPrivacy.kt). */
+    private val _chatPrivateNoteSeen = MutableStateFlow(false)
+    val chatPrivateNoteSeen: StateFlow<Boolean> = _chatPrivateNoteSeen
+
     /** The chats pinned on this phone, both kinds (ChatPlace.kt pinKey):
      *  kept here, never on the server, so one person's pins don't move the
      *  household's list. */
@@ -271,8 +303,12 @@ class Prefs(
     private var developerOptions: Boolean? = null
 
     /** Stable per-install client id, e.g. "android-4f21" (web: "browser-xxxx"). */
-    var deviceId: String = ""
-        private set
+    private var baseDeviceId: String = ""
+
+    /** This phone's id at the ACTIVE server: the install's id, unless that
+     *  server's device key was lost and the phone started over there under a
+     *  new one ([deviceIdFor]). */
+    val deviceId: String get() = deviceIdFor(serverUrl.value)
 
     init {
         // Small blocking read at process start keeps everything downstream simple.
@@ -319,6 +355,8 @@ class Prefs(
             _deviceOwners.value = decodeDeviceOwners(p[kDeviceOwners])
             claimKeys = claimVault.read()
             calendarKeys = calendarKeyVault.read()
+            deviceKeys = deviceKeyVault.read()
+            deviceIds = ServerCredentials.decodeOwners(p[kDeviceIds])
             var picks = ServerCredentials.decodeOwners(p[kListenerPicks])
             val legacyPick = p[kListener]
             if (legacyPick != null) {
@@ -351,11 +389,12 @@ class Prefs(
             _navGroupsOpen.value = p[kNavGroupsOpen]
             _chatPlace.value = p[kChatPlace]
             _chatServerShareSeen.value = p[kChatServerShareSeen] ?: false
+            _chatPrivateNoteSeen.value = p[kChatPrivateNoteSeen] ?: false
             _chatPins.value = ServerCredentials.decodeTrusted(p[kChatPins])
             _voiceChoice.value = p[kVoiceChoice] ?: "server"
             voiceInfo = decodeVoiceInfo(p[kVoiceInfo])
             developerOptions = p[kDeveloperOptions]
-            deviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
+            baseDeviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
                 scope.launch { context.dataStore.edit { it[kDeviceId] = id } }
             }
         }
@@ -497,6 +536,9 @@ class Prefs(
     fun replacePin(url: String, pin: ServerIdentity.Pin) {
         val key = IdentityGate.pinKey(url) ?: return
         setDeviceTokenFor(url, null)
+        // The device key too: it was issued by the identity the person just
+        // replaced, and must not go to whatever holds the new one.
+        forgetDeviceKey(url)
         pin(key, pin)
         setTrustDecided(trustDecided + key)
     }
@@ -563,6 +605,10 @@ class Prefs(
         rememberDeviceOwner(url, null, null)
         setListenerPicks(ServerCredentials.withOwner(_listenerPicks.value, url, null))
         setCalendarKey(url, null)
+        // The device key and any id this phone started over under there: a
+        // forgotten server is a new start (it never gets a key it can't
+        // tell from a new one).
+        forgetDeviceKey(url)
     }
 
     // ── Shared screen ──────────────────────────────────────────────────
@@ -659,6 +705,13 @@ class Prefs(
         scope.launch { context.dataStore.edit { it[kChatPins] = ServerCredentials.encodeTrusted(next) } }
     }
 
+    /** Private chats' first-use note ("Want it truly private?…") was shown. */
+    fun setChatPrivateNoteSeen() {
+        if (_chatPrivateNoteSeen.value) return
+        _chatPrivateNoteSeen.value = true
+        scope.launch { context.dataStore.edit { it[kChatPrivateNoteSeen] = true } }
+    }
+
     fun setChatServerShareSeen() {
         if (_chatServerShareSeen.value) return
         _chatServerShareSeen.value = true
@@ -735,6 +788,60 @@ class Prefs(
         scope.launch { calendarKeyVault.write(calendarKeys) }
     }
 
+    // ── The device key and the device id per server (DeviceKeyBook) ─────
+
+    override fun deviceKeyFor(server: String): String? =
+        deviceKeys[ServerCredentials.normalize(server)]?.takeIf { it.isNotBlank() }
+
+    /** Whether this phone holds a device key for [server]. */
+    fun holdsDeviceKey(server: String): Boolean = deviceKeyFor(server) != null
+
+    /** Written at once (commit), not later: the key is answered once, and a
+     *  process killed before an asynchronous write would lose it. Callers
+     *  are on a background thread (DeviceRegistry). */
+    @Synchronized
+    override fun rememberDeviceKey(server: String, key: String?): Boolean {
+        val clean = ServerCredentials.normalize(server)
+        if (clean.isBlank()) return false
+        val next = ServerCredentials.withToken(deviceKeys, clean, key)
+        if (next == deviceKeys) return true
+        deviceKeys = next
+        _deviceKeysChanged.value += 1
+        return deviceKeyVault.write(next)
+    }
+
+    override fun deviceIdFor(server: String): String =
+        deviceIds[ServerCredentials.normalize(server)]?.takeIf { it.isNotBlank() } ?: baseDeviceId
+
+    @Synchronized
+    override fun startOverAt(server: String): String {
+        val clean = ServerCredentials.normalize(server)
+        rememberDeviceKey(clean, null)
+        val id = newDeviceId()
+        if (clean.isBlank()) return id
+        setDeviceIds(deviceIds + (clean to id))
+        Log.i(TAG, "device key lost at a server: registering there under a new device id")
+        return id
+    }
+
+    @Synchronized
+    private fun forgetDeviceKey(url: String) {
+        val clean = ServerCredentials.normalize(url)
+        if (clean.isBlank()) return
+        if (deviceKeys.containsKey(clean)) {
+            deviceKeys = deviceKeys - clean
+            _deviceKeysChanged.value += 1
+            val snapshot = deviceKeys
+            scope.launch { deviceKeyVault.write(snapshot) }
+        }
+        if (clean in deviceIds) setDeviceIds(deviceIds - clean)
+    }
+
+    private fun setDeviceIds(next: Map<String, String>) {
+        deviceIds = next
+        scope.launch { context.dataStore.edit { it[kDeviceIds] = ServerCredentials.encodeOwners(next) } }
+    }
+
     // ── "Listening as" ────────────────────────────────────────────────
 
     /** Pick who the phone listens as on the active server: a person id, or
@@ -807,6 +914,9 @@ class Prefs(
         const val CALENDAR_KEYS_FILE = "domovoi-calendar-keys"
         const val CALENDAR_KEYS_ALIAS = "domovoi-calendar-keys"
         val CALENDAR_KEYS_AAD: ByteArray = "domovoi-calendar-keys-v1".toByteArray(Charsets.UTF_8)
+        const val DEVICE_KEYS_FILE = "domovoi-device-keys"
+        const val DEVICE_KEYS_ALIAS = "domovoi-device-keys"
+        val DEVICE_KEYS_AAD: ByteArray = "domovoi-device-keys-v1".toByteArray(Charsets.UTF_8)
 
         private val deviceOwnersSerializer = MapSerializer(String.serializer(), DeviceOwner.serializer())
 

@@ -139,6 +139,20 @@ internal data class ThreadRow(
     val internet_allowed: Boolean = false,
     /** A lookup in it went online (V037): the list's globe. */
     val used_internet: Boolean = false,
+    // Private chats (1.5.0, ChatPrivacy.kt): absent from an older server,
+    // which then denies nothing and says nothing about sharing.
+    /** Shared with the household (false: private to its device, or
+     *  admin-only). */
+    val shared: Boolean? = null,
+    /** This phone owns it. */
+    val mine: Boolean? = null,
+    val can_write: Boolean? = null,
+    val can_share: Boolean? = null,
+    val can_delete: Boolean? = null,
+    /** Visible only because the caller is an admin. */
+    val admin_view: Boolean = false,
+    /** The owning device's name, for an admin; else null. */
+    val owner_name: String? = null,
 )
 
 @Serializable
@@ -190,6 +204,9 @@ internal data class MessageList(
     /** The thread's video jobs (1.4.0, ChatVideo.kt), each under the
      *  message it was sent with (`message_id`). */
     val videos: List<ServerVideoJob> = emptyList(),
+    /** The thread itself with its access fields (1.5.0); null from an
+     *  older server. */
+    val thread: ThreadRow? = null,
 )
 
 /** Documents per message the backend accepts (documents plan D1). */
@@ -410,9 +427,13 @@ private suspend fun sendStreaming(
         .build()
     app.api.http.newCall(req).execute().use { resp ->
         if (!resp.isSuccessful) {
+            val text = resp.body?.string()
+            // Unshared (or deleted) while it was open: the caller says so and
+            // closes the chat (ChatPrivacy.kt).
+            if (isThreadGone(resp.code, text)) throw ChatGoneException()
             // Plain words for the household's AI features being off (a 409
             // ai-off), not "409 Conflict" or an empty reply.
-            val line = sendFailureLine(resp.code, resp.message, resp.header(com.domovoi.app.net.REFUSAL_HEADER), resp.body?.string())
+            val line = sendFailureLine(resp.code, resp.message, resp.header(com.domovoi.app.net.REFUSAL_HEADER), text)
             withContext(Dispatchers.Main) { onError(line, null, null) }
             return@use
         }
@@ -503,6 +524,9 @@ internal fun ConversationPane(
     /** The thread's title as the list has it now (the model's title comes
      *  after the first reply); null: not known there yet. */
     titleOf: (Long?) -> String? = { null },
+    /** The thread as the list has it now (its access fields after a share
+     *  or unshare anywhere); null: not listed (yet). */
+    rowOf: (Long?) -> ThreadRow? = { null },
     onCreated: (ThreadRow) -> Unit = {},
 ) {
     val app = LocalApp.current
@@ -513,11 +537,51 @@ internal fun ConversationPane(
     // The thread this chat writes to: the one opened, or the one the first
     // message made.
     var current by remember { mutableStateOf(thread) }
+    // Private chats (1.5.0, ChatPrivacy.kt): whether this phone holds a
+    // device key for the server (a new chat is then private unless the
+    // switch says otherwise), and whether it is a shared screen there.
+    val sharedScreen = com.domovoi.app.net.LocalSharedScreen.current
+    val serverUrl by app.prefs.serverUrl.collectAsState()
+    val keysTick by app.prefs.deviceKeysChanged.collectAsState()
+    val hasKey = remember(serverUrl, keysTick) { app.prefs.holdsDeviceKey(serverUrl) }
+    var shareNew by remember { mutableStateOf(false) }
+    var unshareAsk by remember { mutableStateOf(false) }
+    // Shown once on this phone, and for this whole visit once shown.
+    var privateNote by remember {
+        mutableStateOf(frame.truePrivateNote && hasKey && !sharedScreen && !app.prefs.chatPrivateNoteSeen.value)
+    }
+    LaunchedEffect(privateNote) { if (privateNote) app.prefs.setChatPrivateNoteSeen() }
+    // This chat isn't this phone's to see any more: said once, and closed.
+    var gone by remember { mutableStateOf(false) }
+    fun goneNow() {
+        if (gone) return
+        gone = true
+        toast(CHAT_GONE_LINE)
+        frame.onBack()
+    }
     suspend fun ensureThread(): ThreadRow = current
-        ?: app.api.post("/api/chat/threads").decode<ThreadRow>().also {
+        ?: app.api.post("/api/chat/threads", createThreadBody(hasKey, sharedScreen, shareNew)).decode<ThreadRow>().also {
             current = it
             onCreated(it)
         }
+    // A create the server refused with a code (ChatPrivacy.kt): a shared
+    // screen it now is (the chip and switch follow), or a key it doesn't
+    // know (register again, which starts over if the key is lost). True
+    // when [e] was one of those.
+    fun createRefused(e: Throwable): Boolean {
+        when (chatRefusal(e)) {
+            ChatRefusal.SharedScreen -> {
+                app.prefs.setSharedScreen(serverUrl, true)
+                toast(CHAT_SHARED_SCREEN_LINE)
+            }
+            ChatRefusal.KeyMissing -> {
+                app.scope.launch { com.domovoi.app.net.registerDevice(app) }
+                toast((e as? com.domovoi.app.net.ApiException)?.let { com.domovoi.app.net.apiDetail(it) } ?: failureText("new chat", e))
+            }
+            null -> return false
+        }
+        return true
+    }
 
     val transcript = remember { mutableStateListOf<LiveMessage>() }
     var draft by remember { mutableStateOf("") }
@@ -554,7 +618,7 @@ internal fun ConversationPane(
             scope.launch {
                 runCatching { ensureThread() }
                     .onSuccess { voiceOpen = true; frame.onSent() }
-                    .onFailure { toast(failureText("new chat", it)) }
+                    .onFailure { if (!createRefused(it)) toast(failureText("new chat", it)) }
             }
         }
     }
@@ -582,7 +646,9 @@ internal fun ConversationPane(
         com.domovoi.app.ui.screens.printing.PrintIo(it.api).printers()
     }.data
     val draftDocs = remember { HashMap<Long, ServerDraftDoc>() }
-    fun draftDoc(id: Long) = draftDocs.getOrPut(id) { ServerDraftDoc(app, id) }
+    fun draftDoc(id: Long) = draftDocs.getOrPut(id) {
+        ServerDraftDoc(app, id, privateChat = { current?.shared == false }, canWrite = { current?.writable != false })
+    }
 
     // The thread's long-document jobs (documents plan D2).
     val jobs = remember { mutableStateListOf<ServerJobView>() }
@@ -594,7 +660,11 @@ internal fun ConversationPane(
     suspend fun loadMessages(threadId: Long): Boolean =
         runCatching {
             app.api.get("/api/chat/threads/$threadId/messages").decode<MessageList>()
+        }.onFailure {
+            if (isThreadGone(it)) goneNow()
         }.onSuccess { list ->
+            // The thread's access as the server says it now (1.5.0).
+            list.thread?.let { t -> if (current?.id == t.id) current = current?.withAccessOf(t) }
             val rows = list.messages
             jobs.clear()
             jobs.addAll(list.jobs)
@@ -628,6 +698,23 @@ internal fun ConversationPane(
     // A thread opened from the list: its messages. A new chat has none.
     LaunchedEffect(thread?.id, reloads) {
         if (thread != null) loadMessages(thread.id)
+    }
+    // The list is read again on every chat change: its row carries this
+    // chat's access as it is now (shared or unshared on another device, by
+    // an admin). A chat that was listed and no longer is may have been
+    // unshared from this phone: asked once, and a 404 closes it.
+    val listed = rowOf(current?.id)
+    var seenInList by remember { mutableStateOf(false) }
+    LaunchedEffect(listed) {
+        val id = current?.id ?: return@LaunchedEffect
+        if (listed != null) {
+            seenInList = true
+            if (listed.knowsSharing) current = current?.withAccessOf(listed)
+        } else if (seenInList) {
+            runCatching { app.api.get("/api/chat/threads/$id/messages").decode<MessageList>() }
+                .onSuccess { l -> l.thread?.let { t -> current = current?.withAccessOf(t) } }
+                .onFailure { if (isThreadGone(it)) goneNow() }
+        }
     }
     // Keep the newest message pinned to the bottom. Two triggers, because the
     // list loses its anchor for two different reasons:
@@ -902,12 +989,11 @@ internal fun ConversationPane(
         frame.onSent()
         // Stamped now; the server's own row (with its id) is not sent back
         // for the user turn, and the two clocks agree to the second on a LAN.
-        transcript.add(
-            LiveMessage(
-                "user", content, images, createdAt = Instant.now().toString(), device = "this phone", documents = docs,
-                stagedVideo = video,
-            ),
+        val asked = LiveMessage(
+            "user", content, images, createdAt = Instant.now().toString(), device = "this phone", documents = docs,
+            stagedVideo = video,
         )
+        transcript.add(asked)
         val live = LiveMessage("assistant", "", pending = true)
         live.sentAtMs = System.currentTimeMillis()
         transcript.add(live)
@@ -932,7 +1018,23 @@ internal fun ConversationPane(
                 // its chip under this message (the job names the message).
                 // A refused send keeps its error in place instead.
                 if (video != null && live.error == null) loadMessages(target.id)
-            }.onFailure { live.error = failureText("send", it) }
+            }.onFailure { e ->
+                when {
+                    isThreadGone(e) -> { live.error = CHAT_GONE_LINE; goneNow() }
+                    // The chat couldn't be made as the chip said: nothing was
+                    // sent, so the words go back in the box.
+                    current == null && createRefused(e) -> {
+                        transcript.remove(live)
+                        transcript.remove(asked)
+                        if (revise == null) {
+                            draft = content
+                            attachments.addAll(images)
+                            docAttachments.addAll(docs)
+                        }
+                    }
+                    else -> live.error = failureText("send", e)
+                }
+            }
             // Refused for want of the vision model: re-read what's installed,
             // so the paperclip explains it next time.
             if (live.errorCode == "vision_model_missing") models.refresh()
@@ -991,7 +1093,7 @@ internal fun ConversationPane(
                     onJob = { live.job = it },
                     headsUpPick = id to option,
                 )
-            }.onFailure { live.error = failureText("heads-up", it) }
+            }.onFailure { if (isThreadGone(it)) goneNow() else live.error = failureText("heads-up", it) }
             live.doneAtMs = System.currentTimeMillis()
             if (live.createdAt == null) live.createdAt = Instant.now().toString()
             live.pending = false
@@ -1030,7 +1132,7 @@ internal fun ConversationPane(
                 // Nothing reached the server: the old reply is still the one.
                 transcript.remove(live)
                 transcript.add(old)
-                toast(failureText("try again", it))
+                if (isThreadGone(it)) goneNow() else toast(failureText("try again", it))
             }
             live.pending = false
             sending = false
@@ -1066,7 +1168,7 @@ internal fun ConversationPane(
                     onDone = { row -> live.finishWith(row) },
                     decision = id to decision,
                 )
-            }.onFailure { live.error = failureText("look it up", it) }
+            }.onFailure { if (isThreadGone(it)) goneNow() else live.error = failureText("look it up", it) }
             live.pending = false
             sending = false
             if (decision == "chat") current = target.copy(internet_allowed = true)
@@ -1084,7 +1186,43 @@ internal fun ConversationPane(
         }
     }
 
+    // "Share with household" on or off (the owning phone, or an admin):
+    // turning it off asks first ([CHAT_UNSHARE_ASK]).
+    fun setShared(want: Boolean) {
+        val t = current ?: return
+        scope.launch {
+            runCatching {
+                app.api.patch("/api/chat/threads/${t.id}", buildJsonObject { put("shared", want) }).decode<ThreadRow>()
+            }.onSuccess { r ->
+                current = current?.withAccessOf(r)
+                toast(if (want) CHAT_SHARED_TOAST else CHAT_UNSHARED_TOAST)
+            }.onFailure { e ->
+                when {
+                    isThreadGone(e) -> goneNow()
+                    chatRefusal(e) == ChatRefusal.SharedScreen -> {
+                        app.prefs.setSharedScreen(serverUrl, true)
+                        toast(CHAT_SHARED_SCREEN_LINE)
+                    }
+                    else -> toast(failureText("change it", e))
+                }
+            }
+        }
+    }
+    if (unshareAsk) {
+        com.domovoi.app.ui.components.ConfirmDialog(
+            title = "stop sharing",
+            body = CHAT_UNSHARE_ASK,
+            confirmLabel = "stop sharing",
+            onConfirm = { setShared(false) },
+            onDismiss = { unshareAsk = false },
+        )
+    }
+
     val open = current
+    // What the server lets this phone do in it: a control it would refuse
+    // is not shown (an admin reading another device's private chat writes
+    // nothing; a field an older server didn't send denies nothing).
+    val writable = open?.writable != false
     if (voiceOpen && open != null) {
         VoiceView(open.id, transcript, onClose = { voiceOpen = false })
         return
@@ -1106,7 +1244,21 @@ internal fun ConversationPane(
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatPaneGutter()
         ThreadTitleRow(title, frame, shareChat)
-        open?.let { t ->
+        when {
+            open != null && open.knowsSharing -> {
+                if (open.admin_view) ChatNote(adminBanner(open.owner_name))
+                val shared = open.shared == true
+                ChatPrivacyBar(privacyLine(shared, sharedScreen), shared || sharedScreen, showsShareSwitch(open, sharedScreen)) { want ->
+                    if (want) setShared(true) else unshareAsk = true
+                }
+            }
+            // A new chat: what it will be, and the switch before it exists.
+            open == null -> newChatLine(hasKey, sharedScreen, shareNew)?.let { line ->
+                ChatPrivacyBar(line, shareNew || sharedScreen, hasKey && !sharedScreen) { shareNew = it }
+            }
+        }
+        if (privateNote) ChatNote(CHAT_TRULY_PRIVATE_NOTE) { privateNote = false }
+        open?.takeIf { writable }?.let { t ->
             ServerInternetChip(t, onToggle = { allowed ->
                 scope.launch {
                     runCatching {
@@ -1123,7 +1275,7 @@ internal fun ConversationPane(
         if (openDraft != null) Box(Modifier.weight(1f).fillMaxWidth()) {
             DraftCanvas(
                 draftDoc(openDraft), canvasVersion, canvasKey, onClose = { canvas = null },
-                onPrint = if (draftPrinters?.hasPrinter == true) ({ v -> printDraft = openDraft to v }) else null,
+                onPrint = if (writable && draftPrinters?.hasPrinter == true) ({ v -> printDraft = openDraft to v }) else null,
             )
         } else Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
             LazyColumn(
@@ -1140,7 +1292,7 @@ internal fun ConversationPane(
                     // go, and the three answers (part 5, W1).
                     val card = m.stats?.lookup_card
                     if (card != null && m.role != "user") {
-                        com.domovoi.app.ui.screens.assistant.LookupCardView(card, enabled = !sending) { d -> decideLookup(m, d) }
+                        com.domovoi.app.ui.screens.assistant.LookupCardView(card, enabled = !sending && writable) { d -> decideLookup(m, d) }
                         return@itemsIndexed
                     }
                     // The draft is made at the tap, from the transcript then.
@@ -1149,7 +1301,7 @@ internal fun ConversationPane(
                         m, threadId,
                         onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null,
                         onSource = { openSource = it },
-                        carryOnLeft = stoppedJob?.let { it.parts - it.read }.takeIf { !sending },
+                        carryOnLeft = stoppedJob?.let { it.parts - it.read }.takeIf { !sending && writable },
                         onCarryOn = {
                             stoppedJob?.let { j ->
                                 scope.launch {
@@ -1159,7 +1311,7 @@ internal fun ConversationPane(
                                 }
                             }
                         },
-                        onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
+                        onRetry = if (writable && i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
                         // A video sent with this message: its job's chip.
                         videoJobs = m.id?.let { id -> videoJobs.filter { it.message_id == id } }.orEmpty(),
                         onStopVideo = { job ->
@@ -1168,13 +1320,14 @@ internal fun ConversationPane(
                                 .onFailure { toast(failureText("stop", it)) }
                         },
                         // A card answers only while it ends the thread.
-                        onHeadsUp = if (i == transcript.lastIndex && !sending) ({ option -> pickHeadsUp(m, option) }) else null,
+                        onHeadsUp = if (writable && i == transcript.lastIndex && !sending) ({ option -> pickHeadsUp(m, option) }) else null,
                         busy = sending,
                         draftCard = m.printAttachment?.takeIf { !m.pending && it.usable }?.let { att ->
                             {
                                 AttachmentPrintCard(
                                     att,
-                                    printers = draftPrinters,
+                                    // Printing is a write (1.5.0): not in a chat this phone reads only.
+                                    printers = draftPrinters.takeIf { writable },
                                     onPrint = { printAttachment = att },
                                 )
                             }
@@ -1182,17 +1335,17 @@ internal fun ConversationPane(
                             {
                                 ServerDraftCard(
                                     ref, m.content, transcript, draftDoc(ref.id), canvasKey,
-                                    canPrint = draftPrinters?.hasPrinter == true,
+                                    canPrint = writable && draftPrinters?.hasPrinter == true,
                                     onOpen = { canvas = ref.id; canvasVersion = ref.version; canvasKey++ },
                                     onPrint = { printDraft = ref.id to ref.version },
-                                    onRevise = { text -> send(ref.id to text) },
+                                    onRevise = if (writable) ({ text -> send(ref.id to text) }) else null,
                                 )
                             }
                         },
                     )
                 }
                 // A job a restart interrupted: carried on only when asked.
-                if (!sending) {
+                if (!sending && writable) {
                     items(jobs.filter { it.state == "interrupted" }, key = { "int-" + it.id }) { j ->
                         DocJobCard(j.line.ifEmpty { "this summary was interrupted — carry on?" }, j.read, j.parts, onStop = null,
                             offer = carryOnText(j.parts - j.read), onOffer = {
@@ -1291,7 +1444,7 @@ internal fun ConversationPane(
         // A new chat with nothing said yet: the place can still change.
         if (open == null && transcript.isEmpty() && !sending) frame.picker?.invoke()
 
-        Row(
+        if (writable) Row(
             Modifier.fillMaxWidth().padding(top = 6.dp),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),

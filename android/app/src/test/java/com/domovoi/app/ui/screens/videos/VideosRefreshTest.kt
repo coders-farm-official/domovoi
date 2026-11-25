@@ -72,7 +72,8 @@ class VideosRefreshTest {
         val prefs = allocateWithoutConstructor(Prefs::class.java)
         setField(prefs, "serverUrl", MutableStateFlow(base))
         setField(prefs, "listenerPersonId", MutableStateFlow<String?>(null))
-        setField(prefs, "deviceId", "android-test")
+        setField(prefs, "baseDeviceId", "android-test")
+        setField(prefs, "deviceIds", emptyMap<String, String>())
         val bus = allocateWithoutConstructor(StateBus::class.java)
         setField(bus, "events", events)
         return allocateWithoutConstructor(AppContainer::class.java).also {

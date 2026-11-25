@@ -87,6 +87,9 @@ object RedirectPolicy {
         // server that minted it on the request made to it, and a redirect is
         // not that request (security review 2026-11-22, L56).
         builder.removeHeader(CLAIM_KEY_HEADER)
+        // The device key likewise: the interceptor puts it back on a hop
+        // that is the active server's own route, and on nothing else.
+        builder.removeHeader(DEVICE_KEY_HEADER)
         return builder.url(url).build()
     }
 
