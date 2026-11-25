@@ -28,6 +28,11 @@ class AdminSessionTest {
     @Volatile private var sessionLive = true
     @Volatile private var base: String = ""
     @Volatile private var loginBody: String = ""
+    @Volatile private var grantBody: String = ""
+    @Volatile private var exchangeBody: String = ""
+    @Volatile private var revokeBody: String = ""
+    @Volatile private var freshSignIn = true
+    @Volatile private var grantExpired = false
     private var clock = 1_000_000L
 
     @Before fun setUp() {
@@ -50,8 +55,33 @@ class AdminSessionTest {
                         }
                     }
                     "/api/auth/logout" -> MockResponse().setBody("""{"ok":true,"revoked":true}""")
+                    "/api/auth/phone-grant" -> {
+                        grantBody = request.body.readUtf8()
+                        when {
+                            request.getHeader("Authorization") != "Bearer ${"a".repeat(64)}" ->
+                                MockResponse().setResponseCode(401).setBody("""{"detail":"admin session required"}""")
+                            !freshSignIn -> MockResponse().setResponseCode(403).setBody("""{"detail":"sign in with the password again"}""")
+                            else -> MockResponse().setBody("""{"grant":"$GRANT","expires_at":"2026-11-25T10:00:00Z"}""")
+                        }
+                    }
+                    "/api/auth/phone-grant/exchange" -> {
+                        exchangeBody = request.body.readUtf8()
+                        val o = DomovoiJson.parseToJsonElement(exchangeBody).jsonObject
+                        when {
+                            grantExpired -> MockResponse().setResponseCode(401).setBody("""{"detail":"phone grant has expired"}""")
+                            o["grant"]!!.jsonPrimitive.content != GRANT || o["device_id"]!!.jsonPrimitive.content != "android-test" ->
+                                MockResponse().setResponseCode(401).setBody("""{"detail":"phone grant not valid"}""")
+                            else -> MockResponse().setBody(
+                                """{"token":"${"b".repeat(64)}","grant_expires_at":"2026-11-25T10:00:00Z","idle_timeout_min":60,"idle_until":"x","idle_in_sec":3600}""",
+                            )
+                        }
+                    }
+                    "/api/auth/phone-grant/revoke" -> {
+                        revokeBody = request.body.readUtf8()
+                        MockResponse().setBody("""{"ok":true}""")
+                    }
                     "/api/satellites/kitchen/restart" ->
-                        if (sessionLive && request.getHeader("Authorization") == "Bearer ${"a".repeat(64)}") {
+                        if (sessionLive && request.getHeader("Authorization") in setOf("Bearer ${"a".repeat(64)}", "Bearer ${"b".repeat(64)}")) {
                             MockResponse().setBody("""{"ok":true}""")
                         } else {
                             MockResponse().setResponseCode(401).setBody("""{"detail":"admin session required"}""")
@@ -281,7 +311,171 @@ class AdminSessionTest {
             return src.substring(i, src.indexOf("\n    }", i))
         }
         for (sig in listOf("fun setServerUrl(", "fun forgetActiveServer(", "private fun setPins(")) {
-            assertTrue("$sig calls AdminSessions.forgetAll()", "AdminSessions.forgetAll()" in body(sig))
+            assertTrue("$sig calls AdminSessions.forgetAll", "AdminSessions.forgetAll(" in body(sig))
         }
+    }
+
+    // ---- keep admin today: the day's grant ---------------------------------
+
+    /** The phone's biometric key, faked: sealing XORs, and the test says
+     *  whether the person passes the check. */
+    private class FakeLocker : GrantLocker {
+        var ok = true
+        var gone = false
+        var destroyed = 0
+        var opens = 0
+        override val available = true
+        override suspend fun seal(plain: ByteArray): GrantLocker.Sealed {
+            if (!ok) throw GrantLocker.Cancelled("cancelled")
+            return GrantLocker.Sealed(byteArrayOf(1, 2, 3), plain.map { (it.toInt() xor 0x5a).toByte() }.toByteArray())
+        }
+        override suspend fun open(sealed: GrantLocker.Sealed): ByteArray {
+            opens++
+            if (gone) throw GrantLocker.KeyGone()
+            if (!ok) throw GrantLocker.Cancelled("cancelled")
+            return sealed.ciphertext.map { (it.toInt() xor 0x5a).toByte() }.toByteArray()
+        }
+        override fun destroy() { destroyed++ }
+    }
+
+    private class FakeShelf : GrantShelf {
+        var g: StoredGrant? = null
+        override fun readGrant() = g
+        override fun writeGrant(grant: StoredGrant?) { g = grant }
+    }
+
+    private val locker = FakeLocker()
+    private val shelf = FakeShelf()
+
+    private fun keeping() = AdminSession(
+        api, { b -> IdentityAdmission.fingerprint(verdict, b) }, now = { clock },
+        grants = shelf, locker = locker, deviceId = { "android-test" },
+    )
+
+    @Test fun keepTodaySealsTheGrantBoundToThisServerAndIdentity() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone: Pixel")
+        val r = s.keepToday("phone: Pixel")
+        assertTrue("$r", r is AdminSession.Keep.Ok)
+        val g = shelf.g!!
+        assertEquals(base, g.server)
+        assertEquals("SHA256:test", g.fingerprint)
+        assertEquals("android-test", g.deviceId)
+        assertEquals(java.time.Instant.parse("2026-11-25T10:00:00Z").toEpochMilli(), g.expiresAtMs)
+        assertFalse("never stored in the clear", g.ciphertext.contains(GRANT) || java.util.Base64.getDecoder().decode(g.ciphertext).decodeToString() == GRANT)
+        val sent = DomovoiJson.parseToJsonElement(grantBody).jsonObject
+        assertEquals("android-test", sent["device_id"]!!.jsonPrimitive.content)
+        assertEquals("phone: Pixel", sent["label"]!!.jsonPrimitive.content)
+        assertEquals(g.expiresAtMs, (s.state.value as AdminSession.State.SignedIn).keptUntilMs)
+    }
+
+    @Test fun keepTodayNeedsAFreshPasswordSignIn() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        freshSignIn = false
+        val r = s.keepToday("phone") as AdminSession.Keep.Refused
+        assertTrue(r.reason, r.reason.contains("sign in with the password again"))
+        assertNull(shelf.g)
+    }
+
+    @Test fun aGrantTheFingerprintCheckDidntSealIsRevokedAtOnce() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        locker.ok = false
+        assertTrue(s.keepToday("phone") is AdminSession.Keep.Refused)
+        assertNull(shelf.g)
+        assertEquals(GRANT, DomovoiJson.parseToJsonElement(revokeBody).jsonObject["grant"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun afterTheIdleHourTheFingerprintSwapsTheGrantForASession() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()  // the idle hour lapsed, or the app restarted
+        assertTrue(s.state.value is AdminSession.State.Kept)
+        assertEquals(AdminSession.SignIn.Ok, s.resume())
+        val ex = DomovoiJson.parseToJsonElement(exchangeBody).jsonObject
+        assertEquals(GRANT, ex["grant"]!!.jsonPrimitive.content)
+        assertEquals("android-test", ex["device_id"]!!.jsonPrimitive.content)
+        restart(s)
+        assertEquals("Bearer ${"b".repeat(64)}", seen.last { it.path == "/api/satellites/kitchen/restart" }.getHeader("Authorization"))
+    }
+
+    @Test fun theGrantGoesOnlyToTheServerThatProvesTheSameIdentity() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        verdict = IdentityVerdict.Verified("SHA256:other", pinnedNow = true)
+        assertTrue(s.resume() is AdminSession.SignIn.Refused)
+        assertNull("dropped", shelf.g)
+        assertEquals(0, locker.opens)
+        assertTrue(seen.none { it.path == "/api/auth/phone-grant/exchange" })
+    }
+
+    @Test fun anotherServerDoesntSeeTheKeptGrant() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        val first = base
+        base = "http://192.0.2.1:6369"
+        s.refresh()
+        assertEquals(AdminSession.State.SignedOut, s.state.value)
+        assertTrue(s.resume() is AdminSession.SignIn.Refused)
+        base = first
+        assertTrue("kept for its own server", shelf.g != null)
+    }
+
+    @Test fun newBiometricsOrAnEndedGrantDropIt() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        locker.gone = true
+        assertTrue(s.resume() is AdminSession.SignIn.Refused)
+        assertNull(shelf.g)
+        // A revoked or expired grant at the server: dropped too.
+        locker.gone = false
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        grantExpired = true
+        assertEquals(AdminSession.SignIn.Refused(AdminSession.DAY_OVER), s.resume())
+        assertNull(shelf.g)
+    }
+
+    @Test fun pastTheDayTheGrantMadeSessionIsNotUsed() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        s.resume()
+        clock = java.time.Instant.parse("2026-11-25T10:00:01Z").toEpochMilli()
+        assertFalse(s.signedIn)
+    }
+
+    @Test fun signOutRevokesTheGrantAndDeletesTheKey() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.signOut()
+        assertNull(shelf.g)
+        assertTrue(locker.destroyed > 0)
+        assertEquals(GRANT, DomovoiJson.parseToJsonElement(revokeBody).jsonObject["grant"]!!.jsonPrimitive.content)
+        assertEquals(AdminSession.State.SignedOut, s.state.value)
+    }
+
+    @Test fun roomModeDropsTheKeptGrant() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        HouseholdLock.roomModeActive = true
+        HouseholdLock.roomModeActive = false
+        assertNull(shelf.g)
+        assertEquals(AdminSession.State.SignedOut, s.state.value)
+    }
+
+    private companion object {
+        val GRANT = "0123456789abcdef".repeat(4)
     }
 }

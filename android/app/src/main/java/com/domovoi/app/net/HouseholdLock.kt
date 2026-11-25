@@ -13,11 +13,12 @@ package com.domovoi.app.net
  */
 object HouseholdLock {
     /** Entering room mode also forgets every admin sign-in on this phone at
-     *  once (security review 2026-11-23, L57), not only at its next call. */
+     *  once (security review 2026-11-23, L57), not only at its next call,
+     *  and drops today's kept grant (net/AdminGrant.kt). */
     @Volatile
     var roomModeActive: Boolean = false
         set(on) {
             field = on
-            if (on) AdminSessions.forgetAll()
+            if (on) AdminSessions.forgetAll(dropGrants = true)
         }
 }

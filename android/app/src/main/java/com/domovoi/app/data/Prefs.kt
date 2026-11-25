@@ -68,7 +68,7 @@ class Prefs(
         KeystoreSealer(CALENDAR_KEYS_ALIAS, CALENDAR_KEYS_AAD),
     ) { Log.w(TAG, it.replace("token", "calendar key")) },
 ) : IdentityGate.PinStore, DeveloperOptions.Store, TokenHealth.RejectedBook, ClaimBook,
-    com.domovoi.app.calendarshare.CalendarKeys {
+    com.domovoi.app.calendarshare.CalendarKeys, com.domovoi.app.net.GrantShelf {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val kServer = stringPreferencesKey("server_url")
@@ -77,6 +77,10 @@ class Prefs(
     /** The pre-vault home of the tokens; read once at start and removed. */
     private val kDeviceTokens = stringPreferencesKey("device_tokens")
     private val kIdentityPins = stringPreferencesKey("identity_pins")
+    /** Today's admin grant (net/AdminGrant.kt): ciphertext under a
+     *  biometric-gated Keystore key, with the server and identity it is
+     *  bound to. Never the grant itself, a Bearer or the password. */
+    private val kAdminGrant = stringPreferencesKey("admin_grant")
     /** Servers (by pin key) whose trust decision was taken with the identity
      *  in view — pinned from the dialog, or recorded as offering none. */
     private val kTrustDecided = stringPreferencesKey("trust_decisions")
@@ -312,6 +316,7 @@ class Prefs(
             }
             _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, _serverUrl.value)
             _identityPins.value = ServerIdentity.decodePins(p[kIdentityPins])
+            adminGrant = p[kAdminGrant]?.let { runCatching { Json.decodeFromString(com.domovoi.app.net.StoredGrant.serializer(), it) }.getOrNull() }
             trustDecided = ServerCredentials.decodeTrusted(p[kTrustDecided])
             _rejectedTokens.value = ServerCredentials.decodeTrusted(p[kRejectedTokens])
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
@@ -379,9 +384,10 @@ class Prefs(
     fun setServerUrl(url: String): Boolean {
         val clean = ServerCredentials.normalize(url)
         if (clean.isNotBlank() && !isTrusted(clean)) return false
-        // L57: an admin sign-in belongs to the server it was made on.
-        if (clean != _serverUrl.value) AdminSessions.forgetAll()
+        val switched = clean != _serverUrl.value
         _serverUrl.value = clean
+        // L57: an admin sign-in belongs to the server it was made on.
+        if (switched) AdminSessions.forgetAll()
         _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, clean)
         recomputeListener()
         scope.launch { context.dataStore.edit { it[kServer] = clean } }
@@ -469,6 +475,23 @@ class Prefs(
      *  needs a screen lock: roommode/RoomLockRules.kt). */
     fun holdsHouseholdToken(): Boolean = deviceTokens.values.any { it.isNotBlank() }
 
+    // ── Today's admin grant (net.GrantShelf) ───────────────────────────
+
+    @Volatile
+    private var adminGrant: com.domovoi.app.net.StoredGrant? = null
+
+    override fun readGrant(): com.domovoi.app.net.StoredGrant? = adminGrant
+
+    override fun writeGrant(grant: com.domovoi.app.net.StoredGrant?) {
+        adminGrant = grant
+        scope.launch {
+            context.dataStore.edit {
+                if (grant == null) it.remove(kAdminGrant)
+                else it[kAdminGrant] = Json.encodeToString(com.domovoi.app.net.StoredGrant.serializer(), grant)
+            }
+        }
+    }
+
     // ── Server identity pins (IdentityGate.PinStore) ───────────────────
 
     override fun pinFor(key: String): ServerIdentity.Pin? = _identityPins.value[key]
@@ -512,8 +535,9 @@ class Prefs(
     private fun setPins(next: Map<String, ServerIdentity.Pin>) {
         // L57: an admin sign-in is bound to the identity proved then; a new
         // or dropped pin ends it here at once.
-        if (next != _identityPins.value) AdminSessions.forgetAll()
+        val changed = next != _identityPins.value
         _identityPins.value = next
+        if (changed) AdminSessions.forgetAll(dropGrants = true)
         scope.launch { context.dataStore.edit { it[kIdentityPins] = ServerIdentity.encodePins(next) } }
     }
 
@@ -547,8 +571,8 @@ class Prefs(
      */
     fun forgetActiveServer(): String? {
         val url = _serverUrl.value.takeIf { it.isNotBlank() } ?: return null
-        AdminSessions.forgetAll()
         _serverUrl.value = ""
+        AdminSessions.forgetAll()
         _deviceToken.value = null
         scope.launch { context.dataStore.edit { it[kServer] = "" } }
         removeKnownServer(url)
