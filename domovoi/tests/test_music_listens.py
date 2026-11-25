@@ -183,9 +183,14 @@ async def _seed() -> dict:
 
 
 async def _register(c, device_id: str, **extra) -> dict:
+    """Register as an app from before 1.5.0 would: the device key the
+    server mints (V086) is not kept, so these tests exercise the claim key
+    (X-Domovoi-Claim-Key), which stays accepted for such apps. The device
+    key's own path is test_private_chats.py's."""
     r = await c.post("/api/devices/register",
                      json={"device_id": device_id, "platform": "browser", **extra})
     assert r.status_code == 200, r.text
+    c.cookies.delete("domovoi-device-key")
     return r.json()
 
 
@@ -792,7 +797,11 @@ async def test_a_device_replacing_a_rooms_queue_makes_it_theirs(_db, clean, monk
         return 404, {"detail": "no"}
 
     async with _dev(token, "browser-alex") as c:
-        await _register(c, "browser-alex")
+        # A 1.5.0 browser: it keeps its device key (the cookie), which is how
+        # the room's music is known to be its person's (caller_device_row;
+        # an id alone names no keyed device).
+        r = await c.post("/api/devices/register", json={"device_id": "browser-alex", "platform": "browser"})
+        assert r.status_code == 200 and r.json()["device_key"]
         await c.put("/api/devices/browser-alex/person", json={"person_id": ids["alex"]})
         monkeypatch.setattr(music_api, "post_admin", _refused)
         await c.post("/api/music/play-track", json={"room_id": "office", "track_id": ids["t1"]})

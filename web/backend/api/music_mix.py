@@ -126,20 +126,19 @@ async def get_person_mix(person_id: int) -> dict[str, Any]:
                                             '"claim_key_required"} without its claim key'}})
 async def put_person_mix(person_id: int, body: PersonMixIn, request: Request) -> Any:
     if not await devices_api.caller_is_admin(request):
-        caller = devices_api.caller_device(request)
         async with session_scope() as s:
-            device = (await s.execute(
-                text("SELECT owner_person_id, shared_screen, claim_key_hash, "
-                     "(SELECT name FROM people WHERE id = :p) FROM devices WHERE device_id = :d"),
-                {"d": caller, "p": person_id})).first() if caller else None
-        if device is None or device[0] is None or int(device[0]) != person_id or device[1]:
+            # The caller's own device: devices.caller_device_row.
+            device = await devices_api.caller_device_row(s, request)
+            name = (await s.execute(text("SELECT name FROM people WHERE id = :p"),
+                                    {"p": person_id})).scalar_one_or_none()
+        mine = device is not None and device.owner_person_id is not None
+        if not mine or int(device.owner_person_id) != person_id or device.shared_screen:
             raise HTTPException(status_code=403, detail=NOT_YOURS_DETAIL)
-        # The id is self-asserted: the claim key proves the request comes
-        # from the device that said "this is me" (devices.py).
-        if not devices_api.claim_key_matches(device[2], devices_api.presented_claim_key(request)):
-            name = device[3] or "this person"
-            detail = (devices_api.RECLAIM_DETAIL if not device[2]
-                      else devices_api.WRONG_KEY_DETAIL).format(name=name)
+        # Proven by its device key with its own claim, or (apps from before
+        # 1.5.0) by the claim key: devices.proves_claim.
+        if not devices_api.proves_claim(device, request):
+            detail = (devices_api.RECLAIM_DETAIL if not device.claim_key_hash
+                      else devices_api.WRONG_KEY_DETAIL).format(name=name or "this person")
             return JSONResponse(status_code=403, content={"detail": detail, "code": "claim_key_required"})
     async with session_scope() as s:
         await _person_answer(s, person_id)
