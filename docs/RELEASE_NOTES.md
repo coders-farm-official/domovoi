@@ -30,6 +30,12 @@ a way that would otherwise get reported as a bug.
   the upgrade are private now and disappear from them until the app is
   updated.
 - **Phone admin grants** are bound to the phone's device key too.
+- **"My" actions follow the key.** Whose mix a room follows and whose a
+  listen is, clearing a person's listening history, their mix, forgetting
+  their face and "this is me" find the phone or browser by its device key.
+  The key proves a claim as the claim key does, and the claim key is still
+  accepted, so an older app can still clear its person's history; but what
+  an older app plays counts as the household's until it is updated.
 - **For API readers:** thread JSON gains `shared`, `mine`, `can_write`,
   `can_share`, `can_delete`, `admin_view` and `owner_name`;
   `GET /api/chat/threads?scope=mine|all`; `POST /api/chat/threads` and
