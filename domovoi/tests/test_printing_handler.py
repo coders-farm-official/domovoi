@@ -195,13 +195,41 @@ async def test_two_documents_match_and_a_choice_picks_one(voice):
         await fake.close()
 
 
+NO_PRINTER = ("There's no printer set up. An admin can add one in Settings → Household → "
+              "Printers & scanners. Or say set up the printer to look for one.")
+
+
 @requires_db
 async def test_nothing_to_print_and_no_printer(voice):
+    # No printer: that comes first, whatever was asked for (finding N14).
     r = await voice("print a joke")
-    assert "I can only print documents in Documents" in r.text
+    assert r.text == NO_PRINTER
     (voice.docs / "Lease.pdf").write_bytes(_pdf(1))
     r = await voice("print the lease")
-    assert r.text.startswith("There's no printer set up.")
+    assert r.text == NO_PRINTER
+
+
+@requires_db
+@pytest.mark.parametrize("said", ["can you print this", "Can you print this?", "print this",
+                                  "print it", "print my document"])
+async def test_print_with_no_printer_says_so_first(voice, said):
+    """Capability case 7.6: not "Which document?" when nothing can print."""
+    r = await voice(said)
+    assert r.text == NO_PRINTER
+    assert "Which document" not in r.text
+
+
+@requires_db
+async def test_with_a_printer_the_print_flow_is_unchanged(voice):
+    fake = await FakeIppPrinter().start()
+    try:
+        await _add_printer(voice, fake)
+        r = await voice("can you print this")
+        assert r.text == "Which document? Say print and its name, like print my cover letter."
+        r = await voice("print a joke")
+        assert "I can only print documents in Documents" in r.text
+    finally:
+        await fake.close()
 
 
 @requires_db
@@ -306,7 +334,8 @@ async def test_scan_by_voice_asks_about_the_glass_then_another_page(voice):
 @requires_db
 async def test_scan_with_no_scanner(voice):
     r = await voice("scan this")
-    assert r.text == "There's no scanner set up. You can add one in Settings, Printers and scanners."
+    assert r.text == ("There's no scanner set up. An admin can add one in Settings → Household → "
+                      "Printers & scanners.")
 
 
 @requires_db

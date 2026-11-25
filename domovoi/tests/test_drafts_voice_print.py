@@ -108,5 +108,13 @@ async def test_the_drafts_confirmation_says_the_copies_and_double_sided_too(phon
 
 @requires_db
 async def test_print_it_with_no_chat_or_no_draft_still_asks_which_document(phone):
+    # With no printer, that comes first (finding N14).
     r = await phone("print it", thread=None)
-    assert r.text.startswith("Which document?")
+    assert r.text.startswith("There's no printer set up.")
+    fake = await FakeIppPrinter().start()
+    try:
+        await _printer(phone, fake)
+        r = await phone("print it", thread=None)
+        assert r.text.startswith("Which document?")
+    finally:
+        await fake.close()
