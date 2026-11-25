@@ -118,6 +118,9 @@ class Catalogue:
     refused_models: list[dict] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     made: float = 0.0
+    #: Targets this release can't make a kit for, with the card's reason
+    #: (parts.target_problems: a Mac with no Ollama for macOS pinned).
+    target_problems: dict[str, str] = field(default_factory=dict)
 
 
 _cat_lock = threading.Lock()
@@ -174,7 +177,7 @@ def catalogue(rel: Release, repo_dir: str, *, read: pins.Reader | None = None,
     out += parts.household_wake_parts()
     out.append(parts.licence_part(rel, repo_dir, models))
     cat = Catalogue(release=rel, parts=out, refused_models=parts.refused_models(p), problems=problems,
-                    made=time.time())
+                    made=time.time(), target_problems=parts.target_problems(p))
     with _cat_lock:
         _cat = cat
     return cat
@@ -311,6 +314,8 @@ def plan(cat: Catalogue, sel: Selection, *, freeable: int = 0,
         refusal = {"reason": "no_target", "message": "Tick at least one kind of computer."}
     elif cat.problems:
         refusal = {"reason": "release", "message": cat.problems[0]}
+    elif (bad := next((t for t in sel.targets if t in cat.target_problems), None)) is not None:
+        refusal = {"reason": "release", "message": cat.target_problems[bad]}
     elif not tools_ok():
         refusal = {"reason": "no_tools", "message": (
             "This server can't make kit images yet: it needs the dosfstools and mtools packages "

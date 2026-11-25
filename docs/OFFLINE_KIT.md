@@ -18,14 +18,19 @@ On a Domovoi server that is on the stable channel and runs a release:
 **Settings → System → Offline kit** (admins only).
 
 1. Tick what the stick is for: **A Windows or Linux PC** (ticked) and
-   **A Mac with an Apple chip** (not ticked; it adds about 2.4 GB, and
-   Ollama for macOS with AI).
+   **A Mac with an Apple chip** (not ticked; it adds about 2.4 GB of Mac
+   parts, Ollama for macOS among them).
 2. Tick what to include: **AI chat and questions**, **Pictures in chat**,
    **Rooms: Raspberry Pis and spare computers**. Models and wake words the
    house added itself are listed too, unticked and marked "not checked
    against a release". Models whose licence doesn't allow passing them on
    (Gemma, Qwen2.5 3B, Llama 3.2 Vision, any model of unknown licence) are
-   listed as never going on a kit.
+   listed as never going on a kit. **AI chat and questions** unticked
+   leaves out the AI models only: Domovoi's own Ollama (for Linux, and for
+   macOS when Mac is ticked) is on every kit, because every install from a
+   kit runs it. A computer installs from such a kit with AI chat and
+   questions off, and the house can turn them on later, with internet, in
+   Settings → Models.
 3. Pick your stick's size. The card says the kit's size, the smallest
    stick that holds it and, when yours is too small, by how much and what
    to leave out. A "16 GB" stick holds about 14.9 GB of kit.
@@ -51,17 +56,19 @@ The card's reasons when it can't make a kit:
 | Needs 15 GB free on the server. | The image and the downloads need that much disk. |
 | …needs the dosfstools and mtools packages | The image is made without root by `mkfs.fat` and `mcopy`: `sudo apt install dosfstools mtools`. |
 | …Docker uses its older image store… | See "Images" below. |
+| This release's mac/installer/pins.conf doesn't pin Ollama for macOS… | Every Mac install from a kit runs Domovoi's Ollama for macOS, and this release has no pin for it. Untick the Mac. |
 
 On a Windows server the WSL disk grows by the image's size, and on a Mac
 the VM's disk does, and neither shrinks by itself: delete the kit once
 the stick is written.
 
 Sizes measured on 2026-11-22 for 1.4.0's pins (the card's numbers are
-exact once the server has fetched each part once):
+exact once the server has fetched each part once; "no AI" adds Ollama's
+1.4 GB to that measurement, since every kit now carries it):
 
 | Kit | Size | Stick |
 |---|---|---|
-| PC, no AI | about 3.3 GB | 8 GB |
+| PC, no AI (Ollama still on) | about 4.7 GB | 8 GB |
 | PC, AI + pictures + rooms | about 12.0 GB | 16 GB |
 | PC + Mac, AI + pictures + rooms | about 14.4 GB | 16 GB |
 
