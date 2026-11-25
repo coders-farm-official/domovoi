@@ -59,11 +59,14 @@ class SettingsModelsTest {
     }
 
     @Test fun whatOnlyTheDashboardChangesOpensItThereInWordsEveryDashboardKnows() {
-        // The app has no admin session. Command recordings opens at its
-        // 1.5.0 address (the dashboard's old ones redirect there).
+        // The app has no admin session, and a 1.5.0 phone may talk to a
+        // 1.4.x server: every target is a word every dashboard version
+        // understands. Command recordings opens at `recordings`, not its own
+        // key: a 1.4.x dashboard has no `command-recordings`, and a 1.5.0
+        // one redirects `recordings` there.
         assertEquals(
             mapOf("wake-words" to "wake-words", "greetings" to "greetings", "models" to "models",
-                "internet" to "internet", "command-recordings" to "command-recordings", "advanced" to "configuration"),
+                "internet" to "internet", "command-recordings" to "recordings", "advanced" to "configuration"),
             SettingsSection.entries.filter { it.dashboard != null }.associate { it.key to it.dashboard },
         )
         assertEquals(
