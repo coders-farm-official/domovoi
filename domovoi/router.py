@@ -912,6 +912,19 @@ async def _record_failed_turn(
     return response
 
 
+async def _settings_answer(transcript: str, ctx: Context) -> str | None:
+    """A fixed answer for a turn no fast path took, when the house's own
+    settings already decide it; None otherwise (the turn goes on to the
+    models). ``transcript`` is normalized and filler-stripped.
+
+    * A weather question about home with no Home location set: where an
+      admin sets it (domovoi/weather.py, ``no_place_answer``), not a web
+      search for "what's the weather"."""
+    if ctx.capped_capture:
+        return None
+    return await weather.no_place_answer(transcript, ctx)
+
+
 async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Response:
     # Conversational chat mode (Feature 8) is bypassed UPSTREAM of this
     # function. When a session is in ``conversational_mode`` (set by
@@ -1138,6 +1151,30 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         # turn goes on to the tool model and the Q&A model as if no fast
         # path had matched.
         log.info("fast path %s declined %r; routing on", handler.name, said(transcript))
+
+    # Answers the house's settings decide, before any model is asked: what
+    # Domovoi can't do here, and why, never depends on the small model.
+    fixed = await _settings_answer(transcript, ctx)
+    if fixed is not None:
+        response = Response(
+            text=fixed,
+            session_id=session_id,
+            matched_handler=None,
+            matched_path="qa",
+            online=ctx.online,
+            expect_followup=False,
+        )
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler=None,
+            matched_path="qa",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
 
     # AI features off (Settings → Chat & AI → Models, domovoi/ai_features.py): no
     # language model is asked anything — not the tool router, not the

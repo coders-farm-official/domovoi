@@ -1371,7 +1371,8 @@
       "kind": "command",
       "must_include": [
         "Settings\\s*(?:→|->|>)\\s*Household\\s*(?:→|->|>)\\s*Home location"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "7.12",

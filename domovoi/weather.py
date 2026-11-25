@@ -30,6 +30,7 @@ notes the failure, :func:`answer_for` is the shared plugin-then-core answer.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Awaitable
 
 from domovoi import egress, home_location
@@ -45,10 +46,37 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+#: Where the Home location is set: an admin's job (its PUT is admin-only,
+#: web/backend/api/home_location.py), on the dashboard's Home location card.
+PLACE_HOME_LOCATION = "Settings → Household → Home location"
+
 NO_PLACE_LINE = (
-    "I don't know where home is yet. Set it in Settings → Household → "
-    "Home location, and I can tell you the weather there."
+    "I don't know where home is yet. An admin can set it in "
+    f"{PLACE_HOME_LOCATION}, and then I can tell you the weather there."
 )
+#: The same for a proven admin (``Context.proven_admin``): the steps, in
+#: the card's own words ("start typing your town").
+NO_PLACE_ADMIN_LINE = (
+    f"I don't know where home is yet. Set it in {PLACE_HOME_LOCATION}: start typing "
+    "your town and pick it from the list. Then I can tell you the weather there."
+)
+
+
+def no_place_line(*, admin: bool = False) -> str:
+    """What a weather question hears while no Home location is set."""
+    return NO_PLACE_ADMIN_LINE if admin else NO_PLACE_LINE
+
+
+# A weather question about somewhere named ("weather in Paris", "how cold
+# is it at the beach"): not about home, so no Home location is needed to
+# ask it. "in the morning", "for tomorrow", "this week" are times, not places.
+_TIME_WORDS = (
+    r"(?:the )?(?:morning|afternoon|evening|night|weekend|week|day|moment|next (?:few )?\w+)"
+    r"|today|tonight|tomorrow|this \w+|next \w+|an? (?:hour|bit|while|minute)|\d"
+    # Home itself.
+    r"|home|here|the house|(?:my|our) (?:place|house|town|area)"
+)
+_ELSEWHERE_RE = re.compile(rf"\b(?:in|at|for|near|around) (?!(?:{_TIME_WORDS})\b)[a-z]")
 
 
 # The weather plugin failed and core can't look it up instead: short, in
@@ -125,8 +153,35 @@ async def answer_weather(question: str, ctx: Context) -> str | None:
         return None
     place = await household_place()
     if place is None:
-        return NO_PLACE_LINE
+        return no_place_line(admin=bool(getattr(ctx, "proven_admin", False)))
     return await lookup(place["query"])
+
+
+async def no_place_answer(question: str, ctx: Context) -> str | None:
+    """The no-place line for a weather question about home, said before
+    any model or search is asked (M9, case 7.11), or None.
+
+    Only when core would answer the weather: no weather plugin (a plugin
+    answers on its own terms), the internet answer isn't No and AI is on
+    (else their line is the reason, not the place), the question names no
+    other place ("weather in Paris"), and no Home location is set. Without
+    this a house with no Home location searched the web for "what's the
+    weather" ("The search didn't turn up a clear answer.")."""
+    if categorize_question(question) != CATEGORY_WEATHER or plugin_handles_weather():
+        return None
+    if not egress.internet_allowed():
+        return None
+    from domovoi import ai_features
+
+    if ai_features.turned_off():
+        # AI off answers every lookup with its own line (router): setting
+        # a place wouldn't make this one work.
+        return None
+    if _ELSEWHERE_RE.search((question or "").lower()):
+        return None
+    if await household_place() is not None:
+        return None
+    return no_place_line(admin=bool(getattr(ctx, "proven_admin", False)))
 
 
 async def _plugin_answer(question: str, ctx: Context, session: "AsyncSession") -> str | None:
