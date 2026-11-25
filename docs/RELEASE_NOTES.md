@@ -4,6 +4,35 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Update notices: Domovoi says when a new release is out
+
+- **What changed.** Domovoi looks for a new **signed release** by itself,
+  once a day and a couple of minutes after it starts, and Home says
+  "Domovoi 1.5.0 is available" to every paired phone and browser and to
+  the admin (an admin gets **Update**, which opens Settings → System →
+  About & updates and runs that card's own update; everyone else reads
+  "An admin can install it."). About & updates shows the release's three
+  **Highlights**, has a **Check for updates by itself** box, and on a
+  house following `main` says how many changes it is past the latest
+  release instead of "main channel: not a signed release (expected)" and
+  "latest release: X". Commits on `main` never make a notice. Nothing is
+  ever installed by itself.
+- **What to know.** The automatic check is **on by default, but only when
+  the house's internet answer is Yes**: a house answered Yes starts
+  looking at its first 1.5.0 start (a `git fetch`, and for a new release
+  two small signed files from the GitHub release); Sometimes, No, not
+  answered and the offline kit never look by themselves. An admin turns it
+  off by unticking the box (`update_auto_check` / `UPDATE_AUTO_CHECK`);
+  that also drops a notice the automatic check found. **Check for
+  updates** now also checks the release's signature and returns the new
+  `updates` key, which `GET /v1/admin/version` and `GET /api/config/version`
+  carry too; new route `GET /v1/updates/notice` and its dashboard mirror
+  `GET /api/updates/notice` (device tier: paired phones and browsers and
+  the admin, never an unpaired guest). No migration: the state is the
+  `household_settings` row `update_check`. Release notes now carry three
+  **Highlights** (`docs/release/v<version>.md` and the dated section here),
+  which the release script checks from 1.5.0 on.
+
 ## 1.5.0 (unreleased) — Rooms: diagnostics and support sessions per satellite
 
 - **A room with several satellites is checked one device at a time.** The
@@ -19,6 +48,7 @@ a way that would otherwise get reported as a bug.
   room's satellites with each one's own diagnostics and support-session
   facts; `diagnostics` is true when any of them offers checks. The core's
   diagnostics routes take a satellite id, or a room id for its speaker.
+
 
 ## 1.5.0 (unreleased) — Rooms: mic presets per satellite, older rooms removable
 

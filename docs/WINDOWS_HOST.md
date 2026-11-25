@@ -1006,8 +1006,9 @@ handed to `provision.sh` as `--track-branch`; the channels are described in
 [LINUX_HOST.md, Release channels](LINUX_HOST.md#release-channels)):
 
 - **`stable`**, on a release build: Domovoi's releases only. Settings >
-  System > About & updates says when a newer release is out; nothing
-  updates until an admin pulls it there.
+  System > About & updates (and, when the house's internet answer is Yes,
+  Home) says when a newer release is out; nothing updates until an admin
+  presses **Update**.
 - **`main`**, on a build pinned to a commit that is not a release: every
   change, as it lands.
 

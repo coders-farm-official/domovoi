@@ -402,6 +402,22 @@ async def download_identity_backup(body: IdentityBackupRequest, request: Request
     )
 
 
+@router.get(
+    "/updates/notice",
+    # The device tier's read half at both hops: a paired phone or browser,
+    # or an admin (the cookie after a reload too); never an unpaired guest.
+    dependencies=[Depends(require_device_read)],
+)
+async def updates_notice(request: Request):
+    """Home's update row (1.5.0): ``{available, version, highlights,
+    found_by, found_at, updating}``, or ``{available: false, updating:
+    false}``. Proxy of the core's ``GET /v1/updates/notice``: only a signed
+    release makes a notice, never a commit on main; nothing here installs."""
+    return bridge_response(
+        *await get_admin("/v1/updates/notice", headers=auth_forward_headers(request))
+    )
+
+
 @router.post(
     "/config/version/check",
     # Device tier at both hops: the core's /v1/admin/version/check is on

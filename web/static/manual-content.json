@@ -5660,6 +5660,10 @@
      "text": "[Settings → System → About & updates](route:settings/about) shows the release you run."
     },
     {
+     "type": "p",
+     "text": "With the internet setting **Yes**, Domovoi looks by itself once a day and Home says *Domovoi 1.5.0 is available*. Untick **Check for updates by itself** to look only when you ask. Only a signed release makes this notice, with its three highlights; nothing installs by itself."
+    },
+    {
      "type": "label",
      "role": "how",
      "text": "How to",
@@ -5670,7 +5674,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "**Check for updates**."
+       "text": "**Check for updates** (or **Update** on Home)."
       },
       {
        "text": "**Update Domovoi**. It pulls the update, then restarts with it."

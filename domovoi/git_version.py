@@ -1217,19 +1217,33 @@ async def fetch() -> dict:
 
     Under ``INTERNET_ACCESS=never`` it reports ``ok=False`` with the
     turned-off reason and runs no git at all."""
+    global _LAST_FETCH
     if egress.internet_turned_off():
         return {"ok": False, "error": egress.TURNED_OFF_REASON}
     try:
         proc, warning = await asyncio.to_thread(_fetch_branches_and_tags)
         if proc.returncode != 0:
-            return {"ok": False, "error": _fetch_failure(proc.stderr), "tag_warning": None}
-        return {"ok": True, "error": None, "tag_warning": warning}
+            out = {"ok": False, "error": _fetch_failure(proc.stderr), "tag_warning": None}
+        else:
+            out = {"ok": True, "error": None, "tag_warning": warning}
     except FileNotFoundError:
-        return {"ok": False, "error": "git not installed"}
+        out = {"ok": False, "error": "git not installed"}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": _timed_out()}
+        out = {"ok": False, "error": _timed_out()}
     except Exception as e:  # noqa: BLE001 — never raise into the endpoint
-        return {"ok": False, "error": str(e)}
+        out = {"ok": False, "error": str(e)}
+    _LAST_FETCH = {"ok": out["ok"], "error": out["error"], "at": time.time()}
+    return out
+
+
+# The last fetch's outcome ({ok, error, at}), for the update notice
+# (domovoi/update_notice.py), which runs the signed-release step only after
+# a fetch that worked. None before the first.
+_LAST_FETCH: dict | None = None
+
+
+def last_fetch() -> dict | None:
+    return _LAST_FETCH
 
 
 async def commits_behind() -> dict:

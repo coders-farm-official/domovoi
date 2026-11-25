@@ -348,6 +348,29 @@ const HomeFriendHousesRow = (inbox) => {
            text: HomePlural(n, 'unread Friend Houses message'),
            href: '#settings/friend-houses/messages' };
 };
+/* A new signed Domovoi release (update notices, 1.5.0): one row, not a
+ * problem, for every paired phone and browser and an admin (the device
+ * tier's read, never an unpaired guest). Only a signed release makes one,
+ * never a change on main. An admin (not on a shared screen) gets Update,
+ * which opens About & updates and runs that card's own one update action
+ * (#settings/about/update-now); everyone else reads that an admin can
+ * install it. No button that can't do what it says. */
+const HOME_UPDATE_NOTICE = '/api/updates/notice';
+const HOME_UPDATE_HREF = '#settings/about/update-now';
+const HOME_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
+const HomeUpdateRow = (notice, { admin = false, shared = false } = {}) => {
+  if (!notice || notice.available !== true) return null;
+  const version = typeof notice.version === 'string' && HOME_VERSION_RE.test(notice.version) ? notice.version : null;
+  if (!version) return null;
+  if (notice.updating) {
+    return { key: 'update-available', tone: 'brand', scope: 'household', update: true,
+             text: 'Domovoi is updating…', canUpdate: false, sub: null };
+  }
+  const canUpdate = !!admin && !shared;
+  return { key: 'update-available', tone: 'brand', scope: 'household', update: true,
+           text: `Domovoi ${version} is available`, canUpdate,
+           sub: canUpdate ? null : 'An admin can install it.' };
+};
 /* That row added to whatever the problems show: after the rows, below a
  * summary line, or on its own. */
 const HomeWithRow = (view, row) => {
@@ -364,6 +387,23 @@ const HOME_FH_APPS = '/api/friend-houses/apps/notices';
 const HomeAppsRows = (view, rows) => (rows || []).reduce((v, r) => HomeWithRow(v, r), view);
 
 /* ---- status line --------------------------------------------------- */
+/* Its row: the words (plain text), the muted line under them, and an
+ * admin's Update. Below 420 px the button drops to its own line. */
+const HomeUpdateNoticeRow = ({ r, cls = 'home-att-row' }) => (
+  <div className={`${cls} home-att-claim home-att-update`} data-key={r.key}>
+    <StatusDot tone={r.tone}/>
+    <span className="txt">
+      <span className="home-att-update-title">{r.text}</span>
+      {r.sub && <span className="home-att-update-sub">{r.sub}</span>}
+    </span>
+    {r.canUpdate && (
+      <span className="home-att-acts">
+        <Button variant="primary" icon="download"
+                onClick={() => { window.location.hash = HOME_UPDATE_HREF; }}>Update</Button>
+      </span>
+    )}
+  </div>
+);
 
 const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
   const [explain, setExplain] = React.useState(false);
@@ -443,7 +483,7 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
             <span className="txt">something needs the admin's attention</span>
             <span className="when">{view.count}</span>
           </div>
-          {(view.extra || []).map((r) => (
+          {(view.extra || []).map((r) => (r.update ? <HomeUpdateNoticeRow key={r.key} r={r}/> :
             <a key={r.key} className="home-att-row" data-key={r.key} href={r.href}>
               <StatusDot tone={r.tone}/>
               <span className="txt">{r.text}</span>
@@ -498,6 +538,7 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
               {r.at && <span className="when">{relTime(r.at)}</span>}
             </>
           );
+          if (r.update) return <HomeUpdateNoticeRow key={r.key} r={r} cls={cls}/>;
           if (r.claim) {
             return (
               <div key={r.key} className={`${cls} home-att-claim`} data-key={r.key}>
@@ -1360,6 +1401,10 @@ const HomePage = ({ counts, badges }) => {
   // Apps with friends' notices (friend_apps.jsx): paused mail, apps waiting
   // to be allowed, Docker. The security tier, so only an admin asks.
   const fhApps = useApiObject(admin && !shared ? HOME_FH_APPS : null, { quiet: true, refetchOnAuth: true });
+  // A new signed release (update notices): the device tier's read, so a
+  // paired browser or an admin asks, never an unpaired guest.
+  const updateNotice = useApiObject(viewer.paired || admin ? HOME_UPDATE_NOTICE : null,
+                                    { quiet: true, refetchOnAuth: true });
   const dayStart = HomeDayStart(Date.now());
   const calPath = React.useMemo(() => {
     const start = new Date(dayStart).toISOString();
@@ -1421,6 +1466,8 @@ const HomePage = ({ counts, badges }) => {
   HomeHooks.useInterval(() => approvals.refresh(), HOME_APPROVALS_MS, admin);
   HomeHooks.useInterval(() => hardware.refresh(), HOME_HARDWARE_MS, admin);
   const versionAt = React.useRef(0);
+  // The update notice: read at most every 10 minutes on focus, like the version.
+  const noticeAt = React.useRef(Date.now());
   React.useEffect(() => { if (admin) versionAt.current = Date.now(); }, [admin]);
   HomeHooks.useOnFocus(() => {
     cfg.refresh(); health.refresh(); cal.refresh(); fhInbox.refresh();
@@ -1429,6 +1476,10 @@ const HomePage = ({ counts, badges }) => {
     if (admin && Date.now() - versionAt.current > HOME_VERSION_GAP_MS) {
       versionAt.current = Date.now();
       version.refresh();
+    }
+    if (Date.now() - noticeAt.current > HOME_VERSION_GAP_MS) {
+      noticeAt.current = Date.now();
+      updateNotice.refresh();
     }
   });
 
@@ -1512,9 +1563,10 @@ const HomePage = ({ counts, badges }) => {
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
   // A household member's rows wait for the setting that decides them, so
   // an "admins only" house never flashes them while /api/config loads.
-  const view = HomeAppsRows(HomeWithRow((!admin && !HomeAnswered(cfg)) ? { mode: 'none' }
+  const view = HomeWithRow(HomeAppsRows(HomeWithRow((!admin && !HomeAnswered(cfg)) ? { mode: 'none' }
     : HomeAttentionView({ rows, viewer, visibility, shared }), HomeFriendHousesRow(fhInbox.data)),
-    admin && !shared && typeof fhAppsHomeRows === 'function' ? fhAppsHomeRows(fhApps.data) : []);
+    admin && !shared && typeof fhAppsHomeRows === 'function' ? fhAppsHomeRows(fhApps.data) : []),
+    HomeUpdateRow(updateNotice.data, { admin, shared }));
   const [checkedAt, setCheckedAt] = React.useState(null);
   React.useEffect(() => { if (!checking) setCheckedAt(Date.now()); },
     [checking, health.data, sats.data, plugins.data, acq.data, approvals.data, pending.data,

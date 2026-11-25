@@ -363,6 +363,45 @@ SCENARIOS["unpaired_fh_unread"] = scenario(
                                      "__body": {"detail": "X-Device-Token or admin session required"}}}),
     SNAP,
 )
+# Update notices (1.5.0): a new signed release, for paired browsers, phones
+# and admins (GET /api/updates/notice, the device tier's read), never an
+# unpaired guest. Only an admin off a shared screen gets Update.
+NOTICE = {"available": True, "version": "1.5.0", "highlights": ["a", "b", "c"], "found_by": "auto",
+          "found_at": iso(NOW - 60 * MIN), "updating": False}
+SCENARIOS["paired_update"] = scenario(house(**{"GET /api/updates/notice": NOTICE}), SNAP, ls=PAIRED_LS)
+SCENARIOS["shared_update"] = scenario(house(**{"GET /api/updates/notice": NOTICE}), SNAP, ls=SHARED_LS)
+SCENARIOS["admin_update"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN, "GET /api/updates/notice": NOTICE}),
+    "const before = w.__snap(h);"
+    "await h.click({ type: 'button', text: 'Update' });"
+    "return { before, hash: w.location.hash };",
+    ls=PAIRED_LS,
+)
+SCENARIOS["admin_summary_update"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_CLAIMED, "GET /api/config": cfg("summary"),
+             "GET /api/updates/notice": NOTICE}), SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["updating_notice"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN, "GET /api/updates/notice": {**NOTICE, "updating": True}}),
+    SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["no_notice"] = scenario(
+    house(**{"GET /api/updates/notice": {"available": False, "updating": False}}), SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["bad_version_notice"] = scenario(
+    house(**{"GET /api/updates/notice": {**NOTICE, "version": "<b>9</b> 1.5.0 and a very long line"}}),
+    SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["unpaired_update"] = scenario(
+    house(**{"GET /api/updates/notice": NOTICE,
+             "GET /api/satellites": {"__status": 401,
+                                     "__body": {"detail": "X-Device-Token or admin session required"}}}),
+    SNAP,
+)
+SCENARIOS["paired_notice_refused"] = scenario(
+    house(**{"GET /api/updates/notice": {"__status": 401, "__body": {"detail": "X-Device-Token required"}}}),
+    SNAP, ls=PAIRED_LS,
+)
 SCENARIOS["admin"] = scenario(
     house(**{
         "GET /api/auth/status": STATUS_ADMIN,
@@ -1107,6 +1146,59 @@ def test_a_household_member_sees_unread_friend_messages_linking_to_messages(driv
     unpaired = driven["unpaired_fh_unread"]
     assert "GET /api/friend-houses/unread" not in unpaired["fetches"]
     assert "fh-unread" not in {r["key"] for r in unpaired["attention"]}
+
+
+def _update_row(snap: dict) -> dict | None:
+    return next((r for r in snap["attention"] if r["key"] == "update-available"), None)
+
+
+def test_a_household_member_reads_the_update_notice_without_a_button(driven) -> None:
+    snap = driven["paired_update"]
+    row = _update_row(snap)
+    assert row and row["text"] == "Domovoi 1.5.0 is availableAn admin can install it."
+    assert row["href"] is None
+    assert not any(b["text"] == "Update" for b in snap["buttons"])
+    assert "/api/updates/notice" in _fetched(snap)
+    assert snap["modal"] is False and snap["pair"] is False
+
+
+def test_a_shared_screen_gets_the_line_not_the_button(driven) -> None:
+    snap = driven["shared_update"]
+    assert _update_row(snap)["text"].endswith("An admin can install it.")
+    assert not any(b["text"] == "Update" for b in snap["buttons"])
+
+
+def test_an_admin_gets_update_which_opens_the_about_card_s_own_action(driven) -> None:
+    out = driven["admin_update"]
+    row = _update_row(out["before"])
+    assert row["text"] == "Domovoi 1.5.0 is availableUpdate", "the words, then the button"
+    assert any(b["text"] == "Update" for b in out["before"]["buttons"])
+    assert out["hash"] == "#settings/about/update-now"
+
+
+def test_the_update_row_shows_under_a_summary_line_too(driven) -> None:
+    snap = driven["admin_summary_update"]
+    assert _update_row(snap)["text"].startswith("Domovoi 1.5.0 is available")
+
+
+def test_while_updating_anyone_reads_updating_and_no_button(driven) -> None:
+    snap = driven["updating_notice"]
+    assert _update_row(snap)["text"] == "Domovoi is updating…"
+    assert not any(b["text"] == "Update" for b in snap["buttons"])
+
+
+def test_no_notice_no_row_and_a_refusal_is_quiet(driven) -> None:
+    for name in ("no_notice", "paired_notice_refused", "bad_version_notice"):
+        snap = driven[name]
+        assert _update_row(snap) is None, name
+        assert snap["modal"] is False and snap["pair"] is False, name
+        assert "couldn't check" not in snap["text"], name
+
+
+def test_an_unpaired_guest_never_asks_for_the_notice(driven) -> None:
+    snap = driven["unpaired_update"]
+    assert "/api/updates/notice" not in _fetched(snap)
+    assert _update_row(snap) is None
 
 
 def test_admin_gets_the_admin_rows_from_admin_reads(driven) -> None:
