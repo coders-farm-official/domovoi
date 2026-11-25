@@ -113,13 +113,9 @@ TASKS: tuple[AdminTask, ...] = (
         "On the dashboard, in Files: open the library it's in (Music for a song), tick it, press "
         "Delete and confirm. It's gone from the server, for everyone.",
     ),
-    AdminTask(
-        "video_downloads",
-        re.compile(rf"\b{_YOU} (?:download|fetch|grab) (?:a |the |some |this |that |any )?videos?\b"),
-        "I can't download videos here.",
-        "Not on this house. An admin can add video downloads from the Plugins page.",
-        unless_provided=DOWNLOADER_CAPABILITY,
-    ),
+    # "Can you download videos?" (8.7d/8.7e) is the capability table's
+    # (domovoi/house_facts.py, video_downloads), which knows the plugin's
+    # state: one answer, the same pointer for members and admins.
 )
 
 TASK_BY_KEY: dict[str, AdminTask] = {t.key: t for t in TASKS}

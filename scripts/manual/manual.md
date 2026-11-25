@@ -2211,6 +2211,14 @@ Everything stays on your server, or on your phone.
 Paired phones and browsers in the house can read the voice history, in
 each room's **Conversations** tab.
 
+Ask Domovoi itself: it answers from this house's own settings.
+
+**Try saying**
+
+- "are you recording me"
+- "do you keep what I say"
+- "does anything leave the house"
+
 **How to**
 
 - "forget me", in your own voice: deletes your profile, voice samples,

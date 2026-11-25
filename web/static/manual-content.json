@@ -5399,6 +5399,35 @@
      "text": "Paired phones and browsers in the house can read the voice history, in each room's **Conversations** tab."
     },
     {
+     "type": "p",
+     "text": "Ask Domovoi itself: it answers from this house's own settings."
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "are you recording me",
+       "handler": "house_facts",
+       "path": "fast"
+      },
+      {
+       "text": "do you keep what I say",
+       "handler": "house_facts",
+       "path": "fast"
+      },
+      {
+       "text": "does anything leave the house",
+       "handler": "house_facts",
+       "path": "fast"
+      }
+     ]
+    },
+    {
      "type": "label",
      "role": "how",
      "text": "How to"

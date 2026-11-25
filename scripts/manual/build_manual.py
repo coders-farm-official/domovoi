@@ -228,6 +228,9 @@ CHECKLIST: list[dict] = [
 # mark comes off). Checked through POST /v1/intent on v1.0.0-rc2.
 PHRASES: dict[str, tuple] = {
     "set a timer for 10 minutes": ("timer", "fast", {}),
+    "are you recording me": ("house_facts", "fast", {}),
+    "do you keep what I say": ("house_facts", "fast", {}),
+    "does anything leave the house": ("house_facts", "fast", {}),
     "what's the weather tomorrow": (None, "qa", {}),
     "play some jazz in the kitchen": ("music", "fast", {}),
     "tell everyone dinner's ready": ("intercom", "fast", {}),

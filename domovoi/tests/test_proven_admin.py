@@ -44,8 +44,7 @@ ADD_ROOM_MEMBER = "An admin adds rooms, on the dashboard: Settings → Household
 UPDATE_MEMBER = "Yes. An admin updates Domovoi on the dashboard, in Settings → System → About & updates."
 PLUGINS_MEMBER = "Yes, on the dashboard: an admin installs plugins from the Plugins page."
 DELETE_MEMBER = "Deleting needs the admin: an admin deletes files on the dashboard, in Files."
-VIDEO_MEMBER = "I can't download videos here."
-VIDEO_ADMIN = "Not on this house. An admin can add video downloads from the Plugins page."
+VIDEO_POINTER = "No, not on this house. An admin can add video downloads from the Plugins page."
 
 CASES = [
     # (case, question, task key, who: "member" | "admin")
@@ -56,8 +55,6 @@ CASES = [
     ("8.5", "Can you install plugins?", "plugins", "member"),
     ("8.6", "Can you install plugins?", "plugins", "admin"),
     ("8.7", "Can you change the admin password?", "admin_password", "admin"),
-    ("8.7d", "Can you download videos?", "video_downloads", "admin"),
-    ("8.7e", "Can you download videos?", "video_downloads", "member"),
     ("8.8", "Can you delete this song?", "delete_files", "member"),
 ]
 
@@ -133,11 +130,10 @@ def test_the_member_lines_say_who_and_where() -> None:
     assert by["update"].member == UPDATE_MEMBER
     assert by["plugins"].member == PLUGINS_MEMBER
     assert by["delete_files"].member == DELETE_MEMBER
-    assert by["video_downloads"].member == VIDEO_MEMBER        # 8.7e: no admin steps at all
-    assert by["video_downloads"].admin == VIDEO_ADMIN          # 8.7d, as the case reads
     for t in admin_tasks.TASKS:
-        if t.key != "video_downloads":
-            assert "admin" in t.member.lower(), t.key
+        assert "admin" in t.member.lower(), t.key
+    # 8.7d/8.7e belong to the capability table, not here.
+    assert "video_downloads" not in by and admin_tasks.match("Can you download videos?") is None
 
 
 def test_the_admin_steps_name_only_real_places_and_buttons() -> None:
@@ -176,14 +172,11 @@ def test_neighbours_are_no_admin_task(question) -> None:
     assert admin_tasks.match(question) is None
 
 
-def test_with_a_downloader_installed_video_downloads_is_no_admin_task() -> None:
+def test_provided_by_reads_what_enabled_plugins_declare() -> None:
     rows = [{"slug": "fetcher", "enabled": True, "status": "ok",
              "manifest": {"capabilities": {"provides": [admin_tasks.DOWNLOADER_CAPABILITY]}}}]
     assert admin_tasks.provided_by(rows) == {admin_tasks.DOWNLOADER_CAPABILITY}
-    assert admin_tasks.match("Can you download videos?", provided=admin_tasks.provided_by(rows)) is None
-    off = [{**rows[0], "enabled": False}]
-    assert admin_tasks.match("Can you download videos?", provided=admin_tasks.provided_by(off)).key == (
-        "video_downloads")
+    assert admin_tasks.provided_by([{**rows[0], "enabled": False}]) == set()
 
 
 def test_the_plan_answers_an_admin_task_with_no_model() -> None:
@@ -569,6 +562,18 @@ def test_each_case_in_a_chat(chat, case, question, key, who, title) -> None:
     assert chat.calls == [] and done["model"] is None
     assert done["stats"]["help"]["admin_task"] == key
     assert done["stats"]["help"]["admin_steps"] is (who == "admin")
+
+
+@requires_db
+@pytest.mark.parametrize(("case", "who"), [("8.7d", "admin"), ("8.7e", "member")])
+def test_download_videos_is_one_pointer_for_everyone(chat, case, who) -> None:
+    """8.7d/8.7e: the capability table answers, the same for a member and a
+    proven admin (Testing's corpus, 2026-11-25), with no plugin name."""
+    headers = ADMIN_H if who == "admin" else MEMBER_H
+    tid = _thread(chat.c, None, headers)
+    done = _ask(chat.c, tid, "Can you download videos?", headers)
+    assert done["content"] == VIDEO_POINTER, case
+    assert chat.calls == []
 
 
 @requires_db
