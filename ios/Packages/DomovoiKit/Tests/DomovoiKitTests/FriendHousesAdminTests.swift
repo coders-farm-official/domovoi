@@ -35,28 +35,93 @@ final class FriendHousesAdminTests: XCTestCase {
         XCTAssertEqual("friends & connections", FhTab.connections.label)
     }
 
+    /// Comment lines dropped, string literals kept: a path or a label is
+    /// exactly what the two tests below look for.
+    private func code(_ file: String) -> String {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<6 { root = root.deletingLastPathComponent() }
+        let text = (try? String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n").filter { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            return !(t.hasPrefix("//") || t.hasPrefix("*") || t.hasPrefix("/*"))
+        }.joined(separator: "\n")
+    }
+
     /// The admin tab does design §1's Friend Houses jobs only: no friend
-    /// files, renaming, verifying, this house's name, apps, save or delete.
+    /// files, renaming, verifying, this house's name or apps. Saving a copy
+    /// of a conversation and deleting one are admin jobs too (owner
+    /// decision, 1.5.0), offered here and nowhere else.
     func testTheAdminTabDoesTheDesignsJobsOnly() {
         let files = [
             "ios/Domovoi/FriendHouses/FriendHousesAdminZone.swift",
             "ios/Packages/DomovoiKit/Sources/DomovoiKit/FriendHousesAdmin.swift",
         ]
         for file in files {
-            // Comment lines dropped, string literals kept: a path or a
-            // label is exactly what this looks for.
-            var root = URL(fileURLWithPath: #filePath)
-            for _ in 0..<6 { root = root.deletingLastPathComponent() }
-            let text = (try? String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)) ?? ""
-            let code = text.components(separatedBy: "\n").filter { line in
-                let t = line.trimmingCharacters(in: .whitespaces)
-                return !(t.hasPrefix("//") || t.hasPrefix("*") || t.hasPrefix("/*"))
-            }.joined(separator: "\n")
+            let code = code(file)
             XCTAssertTrue(code.contains("FriendHousesAdmin"), "\(file) was read")
-            for gone in ["invites", "preview", "/verified", "PATCH", "settings", "/apps", "export", "Save a copy", "\"Delete\""] {
+            for gone in ["invites", "preview", "/verified", "PATCH", "settings", "/apps", "proof"] {
                 XCTAssertFalse(code.contains(gone), "\(file): \(gone)")
             }
         }
+        let view = code("ios/Domovoi/FriendHouses/FriendHousesAdminZone.swift")
+        for there in ["FhAdminWords.saveCopy", "FhAdminWords.delete", "FhAdminWords.saveFirst", "conversationFile", "deleteConversation"] {
+            XCTAssertTrue(view.contains(there), there)
+        }
+    }
+
+    /// The household screens never offer Save a copy or Delete, nor call
+    /// either route.
+    func testTheHouseholdScreensNeverSaveOrDelete() {
+        let files = [
+            "ios/Domovoi/FriendHouses/FriendHousesScreenView.swift",
+            "ios/Domovoi/FriendHouses/FriendHousesConversationView.swift",
+            "ios/Domovoi/FriendHouses/FriendHousesListsViews.swift",
+            "ios/Domovoi/FriendHouses/FriendHousesPlainText.swift",
+            "ios/Packages/DomovoiKit/Sources/DomovoiKit/FriendHousesApi.swift",
+            "ios/Packages/DomovoiKit/Sources/DomovoiKit/FriendHousesModels.swift",
+        ]
+        for file in files {
+            let code = code(file)
+            XCTAssertFalse(code.isEmpty, "\(file) was read")
+            for gone in ["Save a copy", "\"Delete\"", "saveCopy", "saveFirst", "conversationFile", "deleteConversation", "/export"] {
+                XCTAssertFalse(code.contains(gone), "\(file): \(gone)")
+            }
+        }
+    }
+
+    func testAConversationIsSavedAndDeletedInTheDashboardsWords() {
+        XCTAssertEqual("Save a copy", FhAdminWords.saveCopy)
+        XCTAssertEqual("Save a copy first", FhAdminWords.saveFirst)
+        XCTAssertEqual("Delete", FhAdminWords.delete)
+        XCTAssertEqual(
+            "Delete every message with The Smiths? This can’t be undone. Save a copy first if you might need it.",
+            FhAdminWords.deleteBody("The Smiths")
+        )
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let day = utc.date(from: DateComponents(year: 2026, month: 11, day: 5, hour: 12))!
+        XCTAssertEqual("Friend Houses - The Smiths - 2026-11-05.json", fhExportName("The Smiths", on: day, calendar: utc))
+        XCTAssertEqual("Friend Houses - friend - 2026-11-05.json", fhExportName(nil, on: day, calendar: utc))
+        XCTAssertEqual("Friend Houses - friend - 2026-11-05.json", fhExportName("★★", on: day, calendar: utc))
+        XCTAssertEqual("Friend Houses - Gran Joness - 2026-11-05.json", fhExportName("Gran  Jones's/", on: day, calendar: utc))
+        XCTAssertEqual(String(repeating: "a", count: 60), fhSafe(String(repeating: "a", count: 80)))
+        XCTAssertEqual("a.b_c-d", fhSafe("  a.b_c-d\t"))
+    }
+
+    func testAFriendWithMessagesAndAFormerFriendOfferThem() {
+        let gran = String(repeating: "cd", count: 32)
+        let friends = [
+            FhFriend(id: "f1", name: "The Smiths", house: smiths),
+            FhFriend(id: "f2", name: "Quiet", house: String(repeating: "ef", count: 32)),
+        ]
+        let inbox = [
+            FhConversation(house: smiths, name: "The Smiths", friendId: "f1"),
+            FhConversation(house: gran, name: "Gran", friendId: nil),
+            FhConversation(house: "not-a-key", name: "Odd", friendId: nil),
+        ]
+        let out = fhConversationsByFriend(friends, inbox)
+        XCTAssertEqual([smiths], out.withMessages)
+        XCTAssertEqual([gran], out.former.map(\.house))
     }
 
     func testTheWordsSayWhatIsAsking() {
@@ -175,6 +240,29 @@ final class FriendHousesAdminTests: XCTestCase {
         XCTAssertEqual(Self.bearer, sent("DELETE", "/api/friend-houses/blocked/\(smiths)")?.value(forHTTPHeaderField: "Authorization"))
         XCTAssertNil(zone.problem)
         XCTAssertFalse(zone.busy)
+    }
+
+    @MainActor
+    func testSaveACopyAndDeleteCarryTheBearer() async throws {
+        let fh = FhHouse()
+        fh.answer("GET", "/api/friend-houses/conversations", #"{"conversations":[{"house":"\#(smiths)","name":"The Joneses","friend_id":"f1"}]}"#)
+        let zone = FriendHousesAdminModel(admin: await signedIn(fh))
+        await zone.load(viaAct: false)
+        XCTAssertEqual([smiths], zone.conversations.map(\.house))
+        fh.answer("GET", "/api/friend-houses/conversations/\(smiths)/export", #"{"format":"domovoi-friend-houses-export-v1","messages":[]}"#)
+        fh.answer("DELETE", "/api/friend-houses/conversations/\(smiths)", #"{"deleted":3}"#)
+
+        let file = await zone.conversationFile(smiths)
+        XCTAssertTrue(String(decoding: try XCTUnwrap(file), as: UTF8.self).contains("domovoi-friend-houses-export-v1"))
+        XCTAssertEqual(Self.bearer, sent("GET", "/api/friend-houses/conversations/\(smiths)/export")?.value(forHTTPHeaderField: "Authorization"))
+
+        let said = await zone.deleteConversation(smiths)
+        XCTAssertEqual("messages deleted", said)
+        XCTAssertEqual(Self.bearer, sent("DELETE", "/api/friend-houses/conversations/\(smiths)")?.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(zone.problem)
+
+        // Only a house key goes into a path.
+        XCTAssertThrowsError(try FhPaths.conversationFile("../friends"))
     }
 
     @MainActor

@@ -3,7 +3,8 @@ import Observation
 
 /// Friends and connections on the phone (1.5.0; design §1's Friend Houses
 /// jobs): accept or decline a friend request, remove or block a friend,
-/// unblock a house. Only while this phone holds admin (``AdminSession``): the
+/// unblock a house, and save a copy of or delete a conversation (a friend's
+/// or a former friend's: owner decision, the admin tab only). Only while this phone holds admin (``AdminSession``): the
 /// tab is not there otherwise (``fhTabsFor(_:sharedScreen:)``). Making or
 /// adding friend files, this house's name, renaming, verifying and apps stay
 /// on the dashboard (``FhAdminWords/onDashboard``).
@@ -52,6 +53,19 @@ public extension FhPaths {
     static func blockedHouse(_ house: String) throws(FhRefusal) -> String {
         let checked = try checkedHouse(house)
         return "\(blocked)/\(checked)"
+    }
+
+    /// `DELETE` (admin security): every message with that house, gone.
+    static func conversationWith(_ house: String) throws(FhRefusal) -> String {
+        let checked = try checkedHouse(house)
+        return "\(conversations)/\(checked)"
+    }
+
+    /// `GET` (admin security, read): every message with that house as a file
+    /// (`domovoi-friend-houses-export-v1`).
+    static func conversationFile(_ house: String) throws(FhRefusal) -> String {
+        let path = try conversationWith(house)
+        return "\(path)/export"
     }
 }
 
@@ -208,6 +222,20 @@ public struct FriendHousesAdminApi: Sendable {
         let path = try FhPaths.blockedHouse(house)
         _ = try await client.raw(method: "DELETE", path: path, headers: headers, onlyTo: onlyTo)
     }
+
+    /// A conversation as the server's file, as it sent it (Save a copy).
+    public func conversationFile(_ house: String, headers: [String: String], onlyTo: String) async throws -> Data {
+        let path = try FhPaths.conversationFile(house)
+        return try await client.raw(method: "GET", path: path, headers: headers, onlyTo: onlyTo)
+    }
+
+    /// Delete every message with that house: how many went.
+    public func deleteConversation(_ house: String, headers: [String: String], onlyTo: String) async throws -> Int {
+        let path = try FhPaths.conversationWith(house)
+        let data = try await client.raw(method: "DELETE", path: path, headers: headers, onlyTo: onlyTo)
+        let reply = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (reply?["deleted"] as? NSNumber)?.intValue ?? 0
+    }
 }
 
 // MARK: - the tabs and the words
@@ -292,9 +320,57 @@ public enum FhAdminWords {
 
     /// A friend's or blocked house's name, or "this house".
     public static func houseName(_ name: String?) -> String { fhNonBlank(name) ?? "this house" }
+
+    // MARK: a conversation: Save a copy, Delete (the dashboard's words)
+
+    public static let saveCopy = "Save a copy"
+    public static let saveFirst = "Save a copy first"
+    public static let delete = "Delete"
+    public static let deleteTitle = "Delete these messages?"
+    public static let deleted = "messages deleted"
+    public static let saved = "copy saved"
+    public static let notSaved = "couldn't save the copy"
+    public static let formerTitle = "Former friends"
+    public static let formerSub = "Messages kept from houses that are no longer friends."
+
+    public static func deleteBody(_ name: String) -> String {
+        "Delete every message with \(name)? This can’t be undone. Save a copy first if you might need it."
+    }
 }
 
 /// `takeIf { it.isNotBlank() }`.
+/// A file name of safe characters only (the dashboard's `fhSafe`).
+public func fhSafe(_ text: String?) -> String {
+    let kept = (text ?? "").unicodeScalars.filter { c in
+        (c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || (c >= "0" && c <= "9") || " ._-".unicodeScalars.contains(c)
+    }
+    let collapsed = String(String.UnicodeScalarView(kept))
+        .split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+    return String(collapsed.prefix(60))
+}
+
+/// The saved copy's file name, as the dashboard names it (`fhExportName`):
+/// `Friend Houses - <name> - YYYY-MM-DD.json`, on this phone's date.
+public func fhExportName(_ name: String?, on day: Date, calendar: Calendar = .current) -> String {
+    let c = calendar.dateComponents([.year, .month, .day], from: day)
+    let date = String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    let safe = fhSafe(name)
+    return "Friend Houses - \(safe.isEmpty ? "friend" : safe) - \(date).json"
+}
+
+/// The conversations an admin can save or delete here: the friends' houses
+/// that have messages, then the former friends' conversations (in the inbox
+/// with no friend). Houses a URL can't name are left out.
+public func fhConversationsByFriend(
+    _ friends: [FhFriend], _ inbox: [FhConversation]
+) -> (withMessages: Set<String>, former: [FhConversation]) {
+    let named = inbox.filter { FhPaths.isHouseKey($0.house) }
+    let friendHouses = Set(friends.map(\.house))
+    let withMessages = Set(named.map(\.house).filter { friendHouses.contains($0) })
+    let former = named.filter { $0.friendId == nil && !friendHouses.contains($0.house) }
+    return (withMessages, former)
+}
+
 func fhNonBlank(_ text: String?) -> String? {
     guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     return text
@@ -316,6 +392,9 @@ public final class FriendHousesAdminModel {
     public private(set) var requests: [FhRequest]?
     public private(set) var friends: [FhFriend] = []
     public private(set) var blocked: [FhBlockedHouse] = []
+    /// The inbox (household read), for which conversations can be saved or
+    /// deleted here.
+    public private(set) var conversations: [FhConversation] = []
     public private(set) var problem: String?
     public private(set) var busy = false
 
@@ -339,6 +418,7 @@ public final class FriendHousesAdminModel {
             requests = r
             blocked = b
             friends = try await household.friends()
+            conversations = (try? await household.inbox().conversations) ?? []
             problem = nil
         } catch is AdminSession.NotSignedIn {
             requests = nil
@@ -410,6 +490,28 @@ public final class FriendHousesAdminModel {
         return await change("unblock") { api, h, srv in
             try await api.unblock(house, headers: h, onlyTo: srv)
             return FhAdminWords.unblocked(name)
+        }
+    }
+
+    /// Save a copy: the conversation's file, through ``AdminSession/act(_:)``
+    /// (Face ID first when needed), or nil (the problem line says why).
+    public func conversationFile(_ house: String) async -> Data? {
+        busy = true
+        problem = nil
+        defer { busy = false }
+        let api = api
+        do {
+            return try await admin.act { h, srv in try await api.conversationFile(house, headers: h, onlyTo: srv) }
+        } catch {
+            problem = Self.problem("save", error)
+            return nil
+        }
+    }
+
+    public func deleteConversation(_ house: String) async -> String? {
+        await change("delete") { api, h, srv in
+            _ = try await api.deleteConversation(house, headers: h, onlyTo: srv)
+            return FhAdminWords.deleted
         }
     }
 
