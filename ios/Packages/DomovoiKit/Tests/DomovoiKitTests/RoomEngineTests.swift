@@ -33,10 +33,11 @@ final class RoomEngineTests: XCTestCase {
         ears: any RoomEarsLoading = FakeRoomEarsLoader(),
         healthMS: Int64 = RoomEngine.healthIntervalMS,
         wakeWordsMax: Int = 5,
+        enrolment: RoomEnrolment? = nil,
         script: (@Sendable (FakeRoomSocket) -> Void)? = nil
     ) -> Rig {
         let store = InMemoryRoomStore(
-            enrolment: RoomEnrolment(coreURL: "http://192.168.1.30:6370", fingerprint: core.fingerprint, roomID: "kitchen", roomLabel: "Kitchen"),
+            enrolment: enrolment ?? RoomEnrolment(coreURL: "http://192.168.1.30:6370", fingerprint: core.fingerprint, roomID: "kitchen", roomLabel: "Kitchen"),
             pairingToken: "ROOM-KEY", approvalCode: "111222"
         )
         let transport = FakeRoomTransport()
@@ -89,6 +90,51 @@ final class RoomEngineTests: XCTestCase {
         // The test core serves no models: the room says so, honestly.
         waitFor("wake problem") { r.engine.status.wakeProblem?.contains("no wake-word models yet") == true }
         XCTAssertFalse(r.engine.status.wakeReady)
+    }
+
+    /// 1.5.0: the hello names the phone and, until it is approved, the room
+    /// its code asked to join; `ready.room` names the room, and a `room`
+    /// frame moves it without a new connection.
+    func testThePhoneNamesItselfJoinsItsRoomAndCarriesOnWhenMoved() throws {
+        let joining = RoomEnrolment(
+            coreURL: "http://192.168.1.30:6370", fingerprint: core.fingerprint, roomID: "kitchen_2",
+            roomLabel: "Kitchen 2", inRoom: "kitchen", inRoomName: "Kitchen"
+        )
+        let r = rig(enrolment: joining) { s in
+            s.say(#"{"type":"ready","room_id":"kitchen","satellite_id":"kitchen_2","features":[],"room":{"room_id":"kitchen","name":"Kitchen","shared":true,"claim":true}}"#)
+        }
+        XCTAssertEqual("kitchen", r.store.requestedRoom)
+        XCTAssertEqual("Kitchen", r.store.roomName)
+        XCTAssertTrue(r.engine.start())
+        waitFor("ready") { r.engine.status.link == .ready }
+        let socket = try XCTUnwrap(r.transport.last)
+        XCTAssertEqual("ws://192.168.1.30:6370/v1/stream/kitchen_2", socket.url)
+        let hello = try XCTUnwrap(socket.first("hello"))
+        XCTAssertEqual(.string("kitchen_2"), hello["satellite_id"])
+        XCTAssertEqual(.string("kitchen"), hello["requested_room"])
+        // Accepted: the server decides the room from now on.
+        waitFor("the room") { r.engine.status.place == RoomPlace(roomID: "kitchen", name: "Kitchen", shared: true, claim: true) }
+        XCTAssertNil(r.store.requestedRoom)
+        // Moved by an admin: the same connection, the new room.
+        socket.say(#"{"type":"room","room":{"room_id":"den","name":"Den","shared":false}}"#)
+        waitFor("moved") { r.engine.status.place?.roomID == "den" }
+        XCTAssertEqual("Den", r.store.roomName)
+        XCTAssertEqual(1, r.transport.sockets.count, "no new connection for a move")
+        // A frame with no usable room changes nothing.
+        socket.say(#"{"type":"room"}"#)
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual("den", r.engine.status.place?.roomID)
+    }
+
+    func testAMismatchedIdIsARefusalInHouseholdWords() {
+        let r = rig { s in
+            s.say(#"{"type":"error","reason":"satellite_id_mismatch","message":"the hello's satellite_id is not the one in the path"}"#)
+            s.serverClose()
+        }
+        r.engine.start()
+        waitFor("refused") { r.engine.status.link == .rejected(reason: RoomSessionRules.mismatchText) }
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(1, r.transport.sockets.count, "retried like a refusal, not at once")
     }
 
     func testAWrongKeyIsNeverDialled() throws {

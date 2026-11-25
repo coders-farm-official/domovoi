@@ -257,7 +257,7 @@ struct RoomKioskView<Footer: View>: View {
 
     private func topRow(_ s: RoomDisplayModel.State, _ c: RoomPalette) -> some View {
         RoomTopRow(
-            label: model.label, compact: s.compact, palette: c,
+            label: model.label, whereLine: model.whereLine, compact: s.compact, palette: c,
             micOpen: model.micOpen, micLive: model.micLive, muted: model.muted
         )
     }

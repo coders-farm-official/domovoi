@@ -91,9 +91,9 @@ public enum RoomStatusText {
     public static let notListening = "Not listening. Tap Resume to start again."
     public static let mutedLine = "The microphone is off. Tap Unmute to listen again."
     public static let awaitingLine =
-        "Waiting for approval. On the dashboard, open Settings → Rooms and approve this room with the code below."
+        "Waiting for approval. On the dashboard, open Settings → Rooms and approve this phone with the code below."
     public static let removedLine =
-        "This room was removed on the dashboard (or its pairing reset). Approve it again with the code below, "
+        "This phone was removed on the dashboard (or its pairing reset). Approve it again with the code below, "
             + "or hold Exit to leave room mode and forget this room."
 
     /// **iOS-only** (ROOMMODE-MAP §11): iOS has no microphone privacy toggle.
@@ -144,6 +144,67 @@ public enum RoomStatusText {
     public static let keepOrForget =
         "Keep this room to come back to it later, or forget it: its key is deleted from this phone, and the room "
             + "stays on the dashboard until you remove it there."
+
+    // MARK: - where the phone is, in household words (1.5.0)
+    //
+    // A room is a place; this phone is one device in it. The phone says the
+    // room's NAME ("This phone is in the Kitchen") and never its id, and it
+    // never says "satellite": that word is for the dashboard's admin pages
+    // (`RoomModeSourcesTests` reads this folder for it).
+
+    /// Settings → Rooms' card and the explainer's heading (`ENTRY_TITLE`).
+    /// "phone" on an iPad too: the app says "this phone" everywhere and has
+    /// no iPad wording of its own.
+    public static let entryTitle = "Use this phone in a room"
+
+    /// The room's name to show: the server's (``RoomStatus/place``), else the
+    /// one kept from the last connect or the room code's `in=`
+    /// (``RoomKeeping/roomName``), else the room code's own
+    /// (``RoomEnrolment/roomLabel``).
+    public static func roomName(_ s: RoomStatus?, kept: String?, label: String) -> String {
+        func shown(_ v: String?) -> String? {
+            guard let v, !v.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return v
+        }
+        return shown(s?.place?.name) ?? shown(kept) ?? label
+    }
+
+    /// "the Kitchen"; a name that already reads as one ("The Den",
+    /// "Alex's room") is left as it is.
+    public static func theRoom(_ name: String) -> String {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.lowercased().hasPrefix("the ") || possessive(n) { return n }
+        return "the \(n)"
+    }
+
+    /// `['’]s(\s|$)` anywhere in the name.
+    private static func possessive(_ name: String) -> Bool {
+        let scalars = Array(name.unicodeScalars)
+        for i in scalars.indices where scalars[i] == "'" || scalars[i] == "\u{2019}" {
+            guard i + 1 < scalars.count, scalars[i + 1] == "s" else { continue }
+            if i + 2 == scalars.count || scalars[i + 2].properties.isWhitespace { return true }
+        }
+        return false
+    }
+
+    /// The line under the room's name on the room screen: "This phone is in
+    /// the Kitchen" once the server has said so (with "with other devices"
+    /// when it shares the room), "This phone will join the Kitchen" until the
+    /// phone has been approved (`approved`: ``RoomKeeping/approvedOnce``).
+    public static func whereLine(_ s: RoomStatus?, roomName: String, approved: Bool) -> String {
+        let room = theRoom(roomName)
+        if let place = s?.place, place.shared { return "This phone is in \(room), with other devices" }
+        if s?.place != nil || approved { return "This phone is in \(room)" }
+        return "This phone will join \(room)"
+    }
+
+    /// The room code screen, before the phone joins: `in=` names an existing
+    /// room (``RoomEnrolment/inRoomName``); without it the phone is set up
+    /// as the room the code names.
+    public static func joinLine(_ roomName: String) -> String { "This phone will join \(theRoom(roomName))." }
+
+    /// The room code screen's button with `in=`: "Join the Kitchen".
+    public static func joinButton(_ roomName: String) -> String { "Join \(theRoom(roomName))" }
 
     /// `hey_jarvis` → "Hey Jarvis".
     public static func spoken(_ wakeWord: String) -> String {

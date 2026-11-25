@@ -52,6 +52,14 @@ public enum RoomProtocol {
     /// phone can run at once (``RoomWakeWords/deviceMax(physicalMemory:)``),
     /// 1-5. Each key is left out when its argument is empty / nil (the shape
     /// before 1.4.0); the room always sends both.
+    ///
+    /// 1.5.0: `roomID` is the phone's own id, the one in the socket's path,
+    /// and the hello repeats it as `satellite_id`: that marks a client that
+    /// carries on in its new room when an admin moves it (the `room` frame)
+    /// rather than being closed. `requestedRoom`: the room the room code's
+    /// `in=` asked to join, sent only until the phone is approved
+    /// (``RoomKeeping/requestedRoom``); it pre-selects the approval card's
+    /// room, and a value that is not a room id is left out.
     public static func hello(
         roomID: String,
         wakeWord: String,
@@ -60,11 +68,13 @@ public enum RoomProtocol {
         echoCanceller: Bool,
         micEnabled: Bool = true,
         wakeWords: [String] = [],
-        wakeWordsMax: Int? = nil
+        wakeWordsMax: Int? = nil,
+        requestedRoom: String? = nil
     ) -> Frame {
         var f: Frame = [
             "type": .string("hello"),
             "room_id": .string(roomID),
+            "satellite_id": .string(roomID),
             "wake_word": .string(wakeWord),
             "pairing_token": .string(pairingToken),
             "approval_code": approvalCode.map { .string($0) } ?? .null,
@@ -79,6 +89,7 @@ public enum RoomProtocol {
         }
         if !words.isEmpty { f["wake_words"] = .array(words.map { .string($0) }) }
         if let wakeWordsMax { f["wake_words_max"] = .int(Int64(min(max(wakeWordsMax, 1), RoomWakeWords.maxPerRoom))) }
+        if let requestedRoom, RoomEnrolmentParser.isRoomID(requestedRoom) { f["requested_room"] = .string(requestedRoom) }
         return f
     }
 
@@ -187,7 +198,16 @@ public enum RoomProtocol {
     public enum ServerFrame: Equatable, Sendable {
         /// `roomVoice`: the voice the server keeps for this room (`room_voice`;
         /// nil: the server's own). This device keeps no voice choice.
-        case ready(features: Set<String>, roomID: String?, botName: String?, roomVoice: String?)
+        /// `satelliteID` / `room` (1.5.0): the phone's own id as the server
+        /// knows it, and the room it is in; nil from an older core.
+        case ready(
+            features: Set<String>, roomID: String?, botName: String?, roomVoice: String?,
+            satelliteID: String? = nil, room: RoomPlace? = nil
+        )
+        /// 1.5.0: an admin moved this phone to another room, or the room's
+        /// `claim` changed (same room). The phone carries on, connected, in
+        /// the room; nil: a frame without a usable room (ignored).
+        case room(RoomPlace?)
         case error(reason: String?, message: String?, code: String?)
         case pong
         case transcript(text: String)
@@ -244,7 +264,12 @@ public enum RoomProtocol {
             if case .array(let items)? = o["features"] {
                 for item in items { if case .string(let f) = item { features.insert(f) } }
             }
-            return .ready(features: features, roomID: s("room_id"), botName: s("bot_name"), roomVoice: voice("room_voice"))
+            return .ready(
+                features: features, roomID: s("room_id"), botName: s("bot_name"), roomVoice: voice("room_voice"),
+                satelliteID: voice("satellite_id"), room: place(o["room"])
+            )
+        case "room":
+            return .room(place(o["room"]))
         case "error":
             return .error(reason: s("reason"), message: s("message"), code: s("code"))
         case "pong":
@@ -288,6 +313,25 @@ public enum RoomProtocol {
         case let type:
             return .other(type: type)
         }
+    }
+
+    /// `ready.room` / the `room` frame's room: nil unless it names a room id
+    /// (``RoomEnrolmentParser/isRoomID(_:)``); a missing or blank name falls
+    /// back to the id, as the core's own `_room_info` does for a room it
+    /// cannot read (`RoomProtocol.place`).
+    static func place(_ value: RoomJSON?) -> RoomPlace? {
+        guard case .object(let o)? = value else { return nil }
+        func s(_ k: String) -> String? {
+            if case .string(let v)? = o[k] { return v }
+            return nil
+        }
+        func b(_ k: String) -> Bool {
+            if case .bool(let v)? = o[k] { return v }
+            return false
+        }
+        guard let id = s("room_id"), RoomEnrolmentParser.isRoomID(id) else { return nil }
+        let name = s("name")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return RoomPlace(roomID: id, name: (name?.isEmpty ?? true) ? id : name!, shared: b("shared"), claim: b("claim"))
     }
 
     /// Only an http(s) URL with no whitespace or control characters is a

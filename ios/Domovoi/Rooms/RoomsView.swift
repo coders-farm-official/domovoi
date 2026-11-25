@@ -42,7 +42,7 @@ import SwiftUI
 /// * **Display controls and logs** — `:1597-1602` and `:1679-1684`, both
 ///   admin. Android's phone screen draws neither either.
 ///
-/// **"Use this device as a room" IS here now** (`SatellitesScreen.kt:166-169`,
+/// **"Use this phone in a room" IS here now** (`SatellitesScreen.kt:166-169`,
 /// ``RoomModeEntryCard``): room mode landed (I7), so the card is drawn after
 /// the roster in every state, as Android's last grid item is.
 ///

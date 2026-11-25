@@ -84,7 +84,20 @@ public final class RoomKioskModel: ObservableObject {
     /// (``RoomDisplaySource``); nil otherwise.
     @Published public private(set) var feed: RoomFeed? = nil
 
-    public let label: String
+    /// The room's name, in household words: the server's
+    /// (``RoomStatus/place``), else the kept one, else the room code's — never
+    /// the room's or the phone's id (``RoomStatusText/roomName(_:kept:label:)``).
+    /// The resume notices follow it too, as Android's notification does.
+    public var label: String {
+        RoomStatusText.roomName(status, kept: store.roomName, label: store.enrolment?.roomLabel ?? "room")
+    }
+
+    /// The line under the name: "This phone is in the Kitchen" (", with
+    /// other devices" when shared), or "This phone will join the Kitchen"
+    /// before the first approval (``RoomStatusText/whereLine(_:roomName:approved:)``).
+    public var whereLine: String {
+        RoomStatusText.whereLine(status, roomName: label, approved: store.approvedOnce)
+    }
 
     private let store: RoomStore
     private let makeEngine: @MainActor () -> any RoomEngineControl
@@ -131,7 +144,6 @@ public final class RoomKioskModel: ObservableObject {
         self.micGranted = micGranted
         self.now = now
         self.onLeave = onLeave
-        label = store.enrolment?.roomLabel ?? "room"
         guidedTipDismissed = store.guidedAccessTipDismissed
         householdPhone = lock.holdsHouseholdToken
         let t = now()

@@ -82,7 +82,7 @@ final class RoomProtocolTests: XCTestCase {
 
     func testTheReadyFeaturesGateTheNewMessageTypes() throws {
         let (d, _) = try device()
-        guard let ready = d["ready"], case let .ready(features, _, _, _) = RoomProtocol.parse(ready.serialized) else {
+        guard let ready = d["ready"], case let .ready(features, _, _, _, _, _) = RoomProtocol.parse(ready.serialized) else {
             return XCTFail("the fixture's ready did not parse")
         }
         XCTAssertEqual(["speech_pause", "end_capture", "music_failed", "health", "log_push", "room_display"], features)
@@ -124,7 +124,7 @@ final class RoomProtocolTests: XCTestCase {
     func testTheRoomsVoiceIsTheServersToChoose() throws {
         XCTAssertFalse(RoomProtocol.supports(echoCanceller: true).contains("voice"))
         let (d, _) = try device()
-        guard let ready = d["ready"], case let .ready(_, _, _, voice) = RoomProtocol.parse(ready.serialized) else {
+        guard let ready = d["ready"], case let .ready(_, _, _, voice, _, _) = RoomProtocol.parse(ready.serialized) else {
             return XCTFail("no ready")
         }
         XCTAssertNil(voice)

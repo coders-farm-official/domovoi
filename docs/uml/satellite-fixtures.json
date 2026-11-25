@@ -1183,10 +1183,11 @@
       }
     },
     "android_room": {
-      "about": "An Android phone in room mode (android roommode/, what RoomProtocol.hello sends on a phone with an echo canceller; a phone without one leaves full_duplex and dropin_ready out): only `supports`, no boolean keys. Echo cancellation for drop-ins (finishing the reply that announces one first) but no chat mode; it mirrors the server's sounds and wake models; it updates through its app store, so no restart, code sync, settings, live log or clip recording. Since 1.4.0 it shows the room display (`room_display`: the room's music, timers and alarms, and one going off); and it runs several wake words on one front end, saying which it loaded and how many it can run (`wake_words`, `wake_words_max`: 5, or 3 on a 32-bit or ~2 GB phone).",
+      "about": "An Android phone in room mode (android roommode/, what RoomProtocol.hello sends on a phone with an echo canceller; a phone without one leaves full_duplex and dropin_ready out): only `supports`, no boolean keys. Echo cancellation for drop-ins (finishing the reply that announces one first) but no chat mode; it mirrors the server's sounds and wake models; it updates through its app store, so no restart, code sync, settings, live log or clip recording. Since 1.4.0 it shows the room display (`room_display`: the room's music, timers and alarms, and one going off); and it runs several wake words on one front end, saying which it loaded and how many it can run (`wake_words`, `wake_words_max`: 5, or 3 on a 32-bit or ~2 GB phone). Since 1.5.0 it names itself (`satellite_id`, the path's id) so it carries on in a new room when an admin moves it, and until it is approved it sends `requested_room`, the room its room code's `in=` asked to join (left out here: this room code asked for none). The iPhone's room (`ios_room`) sends the same hello with its own board.",
       "hello": {
         "type": "hello",
         "room_id": "nursery",
+        "satellite_id": "nursery",
         "wake_word": "hey_jarvis",
         "wake_words": [
           "hey_jarvis"

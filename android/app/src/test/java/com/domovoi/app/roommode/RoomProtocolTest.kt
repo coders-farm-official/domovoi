@@ -44,10 +44,10 @@ class RoomProtocolTest {
             wakeWords = want["wake_words"]!!.jsonArray.map { it.jsonPrimitive.content },
             wakeWordsMax = WakeWords.limitFor(is64Bit = true, totalRamBytes = 6L shl 30),
         )
-        // 1.5.0: the phone also names itself, the path's id. The fixture's
-        // room hello is the iPhone's too (its RoomProtocolTests), which does
-        // not send the key yet, so it is added here rather than there.
-        assertEquals(JsonObject(want + ("satellite_id" to want["room_id"]!!)), ours)
+        // 1.5.0: the phone also names itself, the path's id (the fixture's
+        // hello carries it, as the iPhone's does).
+        assertEquals(want, ours)
+        assertEquals(want["room_id"], want["satellite_id"])
         assertFalse("requested_room" in ours)
         assertEquals(listOf("hey_jarvis"), want["wake_words"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertEquals(5, want["wake_words_max"]!!.jsonPrimitive.content.toInt())
