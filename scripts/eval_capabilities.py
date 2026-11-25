@@ -1280,6 +1280,17 @@ async def run_chat_turn(
             if turn.task_answer is not None:
                 _chat_row(thread, "assistant", {"model_role": "help"})
                 return Turn("reply", turn.task_answer, "help", "chat_help")
+    if house_facts.wants_facts(utterance):
+        # chat.send_message: a privacy-worded question about this house that
+        # the closed set didn't take gets house_facts.privacy_summary, no model.
+        try:
+            facts = await house_facts.read(
+                chat=True, get_setting=house_facts.core_setting, scope=fixture_scope)
+            text = house_facts.privacy_summary(facts)
+        except Exception:  # noqa: BLE001 - chat.py: still an honest answer
+            text = f"{house_facts.CANT_CHECK} {house_facts.PRIVACY_POINTER}"
+        _chat_row(thread, "assistant", {"model_role": "house_facts"})
+        return Turn("reply", text, "house_facts", "chat")
     if model_url is None:
         return Turn("needs_model", detail="the chat model")
     import ollama
