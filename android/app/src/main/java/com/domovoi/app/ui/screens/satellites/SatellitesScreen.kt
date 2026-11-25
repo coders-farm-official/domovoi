@@ -147,6 +147,10 @@ fun SatellitesScreen(embedded: Boolean = false) {
                         PageHeader("Rooms", summary)
                     }
                 }
+                // Devices asking to join: only while this phone holds admin.
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    JoinRequestsCard()
+                }
                 val err = satsState.error
                 when {
                     satsState.loading && sats.isEmpty() ->

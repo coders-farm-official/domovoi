@@ -138,6 +138,9 @@ internal enum class SettingsSection(
     PhoneCalendars("phone-calendars", "Phone calendars", SettingsGroup.Household,
         "Show this phone's calendars on the household calendar, read-only. Off until you turn it on.",
         "calendar calendars share sharing events google microsoft outlook samsung agenda"),
+    AdminOnPhone("admin-on-phone", "Admin on this phone", SettingsGroup.Household,
+        "Sign in as the admin here, for an hour or for the rest of the day behind your fingerprint or face.",
+        "admin administrator sign in signin password fingerprint face biometric approve approvals day"),
     WakeWords("wake-words", "Wake words", SettingsGroup.Voice,
         "The words that wake Domovoi: train your own, record clips in a room.",
         "wake word hey hello train", dashboard = "wake-words"),
@@ -183,7 +186,8 @@ internal enum class SettingsSection(
 /** Sections a shared screen (the kitchen tablet) leaves out: one person's
  *  things, as ui/shell/Routes.kt SharedScreenHidden leaves People off every
  *  launcher. Presentational, like the rest of the shared view. */
-internal val SharedScreenHiddenSections: Set<SettingsSection> = setOf(SettingsSection.People, SettingsSection.PhoneCalendars)
+internal val SharedScreenHiddenSections: Set<SettingsSection> =
+    setOf(SettingsSection.People, SettingsSection.PhoneCalendars, SettingsSection.AdminOnPhone)
 
 internal fun SettingsSection.shownOn(shared: Boolean): Boolean = !(shared && this in SharedScreenHiddenSections)
 
@@ -299,6 +303,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
                     SettingsSection.MusicMix -> MusicMixPanel()
                     SettingsSection.Printers -> PrintersPanel()
                     SettingsSection.PhoneCalendars -> PhoneCalendarsPanel()
+                    SettingsSection.AdminOnPhone -> AdminPanel()
                     SettingsSection.AppLayout -> PhoneBarPanel()
                     SettingsSection.Voices -> VoicePanel()
                     SettingsSection.About -> AboutPanel(navigate)

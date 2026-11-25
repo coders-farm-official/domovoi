@@ -161,7 +161,8 @@ fun HealthPanel(navigate: (Route) -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     "Updates, disk space, rooms waiting for approval and the internet are checked on the " +
-                        "dashboard's Health, where the admin signs in.",
+                        "dashboard's Health, where the admin signs in, or sign in as admin on this phone " +
+                        "(Settings → Household → Admin on this phone) to approve rooms in Settings → Rooms.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Domovoi.colors.fgSubtle,
                 )

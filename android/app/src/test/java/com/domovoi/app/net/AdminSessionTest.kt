@@ -475,6 +475,58 @@ class AdminSessionTest {
         assertEquals(AdminSession.State.SignedOut, s.state.value)
     }
 
+    // ---- act: a tap after the hour asks for the fingerprint, then acts ----
+
+    @Test fun actWithAKeptGrantResumesThenActs() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        s.act { h, srv -> api.post("/api/satellites/kitchen/restart", null, h, onlyTo = srv) }
+        assertEquals(1, locker.opens)
+        assertEquals("Bearer ${"b".repeat(64)}", seen.last { it.path == "/api/satellites/kitchen/restart" }.getHeader("Authorization"))
+    }
+
+    @Test fun actAfterTheServerEndedTheSessionResumesOnce() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        sessionLive = false  // the idle hour, at the server
+        try {
+            s.act { h, srv -> api.post("/api/satellites/kitchen/restart", null, h, onlyTo = srv) }
+            fail("the exchanged session is refused too here")
+        } catch (e: ApiException) {
+            assertEquals(401, e.status)
+        }
+        assertEquals("one fingerprint check, not a loop", 1, locker.opens)
+    }
+
+    @Test fun actWithNothingKeptIsNotSignedIn() = runBlocking {
+        val s = keeping()
+        try {
+            s.act { h, srv -> api.post("/api/satellites/kitchen/restart", null, h, onlyTo = srv) }
+            fail("no admin")
+        } catch (e: AdminSession.NotSignedIn) {
+            assertEquals(ADMIN_ONLY, e.message)
+        }
+        assertEquals(0, locker.opens)
+    }
+
+    @Test fun aCancelledFingerprintSaysSoAndKeepsTheGrant() = runBlocking {
+        val s = keeping()
+        s.signIn("right-password", "phone")
+        s.keepToday("phone")
+        s.forget()
+        locker.ok = false
+        try {
+            s.act { h, srv -> api.post("/api/satellites/kitchen/restart", null, h, onlyTo = srv) }
+            fail("cancelled")
+        } catch (e: AdminSession.AdminUnavailable) {
+            assertTrue(e.message!!.contains("didn't finish"))
+        }
+        assertTrue(shelf.g != null)
+    }
+
     private companion object {
         val GRANT = "0123456789abcdef".repeat(4)
     }

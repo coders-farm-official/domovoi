@@ -22,7 +22,8 @@ class SettingsModelsTest {
         )
         assertEquals(
             listOf(
-                listOf("Rooms", "People", "Phones & browsers", "Music mix", "Printers & scanners", "Phone calendars"),
+                listOf("Rooms", "People", "Phones & browsers", "Music mix", "Printers & scanners", "Phone calendars",
+                    "Admin on this phone"),
                 listOf("Wake words", "Voices", "Greetings"),
                 listOf("Models", "Chat"),
                 listOf("Internet", "Voice history"),

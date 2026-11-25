@@ -361,6 +361,41 @@ class AdminSession(
     }
 
     /**
+     * An admin action a screen asks for (design §1: "a tap after the hour
+     * but within the day asks for the biometric, then acts"): with a live
+     * session, [call]; with admin kept today and no session (the idle hour
+     * lapsed, the app restarted, or the server ended the session), the
+     * fingerprint or face first ([resume]), then the call, once. Without
+     * either, [NotSignedIn]; a resume that didn't work throws its reason.
+     */
+    suspend fun <T> act(block: suspend (headers: Map<String, String>, server: String) -> T): T {
+        if (liveForActive() == null && storedForActive() != null) resumeOrThrow()
+        return try {
+            call(block)
+        } catch (e: NotSignedIn) {
+            if (storedForActive() == null) throw e
+            resumeOrThrow()
+            call(block)
+        } catch (e: ApiException) {
+            // The server ended this session (its idle hour); today's grant
+            // may still be good for a new one.
+            if (!isAdminRefusal(e.status, e.body) || storedForActive() == null) throw e
+            resumeOrThrow()
+            call(block)
+        }
+    }
+
+    private suspend fun resumeOrThrow() {
+        when (val r = resume()) {
+            SignIn.Ok -> Unit
+            is SignIn.Refused -> throw AdminUnavailable(r.reason)
+        }
+    }
+
+    /** [act] couldn't get a session: the reason, in plain words. */
+    class AdminUnavailable(reason: String) : IOException(reason)
+
+    /**
      * Sign out: forget the session and today's grant here at once, then end
      * both at the server (best effort) under the same rules as every admin
      * call (L56): only while the phone is not a room, only to the server
