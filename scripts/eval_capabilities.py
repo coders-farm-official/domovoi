@@ -1360,9 +1360,13 @@ async def run_chat_turn(
     async def admin_check() -> bool:
         return house.get("asker") == "proven_admin"
 
+    async def guest_check() -> bool:
+        # admin_auth.request_is_guest: no device token, Bearer or cookie.
+        return house.get("asker") == "guest"
+
     fact = await house_facts.chat_reply(
         utterance, get_setting=house_facts.core_setting, scope=fixture_scope,
-        previous_assistant=previous_assistant, admin_check=admin_check,
+        previous_assistant=previous_assistant, admin_check=admin_check, guest_check=guest_check,
     )
     if fact is not None:
         _chat_row(thread, "assistant", {"model_role": "house_facts"})
@@ -1370,7 +1374,8 @@ async def run_chat_turn(
     # chat._owner_egg_reply: "I'm the owner" (bare) / "who's in charge?".
     from domovoi import owner_easter_eggs
 
-    egg = await owner_easter_eggs.chat_reply(utterance, scope=fixture_scope, key=f"chat:{tid}")
+    egg = await owner_easter_eggs.chat_reply(
+        utterance, scope=fixture_scope, key=f"chat:{tid}", guest_check=guest_check)
     if egg is not None:
         _chat_row(thread, "assistant", {"model_role": "owner_easter_egg"})
         return Turn("reply", egg, "owner_easter_egg", "chat")

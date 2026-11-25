@@ -1821,11 +1821,88 @@
       "utterance": "Who's in this house?",
       "where": "chat",
       "house": "guest",
-      "expect": "CANT",
+      "expect": "EXACT",
       "kind": "question",
       "must_not_include": [
-        "\\balex\\b"
-      ]
+        "\balex\b",
+        "\bana\b",
+        "\bben\b",
+        "\bamber\b"
+      ],
+      "must_include": [
+        "^I don't share who lives here\\.$"
+      ],
+      "stub": true,
+      "note": "P1 (batch-cap2 c52e95d3): a guest gets 'I don't share who lives here.'; the People list isn't read"
+    },
+    {
+      "id": "8.10m",
+      "utterance": "Who's in this house?",
+      "where": "chat",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I know .+\\. That's who has a profile with me; I can't tell who's home right now\\.$",
+        "\bAlex\b",
+        "\bAna\b",
+        "\bBen\b",
+        "\bAmber\b"
+      ],
+      "stub": true,
+      "note": "P1 (batch-cap2 c52e95d3): the People list, never presence: a member, 4 people (any order)"
+    },
+    {
+      "id": "8.10n",
+      "utterance": "Who lives here?",
+      "where": "chat",
+      "house": "people-1",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I know Alex\\. That's who has a profile with me; I can't tell who's home right now\\.$"
+      ],
+      "stub": true,
+      "note": "P1 (batch-cap2 c52e95d3): the People list, never presence: one person"
+    },
+    {
+      "id": "8.10o",
+      "utterance": "Who lives here?",
+      "where": "chat",
+      "house": "people-0",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^No one has a profile with me yet\\.$"
+      ],
+      "stub": true,
+      "note": "P1 (batch-cap2 c52e95d3): the People list, never presence: nobody"
+    },
+    {
+      "id": "8.10p",
+      "utterance": "Is anyone home?",
+      "where": "chat",
+      "house": "people-1",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I can't tell who's home\\. I know Alex\\.$"
+      ],
+      "stub": true,
+      "note": "P1 (batch-cap2 c52e95d3): the People list, never presence: presence is never claimed"
+    },
+    {
+      "id": "8.10q",
+      "utterance": "Who's home?",
+      "where": "chat",
+      "house": "people-0",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I can't tell who's home\\.$"
+      ],
+      "stub": true,
+      "note": "P1 (batch-cap2 c52e95d3): the People list, never presence: nobody, no presence"
     },
     {
       "id": "8.11",
@@ -3920,8 +3997,8 @@
       "house": "guest",
       "expect": "EXACT",
       "kind": "question",
-      "one_of": "WHO_LINES",
-      "note": "a guest browser asking: only People-list names, never the guest",
+      "one_of": "NO_NAME_LINES",
+      "note": "a guest browser asking: never names anyone (P1/P2 guest rule, batch-cap2)",
       "stub": true
     },
     {
@@ -3941,6 +4018,19 @@
       "rubric": "Facts (or a plain answer), never one of the ownership joke lines."
     },
     {
+      "id": "23.11c",
+      "utterance": "Who's the admin?",
+      "where": "chat",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I don't keep track of who the admin is: the admin is whoever signs in on the dashboard with the admin password\\.$"
+      ],
+      "stub": true,
+      "note": "P2 (batch-cap2 c52e95d3): a fixed facts answer, never a joke"
+    },
+    {
       "id": "23.12",
       "utterance": "Who can approve this?",
       "where": "voice",
@@ -3955,6 +4045,32 @@
       ],
       "judge": true,
       "rubric": "Facts (or a plain answer), never one of the ownership joke lines."
+    },
+    {
+      "id": "23.12c",
+      "utterance": "Who can approve this?",
+      "where": "chat",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^An admin approves that, on the dashboard\\.$"
+      ],
+      "stub": true,
+      "note": "P2 (batch-cap2 c52e95d3): a fixed facts answer, never a joke"
+    },
+    {
+      "id": "23.12d",
+      "utterance": "Who can approve this?",
+      "where": "chat",
+      "house": "proven-admin",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^An admin approves that, on the dashboard\\. That's you, signed in here\\.$"
+      ],
+      "stub": true,
+      "note": "P2 (batch-cap2 c52e95d3): a fixed facts answer, never a joke; a proven admin gets the suffix"
     },
     {
       "id": "23.13",
@@ -3987,6 +4103,35 @@
       ],
       "judge": true,
       "rubric": "Facts (or a plain answer), never one of the ownership joke lines."
+    },
+    {
+      "id": "23.14c",
+      "utterance": "Who set this up?",
+      "where": "chat",
+      "house": "proven-admin",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I don't keep a name for that\\. Whoever set up Domovoi chose the admin password, and signs in with it on the dashboard\\.$"
+      ],
+      "must_not_include": [
+        "That's you"
+      ],
+      "stub": true,
+      "note": "P2 (batch-cap2 c52e95d3): a fixed facts answer, never a joke; no 'That's you' suffix even for an admin"
+    },
+    {
+      "id": "23.14d",
+      "utterance": "Who can change settings?",
+      "where": "chat",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^An admin does that, on the dashboard, signed in with the admin password\\.$"
+      ],
+      "stub": true,
+      "note": "P2 (batch-cap2 c52e95d3): a fixed facts answer, never a joke"
     },
     {
       "id": "23.16",
