@@ -513,6 +513,17 @@ public final class AdminSession: Sendable {
         refresh()
     }
 
+    /// This phone started over at `server` under a new device id (it lost
+    /// its device key there; ``DeviceKeyStore/startOver(at:)``): a grant kept
+    /// for that server was issued to the old id, which the server no longer
+    /// takes, so it goes now rather than at the next Face ID. A password
+    /// session is not bound to the id and stays.
+    public func startedOver(_ server: String) {
+        guard let g = grants?.readGrant(),
+              ServerCredentials.normalize(g.server) == ServerCredentials.normalize(server) else { return }
+        dropGrant()
+    }
+
     /// Drop today's grant here: the stored copy and the Keychain item.
     public func dropGrant() {
         if grants?.readGrant() != nil { grants?.writeGrant(nil) }
@@ -601,6 +612,14 @@ public final class AdminSession: Sendable {
 
     public static let noBiometrics = "keeping admin today needs Face ID or Touch ID set up on this phone"
     public static let dayOver = "today's admin on this phone has ended; sign in with the password"
+
+    /// Issuing a grant was refused because the server can't match this
+    /// phone's device key (missing or out of date; auth.py's
+    /// `_PHONE_GRANT_KEY_DETAIL`): in plain words. Android's
+    /// `DEVICE_KEY_REFUSED`, word for word.
+    public static let deviceKeyRefused =
+        "the server couldn't match this phone's device key, so admin isn't kept today. "
+        + "Let the phone reconnect to the server (it registers again), then sign in with the admin password."
     static let signInFirst = "sign in with the admin password first"
 
     static let dayMs: Int64 = 24 * 60 * 60 * 1000
@@ -639,6 +658,8 @@ public final class AdminSession: Sendable {
         switch failure {
         case .refused(let f), .rateLimited(let f, _), .serverTrouble(let f), .httpError(let f):
             switch f.status {
+            case 403 where jsonDetail(of: f.body)?.range(of: "device key", options: .caseInsensitive) != nil:
+                return deviceKeyRefused
             case 403:
                 return "sign in with the password again first: keeping admin today needs a sign-in from the last 5 minutes"
             case 429:

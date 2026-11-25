@@ -31,6 +31,10 @@ final class AdminSessionTests: XCTestCase {
     private var sessionLive: Shared<Bool>!
     private var freshSignIn: Shared<Bool>!
     private var grantExpired: Shared<Bool>!
+    /// The server takes the phone-grant routes only with this device key
+    /// (1.5.0: the grant is bound to the per-device key).
+    private var keyRequired: Shared<Bool>!
+    private static let deviceKey = "dk-1-" + String(repeating: "A", count: 38)
     private var lock: HouseholdLock!
     private var client: DomovoiClient!
     private var locker: FakeLocker!
@@ -45,6 +49,7 @@ final class AdminSessionTests: XCTestCase {
         sessionLive = Shared(true)
         freshSignIn = Shared(true)
         grantExpired = Shared(false)
+        keyRequired = Shared(false)
         lock = HouseholdLock()
         locker = FakeLocker()
         shelf = InMemoryGrantShelf()
@@ -69,7 +74,9 @@ final class AdminSessionTests: XCTestCase {
         let sessionLive = sessionLive!
         let freshSignIn = freshSignIn!
         let grantExpired = grantExpired!
+        let keyRequired = keyRequired!
         StubURLProtocol.dispatch { request in
+            let keyed = request.value(forHTTPHeaderField: "X-Domovoi-Device-Key") == Self.deviceKey
             let path = request.url?.path ?? ""
             let body = Self.sentBody(path)
             switch path {
@@ -88,12 +95,21 @@ final class AdminSessionTests: XCTestCase {
                 if request.value(forHTTPHeaderField: "Authorization") != Self.bearerA {
                     return .json(#"{"detail":"admin session required"}"#, status: 401)
                 }
+                if keyRequired.current, !keyed {
+                    return .json(
+                        #"{"detail":"this phone can't prove it is that device (its device key is missing or out of date) — register it again, then sign in with the password"}"#,
+                        status: 403
+                    )
+                }
                 if !freshSignIn.current {
                     return .json(#"{"detail":"sign in with the password again"}"#, status: 403)
                 }
                 return .json(#"{"grant":"\#(Self.grant)","expires_at":"2026-11-25T10:00:00Z"}"#)
             case "/api/auth/phone-grant/exchange":
                 if grantExpired.current { return .json(#"{"detail":"phone grant has expired"}"#, status: 401) }
+                if keyRequired.current, !keyed {
+                    return .json(#"{"detail":"phone grant not valid — sign in with the password"}"#, status: 401)
+                }
                 guard body["grant"] == Self.grant, body["device_id"] == "ios-test" else {
                     return .json(#"{"detail":"phone grant not valid"}"#, status: 401)
                 }
@@ -136,12 +152,127 @@ final class AdminSessionTests: XCTestCase {
         return AdminSession(client: client, prove: prove(), now: { clock.current }, registry: registry)
     }
 
-    private func keeping(client: DomovoiClient? = nil) -> AdminSession {
+    private func keeping(client: DomovoiClient? = nil, deviceID: (@Sendable () -> String)? = nil) -> AdminSession {
         let clock = clock!
         return AdminSession(
             client: client ?? self.client, prove: prove(), now: { clock.current },
-            grants: shelf, locker: locker, deviceID: { "ios-test" }
+            grants: shelf, locker: locker, deviceID: deviceID ?? { "ios-test" }
         )
+    }
+
+    /// The app's client: the household token, and this phone's device keys
+    /// (each only to its own server).
+    private func keyedClient(_ keys: DeviceKeyStore) -> DomovoiClient {
+        let active = active!
+        let household = household
+        return DomovoiClient(
+            book: ServerBook(
+                activeServer: { active.current },
+                tokenForServer: { _ in household },
+                deviceKeyForServer: { keys.deviceKey(for: $0) }
+            ),
+            gate: AdmitsAnyServer(),
+            lock: lock,
+            configuration: StubURLProtocol.session(timeout: 5)
+        )
+    }
+
+    // MARK: - the grant is bound to the per-device key (1.5.0)
+
+    func testIssueExchangeAndRevokeCarryTheDeviceKey() async {
+        keyRequired.set(true)
+        let keys = DeviceKeyStore()
+        XCTAssertTrue(keys.rememberDeviceKey(Self.deviceKey, for: server))
+        XCTAssertTrue(keys.rememberDeviceKey("dk-1-" + String(repeating: "C", count: 38), for: other))
+        let s = keeping(client: keyedClient(keys))
+        _ = await signIn(s)
+        guard case .ok = await s.keepToday(label: "phone") else { return XCTFail("not kept") }
+        s.forget()
+        let resumed = await s.resume()
+        XCTAssertEqual(.ok, resumed)
+        await s.signOut()
+        for path in ["/api/auth/phone-grant", "/api/auth/phone-grant/exchange", "/api/auth/phone-grant/revoke"] {
+            XCTAssertEqual(Self.deviceKey, sent(path).last?.value(forHTTPHeaderField: "X-Domovoi-Device-Key"), path)
+        }
+        XCTAssertNil(sent("/api/auth/login").last?.value(forHTTPHeaderField: "X-Domovoi-Device-Key"), "not one of its routes")
+    }
+
+    func testAMissingKeyOnIssueIsSaidInPlainWords() async {
+        keyRequired.set(true)
+        let s = keeping(client: keyedClient(DeviceKeyStore()))
+        _ = await signIn(s)
+        guard case .refused(let why) = await s.keepToday(label: "phone") else { return XCTFail("kept") }
+        XCTAssertEqual(AdminSession.deviceKeyRefused, why)
+        XCTAssertNil(shelf.readGrant())
+    }
+
+    func testAWrongKeyOnExchangeDropsTheGrantForThePassword() async {
+        keyRequired.set(true)
+        let keys = DeviceKeyStore()
+        _ = keys.rememberDeviceKey(Self.deviceKey, for: server)
+        let s = keeping(client: keyedClient(keys))
+        _ = await signIn(s)
+        _ = await s.keepToday(label: "phone")
+        s.forget()
+        _ = keys.rememberDeviceKey("dk-1-" + String(repeating: "B", count: 38), for: server)
+        guard case .refused(let why) = await s.resume() else { return XCTFail("resumed") }
+        XCTAssertTrue(why.contains("sign in with the password"), why)
+        XCTAssertNil(shelf.readGrant(), "the grant went")
+        XCTAssertEqual(.signedOut, s.state)
+    }
+
+    func testStartingOverUnderANewIdDropsTheKeptGrant() async {
+        let s = keeping()
+        _ = await signIn(s)
+        _ = await s.keepToday(label: "phone")
+        s.forget()
+        guard case .kept = s.state else { return XCTFail("\(s.state)") }
+        s.startedOver(other)
+        XCTAssertNotNil(shelf.readGrant(), "another server's start-over leaves it")
+        s.startedOver(server + "/")
+        XCTAssertNil(shelf.readGrant())
+        XCTAssertEqual(.signedOut, s.state)
+    }
+
+    func testResumeUnderAnotherIdDropsTheGrant() async {
+        let id = Shared("ios-test")
+        let s = keeping(deviceID: { id.current })
+        _ = await signIn(s)
+        _ = await s.keepToday(label: "phone")
+        s.forget()
+        id.set("ios-started-over")
+        guard case .refused = await s.resume() else { return XCTFail("resumed") }
+        XCTAssertNil(shelf.readGrant())
+        XCTAssertTrue(sent("/api/auth/phone-grant/exchange").isEmpty, "nothing was exchanged")
+    }
+
+    /// The container's admin reads the id this phone uses at the ACTIVE
+    /// server, and a start-over there drops a grant kept for it.
+    @MainActor
+    func testTheContainerBindsTheGrantToThePerServerID() async {
+        let fh = FhHouse()
+        fh.answer("POST", "/api/auth/login", #"{"ok":true,"token":"\#(String(repeating: "a", count: 64))","idle_timeout_min":60}"#)
+        fh.answer("POST", "/api/auth/phone-grant", #"{"grant":"\#(Self.grant)","expires_at":"2026-11-25T10:00:00Z"}"#)
+        StubURLProtocol.dispatch { request in fh.respond(request) }
+        let store = InMemoryShellStore(serverURL: server, token: "household-token-1234")
+        store.trustServer(server, identity: TestIdentity.real.pin)
+        let keys = DeviceKeyStore()
+        let grants = InMemoryGrantShelf()
+        let container = AppContainer(
+            store: store, vault: TokenVault(items: InMemoryKeychain()), lock: HouseholdLock(),
+            clock: { 0 }, configuration: StubURLProtocol.session(timeout: 1),
+            deviceKeys: keys, adminGrants: grants, adminLocker: FakeLocker(), deviceID: { "ios-install" }
+        )
+        _ = await container.admin.signIn(password: "right-password", label: "phone")
+        guard case .ok = await container.admin.keepToday(label: "phone") else { return XCTFail("not kept") }
+        XCTAssertEqual("ios-install", grants.readGrant()?.deviceID)
+        // The phone lost its key here and starts over: the grant goes.
+        let fresh = keys.startOver(at: server)
+        XCTAssertNil(grants.readGrant())
+        // A grant kept now is bound to the new id.
+        _ = await container.admin.signIn(password: "right-password", label: "phone")
+        guard case .ok = await container.admin.keepToday(label: "phone") else { return XCTFail("not kept again") }
+        XCTAssertEqual(fresh, grants.readGrant()?.deviceID)
     }
 
     @discardableResult

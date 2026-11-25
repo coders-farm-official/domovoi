@@ -205,6 +205,11 @@ public final class DeviceKeyStore: DeviceKeyBook, @unchecked Sendable {
     /// Told after a key comes or goes. Carries nothing.
     public var changed: (@Sendable () -> Void)?
 
+    /// Told which server this phone started over at (a lost key, a new
+    /// device id there): a grant kept for it goes (``AdminSession``). Set
+    /// once by the container before any call.
+    public var startedOver: (@Sendable (String) -> Void)?
+
     public init(place: any SavedState = SavedStateBox(), vault: DeviceKeyVault = DeviceKeyVault(items: InMemoryKeychain())) {
         self.place = place
         self.vault = vault
@@ -269,6 +274,7 @@ public final class DeviceKeyStore: DeviceKeyBook, @unchecked Sendable {
             if let blob = try? JSONEncoder().encode(s.ids) { place.write(blob) }
         }
         changed?()
+        startedOver?(k)
         return id
     }
 

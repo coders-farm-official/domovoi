@@ -642,13 +642,20 @@ public final class AppContainer: Sendable {
         self.client = graph.app
         self.identity = graph.gate
         self.lock = lock
-        self.admin = AdminSession(
+        let adminSession = AdminSession(
             client: graph.app,
             prove: IdentityAdmission.fingerprintOf(graph.gate),
             grants: adminGrants,
             locker: adminLocker,
-            deviceID: deviceID
+            // The id this phone uses at the ACTIVE server, which the grant
+            // is bound to: the install's own, unless it lost its device key
+            // there and started over under a new one (``DeviceKeyStore``).
+            deviceID: { deviceKeys.startedOverID(for: store.serverURL) ?? deviceID() }
         )
+        // A phone that starts over at a server under a new id drops a grant
+        // kept there (it was issued to the old id).
+        self.admin = adminSession
+        deviceKeys.startedOver = { server in adminSession.startedOver(server) }
 
         // The socket, built from the client that was just made rather than
         // from `self.client`, because not every stored property is set yet.

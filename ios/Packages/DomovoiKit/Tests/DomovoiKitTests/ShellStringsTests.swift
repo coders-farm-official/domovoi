@@ -942,7 +942,9 @@ final class ShellStringsTests: XCTestCase {
     /// Every section's label and `sub`, and the five group labels, read from
     /// the table they were ported from.
     func testEverySettingsSectionMatchesTheKotlin() throws {
-        XCTAssertEqual(18, SettingsSection.all.count)
+        // 19 since next/1.5.0's "Keep voice history" met this branch's
+        // "Admin on this phone" (each list was 18 on its own).
+        XCTAssertEqual(19, SettingsSection.all.count)
         XCTAssertEqual(5, SettingsGroup.allCases.count)
         // Before the merge brings the regroup's Kotlin, the fields it added
         // are pinned one by one against adb2ad06's own literals
@@ -982,7 +984,7 @@ final class ShellStringsTests: XCTestCase {
             if let dashboard = section.dashboard { assertKotlinSaysWhole(dashboard) }
         }
         // The keys are unique, and every alias resolves.
-        XCTAssertEqual(18, Set(SettingsSection.all.map(\.key)).count)
+        XCTAssertEqual(19, Set(SettingsSection.all.map(\.key)).count)
         XCTAssertEqual("rooms", SettingsSection.named("satellites")?.key)
         XCTAssertEqual("phones-and-browsers", SettingsSection.named("connection")?.key)
         XCTAssertEqual("advanced", SettingsSection.named("configuration")?.key)
