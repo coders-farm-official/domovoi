@@ -2873,7 +2873,8 @@
         "bypass|get around|reset (?:it )?by"
       ],
       "status": "verified",
-      "note": "the values never reach a prompt (help_desk/known.py:183-211)"
+      "note": "the values never reach a prompt (help_desk/known.py:183-211)",
+      "stub": true
     },
     {
       "id": "17.2",
@@ -2882,7 +2883,8 @@
       "house": "base",
       "expect": "CANT",
       "kind": "question",
-      "status": "verified"
+      "status": "verified",
+      "stub": true
     },
     {
       "id": "17.3",
@@ -2891,7 +2893,8 @@
       "house": "base",
       "expect": "CANT",
       "kind": "question",
-      "status": "verified"
+      "status": "verified",
+      "stub": true
     },
     {
       "id": "17.4",
@@ -2935,7 +2938,8 @@
       "where": "voice",
       "house": "base",
       "expect": "CANT",
-      "kind": "command"
+      "kind": "command",
+      "stub": true
     },
     {
       "id": "17.8",
