@@ -35,11 +35,15 @@ scripts/eval_routing.py:
   --ollama URL     Real-model runs: the same route() with the real model
                    client (``--model`` answers, default
                    settings.ollama_model; ``--tool-model`` routes, default
-                   settings.ollama_tool_model). Reads the fixture doesn't
-                   hold come back empty and writes are dropped (noted in
-                   the result), so a profile or history read doesn't stop
-                   the turn. A chat case gets the chat's system prompt (or
-                   the help desk's, for a help question).
+                   settings.ollama_tool_model). Only the model is real:
+                   a turn that needs database state the fixture doesn't
+                   hold, the live rooms or a real plugin is reported
+                   "needs db" / "needs live" / "needs plugin", as in stub
+                   mode. A chat case gets the chat's system prompt (or the
+                   help desk's, for a help question).
+
+  --runs N         Run every case N times (a model's answers vary) and
+                   report each case's pass rate (2/3) and each group's.
 
   --judge-model M  Also score ``judge: true`` cases 0-3 against their
                    rubric, on the same Ollama server (2 or more passes).
@@ -372,9 +376,11 @@ def load_settings_tree(path: Path = SETTINGS_JSX) -> SettingsTree:
     return SettingsTree(groups=groups, marks=marks)
 
 
-_ARROW = r"\s*(?:→|->|›|>)\s*"
-_ARROW_PATH_RE = re.compile(r"\bSettings((?:" + _ARROW + r"[^→>›\n.,;:!?\"()]+)+)")
-_SPOKEN_PATH_RE = re.compile(r"\bsettings,? then ([^.;:!?\n]+)", re.IGNORECASE)
+# Only the form Domovoi writes its places in: "Settings → Group → Section",
+# capitalised, with the arrow. Prose ("open your phone's settings, then
+# Apps") is general advice, not a claim about Domovoi's menus.
+_ARROW = r"\s*(?:→|->)\s*"
+_ARROW_PATH_RE = re.compile(r"\bSettings((?:" + _ARROW + r"[^→\n.,;:!?\"()]+)+)")
 
 
 def _norm_label(s: str) -> str:
@@ -419,9 +425,6 @@ def find_menu_paths(text: str) -> list[tuple[str, list[str]]]:
     out = []
     for m in _ARROW_PATH_RE.finditer(t):
         segs = [s.strip() for s in re.split(_ARROW, m.group(1)) if s.strip()]
-        out.append((m.group(0).strip(), segs))
-    for m in _SPOKEN_PATH_RE.finditer(t):
-        segs = [s.strip() for s in re.split(r",? then |, and then ", m.group(1)) if s.strip()]
         out.append((m.group(0).strip(), segs))
     return out
 
@@ -1355,7 +1358,10 @@ async def run_case(
     if case.skip_reason:
         return Turn("skipped", detail=case.skip_reason)
     TOUCHES.clear()
-    lenient = model_url is not None
+    # Only the model is real in an --ollama run: state the fixture doesn't
+    # hold is still "needs db" (answering it empty made fake failures:
+    # "Playing some jazz by Stub Artist", rooms that don't exist).
+    lenient = False
 
     async def one(say: str, device: str | None, thread: str) -> Turn:
         if case.where == "voice":
@@ -1422,6 +1428,36 @@ class Result:
     judge_score: int | None = None
     judge_reason: str = ""
     detail: str = ""
+    # --runs N: how many scored runs passed, of how many; every run's own
+    # status, reply and problems.
+    passes: int = 0
+    scored_runs: int = 0
+    runs: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def rate(self) -> str:
+        return f"{self.passes}/{self.scored_runs}" if self.scored_runs else "-"
+
+
+SCORED = ("pass", "fail", "known_gap", "fixed")
+# The case's status over several runs: its worst scored run.
+_WORST = ("fail", "known_gap", "fixed", "pass")
+
+
+def combine(runs: list[Result]) -> Result:
+    """One result per case from its runs: the worst scored run's (the
+    reply shown is that run's), with the pass rate and every run kept."""
+    scored = [r for r in runs if r.status in SCORED]
+    if scored:
+        worst = min(scored, key=lambda r: _WORST.index(r.status))
+    else:
+        worst = runs[0]
+    out = Result(**{k: v for k, v in asdict(worst).items() if k not in ("passes", "scored_runs", "runs")})
+    out.passes = sum(1 for r in scored if r.status in ("pass", "fixed"))
+    out.scored_runs = len(scored)
+    out.runs = [{"status": r.status, "text": r.text, "problems": r.problems, "detail": r.detail}
+                for r in runs]
+    return out
 
 
 def score(case: Case, turn: Turn, house: dict, tree: SettingsTree, catalogue: dict) -> Result:
@@ -1482,20 +1518,33 @@ STATUS_COLUMNS = ("pass", "fail", "known_gap", "fixed", "needs_model", "needs_db
                   "needs_live", "needs_network", "needs_plugin", "skipped")
 
 
+def group_rates(results: list[Result]) -> dict[str, str]:
+    """Each group's passed scored runs, of all its scored runs ("all": every group)."""
+    out = {}
+    for g in sorted({r.group for r in results}):
+        rows = [r for r in results if r.group == g]
+        out[str(g)] = f"{sum(r.passes for r in rows)}/{sum(r.scored_runs for r in rows)}"
+    out["all"] = f"{sum(r.passes for r in results)}/{sum(r.scored_runs for r in results)}"
+    return out
+
+
 def report(results: list[Result], verbose: bool = False) -> int:
     groups = sorted({r.group for r in results})
-    head = f"{'group':>5} {'cases':>5} " + " ".join(f"{c.replace('needs_', 'n/'):>9}" for c in STATUS_COLUMNS)
+    rates = group_rates(results)
+    head = (f"{'group':>5} {'cases':>5} " + " ".join(f"{c.replace('needs_', 'n/'):>9}" for c in STATUS_COLUMNS)
+            + f" {'run rate':>9}")
     print(head)
     for g in groups:
         rows = [r for r in results if r.group == g]
         print(f"{g:>5} {len(rows):>5} " + " ".join(
-            f"{sum(1 for r in rows if r.status == c):>9}" for c in STATUS_COLUMNS))
+            f"{sum(1 for r in rows if r.status == c):>9}" for c in STATUS_COLUMNS) + f" {rates[str(g)]:>9}")
     print(f"{'all':>5} {len(results):>5} " + " ".join(
-        f"{sum(1 for r in results if r.status == c):>9}" for c in STATUS_COLUMNS))
+        f"{sum(1 for r in results if r.status == c):>9}" for c in STATUS_COLUMNS) + f" {rates['all']:>9}")
     print()
 
     def show(r: Result) -> None:
-        print(f"  {r.id:6} [{r.house}] {r.utterance!r}")
+        rate = f" (passed {r.rate} runs)" if r.scored_runs > 1 else ""
+        print(f"  {r.id:6} [{r.house}] {r.utterance!r}{rate}")
         print(f"         reply ({r.handler or '-'}/{r.path or '-'}): {r.text!r}")
         for p in r.problems:
             print(f"         - {p}")
@@ -1543,7 +1592,7 @@ def report(results: list[Result], verbose: bool = False) -> int:
 async def run_all(
     cases: list[Case], houses: dict[str, dict], catalogue: dict[str, dict], tree: SettingsTree, *,
     model_url: str | None = None, model: str | None = None, tool_model: str | None = None,
-    judge_model: str | None = None,
+    judge_model: str | None = None, runs: int = 1,
 ) -> list[Result]:
     client = None
     if model_url is not None:
@@ -1558,18 +1607,19 @@ async def run_all(
             tool_model=tool_model or settings.ollama_tool_model,
         )
     by_id = {c.id: c for c in cases}
-    results = []
+    per_case: dict[str, list[Result]] = {c.id: [] for c in cases}
     with sandbox(client):
-        for case in cases:
-            house = houses[case.house]
-            turn = await run_case(case, house, catalogue, model_url=model_url, model=model)
-            r = score(case, turn, house, tree, catalogue)
-            results.append(r)
+        for _ in range(max(1, runs)):
+            for case in cases:
+                house = houses[case.house]
+                turn = await run_case(case, house, catalogue, model_url=model_url, model=model)
+                per_case[case.id].append(score(case, turn, house, tree, catalogue))
     if judge_model and model_url:
-        for r in results:
-            if by_id[r.id].judge and r.status in ("pass", "fail", "known_gap", "fixed") and r.text:
-                await judge_result(r, by_id[r.id], model_url, judge_model)
-    return results
+        for rs in per_case.values():
+            for r in rs:
+                if by_id[r.id].judge and r.status in SCORED and r.text:
+                    await judge_result(r, by_id[r.id], model_url, judge_model)
+    return [combine(per_case[c.id]) for c in cases]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1578,6 +1628,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model", help="Q&A / chat model (default: settings.ollama_model)")
     p.add_argument("--tool-model", help="tool-routing model (default: settings.ollama_tool_model)")
     p.add_argument("--judge-model", help="score judge:true cases 0-3 with this model (needs --ollama)")
+    p.add_argument("--runs", type=int, default=1, metavar="N",
+                   help="run every case N times and report pass rates (for model runs)")
     p.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     p.add_argument("--houses", type=Path, default=HOUSES_DIR)
     p.add_argument("--case", action="append", default=[], metavar="ID", help="run only this case id (repeatable)")
@@ -1623,14 +1675,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"target: {target}, {len(cases)} cases")
     results = asyncio.run(run_all(
         cases, houses, catalogue, tree, model_url=args.ollama, model=args.model,
-        tool_model=args.tool_model, judge_model=args.judge_model,
+        tool_model=args.tool_model, judge_model=args.judge_model, runs=args.runs,
     ))
     code = report(results, verbose=args.verbose)
     print(f"({time.monotonic() - t0:.1f}s)")
     if args.json:
         args.json.write_text(json.dumps({
-            "target": target, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "results": [asdict(r) for r in results],
+            "target": target, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "runs": args.runs,
+            "group_rates": group_rates(results),
+            "results": [{**asdict(r), "rate": r.rate} for r in results],
         }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     return code
 

@@ -215,10 +215,8 @@ def test_settings_tree_comes_from_the_dashboard() -> None:
         "Set it in Settings → Household → Home location.",
         "Open Settings → Household → Home location and type your town.",
         "Settings -> Chat & AI -> Models.",
-        "Go to Settings > Privacy > Internet.",
         "Settings → System → Advanced → Admin account.",
         "Settings → Household.",
-        "In the app, open Settings, then Household, then Phones and browsers, and set it.",
         "Nothing to set here.",
     ],
 )
@@ -229,11 +227,26 @@ def test_menu_paths_that_exist(text) -> None:
 @pytest.mark.parametrize(
     "text",
     [
+        # Prose, not the "Settings → …" form Domovoi writes its places in:
+        # general advice about a phone (22.3's real reply), not checked.
+        'On your phone, open settings, then "Apps", then turn off what you do not use.',
+        "Open Settings, then Lights, then Bulbs.",
+        "Go to settings > privacy on your phone.",
+    ],
+)
+def test_prose_about_settings_is_not_a_menu_path(text) -> None:
+    assert ev.find_menu_paths(text) == []
+    assert ev.check_menu_paths(text, TREE) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "Turn it on in Settings → Smart home.",
         "Settings → Advanced.",                      # a section, not a group (N12's comment)
         "Settings → Household → Voice history.",     # the wrong group
-        "Open Settings, then Lights, then Bulbs.",
         "Settings → Privacy → Internet → Proxy.",
+        "Settings -> Lights -> Bulbs.",
     ],
 )
 def test_menu_paths_that_dont(text) -> None:
@@ -321,6 +334,18 @@ def test_voice_is_never_a_proven_admin() -> None:
 def test_can_you_download_videos_is_one_answer_for_everyone() -> None:
     """The capability table's answer, the same for a member and an admin."""
     assert _reply("8.7e") == _reply("8.7d") == _reply("4.33")
+
+
+def test_runs_combine_into_a_pass_rate() -> None:
+    def r(status: str, text: str = "") -> "ev.Result":
+        return ev.Result(id="0.1", group=0, utterance="x", house="base", where="voice",
+                         expect="CAN", outcome="reply", status=status, text=text)
+
+    out = ev.combine([r("pass", "a"), r("fail", "b"), r("pass", "c")])
+    assert (out.status, out.text, out.rate) == ("fail", "b", "2/3")
+    assert [x["status"] for x in out.runs] == ["pass", "fail", "pass"]
+    assert ev.combine([r("needs_model")]).rate == "-"
+    assert ev.group_rates([out])["all"] == "2/3"
 
 
 def test_findings_are_stub_cases_without_a_known_gap() -> None:
