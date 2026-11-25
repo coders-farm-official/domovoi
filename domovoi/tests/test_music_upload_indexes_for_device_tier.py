@@ -416,6 +416,16 @@ async def test_a_phone_uploads_and_the_track_is_in_the_library(
     # put back afterwards: the preload binds a SECOND module object, and
     # leaving either name pointing at it makes a later test's
     # ``monkeypatch.setattr`` land on the copy the handler doesn't use.
+    # ``_db`` resets only the auth tables. A test before this one on the same
+    # worker may have restarted library_tracks' id sequence (db_session's
+    # TRUNCATE ... RESTART IDENTITY) and then left rows with explicit ids:
+    # the indexer's insert then hit a duplicate key, logged it and indexed
+    # nothing (CI, 2026-11-25). Move the sequence past whatever is there.
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "SELECT setval(pg_get_serial_sequence('library_tracks', 'id'), "
+            "COALESCE((SELECT max(id) FROM library_tracks), 0) + 1, false)"
+        ))
     modname = "domovoi.workers.library_indexer"
     original = sys.modules.get(modname)
     sys.modules.pop(modname, None)
