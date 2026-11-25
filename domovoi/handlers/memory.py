@@ -675,7 +675,7 @@ class MemoryHandler(Handler):
                 kind=FORGET_WHAT_KIND,
                 handler=self.name,
                 data={"person_id": ctx.person_id, "expires_at": time.time() + _FORGET_WHAT_TTL_SEC},
-                prompt="Forget what?",
+                prompt="What should I forget?",
             )
         return Response(
             text=_FORGET_WHAT_TEXT,
