@@ -1885,7 +1885,10 @@ const VersionSection = () => {
   return (
     <Card title="Version"
           sub="The Domovoi release this server runs, which updates it follows, and the update check.">
-      <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '140px 1fr',
+      {/* minmax(0, 1fr): the value column may shrink below its content's
+          width, so at 360 px the channel switch fits the card instead of
+          pushing past its edge. */}
+      <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '140px minmax(0, 1fr)',
                     rowGap: 8, fontSize: 13, alignItems: 'center' }}>
         <div className="label">web build</div>
         <div className="mono" style={{ color: webVer ? 'var(--fg)' : 'var(--fg-faint)' }}>{webVer || '—'}</div>
@@ -1963,7 +1966,7 @@ const VersionSection = () => {
                         title={internetOff ? NEEDS_INTERNET_TEXT : 'which updates this server follows; switching moves no code'}
                         style={{ font: 'inherit', fontSize: 12, height: 28, padding: '0 8px',
                                  borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                                 background: 'var(--card)', color: 'var(--fg)', maxWidth: 280 }}>
+                                 background: 'var(--card)', color: 'var(--fg)', maxWidth: 'min(280px, 100%)', minWidth: 0 }}>
                   {!channelChoices.includes(channel) && (
                     <option value={channel || ''} disabled>{channel ? `${channel} (not a channel)` : 'no branch followed'}</option>
                   )}
