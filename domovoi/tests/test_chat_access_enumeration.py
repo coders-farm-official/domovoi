@@ -247,31 +247,77 @@ ROUTES_ALLOWED: dict[tuple[str, str], str] = {
 }
 
 
-def _chat_routes(app: Any) -> list[Any]:
-    """The app's chat routes, and (for the web) its chat and help routers'
-    own, one per (methods, path). Routes are recognised by shape (a path,
-    methods and a ``dependant``), not ``isinstance(r, APIRoute)``: a test
-    elsewhere in a CI shard that re-imports modules leaves routes built
-    from another copy of the class (this check once saw no web route at
-    all that way)."""
+class _Route:
+    """A route as the guard reads it: its full path, methods and dependant."""
+
+    def __init__(self, path: str, methods: Any, dependant: Any) -> None:
+        self.path, self.methods, self.dependant = path, methods, dependant
+
+
+#: The web modules whose ``router`` serves chats: chat.py (prefix
+#: ``/api/chat``), the routers chat.py includes into it (their own paths
+#: get that prefix) and help.py (``/api/help/deliveries``). Read straight
+#: from the modules, not from the global web app's route table, which a
+#: test elsewhere in a CI shard can leave changed (two CI runs saw part or
+#: all of the chat routes missing from it). test_the_guard_reads_every_router_chat_py_includes
+#: keeps the list in step with chat.py.
+CHAT_SUBROUTERS = ("chat_documents", "chat_drafts", "chat_doc_jobs", "chat_letters", "chat_videos")
+
+
+def _is_chat_path(path: str) -> bool:
+    return path.startswith("/api/chat") or path == "/api/help/deliveries" or path == "/v1/phone/voice"
+
+
+def _shaped(r: Any) -> bool:
+    return hasattr(r, "dependant") and bool(getattr(r, "methods", None)) and isinstance(getattr(r, "path", None), str)
+
+
+def _module_routes() -> list[_Route]:
+    """The web's chat routes, from the routers the modules define."""
     import importlib
 
-    sources = list(app.routes)
+    out: list[_Route] = []
+    chat = importlib.import_module("web.backend.api.chat")
+    for r in chat.router.routes:
+        if _shaped(r):
+            out.append(_Route(r.path, r.methods, r.dependant))
+    prefix = chat.router.prefix
+    for name in CHAT_SUBROUTERS:
+        sub = importlib.import_module(f"web.backend.api.{name}").router
+        for r in sub.routes:
+            if _shaped(r):
+                path = r.path if r.path.startswith(prefix) else prefix + r.path
+                out.append(_Route(path, r.methods, r.dependant))
+    for r in importlib.import_module("web.backend.api.help").router.routes:
+        if _shaped(r):
+            out.append(_Route(r.path, r.methods, r.dependant))
+    return out
+
+
+def _chat_routes(app: Any) -> list[Any]:
+    """The chat routes: for the web, its modules' routers (plus whatever the
+    app's table also has); for the core, its app's table. One per
+    (methods, path)."""
+    sources: list[Any] = [_Route(r.path, r.methods, r.dependant) for r in app.routes if _shaped(r)]
     if app is _web_app():
-        for mod in ("web.backend.api.chat", "web.backend.api.help"):
-            sources += list(importlib.import_module(mod).router.routes)
+        sources = _module_routes() + sources
     out, seen = [], set()
     for r in sources:
-        if not (hasattr(r, "dependant") and getattr(r, "methods", None) and isinstance(getattr(r, "path", None), str)):
-            continue
-        if not (r.path.startswith("/api/chat") or r.path == "/api/help/deliveries"
-                or r.path == "/v1/phone/voice"):
+        if not _is_chat_path(r.path):
             continue
         key = (tuple(sorted(r.methods or ())), r.path)
         if key not in seen:
             seen.add(key)
             out.append(r)
     return out
+
+
+def test_the_guard_reads_every_router_chat_py_includes() -> None:
+    src = (ROOT / "web/backend/api/chat.py").read_text(encoding="utf-8")
+    aliases = dict(re.findall(r"^from web\.backend\.api import (\w+) as (\w+)$", src, re.M))
+    by_alias = {alias: mod for mod, alias in aliases.items()}
+    included = re.findall(r"^router\.include_router\((\w+)\.router\)", src, re.M)
+    assert sorted(by_alias[a] for a in included) == sorted(CHAT_SUBROUTERS)
 
 
 def _carries_marker(dependant: Any) -> bool:
@@ -459,6 +505,12 @@ async def test_another_device_asking_for_a_chat_by_id(_db, tmp_path, monkeypatch
     from web.backend.api import chat as chat_api
     from web.backend.api import chat_documents as docs_api
 
+    # The global web app must still serve every chat route; if a test
+    # elsewhere left its route table changed, say so here (with what is
+    # missing) rather than as a puzzling 404 below.
+    served = {(m, r.path) for r in _web_app().routes if _shaped(r) for m in r.methods}
+    lost = sorted(set(_child_routes()) - served)
+    assert not lost, f"the web app's route table lost chat routes (state leaked from another test?): {lost}"
     monkeypatch.setattr(ai_features, "turned_off", lambda: False)
     monkeypatch.setattr(chat_api, "UPLOADS_DIR", tmp_path / "up")
     monkeypatch.setattr(docs_api, "DOCS_DIR", tmp_path / "docs")
