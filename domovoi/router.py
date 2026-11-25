@@ -371,6 +371,24 @@ def phone_refusal(handler: Handler, ctx: Context) -> Response | None:
     return None
 
 
+def ai_off_refusal(handler: Handler, fp: FastPath, ctx: Context) -> Response | None:
+    """The reply a fast path gets instead of running when it needs AI
+    (``Handler.needs_ai``, or the path's own ``needs_ai``) and the
+    household's AI switch is off; None when it may run. A plugin that
+    makes pictures on its own engine never asks this box's Ollama, so the
+    SDK's Ollama refusal alone would let it run (owner, Q6)."""
+    needs = fp.needs_ai if fp.needs_ai is not None else getattr(handler, "needs_ai", False)
+    if not needs or ai_features.enabled():
+        return None
+    decl = ai_features.plugin_ai(getattr(handler, "plugin_slug", None))
+    return Response(
+        text=ai_features.off_feature_line(decl.does if decl is not None else None),
+        session_id=ctx.session_id,
+        matched_handler=handler.name,
+        expect_followup=False,
+    )
+
+
 def offline_blocked(handler: Handler, fp: FastPath, ctx: Context) -> bool:
     """Whether the offline gate sends this fast path to the handler's
     ``fallback_offline`` instead (see route(), step 1)."""
@@ -392,7 +410,7 @@ async def run_fast_path(
     that hands a reply on to another command (a parked choice answered
     "no, play X"). The caller stamps and records the turn. None: the path
     declined the turn (see ``FastPath``)."""
-    refusal = phone_refusal(handler, ctx)
+    refusal = phone_refusal(handler, ctx) or ai_off_refusal(handler, fp, ctx)
     if refusal is not None:
         return refusal
     if offline_blocked(handler, fp, ctx):
@@ -983,7 +1001,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             return response
 
         try:
-            response = phone_refusal(handler, ctx)
+            response = phone_refusal(handler, ctx) or ai_off_refusal(handler, fp, ctx)
             if response is None:
                 response = await fp.method(handler, m, ctx, session)
         except MPDNotProvisioned:
@@ -1018,9 +1036,17 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # this home is set up for. Not an outage line: nothing is broken.
     if ai_features.turned_off():
         category = categorize_question(transcript)
+        # A request for what an installed plugin makes with a model and
+        # has no voice handler for ("make a picture of a cat", the image
+        # plugin): say that AI being off is why (owner, Q6).
+        from domovoi.capabilities import CAPABILITIES
+
+        asked = ai_features.known_capability_request(transcript, CAPABILITIES.names())
         response = Response(
             text=(
-                ai_features.OFF_LOOKUP_LINE
+                ai_features.off_feature_line(asked.does)
+                if asked is not None
+                else ai_features.OFF_LOOKUP_LINE
                 if category is not None and category in VOLATILE_CATEGORIES
                 else ai_features.OFF_LINE
             ),

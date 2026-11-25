@@ -34,11 +34,13 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 from urllib.parse import urlsplit
 
-from domovoi import config_env_writer
+from domovoi import config_env_writer, off_answers
 
 ENV_KEY = "AI_FEATURES"
 
@@ -51,7 +53,10 @@ OFF_LINE = (
 )
 # The weather, scores, prices, the news of the day, "are you sure?": things
 # only a web answer summarised by the model could give.
-OFF_LOOKUP_LINE = "I can't look that up with AI turned off."
+# Says how to turn AI back on (owner, Q2: domovoi/off_answers.py).
+OFF_LOOKUP_LINE = off_answers.with_turn_on(
+    "I can't look that up with AI turned off.", off_answers.AI
+)
 
 # The one sentence an API refusal carries (HTTP detail, the SDK's
 # exception text, the dashboard's toast).
@@ -183,16 +188,189 @@ def override(value: bool | None) -> Iterator[None]:
         _overrides.pop()
 
 
-def http_exception(what: str = "this"):
+def http_exception(what: str = "this", *, status_code: int = 409, detail: str | None = None):
     """The one refusal shape for HTTP routes while AI is off: 409, detail
-    :data:`TURNED_OFF_REASON`, header ``X-Domovoi-Refusal: ai-off``."""
+    :data:`TURNED_OFF_REASON`, header ``X-Domovoi-Refusal: ai-off``.
+    ``status_code`` and ``detail`` are for the plugin route gate
+    (:data:`PLUGIN_ROUTE_REFUSAL_STATUS`)."""
     from fastapi import HTTPException
 
     return HTTPException(
-        status_code=409,
-        detail=TURNED_OFF_REASON,
+        status_code=status_code,
+        detail=TURNED_OFF_REASON if detail is None else detail,
         headers={REFUSAL_HEADER: REFUSAL_VALUE},
     )
+
+
+# --- Plugins that make things with a model (owner, Q6) ---------------------
+#
+# A plugin whose feature IS a model (image generation runs a diffusion
+# model on its own engine, never this box's Ollama) slips past the Ollama
+# refusal below. It says so in its manifest, and core does the rest:
+#
+#   [ai]
+#   does = "make pictures"        # finishes "AI is off on this house, so I can't ..."
+#   routes = ["/generate"]        # web/core routes that make something
+#
+#   [[handlers]]
+#   name = "..."
+#   needs_ai = true               # every voice turn this handler takes
+#
+# While AI is off the router answers a ``needs_ai`` handler's turns with
+# :func:`off_feature_line` (the handler's code never runs), and both
+# plugin route gates (web ``/api/plugins/<slug>``, core
+# ``/v1/plugins/<slug>``) refuse a non-GET request to a listed route with
+# :data:`PLUGIN_ROUTE_REFUSAL_STATUS`, the same line and
+# ``X-Domovoi-Refusal: ai-off``. Reading (GET) always works: what was
+# made before stays.
+#
+# A plugin released before the ``[ai]`` table existed says nothing, so a
+# capability it provides stands in for it (:data:`KNOWN_AI_CAPABILITIES`):
+# what core knows that capability's routes and requests to be. A manifest
+# with its own ``[ai]`` table is read instead.
+
+AI_OFF_LEAD = "AI is off on this house"
+
+#: A refused plugin route answers 423, not the core routes' 409: pages
+#: released before this gate read their own 409 and 503 as something else
+#: ("model not installed", "engine offline"), which would be untrue here.
+#: The ``X-Domovoi-Refusal: ai-off`` header is what a page should read;
+#: the dashboard shell shows the refusal's line itself (data.js).
+PLUGIN_ROUTE_REFUSAL_STATUS = 423
+
+#: A manifest's ``[ai] does`` is spoken, so it stays a short phrase.
+AI_DOES_MAX = 60
+
+
+@dataclass(frozen=True)
+class PluginAI:
+    """What a plugin's ``[ai]`` table says (or what core knows for it)."""
+
+    #: Finishes "AI is off on this house, so I can't ..."; "" says "do that".
+    does: str = ""
+    #: Route paths under the plugin's prefix ("/generate",
+    #: "/jobs/{job_id}/redo") whose non-GET requests make something.
+    routes: tuple[str, ...] = ()
+    #: Core-only, for a capability with no voice handler of its own: the
+    #: requests that would be it ("make a picture of ..."), answered with
+    #: the off line instead of the general AI-off answer.
+    voice: re.Pattern[str] | None = None
+
+
+KNOWN_AI_CAPABILITIES: dict[str, PluginAI] = {
+    # The Image Generation plugin (capability "imagegen", 1.0.x): its page
+    # starts a picture with POST /generate. It has no voice handler, so
+    # core recognises the request itself.
+    "imagegen": PluginAI(
+        does="make pictures",
+        routes=("/generate",),
+        voice=re.compile(
+            r"^(?:(?:can you |could you |please )?"
+            r"(?:make|draw|create|generate|paint|render|design) "
+            r"(?:me |us )?(?:a |an |some |the )?(?:\w+ )?"
+            r"(?:picture|pictures|image|images|drawing|painting|illustration|photo|artwork)"
+            r"|(?:can you |could you |please )?draw (?:me |us )?(?:a|an|some) "
+            r"|(?:image|picture) generation)\b"
+        ),
+    ),
+}
+
+
+def off_feature_line(does: str | None = None) -> str:
+    """What a turn hears when AI is off and it asked for something only a
+    model makes: "AI is off on this house, so I can't make pictures." and
+    how to turn it on. Never the plugin's name."""
+    what = " ".join(str(does or "").split()) or "do that"
+    return off_answers.with_turn_on(f"{AI_OFF_LEAD}, so I can't {what}.", off_answers.AI)
+
+
+def plugin_ai_from_manifest(raw: Mapping[str, Any] | None) -> PluginAI | None:
+    """A manifest's ``[ai]`` table (the raw TOML or the registry's JSONB),
+    else the known capability it provides, else None. Raises
+    :class:`ValueError` on a malformed table (the installer refuses it)."""
+    raw = raw or {}
+    table = raw.get("ai")
+    if table is not None:
+        if not isinstance(table, Mapping):
+            raise ValueError("[ai] must be a table")
+        does = table.get("does", "")
+        if not isinstance(does, str) or len(does) > AI_DOES_MAX:
+            raise ValueError(f"ai.does must be a phrase of at most {AI_DOES_MAX} characters")
+        routes = table.get("routes", [])
+        if not isinstance(routes, list) or not all(
+            isinstance(r, str) and r.startswith("/") for r in routes
+        ):
+            raise ValueError('ai.routes must be a list of paths starting with "/"')
+        return PluginAI(does=does.strip(), routes=tuple(r.rstrip("/") or "/" for r in routes))
+    caps = raw.get("capabilities") or {}
+    provides = caps.get("provides") if isinstance(caps, Mapping) else None
+    for cap in provides or ():
+        known = KNOWN_AI_CAPABILITIES.get(cap) if isinstance(cap, str) else None
+        if known is not None:
+            return known
+    return None
+
+
+def route_needs_ai(decl: PluginAI | None, method: str, route_path: str) -> bool:
+    """Whether a request to ``route_path`` (the route's path under the
+    plugin's prefix, as declared: "/generate", "/jobs/{job_id}/redo") is
+    one AI-off refuses. Reads (GET, HEAD, OPTIONS) never are."""
+    if decl is None or not decl.routes:
+        return False
+    if method.upper() in ("GET", "HEAD", "OPTIONS"):
+        return False
+    path = route_path.rstrip("/") or "/"
+    return path in decl.routes
+
+
+def plugin_route_refusal(decl: PluginAI | None, method: str, route_path: str):
+    """The HTTPException a plugin route gate raises while AI is off for a
+    route the plugin listed, or None when the request may run."""
+    if not route_needs_ai(decl, method, route_path) or enabled():
+        return None
+    assert decl is not None
+    return http_exception(
+        status_code=PLUGIN_ROUTE_REFUSAL_STATUS, detail=off_feature_line(decl.does)
+    )
+
+
+def route_path_under(route_template: str | None, actual_path: str, prefix: str) -> str:
+    """The path a plugin declares a route by: the matched route's template
+    ("/api/plugins/imagegen/jobs/{job_id}") less the mount ``prefix``, else
+    the request's own path less it."""
+    path = route_template or actual_path
+    if path.startswith(prefix):
+        path = path[len(prefix):]
+    return path or "/"
+
+
+# The core process's plugin declarations, by slug: the plugin loader sets
+# one as it loads a plugin and drops it on disable. The router reads
+# ``does`` for a needs_ai handler's line; the core route gate ``routes``.
+_PLUGIN_AI: dict[str, PluginAI] = {}
+
+
+def set_plugin_ai(slug: str, decl: PluginAI | None) -> None:
+    if decl is None:
+        _PLUGIN_AI.pop(slug, None)
+    else:
+        _PLUGIN_AI[slug] = decl
+
+
+def plugin_ai(slug: str | None) -> PluginAI | None:
+    return _PLUGIN_AI.get(slug) if slug else None
+
+
+def known_capability_request(transcript: str, provided: Any) -> PluginAI | None:
+    """The known capability (:data:`KNOWN_AI_CAPABILITIES`) a turn asks
+    for, among those ``provided`` (names with a live provider), or None.
+    For the router's AI-off answer: "make a picture of a cat" with an
+    image plugin installed hears the honest line, not the general one."""
+    text = " ".join(str(transcript or "").lower().split())
+    for cap, decl in KNOWN_AI_CAPABILITIES.items():
+        if decl.voice is not None and cap in provided and decl.voice.search(text):
+            return decl
+    return None
 
 
 # ─── Plugins' requests to Ollama ──────────────────────────────────────────

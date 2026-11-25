@@ -102,7 +102,9 @@ async def test_anything_no_command_takes_gets_the_home_commands_line(offline_rou
 async def test_the_weather_and_the_news_of_the_day_get_the_lookup_line(offline_router, online) -> None:
     with ai_features.override(False):
         r = await _say("what's the weather going to be like tomorrow", online=online)
-    assert r.text == ai_features.OFF_LOOKUP_LINE == "I can't look that up with AI turned off."
+    assert r.text == ai_features.OFF_LOOKUP_LINE == (
+        "I can't look that up with AI turned off. An admin can turn it on in Settings → Chat & AI → Models."
+    )
 
 
 @pytest.mark.asyncio

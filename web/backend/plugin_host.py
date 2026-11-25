@@ -469,8 +469,31 @@ class PluginHost:
                     status_code=404, detail=f"plugin {slug!r} is not enabled"
                 )
             await enforce_route_tier(request)
+            self._refuse_if_ai_off(slug, request)
 
         return gate
+
+    def _refuse_if_ai_off(self, slug: str, request: Request) -> None:
+        """While the household's AI switch is off, a non-GET request to a
+        route the plugin's manifest says makes something with a model
+        (``[ai] routes``, or the routes core knows for a capability it
+        provides: ``ai_features.KNOWN_AI_CAPABILITIES``) is refused with
+        the spoken line ("AI is off on this house, so I can't make
+        pictures. …") and ``X-Domovoi-Refusal: ai-off``."""
+        from domovoi import ai_features
+
+        row = self.rows.get(slug) or {}
+        try:
+            decl = ai_features.plugin_ai_from_manifest(row.get("manifest") or {})
+        except ValueError:
+            decl = None  # the core refuses such a manifest at install
+        route = request.scope.get("route")
+        path = ai_features.route_path_under(
+            getattr(route, "path", None), request.url.path, f"/api/plugins/{slug}"
+        )
+        refusal = ai_features.plugin_route_refusal(decl, request.method, path)
+        if refusal is not None:
+            raise refusal
 
     def _mount_one(self, row: dict[str, Any]) -> None:
         """Import + register one plugin's web module. Exception-isolated:
