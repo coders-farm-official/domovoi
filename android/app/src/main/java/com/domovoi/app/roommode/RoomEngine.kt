@@ -128,7 +128,9 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
     }
 
     override suspend fun art(path: String): ByteArray? {
-        if (!RoomDisplayFeed.isArtPath(path)) return null
+        // A cover or a photo result's thumbnail, on this room's own server,
+        // with no credential (the room key goes on no HTTP request).
+        if (!RoomDisplayFeed.isImagePath(path)) return null
         val client = http ?: return null
         val core = store.enrolment?.coreUrl?.trimEnd('/') ?: return null
         return withContext(Dispatchers.IO) {

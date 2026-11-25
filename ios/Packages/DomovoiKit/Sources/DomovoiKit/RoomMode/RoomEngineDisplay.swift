@@ -48,10 +48,12 @@ extension RoomEngine: RoomDisplaySource {
         return send(RoomProtocol.volumeStatus(level: parts.gain.level))
     }
 
-    /// Only a plain `/v1/` path, only from the room's own server (the
-    /// address it was enrolled to, under the app's cleartext rule).
+    /// Only a cover or a photo result's thumbnail path
+    /// (``RoomDisplayFeed/isImagePath(_:)``), only from the room's own server
+    /// (the address it was enrolled to, under the app's cleartext rule), with
+    /// no credential: the room key goes on no HTTP request.
     public func art(_ path: String) async -> Data? {
-        guard RoomDisplayFeed.isArtPath(path), var base = store.enrolment?.coreURL else { return nil }
+        guard RoomDisplayFeed.isImagePath(path), var base = store.enrolment?.coreURL else { return nil }
         while base.hasSuffix("/") { base.removeLast() }
         let url = base + path
         let http = parts.http
