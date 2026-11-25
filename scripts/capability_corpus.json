@@ -1106,7 +1106,7 @@
       "utterance": "Can you update yourself?",
       "where": "chat",
       "house": "offline-kit-admin",
-      "expect": "CAN",
+      "expect": "EXACT",
       "kind": "question",
       "must_include": [
         "offline kit",
@@ -1115,7 +1115,7 @@
       "must_not_include": [
         "I can't do that yet, I don't think"
       ],
-      "note": "proven admin: '...Plug in the new kit's USB stick and open Settings → System → About & updates → Update from an offline kit.' (1.5.0)",
+      "note": "proven admin: '...Plug in the new kit's USB stick and open Settings → System → About & updates → Update from an offline kit.' (1.5.0); EXACT, not CAN: the approved admin line has no 'yes' (next batch 23, 11faa3d7)",
       "skip_reason": "1.5.0 only: the offline-kit update answer is built on next/1.5.0"
     },
     {
