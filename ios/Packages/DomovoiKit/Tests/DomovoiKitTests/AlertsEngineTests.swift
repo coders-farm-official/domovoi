@@ -463,7 +463,10 @@ final class AlertsEngineTests: XCTestCase {
     /// A shared screen never gets another person's steps, whoever it belongs
     /// to.
     func testHelpNeverPostsOnASharedScreen() async {
-        let reader = FakeAlertsReader()
+        // The push is a reason to read (1.5.0); the read lists the row.
+        let reader = FakeAlertsReader(help: { _ in
+            AlertsHelpDeliveryList(deliveries: [AlertsHelpDelivery(id: 7, personID: 3, threadID: 11, title: "Help: add a room")])
+        })
         let books = MemoryAlertsBooks()
         books.setHelpSeen(Self.keyA, id: 6)
         let centre = FakeAlertsCentre()
@@ -474,6 +477,73 @@ final class AlertsEngineTests: XCTestCase {
         await engine.onDeliveries([AlertsHelpDelivery(id: 7, personID: 3, threadID: 11, title: "Help: add a room")])
         XCTAssertTrue(centre.added.isEmpty)
         XCTAssertEqual(7, books.helpSeen(Self.keyA), "the mark still moves")
+    }
+
+    // MARK: - deliveries, 1.5.0: the read decides, the push only asks
+
+    /// The push says "Photos from Domovoi"; the read, filtered to this phone
+    /// by its device key, has the chat's title, and that is the title.
+    func testDeliveriesAreTitledFromTheFetchedRow() async {
+        let reader = FakeAlertsReader(help: { _ in
+            AlertsHelpDeliveryList(deliveries: [AlertsHelpDelivery(id: 7, personID: 3, threadID: 11, title: "Photos: The beach")])
+        })
+        let books = MemoryAlertsBooks()
+        books.setHelpSeen(Self.keyA, id: 6)
+        let centre = FakeAlertsCentre()
+        let engine = AlertsHelpEngine(
+            reader: reader, books: books, centre: centre, serverKey: { Self.keyA }, owner: { "3" }
+        )
+        await engine.onPush([AlertsHelpPushHint(id: 7, title: "Photos from Domovoi")])
+        XCTAssertEqual(["/api/help/deliveries?person_id=3&since_id=6"], reader.paths.current, "the push asked for a read")
+        XCTAssertEqual(["Photos: The beach"], centre.added.map(\.title))
+    }
+
+    /// A read row with no title takes the push's.
+    func testAFetchedRowWithNoTitleFallsBackToThePushTitle() async {
+        let reader = FakeAlertsReader(help: { _ in
+            AlertsHelpDeliveryList(deliveries: [AlertsHelpDelivery(id: 7, personID: 3, threadID: 11, title: "")])
+        })
+        let books = MemoryAlertsBooks()
+        books.setHelpSeen(Self.keyA, id: 6)
+        let centre = FakeAlertsCentre()
+        let engine = AlertsHelpEngine(
+            reader: reader, books: books, centre: centre, serverKey: { Self.keyA }, owner: { "3" }
+        )
+        await engine.onPush([AlertsHelpPushHint(id: 7, title: "Photos from Domovoi")])
+        XCTAssertEqual(["Photos from Domovoi"], centre.added.map(\.title))
+    }
+
+    /// A row the push names that the read doesn't list is another phone's:
+    /// nothing posts. A push with no person or thread still reads.
+    func testThePushsOwnRowsNeverPost() async {
+        let reader = FakeAlertsReader(help: { _ in AlertsHelpDeliveryList() })
+        let books = MemoryAlertsBooks()
+        books.setHelpSeen(Self.keyA, id: 6)
+        let centre = FakeAlertsCentre()
+        let engine = AlertsHelpEngine(
+            reader: reader, books: books, centre: centre, serverKey: { Self.keyA }, owner: { "3" }
+        )
+        await engine.onDeliveries([AlertsHelpDelivery(id: 7, personID: 3, threadID: 11, title: "Photos: mine?")])
+        XCTAssertTrue(centre.added.isEmpty)
+        let push = try? JSONDecoder().decode(
+            AlertsHelpDeliveryPush.self, from: Data(#"[{"id":9,"title":"Photos from Domovoi"},{"title":"x"}]"#.utf8)
+        )
+        XCTAssertEqual([AlertsHelpPushHint(id: 9, title: "Photos from Domovoi")], push?.hints)
+        XCTAssertEqual([], push?.deliveries, "no person or thread: no row, but still a hint")
+    }
+
+    /// Nobody to read for: the push's ids still move the mark.
+    func testWithNoOwnerThePushMovesTheMarkAndReadsNothing() async {
+        let reader = FakeAlertsReader()
+        let books = MemoryAlertsBooks()
+        books.setHelpSeen(Self.keyA, id: 1)
+        let centre = FakeAlertsCentre()
+        let engine = AlertsHelpEngine(
+            reader: reader, books: books, centre: centre, serverKey: { Self.keyA }, owner: { nil }
+        )
+        await engine.onPush([AlertsHelpPushHint(id: 5)])
+        XCTAssertTrue(reader.paths.current.isEmpty)
+        XCTAssertEqual(5, books.helpSeen(Self.keyA))
     }
 
     // MARK: - container incidents

@@ -289,10 +289,22 @@ public struct AlertsHelpDeliveryList: Equatable, Sendable, Decodable {
 /// decoder and cannot try both.
 public struct AlertsHelpDeliveryPush: Equatable, Sendable, Decodable {
 
+    /// The full rows, for a reader that still wants them. **The engine no
+    /// longer reads them** (1.5.0): the push doesn't carry the chat's title
+    /// any more ("Photos from Domovoi"), its `person_id` and `thread_id` will
+    /// be dropped, and the rows that count are this phone's own read,
+    /// filtered by its device key.
     public let deliveries: [AlertsHelpDelivery]
 
-    public init(deliveries: [AlertsHelpDelivery] = []) {
+    /// What the engine takes from a push: each row's id (to read again, and
+    /// to move the mark when there is nobody to read for) and its title (the
+    /// fallback for a read row that has none). Needs nothing else, so a push
+    /// without `person_id` or `thread_id` still counts.
+    public let hints: [AlertsHelpPushHint]
+
+    public init(deliveries: [AlertsHelpDelivery] = [], hints: [AlertsHelpPushHint]? = nil) {
         self.deliveries = deliveries
+        self.hints = hints ?? deliveries.map { AlertsHelpPushHint(id: $0.id, title: $0.title) }
     }
 
     public init(from decoder: any Decoder) throws {
@@ -302,6 +314,32 @@ public struct AlertsHelpDeliveryPush: Equatable, Sendable, Decodable {
         // `JsonArray` of mixed members.
         let rows = try [AlertsMaybeHelpDelivery](from: decoder)
         deliveries = rows.compactMap(\.row)
+        hints = try [AlertsMaybeHelpHint](from: decoder).compactMap(\.hint)
+    }
+}
+
+/// A push row as a hint: its id, and its title ("" when none).
+public struct AlertsHelpPushHint: Equatable, Sendable {
+    public let id: Int64
+    public let title: String
+
+    public init(id: Int64, title: String = "") {
+        self.id = id
+        self.title = title
+    }
+}
+
+struct AlertsMaybeHelpHint: Decodable {
+    let hint: AlertsHelpPushHint?
+
+    enum CodingKeys: String, CodingKey { case id, title }
+
+    init(from decoder: any Decoder) throws {
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self), let id = c.alertsInt64(.id) else {
+            hint = nil
+            return
+        }
+        hint = AlertsHelpPushHint(id: id, title: c.alertsString(.title) ?? "")
     }
 }
 

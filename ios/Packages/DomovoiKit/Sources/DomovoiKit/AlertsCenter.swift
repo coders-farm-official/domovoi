@@ -339,7 +339,7 @@ public final class AlertsCenter: Sendable {
             requestSync(after: alertsSyncDebounceMs)
         case AlertsPaths.helpEvent:
             guard let push = event.data(as: AlertsHelpDeliveryPush.self) else { return }
-            Task { [help] in await help.onDeliveries(push.deliveries) }
+            Task { [help] in await help.onPush(push.hints) }
         case AlertsPaths.containersEvent:
             guard let payload = event.data(as: AlertsIncidentsPayload.self) else { return }
             Task { [incidents] in await incidents.onIncidents(payload) }

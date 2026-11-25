@@ -105,6 +105,9 @@ final class ShellStringsTests: XCTestCase {
         "ui/screens/chat/ChatErrors.kt",
         "ui/screens/chat/AiOffRefusal.kt",
         "ui/screens/chat/ServerChatPlace.kt",
+        // Private chats (1.5.0): the delete wording moved here from
+        // ServerChatPlace.kt, with the §2.5 strings.
+        "ui/screens/chat/ChatPrivacy.kt",
         // "This is me" (CLAIM unit, 2026-11-14): the claim's toasts live
         // with `claimHere`, which `ConnectionPanel.kt` calls.
         "ui/screens/people/ThisPhone.kt",

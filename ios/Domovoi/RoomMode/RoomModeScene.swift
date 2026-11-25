@@ -25,7 +25,11 @@ final class HouseholdRoot {
         // answer at the one place that builds the graph, and so that a test
         // or a future seam can replace it in one line rather than two.
         let vault = TokenVault()
-        let container = AppContainer(store: DomovoiApp.store(vault: vault), vault: vault)
+        // The device keys (1.5.0, private chats): the Keychain's, and the ids
+        // this phone started over under where it lost one.
+        let container = AppContainer(
+            store: DomovoiApp.store(vault: vault), vault: vault, deviceKeys: DeviceKeyStore.forApp()
+        )
         // The device id, and the two things only UIKit can answer. Read HERE,
         // on the main actor, once: ``DeviceSelf`` exists so that a `Sendable`
         // closure running anywhere never reads `UIDevice`, which

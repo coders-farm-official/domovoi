@@ -58,6 +58,15 @@ public final class ChatMoreDraftModel {
 
     public private(set) var toast: String?
 
+    /// The open chat is one this phone may read and not write (1.5.0): a
+    /// save, a hand edit and a print are writes, so none is offered.
+    public var readOnly = false
+
+    /// The open chat is private to this phone (1.5.0): a save puts a copy
+    /// where the household can see it, so the canvas asks first
+    /// (``ChatPrivacyStrings/savePrivateAsk``).
+    public var privateChat = false
+
     /// The house, as the seen key spells it (`ServerDrafts.kt:47`).
     private var server: String { ServerCredentials.normalize(container.store.serverURL) }
 

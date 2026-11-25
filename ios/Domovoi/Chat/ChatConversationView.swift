@@ -192,6 +192,9 @@ struct ChatConversationView: View {
             // A thread opened from this screen (a new chat's first send makes
             // one) or from the list.
             .onChange(of: chat.openThread) { (_: Int64?, _: Int64?) in openExtras() }
+            // What the open chat lets this phone do (1.5.0), handed to the
+            // models whose controls write.
+            .onChange(of: chat.openAccess, initial: true) { (_: ChatThread?, _: ChatThread?) in privacyChanged() }
             // A reopen, a pagination or a `chat.changed` moved the transcript, so
             // the extras -- which are a **second read of the same route** -- have
             // to follow it. ``ChatMoreDetail`` says at length why there are two.
@@ -272,7 +275,14 @@ struct ChatConversationView: View {
     /// the server has on states the one fact it exists to state, wrongly.
     /// ``ChatMoreModel/internetAllowedKnown`` keeps it blank instead, and
     /// ``ChatMoreModel/seedInternetAllowed(_:)`` fills it in below.
+    private func privacyChanged() {
+        more?.readOnly = !chat.openWritable
+        draft?.readOnly = !chat.openWritable
+        draft?.privateChat = chat.openAccess?.shared == false
+    }
+
     private func openExtras() {
+        privacyChanged()
         guard let id = chat.openThread else {
             more?.close()
             video?.close()
@@ -372,7 +382,8 @@ struct ChatConversationView: View {
     /// The printers and the shell, **only when the house has a printer** —
     /// nil draws no Print on any card or in the canvas.
     private var draftPrinting: ChatMoreDraftPrinting? {
-        guard let printers, printers.offersDraftPrint, let house = printers.data else { return nil }
+        // Printing is a write (1.5.0): none in a chat this phone reads only.
+        guard chat.openWritable, let printers, printers.offersDraftPrint, let house = printers.data else { return nil }
         return ChatMoreDraftPrinting(printers: house, shell: model)
     }
 
@@ -411,8 +422,15 @@ struct ChatConversationView: View {
         VStack(spacing: 0) {
             titleRow
             internetSwitch
+            privacyBand
             Divider()
         }
+    }
+
+    /// Who can see this chat, and the switch (1.5.0, ``ChatPrivacyBand``).
+    private var privacyBand: some View {
+        ChatPrivacyBand(chat: chat)
+            .padding(.horizontal, 12)
     }
 
     /// The way out, pinned at every size.
@@ -453,6 +471,7 @@ struct ChatConversationView: View {
             titleAndPlace
                 .padding(.horizontal, 12)
             internetSwitch
+            privacyBand
             Divider()
         }
     }
@@ -462,7 +481,8 @@ struct ChatConversationView: View {
     /// Honest now: the chip turns a chat's lookups on, and the card a lookup
     /// then stops at is one this app can answer.
     @ViewBuilder private var internetSwitch: some View {
-        if let more, chat.openThread != nil {
+        // The switch is a write (1.5.0): not in a chat this phone reads only.
+        if let more, chat.openThread != nil, chat.openWritable {
             ChatMoreInternetChipView(more: more)
                 .padding(.horizontal, 12)
         }
