@@ -1035,25 +1035,42 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
 # ─── The fallback: a fixed privacy answer, never a model's ────────────────
 
 _PRIVACY_WORDS_RE = re.compile(
-    # About the assistant AND about privacy: "is it creepy that you listen",
-    # "do you spy on us", "does your server send my stuff to the cloud".
-    # Not "how does the internet work" or "do you like listening to jazz":
-    # those are ordinary questions and get the ordinary prompt.
-    r"\b(?:you|you're|youre|your|domovoi|domo|this (?:thing|device|speaker))\b.{0,40}?"
+    # The privacy topic: "is it creepy that you listen", "do you spy on us",
+    # "does your server send my stuff to the cloud", "do you sell my data".
     r"\b(?:record(?:ing|ed|s)? (?:me|us|everything|what|my|our|this|conversations)"
     r"|listen(?:ing)? (?:to (?:me|us|everything|what|our|my conversations)|all the time|in on)"
     r"|always listening|spy(?:ing)?|eavesdrop\w*|track(?:ing)? (?:me|us)|privacy|private"
-    r"|(?:keep|store|save|send|share)s? (?:what i|what we|my|our|everything)"
-    r"|the cloud|leaves? the house|my data|my voice|voice history)\b"
-    r"|\b(?:creepy|spying on|eavesdropping)\b"
-    r"|\bmy (?:data|privacy|recordings|voice history)\b"
+    r"|(?:keep|store|save|send|share|sell)s? (?:what i|what we|my|our|everything)"
+    r"|the cloud|leaves? the house|my data|my voice|voice history|my recordings|creepy)\b"
+)
+# ... and about THIS house: you, Domovoi, this house or server, here. A
+# privacy question about anything else ("is my data safe with Google?",
+# "how do I protect my privacy online?") is an ordinary question for the
+# model; the fixed answer only ever speaks for this house.
+_ABOUT_THIS_HOUSE_RE = re.compile(
+    r"\b(?:you|you're|youre|your|yours|domovoi|domo|here"
+    r"|this (?:house|home|thing|device|speaker|server|assistant))\b"
+)
+# Someone else named as the subject ("with Google", "on my phone", "by
+# apps"): not this house, even with "you" in the sentence.
+_SOMEONE_ELSE_RE = re.compile(
+    r"\b(?:with|on|by|from|at|to) (?!(?:you|your|yours|this|here|domovoi|domo|me|us|the cloud|the house)\b)"
+    r"(?:my |the |a |an )?(?:phone|apps?|websites?|sites?|browser|computer|laptop|tv|company|companies"
+    r"|[A-Z][a-z]+)\b"
+    # ... or another device is the subject: "is my phone spying on me".
+    r"|\b(?:my|the|an?) (?:phone|apps?|websites?|browser|computer|laptop|tv|car|watch|router)\b"
 )
 
 
 def wants_facts(transcript: str) -> bool:
     """A privacy-worded question outside the closed set ("is it creepy
     that you listen?"): it gets :func:`privacy_summary`, not the model."""
-    return bool(_PRIVACY_WORDS_RE.search((transcript or "").lower()))
+    raw = transcript or ""
+    text = raw.lower()
+    if not (_PRIVACY_WORDS_RE.search(text) and _ABOUT_THIS_HOUSE_RE.search(text)):
+        return False
+    # A named other subject (case kept: "with Google") makes it not ours.
+    return not _SOMEONE_ELSE_RE.search(raw) and not _SOMEONE_ELSE_RE.search(text)
 
 
 def _yes_no(v: bool | None, yes: str = "on", no: str = "off") -> str:

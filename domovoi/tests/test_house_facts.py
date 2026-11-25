@@ -620,6 +620,27 @@ def test_wants_facts_is_narrow() -> None:
         assert not hf.wants_facts(said), said
 
 
+@pytest.mark.parametrize("said", [
+    # About this house: the fixed answer.
+    "is my data safe with you", "do you sell my data", "is my privacy protected here",
+    "is domovoi private", "do you share my data with google",
+])
+def test_wants_facts_about_this_house(said) -> None:
+    assert hf.wants_facts(said)
+
+
+@pytest.mark.parametrize("said", [
+    # A privacy topic about anything else: the model answers, as for any
+    # question (Core, 2026-11-25): the fixed answer speaks only for this house.
+    "is my data safe with google", "Is my data safe with Google?", "what is end-to-end encryption",
+    "how do i make my phone more private", "how do i protect my privacy online",
+    "should i delete my voice history on alexa", "is facebook spying on me",
+    "can you tell me if my phone is spying on me", "is it creepy when apps track me",
+])
+def test_wants_facts_leaves_other_privacy_questions_to_the_model(said) -> None:
+    assert not hf.wants_facts(said)
+
+
 # ─── Web chat: the same matcher first, no model ───────────────────────────
 
 def _client():
