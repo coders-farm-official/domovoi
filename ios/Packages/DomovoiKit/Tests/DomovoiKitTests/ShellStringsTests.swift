@@ -979,10 +979,13 @@ final class ShellStringsTests: XCTestCase {
         XCTAssertEqual("rooms", SettingsSection.named("satellites")?.key)
         XCTAssertEqual("phones-and-browsers", SettingsSection.named("connection")?.key)
         XCTAssertEqual("advanced", SettingsSection.named("configuration")?.key)
+        // "Voice history" until 1.5.0, and "recordings" before that.
+        XCTAssertEqual("command-recordings", SettingsSection.named("voice-history")?.key)
+        XCTAssertEqual("command-recordings", SettingsSection.named("recordings")?.key)
         XCTAssertNil(SettingsSection.named("nope"))
         XCTAssertNil(SettingsSection.named(nil))
         // Two of the subs carry a character worth protecting.
-        XCTAssertTrue(SettingsSection.named("voice-history")!.sub.contains("—"), "em dash")
+        XCTAssertTrue(SettingsSection.named("command-recordings")!.sub.contains("—"), "em dash")
         XCTAssertTrue(SettingsSection.named("advanced")!.sub.contains("—"), "em dash")
     }
 

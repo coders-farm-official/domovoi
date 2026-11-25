@@ -44,7 +44,7 @@ import DomovoiKit
 ///
 /// ### Drawn from the section, so later items add one line and not a copy
 ///
-/// `wake-words`, `greetings` and `voice-history` are dashboard-only too
+/// `wake-words`, `greetings` and `command-recordings` are dashboard-only too
 /// (``SettingsSection/dashboard``), and `advanced` will be. They are other
 /// items' slots; each is this view with its own section passed in.
 struct AiSettingsDashboardPanel: View {
@@ -54,9 +54,8 @@ struct AiSettingsDashboardPanel: View {
     /// The section being drawn. Its ``SettingsSection/label`` goes into the
     /// paragraph exactly where Android interpolates `${section.label}`
     /// (`SettingsScreen.kt:414`), and its ``SettingsSection/dashboard`` key is
-    /// the dashboard route — **not** ``SettingsSection/key``. They are equal
-    /// for `models` and differ for `voice-history`, whose dashboard page is
-    /// `recordings`.
+    /// the dashboard route — **not** ``SettingsSection/key``, nor the old key
+    /// a link used (`voice-history` lands on `command-recordings`, 1.5.0).
     let section: SettingsSection
 
     @Environment(\.openURL) private var openURL

@@ -169,11 +169,15 @@ public extension SettingsSection {
             words: "internet online offline network web",
             dashboard: "internet"
         ),
+        // "Voice history" until 1.5.0: it is the opt-in command recordings
+        // (the dashboard's Settings → Privacy → Command recordings). Its old
+        // keys still land here (`SettingsScreen.kt` CommandRecordings).
         SettingsSection(
-            key: "voice-history", label: "Voice history", group: .privacy,
+            key: "command-recordings", label: "Command recordings", group: .privacy,
             sub: "Commands kept from the rooms an admin opted in — reviewed on the dashboard.",
-            words: "recordings voice history captures commands kept privacy",
-            dashboard: "recordings"
+            words: "command commands recordings recording captures kept audio privacy tuning",
+            aliases: ["voice-history", "recordings"],
+            dashboard: "command-recordings"
         ),
         SettingsSection(
             key: "about", label: "About & updates", group: .system,
