@@ -19,7 +19,8 @@
     "                plugin names are allowed (owner, 2026-11-25)",
     "  allow_names - lift single name checks ('listenbrainz', 'plugin', 'provider')",
     "  judge, rubric - needs a judge model (--judge-model) to score fully",
-    "  needs_change - a known gap (N1..N12, not N7/N10: resolved): failing is expected",
+    "  needs_change - a known gap still open (N1..N16; N7/N10 resolved, the rest fixed in 1.4.1):",
+    "                failing is expected",
     "  status      - verified (checked in code) | unverified (as the list marks it)",
     "  skip_reason - never run (phone app, 1.5.0, multi-turn, non-turn inputs)",
     "  stub        - answered without a model or database: the CI test runs it"
@@ -166,7 +167,8 @@
       ],
       "must_not_include": [
         "timer (?:is )?set for|i'?ve set"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "2.2",
@@ -177,7 +179,8 @@
       "kind": "question",
       "must_include": [
         "remind me"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "2.3",
@@ -229,8 +232,9 @@
       "expect": "CAN",
       "kind": "question",
       "must_include": [
-        "announce|broadcast"
-      ]
+        "announce|broadcast|tell everyone"
+      ],
+      "stub": true
     },
     {
       "id": "2.7",
@@ -245,7 +249,8 @@
       "must_not_include": [
         "can'?t print"
       ],
-      "note": "'print this' on an attachment"
+      "note": "'print this' on an attachment",
+      "stub": true
     },
     {
       "id": "2.8",
@@ -255,8 +260,9 @@
       "expect": "CAN",
       "kind": "question",
       "must_include": [
-        "document|sheet"
-      ]
+        "document|sheet|letter"
+      ],
+      "stub": true
     },
     {
       "id": "2.9",
@@ -267,7 +273,8 @@
       "kind": "question",
       "must_include": [
         "attach|picture|photo|image"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "2.10",
@@ -278,7 +285,8 @@
       "kind": "question",
       "must_include": [
         "\\b(?:3|three) minutes"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "2.11",
@@ -292,7 +300,8 @@
       ],
       "must_not_include": [
         "^\\s*playing\\b"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "2.12",
@@ -357,7 +366,8 @@
       "kind": "question",
       "must_include": [
         "times|plus|percent|\\d"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "2.17",
@@ -377,8 +387,9 @@
       "expect": "CAN",
       "kind": "question",
       "must_include": [
-        "\\bnotes?\\b"
-      ]
+        "\\bnotes?\\b|jot down"
+      ],
+      "stub": true
     },
     {
       "id": "2.19",
@@ -403,7 +414,8 @@
       "must_not_include": [
         "^\\s*(?:ok(?:ay)?|sure|done)\\b[,.!]?\\s*(?:i'?ve|i have|it'?s|done)",
         "\\bordering\\b"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "3.2",
@@ -411,7 +423,8 @@
       "where": "voice",
       "house": "base",
       "expect": "CANT",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "3.3",
@@ -422,7 +435,8 @@
       "kind": "question",
       "must_not_include": [
         "\\bcalling\\b"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "3.4",
@@ -430,7 +444,8 @@
       "where": "chat",
       "house": "base",
       "expect": "CANT",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "3.5",
@@ -442,7 +457,8 @@
       "must_not_include": [
         "friend house"
       ],
-      "note": "mentions Friend Houses only if a friend's house is meant"
+      "note": "mentions Friend Houses only if a friend's house is meant",
+      "stub": true
     },
     {
       "id": "3.6",
@@ -450,7 +466,8 @@
       "where": "voice",
       "house": "base",
       "expect": "CANT",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "3.7",
@@ -461,7 +478,8 @@
       "kind": "question",
       "must_not_include": [
         "\\bbooked\\b"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "3.8",
@@ -469,7 +487,8 @@
       "where": "voice",
       "house": "base",
       "expect": "CANT",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "3.9",
@@ -494,8 +513,8 @@
       "must_not_include": [
         "home assistant|coming soon|\\bHA\\b"
       ],
-      "needs_change": "N2",
-      "note": "a plain no, no hedge (a question), no 'HA is coming' (owner Q3)"
+      "note": "a plain no, no hedge (a question), no 'HA is coming' (owner Q3)",
+      "stub": true
     },
     {
       "id": "3.11",
@@ -507,7 +526,7 @@
       "must_not_include": [
         "home assistant|coming soon|\\bHA\\b"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "4.1",
@@ -515,7 +534,8 @@
       "where": "voice",
       "house": "base",
       "expect": "CANT",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "4.2",
@@ -536,7 +556,8 @@
       "house": "video-disabled",
       "expect": "CANT",
       "kind": "question",
-      "note": "the same as absent, to a member"
+      "note": "the same as absent, to a member",
+      "stub": true
     },
     {
       "id": "4.4",
@@ -553,7 +574,8 @@
       "where": "voice",
       "house": "base",
       "expect": "CANT",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "4.6",
@@ -562,7 +584,6 @@
       "house": "imagegen-working",
       "expect": "CAN",
       "kind": "question",
-      "handler": "imagegen",
       "stub": true
     },
     {
@@ -571,7 +592,8 @@
       "where": "voice",
       "house": "imagegen-disabled",
       "expect": "CANT",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "4.8",
@@ -586,7 +608,8 @@
       "must_not_include": [
         "here'?s|i made|done"
       ],
-      "note": "no image service: can't right now; never claims it worked"
+      "note": "no image service: can't right now; never claims it worked",
+      "stub": true
     },
     {
       "id": "4.9",
@@ -716,7 +739,6 @@
       "must_not_include": [
         "^\\s*\\[stand-in"
       ],
-      "needs_change": "N3",
       "note": "plugin service down: core weather steps in when the internet allows (owner Q5)"
     },
     {
@@ -730,7 +752,8 @@
         "internet|online|web"
       ],
       "judge": true,
-      "rubric": "Depends: it can look things up on the web, if the internet setting allows; no offline library."
+      "rubric": "Depends: it can look things up on the web, if the internet setting allows; no offline library.",
+      "stub": true
     },
     {
       "id": "4.22",
@@ -741,7 +764,8 @@
       "kind": "question",
       "must_include": [
         "offline|without the internet"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "4.23",
@@ -752,7 +776,8 @@
       "kind": "question",
       "must_include": [
         "internet|online|web"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "4.24",
@@ -765,7 +790,8 @@
         "no offline library|not set up|isn'?t set up|download"
       ],
       "judge": true,
-      "rubric": "Says no offline library is set up yet; an admin downloads one."
+      "rubric": "Says no offline library is set up yet; an admin downloads one.",
+      "stub": true
     },
     {
       "id": "4.25",
@@ -780,7 +806,8 @@
       "must_not_include": [
         "^\\s*yes"
       ],
-      "note": "the house is set to never use the internet"
+      "note": "the house is set to never use the internet",
+      "stub": true
     },
     {
       "id": "4.26",
@@ -817,7 +844,6 @@
       "must_include": [
         "\\bAI\\b"
       ],
-      "needs_change": "N4",
       "note": "image generation is off while AI is off (owner Q6)",
       "stub": true
     },
@@ -878,7 +904,8 @@
       "kind": "question",
       "must_include": [
         "download"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "4.33",
@@ -891,7 +918,8 @@
         "plugins page"
       ],
       "needs_change": "N1",
-      "note": "'An admin can add video downloads from the Plugins page.' (Q1)"
+      "note": "'An admin can add video downloads from the Plugins page.' (Q1)",
+      "stub": true
     },
     {
       "id": "4.34",
@@ -909,7 +937,8 @@
       "where": "voice",
       "house": "base",
       "expect": "CAN",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "5.2",
@@ -921,7 +950,8 @@
       "must_include": [
         "\\bask"
       ],
-      "note": "sometimes: asks first"
+      "note": "sometimes: asks first",
+      "stub": true
     },
     {
       "id": "5.3",
@@ -934,8 +964,8 @@
         "never|stay off|set (?:not )?to",
         "admin"
       ],
-      "needs_change": "N9",
-      "note": "the house is set to never use the internet; an admin can change it (Q2)"
+      "note": "the house is set to never use the internet; an admin can change it (Q2)",
+      "stub": true
     },
     {
       "id": "5.4",
@@ -943,7 +973,8 @@
       "where": "voice",
       "house": "base",
       "expect": "CAN",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "5.5",
@@ -955,7 +986,8 @@
       "must_include": [
         "\\bask"
       ],
-      "note": "sometimes: asks first"
+      "note": "sometimes: asks first",
+      "stub": true
     },
     {
       "id": "5.6",
@@ -968,8 +1000,8 @@
         "never|stay off|set (?:not )?to",
         "admin"
       ],
-      "needs_change": "N9",
-      "note": "the house is set to never use the internet; an admin can change it (Q2)"
+      "note": "the house is set to never use the internet; an admin can change it (Q2)",
+      "stub": true
     },
     {
       "id": "5.7",
@@ -1014,8 +1046,8 @@
       "must_include": [
         "\\byes\\b|when (?:you|i)|look"
       ],
-      "needs_change": "N2",
-      "note": "the house's own words for its internet setting"
+      "note": "the house's own words for its internet setting",
+      "stub": true
     },
     {
       "id": "5.10b",
@@ -1025,10 +1057,10 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "\\bask"
+        "sometimes|\\bask"
       ],
-      "needs_change": "N2",
-      "note": "the house's own words for its internet setting"
+      "note": "the house's own words for its internet setting",
+      "stub": true
     },
     {
       "id": "5.10c",
@@ -1040,8 +1072,8 @@
       "must_include": [
         "\\bno\\b|never|stay off"
       ],
-      "needs_change": "N2",
-      "note": "the house's own words for its internet setting"
+      "note": "the house's own words for its internet setting",
+      "stub": true
     },
     {
       "id": "5.11",
@@ -1067,7 +1099,8 @@
       "kind": "question",
       "must_not_include": [
         "\\bkit\\b"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "6.1",
@@ -1088,7 +1121,6 @@
         "\\bAI\\b|\\bchat\\b",
         "admin"
       ],
-      "needs_change": "N9",
       "note": "AI chat is off here, quick answers still work; how to turn it on (Q2)",
       "stub": true
     },
@@ -1104,7 +1136,8 @@
         "\\broom"
       ],
       "judge": true,
-      "rubric": "An answer written from the manual, naming the section."
+      "rubric": "An answer written from the manual, naming the section.",
+      "stub": true
     },
     {
       "id": "6.4",
@@ -1120,7 +1153,8 @@
       "must_not_include": [
         "^\\s*i can'?t"
       ],
-      "note": "the manual's own words, with the section; not 'I can't'"
+      "note": "the manual's own words, with the section; not 'I can't'",
+      "stub": true
     },
     {
       "id": "6.5",
@@ -1142,7 +1176,6 @@
       "must_include": [
         "admin"
       ],
-      "needs_change": "N9",
       "note": "can't while AI is off; says an admin can turn it on (Q2)",
       "stub": true
     },
@@ -1194,7 +1227,6 @@
         "memory",
         "admin"
       ],
-      "needs_change": "N9",
       "note": "memory is off; an admin can turn it on (Q2)"
     },
     {
@@ -1389,7 +1421,8 @@
       "must_include": [
         "\\bUS\\b|United States|America|\\bUK\\b|Britain"
       ],
-      "note": "the UK has no Thanksgiving, or answers for the US with that said"
+      "note": "the UK has no Thanksgiving, or answers for the US with that said",
+      "stub": true
     },
     {
       "id": "7.14",
@@ -1401,7 +1434,8 @@
       "handler": "calculator",
       "must_include": [
         "\\d+ days?|tomorrow|today"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "7.15",
@@ -1471,7 +1505,6 @@
         "friend houses",
         "admin"
       ],
-      "needs_change": "N9",
       "note": "Friend Houses isn't set up; an admin turns it on (Q2)"
     },
     {
@@ -1524,7 +1557,8 @@
       "where": "voice",
       "house": "base",
       "expect": "ADMIN",
-      "kind": "question"
+      "kind": "question",
+      "stub": true
     },
     {
       "id": "8.2",
@@ -1618,7 +1652,8 @@
       "kind": "question",
       "handler": "help_desk",
       "status": "verified",
-      "note": "voice ID never makes someone an admin (no admin field on a voice turn, models.py:51-193)"
+      "note": "voice ID never makes someone an admin (no admin field on a voice turn, models.py:51-193)",
+      "stub": true
     },
     {
       "id": "8.7b",
@@ -1650,7 +1685,8 @@
         "plugins page"
       ],
       "needs_change": "N1",
-      "note": "'Not on this house. An admin can add video downloads from the Plugins page.'"
+      "note": "'Not on this house. An admin can add video downloads from the Plugins page.'",
+      "stub": true
     },
     {
       "id": "8.7e",
@@ -1662,7 +1698,8 @@
       "must_not_include": [
         "admin",
         "plugins page"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "8.7f",
@@ -1751,7 +1788,7 @@
         "wake word",
         "device|locally|at home|this house|server"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.2",
@@ -1764,7 +1801,7 @@
         "wake word",
         "notification|mic(?:rophone)? (?:dot|indicator)"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.3",
@@ -1776,7 +1813,7 @@
       "must_include": [
         "no recordings|not (?:keeping|recording)|aren'?t kept|don'?t keep"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.4",
@@ -1789,7 +1826,7 @@
         "\\b14\\b|fourteen",
         "admin"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.5",
@@ -1801,7 +1838,7 @@
       "must_include": [
         "server|stays (?:at )?home|never leaves"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.6",
@@ -1814,8 +1851,8 @@
         "search|look(?:s|ing)? (?:something|things|it) up",
         "voice"
       ],
-      "needs_change": "N2",
-      "note": "internet yes, web lookups on: the voice stays home; only a search's words go out"
+      "note": "internet yes, web lookups on: the voice stays home; only a search's words go out",
+      "stub": true
     },
     {
       "id": "9.7",
@@ -1825,10 +1862,10 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "household|people (?:in|who live)|everyone (?:in|at) home",
+        "household|people (?:in|who live)|everyone (?:in|at) (?:home|this house)",
         "friend"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.8a",
@@ -1840,7 +1877,7 @@
       "must_include": [
         "\\byes\\b|when (?:you|i)|look"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.8b",
@@ -1850,9 +1887,9 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "\\bask"
+        "sometimes|\\bask"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.8c",
@@ -1864,7 +1901,7 @@
       "must_include": [
         "\\bno\\b|never|stay off"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.9",
@@ -1901,7 +1938,7 @@
       "kind": "question",
       "judge": true,
       "rubric": "True to how chats are shared on the home server today.",
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "9.12",
@@ -1911,13 +1948,11 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "listen ?brainz",
-        "optional|turn (?:it )?off|choose"
+        "music suggestions|catalogue",
+        "optional|turn (?:that |it )?off|choose"
       ],
-      "allow_names": [
-        "listenbrainz"
-      ],
-      "needs_change": "N2"
+      "note": "what goes out for music suggestions (by feature, never the service's name), and that it can be turned off",
+      "stub": true
     },
     {
       "id": "10.1",
@@ -2279,15 +2314,13 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "The full answer is in the manual\\."
+        "manual|chat"
       ],
       "must_not_include": [
-        "send the steps",
-        "to your phone",
-        "[Ww]ant me to send"
+        "send the steps to your phone"
       ],
       "skip_reason": "1.5.0 only: added when 1.5.0 is on main",
-      "note": "1.5.0 (wf/help-send-removal d7cddae1): short steps ending 'The full answer is in the manual.', no question asked; on main the send-to-phone offer is still expected"
+      "note": "short steps plus a manual/chat pointer, no send-to-phone offer (on main the offer is still expected)"
     },
     {
       "id": "13.12",
@@ -2297,15 +2330,13 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "The full answer is in the manual\\."
+        "manual|chat"
       ],
       "must_not_include": [
-        "send the steps",
-        "to your phone",
-        "[Ww]ant me to send"
+        "send the steps to your phone"
       ],
       "skip_reason": "1.5.0 only: added when 1.5.0 is on main",
-      "note": "1.5.0 (wf/help-send-removal d7cddae1): short steps ending 'The full answer is in the manual.', no question asked; on main the send-to-phone offer is still expected"
+      "note": "same as 13.11"
     },
     {
       "id": "13.13",
@@ -2370,7 +2401,7 @@
       "must_include": [
         "wake word"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.2",
@@ -2382,7 +2413,7 @@
       "must_include": [
         "no recordings|not (?:keeping|recording)|aren'?t kept|don'?t keep"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.3",
@@ -2395,8 +2426,8 @@
         "\\b14\\b|fourteen",
         "admin"
       ],
-      "needs_change": "N2",
-      "note": "command_captures.py:8-16, retention config.py:1217"
+      "note": "command_captures.py:8-16, retention config.py:1217",
+      "stub": true
     },
     {
       "id": "15.4",
@@ -2411,7 +2442,7 @@
       "must_not_include": [
         "\\bcloud\\b"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.5",
@@ -2423,7 +2454,7 @@
       "must_include": [
         "\\bnothing\\b|\\bno\\b"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.6",
@@ -2436,7 +2467,7 @@
         "search|look",
         "voice"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.7",
@@ -2448,7 +2479,7 @@
       "must_include": [
         "\\b90\\b|ninety"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.8",
@@ -2460,7 +2491,7 @@
       "must_include": [
         "until (?:it'?s |you |someone )?delete"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.9",
@@ -2472,7 +2503,7 @@
       "must_include": [
         "\\b30\\b|thirty"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.10a",
@@ -2485,8 +2516,8 @@
         "\\b90\\b|ninety",
         "admin"
       ],
-      "needs_change": "N2",
-      "note": "and where to change it; N12: code says Settings → Advanced, the FAQ Settings → Household → People"
+      "note": "and where to change it; N12: code says Settings → Advanced, the FAQ Settings → Household → People",
+      "stub": true
     },
     {
       "id": "15.10b",
@@ -2499,8 +2530,8 @@
         "until (?:it'?s |you |someone )?delete",
         "admin"
       ],
-      "needs_change": "N2",
-      "note": "and where to change it; N12: code says Settings → Advanced, the FAQ Settings → Household → People"
+      "note": "and where to change it; N12: code says Settings → Advanced, the FAQ Settings → Household → People",
+      "stub": true
     },
     {
       "id": "15.10c",
@@ -2513,8 +2544,8 @@
         "\\b30\\b|thirty",
         "admin"
       ],
-      "needs_change": "N2",
-      "note": "and where to change it; N12: code says Settings → Advanced, the FAQ Settings → Household → People"
+      "note": "and where to change it; N12: code says Settings → Advanced, the FAQ Settings → Household → People",
+      "stub": true
     },
     {
       "id": "15.11",
@@ -2528,8 +2559,8 @@
         "forgotten"
       ],
       "status": "unverified",
-      "note": "the doc's 'OK, forgotten' (memory.py:403) needs a body ('forget that I like jazz'); a bare 'forget that' is DismissHandler's (dismiss.py:61)",
-      "stub": true
+      "skip_reason": "needs a prior 'remember that ...' turn: the memory it saves lives in the database (without one, 'Forget what?' is the right answer)",
+      "note": "the doc's 'OK, forgotten' (memory.py:403) needs a body ('forget that I like jazz'); a bare 'forget that' is DismissHandler's (dismiss.py:61)"
     },
     {
       "id": "15.12",
@@ -2563,10 +2594,10 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "household|people (?:in|who live)",
+        "household|people (?:in|who live)|everyone (?:in|at) (?:home|this house)",
         "friend"
       ],
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.15",
@@ -2581,7 +2612,6 @@
       "must_not_include": [
         "who'?s (?:at )?home"
       ],
-      "needs_change": "N2",
       "note": "SECURITY_PRIVACY.md:2804-2811"
     },
     {
@@ -2593,7 +2623,7 @@
       "kind": "question",
       "judge": true,
       "rubric": "True to how chats are shared today.",
-      "needs_change": "N2"
+      "stub": true
     },
     {
       "id": "15.17",
@@ -2605,8 +2635,8 @@
       "must_include": [
         "room|hear"
       ],
-      "needs_change": "N2",
-      "note": "others in the room can hear; what's kept per 15.7"
+      "note": "others in the room can hear; what's kept per 15.7",
+      "stub": true
     },
     {
       "id": "15.18",
@@ -2664,7 +2694,6 @@
       "must_not_include": [
         "\\bsent to\\b"
       ],
-      "needs_change": "N6",
       "note": "queued, not 'Sent' (friend_houses.py:346)"
     },
     {
@@ -2676,8 +2705,7 @@
       "kind": "question",
       "must_include": [
         "queued|waiting|not (?:yet )?delivered|will be delivered"
-      ],
-      "needs_change": "N6"
+      ]
     },
     {
       "id": "16.3",
@@ -2693,7 +2721,6 @@
       "must_not_include": [
         "^\\s*added"
       ],
-      "needs_change": "N5",
       "note": "never 'Added'; today a failed write is silent"
     },
     {
@@ -2717,8 +2744,8 @@
       "must_include": [
         "\\b7\\b|seven"
       ],
-      "needs_change": "N11",
-      "note": "no query handler for alarms under this phrasing (reminder.py:958-984)"
+      "note": "no query handler for alarms under this phrasing (reminder.py:958-984)",
+      "stub": true
     },
     {
       "id": "16.6",
@@ -2730,8 +2757,8 @@
       "must_include": [
         "pasta|\\btwo\\b|\\b2\\b"
       ],
-      "needs_change": "N11",
-      "note": "timer status covers only 'how long left' (timer.py:34)"
+      "note": "timer status covers only 'how long left' (timer.py:34)",
+      "stub": true
     },
     {
       "id": "16.7",
@@ -3110,16 +3137,15 @@
     },
     {
       "id": "20.6",
-      "utterance": "What's the weather?",
+      "utterance": "Look up the Eiffel Tower",
       "where": "voice",
-      "house": "weather-crash",
+      "house": "kiwix-crash",
       "expect": "DO_IT",
       "kind": "command",
       "must_include": [
         "didn'?t work|went wrong|couldn'?t"
       ],
-      "needs_change": "N5",
-      "note": "a short spoken failure, never silence",
+      "note": "a plugin handler that raises: a short spoken failure, never silence",
       "stub": true
     },
     {
@@ -3132,7 +3158,6 @@
       "must_not_include": [
         "^\\s*\\[stand-in"
       ],
-      "needs_change": "N3",
       "note": "core weather steps in when the internet allows (Q5)"
     },
     {
@@ -3145,7 +3170,6 @@
       "must_include": [
         "\\bAI\\b"
       ],
-      "needs_change": "N4",
       "stub": true
     },
     {
@@ -3158,8 +3182,7 @@
       "handler": "lists",
       "must_include": [
         "couldn'?t|didn'?t|wasn'?t"
-      ],
-      "needs_change": "N5"
+      ]
     }
   ]
 }

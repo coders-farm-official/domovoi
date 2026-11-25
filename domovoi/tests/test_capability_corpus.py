@@ -7,16 +7,18 @@ model. Everything that needs no model, no network and no database is
 asserted here:
 
 * the corpus and the house fixtures are well-formed (unique ids, houses
-  that exist, valid verdicts, needs_change ids N1..N12 without the
+  that exist, valid verdicts, needs_change ids N1..N16 without the
   resolved N7 and N10);
 * the global reply checks (no hedge on a question, no plugin names, no
   secrets, menu paths that exist in web/static/settings.jsx) on sample
   strings;
-* every ``stub: true`` case actually runs through route()'s deterministic
-  tiers and passes; a case with ``needs_change`` is an expected failure
-  (xfail, not strict, naming its N id), so a fix shows up as XPASS.
+* every ``stub: true`` case actually runs through the real
+  ``router.route()`` (or the chat's own house-facts matcher) and passes; a
+  case with ``needs_change`` is an expected failure (xfail, not strict,
+  naming its N id), so a fix shows up as XPASS.
 
-The stub sandbox refuses every database connect, outbound request and
+The stub sandbox answers the database reads a house fixture holds and
+refuses every other read, every write, every outbound request and every
 model call, so these tests never touch Postgres or Ollama.
 """
 
@@ -53,17 +55,39 @@ CATALOGUE = ev.load_plugin_catalogue()
 TREE = ev.load_settings_tree()
 STUB_CASES = [c for c in CASES if c.stub]
 
-# Stub-mode findings that are not one of the list's N1..N12 items: real
-# replies that disagree with the owner-approved expectation, reported for
-# triage (test tooling never changes the product to make a case pass).
-# Expected failures here so CI stays green; remove a line once fixed.
+# Stub-mode findings: real replies that disagree with the owner-approved
+# expectation and aren't an open N item, reported for triage (test tooling
+# never changes the product to make a case pass). Expected failures here so
+# CI stays green; remove a line once fixed (it shows up as XPASS first).
+_PLUGINS_PAGE = (
+    "house_facts tells a member 'An admin can ... from the Plugins page': the word 'plugin' t"
+    'o a member (the global check; owner to rule, house_facts.PLACE_PLUGINS)'
+)
+_VOICE_HISTORY = (
+    "'Settings → Household → People → Voice history' (house_facts.PLACE_VOICE_HISTORY) isn't a "
+    'path the settings registry knows: Voice history is no search card of People'
+)
 STUB_FINDINGS = {
-    "1.4": "the help answer offers News with the internet set to never (handlers/help.py _CORE_AREAS)",
-    "12.1": "the help answer offers News with the internet set to never (handlers/help.py _CORE_AREAS)",
-    "12.2": "the help answer offers News with the internet set to never (handlers/help.py _CORE_AREAS)",
-    "4.31": "the help answer names at most 2 plugin areas (handlers/help.py _MAX_PLUGINS)",
-    "7.6": "voice 'print this' asks which document before checking for a printer (handlers/printing.py)",
-    "15.11": "a bare 'forget that' is DismissHandler's (dismiss.py:61), not the memory handler's",
+    '4.1': _PLUGINS_PAGE,
+    '4.3': _PLUGINS_PAGE,
+    '4.5': _PLUGINS_PAGE,
+    '4.7': _PLUGINS_PAGE,
+    '4.8': _PLUGINS_PAGE,
+    '4.21': _PLUGINS_PAGE,
+    '4.23': "a switched-off offline library doesn't offer the web instead, as absent does; " + _PLUGINS_PAGE,
+    '4.24': "an offline library with nothing downloaded reads as 'isn't working'; " + _PLUGINS_PAGE,
+    '8.7e': 'a member hears where an admin adds video downloads (the list: no admin steps); ' + _PLUGINS_PAGE,
+    '4.31': 'the help answer names at most 2 plugin areas (handlers/help.py _MAX_PLUGINS)',
+    '5.5': "internet 'sometimes': the news answer doesn't say it asks first",
+    '7.13': 'Home location in the UK: Thanksgiving is answered with no word of the US',
+    '8.1': "the help desk's member answer doesn't say an admin adds a room",
+    '8.7a': "the help desk's member answer doesn't say an admin adds a room",
+    '15.7': _VOICE_HISTORY,
+    '15.8': _VOICE_HISTORY,
+    '15.9': _VOICE_HISTORY,
+    '15.10a': _VOICE_HISTORY,
+    '15.10b': _VOICE_HISTORY,
+    '15.10c': _VOICE_HISTORY,
 }
 
 
