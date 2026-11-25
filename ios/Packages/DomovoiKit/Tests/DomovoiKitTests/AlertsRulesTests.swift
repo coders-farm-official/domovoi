@@ -436,22 +436,23 @@ final class AlertsRulesTests: XCTestCase {
 
     // MARK: - help steps
 
-    func testTheHelpTitleGetsItsPrefixOnceOrNotAtAll() {
+    /// 1.5.0: the chat's title exactly as sent, nothing added; a 1.4.x
+    /// server's "Help: …" title is shown as it is.
+    func testTheTitleIsTheChatsOwn() {
+        XCTAssertEqual(
+            "Photos: The beach",
+            alertsHelpTitle(AlertsHelpDelivery(id: 1, personID: 3, threadID: 11, title: "Photos: The beach"))
+        )
         XCTAssertEqual(
             "Help: add a room",
             alertsHelpTitle(AlertsHelpDelivery(id: 1, personID: 3, threadID: 11, title: "Help: add a room"))
         )
         XCTAssertEqual(
-            "help: add a room",
-            alertsHelpTitle(AlertsHelpDelivery(id: 1, personID: 3, threadID: 11, title: "help: add a room")),
-            "the test is case-insensitive, and the row's own words are kept"
+            "add a room",
+            alertsHelpTitle(AlertsHelpDelivery(id: 1, personID: 3, threadID: 11, title: " add a room "))
         )
         XCTAssertEqual(
-            "Help: add a room",
-            alertsHelpTitle(AlertsHelpDelivery(id: 1, personID: 3, threadID: 11, title: "add a room"))
-        )
-        XCTAssertEqual(
-            "Help from Domovoi",
+            "From Domovoi",
             alertsHelpTitle(AlertsHelpDelivery(id: 1, personID: 3, threadID: 11, title: "  "))
         )
     }
@@ -669,11 +670,11 @@ final class AlertsRulesTests: XCTestCase {
         let row = AlertsHelpDelivery(id: 7, personID: 3, threadID: 11, title: "add a room")
         let request = AlertsNotifier.help(row, serverKey: "aaaa1111")
         XCTAssertEqual("help_delivery:aaaa1111:7", request.identifier)
-        XCTAssertEqual("Help: add a room", request.title)
-        XCTAssertEqual("Tap to open the steps in Chat.", request.body)
+        XCTAssertEqual("add a room", request.title)
+        XCTAssertEqual("Tap to open it in Chat.", request.body)
         XCTAssertEqual("chat", request.userInfo[AlertsPayloadKey.route])
         XCTAssertEqual("11", request.userInfo[AlertsPayloadKey.chatThread])
-        XCTAssertEqual("Help: add a room", request.userInfo[AlertsPayloadKey.chatTitle])
+        XCTAssertEqual("add a room", request.userInfo[AlertsPayloadKey.chatTitle])
         XCTAssertEqual(AlertsRequest.helpThread, request.threadIdentifier)
     }
 
