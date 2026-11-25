@@ -958,7 +958,7 @@ from domovoi.sdk import (
 | 1.9 | `sdk.speech.render` (§4.17); `core_config.ollama_url` / `ollama_model` (§4.13) |
 | 1.10 | `spoken_names` and `choices` (§4.20); `choice_kinds` on plugin handlers (§4.2); `playback.ensure_room` (§4.5); the player source's `room_play_template` (§3) |
 | 1.11 | `@device_endpoint` websocket routes on the core router (§4.15) |
-| 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core |
+| 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core (since 1.4.1, when its handler raises or answers nothing on a weather question, core's own lookup stands in if the internet answer allows; "check that online" asks the plugin first too) |
 | 1.13 | `sdk.household.home_location()` (async: the Home location `{name, lat, lon, country}` or `None`; `lat`/`lon`/`country` are `None` for a name that matched no town) and `sdk.places.suggest(text, limit=8)` (the bundled GeoNames town list, offline, biggest first; same shape); `core_config.news_location` is now the Home location's name (§4.13). 1.13.1: `net_safety.open_raw_stream` / `iter_raw` and their `_sync` twins (a stream read as it came, never decoded) |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
