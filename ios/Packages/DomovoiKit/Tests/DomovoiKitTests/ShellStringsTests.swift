@@ -1308,7 +1308,7 @@ final class ShellStringsTests: XCTestCase {
     /// whose words are the dashboard's `HomeUpdateRow`'s. The title has the
     /// version interpolated, so it is checked around it.
     func testTheUpdateNoticeSaysWhatTheKotlinSays() {
-        assertKotlinSaysWhole(HomeUpdateNoticeStrings.updating, "U+2026 ellipsis, not three dots")
+        assertKotlinSaysWhole(HomeUpdateNoticeStrings.restarting, "U+2026 ellipsis, not three dots")
         assertKotlinSaysWhole(HomeUpdateNoticeStrings.adminCanInstall)
         assertKotlinSaysWhole(HomeUpdateNoticeStrings.update)
         assertKotlinSaysAround(HomeUpdateNoticeStrings.available("\u{1}"))
