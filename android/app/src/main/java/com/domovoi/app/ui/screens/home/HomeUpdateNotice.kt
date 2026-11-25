@@ -82,7 +82,8 @@ internal object UpdateNotices {
 
     /**
      * The release's highlights as plain text (the web's updateHighlights):
-     * strings of 1 to 80 characters, the first three. A highlight holding a
+     * strings of 1 to 80 characters counted as code points (an emoji is one,
+     * as the server counts them), the first three. A highlight holding a
      * control character (a line break included) is dropped rather than
      * drawn: each one is one plain line. Not a list: none.
      */
@@ -90,7 +91,7 @@ internal object UpdateNotices {
         val list = json as? JsonArray ?: return emptyList()
         return list.asSequence()
             .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
-            .filter { it.isNotBlank() && it.length <= HIGHLIGHT_MAX_CHARS && it.none(::isControl) }
+            .filter { it.isNotBlank() && it.codePointCount(0, it.length) <= HIGHLIGHT_MAX_CHARS && it.none(::isControl) }
             .take(HIGHLIGHTS_MAX)
             .toList()
     }

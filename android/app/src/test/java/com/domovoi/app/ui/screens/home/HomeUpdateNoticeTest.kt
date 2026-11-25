@@ -123,6 +123,22 @@ class HomeUpdateNoticeTest {
         assertEquals(listOf(at80, "fine words"), parsed?.highlights)
     }
 
+    @Test fun highlightsCountCodePointsNotUtf16Units() {
+        // As the server and the dashboard count: an emoji is one code point
+        // (two UTF-16 units), so 80 with an emoji is kept and 81 is dropped.
+        val at80 = "x".repeat(79) + "\uD83D\uDE00"
+        val at81 = "x".repeat(80) + "\uD83D\uDE00"
+        val emoji80 = "\uD83D\uDE00".repeat(80)
+        assertEquals(80, at80.codePointCount(0, at80.length))
+        assertEquals(81, at80.length)
+        assertEquals(81, at81.codePointCount(0, at81.length))
+        assertEquals(160, emoji80.length)
+        val parsed = UpdateNotices.parse(
+            """{"available": true, "version": "1.5.0", "highlights": ${json(listOf(at81, at80, emoji80, emoji80 + "x"))}}""",
+        )
+        assertEquals(listOf(at80, emoji80), parsed?.highlights)
+    }
+
     @Test fun markupInAHighlightStaysText() {
         // The server's text is untrusted: what looks like HTML, Markdown or a
         // link is kept as the characters it is, and drawn as plain text.
