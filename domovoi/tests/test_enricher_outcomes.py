@@ -532,7 +532,7 @@ async def test_voice_under_never_says_so_and_starts_nothing(monkeypatch) -> None
     monkeypatch.setattr(f"{ENRICHER}.enrich_library", _aexplode)
     with egress.override_policy("never"):
         resp = await LibraryHandler()._enrich(_ctx(online=False), None)
-    assert resp.text == "I'm set to stay off the internet, so I can't identify songs."
+    assert resp.text == "I'm set to stay off the internet, so I can't identify songs. An admin can change that in Settings → Privacy → Internet."
 
 
 @pytest.mark.asyncio
@@ -597,7 +597,7 @@ def test_the_completion_summary_is_honest() -> None:
     )
     with egress.override_policy("never"):
         assert _format_enrich_summary(le._counts(skipped="internet_off")) == (
-            "I'm set to stay off the internet, so I can't identify songs."
+            "I'm set to stay off the internet, so I can't identify songs. An admin can change that in Settings → Privacy → Internet."
         )
 
 

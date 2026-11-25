@@ -351,6 +351,12 @@ def check_manifest_drift(
                 f"{decl.chat_exposed}, code registers "
                 f"{bool(getattr(h, 'chat_exposed', False))}"
             )
+        if bool(getattr(h, "needs_ai", False)) != decl.needs_ai:
+            report.errors.append(
+                f"handler {decl.name!r}: manifest says needs_ai="
+                f"{decl.needs_ai}, code registers "
+                f"{bool(getattr(h, 'needs_ai', False))}"
+            )
         display = getattr(h, "display", None)
         if display is not None and decl.label and display.label != decl.label:
             report.errors.append(

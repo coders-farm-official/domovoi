@@ -42,6 +42,7 @@ from domovoi.plugins_runtime.lockfile import (
 
 # The core SDK semver the `domovoi_api` range is checked against.
 from domovoi.sdk import API_VERSION
+from domovoi.ai_features import PluginAI, plugin_ai_from_manifest
 
 SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}\Z")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+\Z")
@@ -172,6 +173,9 @@ class HandlerDecl:
     tone: str = "neutral"
     icon: str | None = None
     corpus: tuple[str, ...] = ()
+    # SDK 1.14: the handler's work is a model's (Handler.needs_ai); off
+    # with the household's AI switch.
+    needs_ai: bool = False
 
 
 @dataclass(frozen=True)
@@ -338,6 +342,10 @@ class PluginManifest:
     # [assets]
     migrations_dir: str = "migrations"
     sounds_dir: str = "sounds"
+    # [ai] (SDK 1.14): what the plugin makes with a model and the routes
+    # that make it; for a manifest without the table, what core knows for
+    # a capability it provides (ai_features.KNOWN_AI_CAPABILITIES).
+    ai: PluginAI | None = None
     # The raw parsed TOML — persisted verbatim into plugins.manifest JSONB
     # (the web process and /api/capabilities read THIS, design §3.1/§8).
     raw: dict[str, Any] = field(default_factory=dict)
@@ -405,6 +413,13 @@ def help_file_problem(path: str) -> str | None:
     if not rel.lower().endswith(".md"):
         return "must be a Markdown file (.md)"
     return None
+
+
+def _opt_bool(table: dict, key: str, where: str) -> bool:
+    v = table.get(key, False)
+    if not isinstance(v, bool):
+        raise ManifestError(f"{where}.{key} must be true or false")
+    return v
 
 
 def _str_list(table: dict, key: str, where: str) -> tuple[str, ...]:
@@ -478,6 +493,10 @@ def parse_manifest(toml_text: str) -> PluginManifest:
     provides = _str_list(caps, "provides", "capabilities")
     consumes = _str_list(caps, "consumes", "capabilities")
     consumes_optional = _str_list(caps, "consumes_optional", "capabilities")
+    try:
+        ai = plugin_ai_from_manifest(data)
+    except ValueError as e:
+        raise ManifestError(str(e)) from e
 
     reqs = data.get("requirements", {})
     if not isinstance(reqs, dict):
@@ -542,6 +561,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
                 tone=str(h.get("tone", "neutral")),
                 icon=_opt_str(h, "icon", f"handlers.{hname}"),
                 corpus=tuple(_str_list(h, "corpus", f"handlers.{hname}")),
+                needs_ai=_opt_bool(h, "needs_ai", f"handlers.{hname}"),
             )
         )
 
@@ -816,6 +836,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         android_capabilities=android_caps,
         migrations_dir=migrations_dir,
         sounds_dir=sounds_dir,
+        ai=ai,
         raw=data,
     )
 

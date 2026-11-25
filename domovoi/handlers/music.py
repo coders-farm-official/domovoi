@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import off_answers
 from domovoi.capabilities import (
     CAPABILITIES,
     STREAMING_SEARCH_PROVIDER,
@@ -139,7 +140,9 @@ _LYRIC_FIND_RE = re.compile(
 # What a lyric request says when it plays nothing (contract [V10]). Never
 # the words themselves: Domovoi does not say, show or log a lyric back.
 _LYRIC_NONE_TEXT = {
-    "disabled": "Finding songs by their words is turned off.",
+    "disabled": off_answers.with_turn_on(
+        "Finding songs by their words is turned off.", off_answers.LYRICS_SEARCH
+    ),
     "no_lyrics": "I don't have the words to your songs yet.",
     "too_short": "Tell me a few more of the words and I'll look.",
     "too_common": "A lot of your songs have those words. Tell me a few more of them.",

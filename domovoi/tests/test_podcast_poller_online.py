@@ -283,7 +283,7 @@ async def test_subscribe_under_never_says_so_without_a_lookup(monkeypatch) -> No
         offline = await h.fallback_offline(
             Intent(transcript="subscribe to the daily", room_id="kitchen"), ctx, None,
         )
-    want = "I'm set to stay off the internet, so I can't subscribe to a new podcast."
+    want = "I'm set to stay off the internet, so I can't subscribe to a new podcast. An admin can change that in Settings → Privacy → Internet."
     assert direct.text == offline.text == want
 
 

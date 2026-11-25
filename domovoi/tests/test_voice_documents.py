@@ -447,7 +447,7 @@ async def test_inline_content_cancel_and_the_failures_said(db_session, docs, mod
 async def test_with_ai_off_a_letter_refuses_before_dictation(db_session, docs, model):
     with ai_features.override(False):
         r = await Room(db_session).say("take a letter to the landlord", trigger="wake_word")
-    assert r.text.startswith("Writing a letter needs the AI features, and they're turned off.")
+    assert r.text.startswith("Writing a letter needs AI, which is turned off. An admin can turn it on in Settings → Chat & AI → Models.")
     assert not r.expect_followup and model.calls == []
 
 

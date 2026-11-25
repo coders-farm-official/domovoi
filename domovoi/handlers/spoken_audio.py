@@ -163,7 +163,7 @@ def _subscribe_offline_text() -> str:
     """The reply to "subscribe to X" with no internet: today's sentence,
     or the internet-off phrase when internet access is turned off."""
     if egress.internet_turned_off():
-        return f"{egress.spoken_offline_phrase()}, so I can't subscribe to a new podcast."
+        return egress.spoken_offline_reply("subscribe to a new podcast")
     return "I need an internet connection to subscribe to a new podcast."
 
 

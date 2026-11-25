@@ -335,7 +335,7 @@ def _ctx(**kw) -> Context:
 
 
 NONE_TEXTS = [
-    ("disabled", "Finding songs by their words is turned off."),
+    ("disabled", "Finding songs by their words is turned off. An admin can turn it on in Settings → System → Advanced → Library."),
     ("no_lyrics", "I don't have the words to your songs yet."),
     ("too_short", "Tell me a few more of the words and I'll look."),
     ("too_common", "A lot of your songs have those words. Tell me a few more of them."),
@@ -831,7 +831,7 @@ async def test_switched_off(db_session, lyric_library, player, monkeypatch) -> N
     resp = await _say(db_session, sid, f"play {SIX_WORDS}")
     assert resp.text == f"I couldn't find anything called {SIX_WORDS}."      # never looks in lyrics
     resp = await _say(db_session, sid, f"play the song that goes {CHORUS_1}")
-    assert resp.text == "Finding songs by their words is turned off."
+    assert resp.text == "Finding songs by their words is turned off. An admin can turn it on in Settings → System → Advanced → Library."
     assert player.files_calls == []
 
 

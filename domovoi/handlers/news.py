@@ -1007,7 +1007,7 @@ class NewsHandler(Handler):
         if not url.lower().startswith("https://") or ai_features.turned_off():
             return False, None
         if egress.internet_turned_off():
-            return False, f"{egress.spoken_offline_phrase()}, so I can't read the full article."
+            return False, egress.spoken_offline_reply("read the full article")
         if not ctx.online:
             return False, "I can't reach the internet right now, so I can't read the full article."
         return True, None
@@ -1033,7 +1033,7 @@ class NewsHandler(Handler):
         try:
             outcome = await lookup_web.read_page(item["url"], query=title)
         except egress.InternetTurnedOff:
-            return None, f"{egress.spoken_offline_phrase()}, so I can't read the full article."
+            return None, egress.spoken_offline_reply("read the full article")
         except lookup_web.LookupRefused as e:
             return None, f"I couldn't read the full article. {e}"
         except Exception as e:  # noqa: BLE001

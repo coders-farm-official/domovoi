@@ -64,7 +64,7 @@ def _format_enrich_summary(counts: dict[str, Any]) -> str:
     if skipped_reason == "internet_off":
         from domovoi import egress
 
-        return f"{egress.spoken_offline_phrase()}, so I can't identify songs."
+        return egress.spoken_offline_reply("identify songs")
     if skipped_reason:
         return _ENRICH_SKIPPED_REPLY.get(
             skipped_reason, "I couldn't identify your songs this time."
@@ -480,7 +480,7 @@ class LibraryHandler(Handler):
 
         if egress.internet_turned_off():
             return self._enrich_reply(
-                ctx, f"{egress.spoken_offline_phrase()}, so I can't identify songs."
+                ctx, egress.spoken_offline_reply("identify songs")
             )
         if not ctx.online:
             return self._enrich_reply(

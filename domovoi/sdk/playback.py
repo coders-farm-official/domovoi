@@ -86,10 +86,7 @@ class PlaybackAPI:
         if egress.check_destination(stream_url) is not None:
             egress.log_refusal(f"music stream {stream_url[:120]}")
             return Response(
-                text=(
-                    f"{egress.spoken_offline_phrase()}, so I can't play "
-                    f"{title or 'that'}."
-                ),
+                text=egress.spoken_offline_reply(f"play {title or 'that'}"),
                 data={"stream_url": stream_url, "ok": False, "status": "internet_off"},
             )
         ok = False

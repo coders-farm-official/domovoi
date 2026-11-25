@@ -117,6 +117,10 @@ class FastPath:
     method: FastPathMethod
     offline_ok: bool | None = None
     early_commit: EarlyCommitTier | None = None
+    # Overrides the handler's ``needs_ai`` for this one path: False for a
+    # path that only reads ("is my picture ready?") on a handler that
+    # makes things with a model; None (the default) inherits it.
+    needs_ai: bool | None = None
 
     def __iter__(self) -> Iterator[Any]:
         # 2-tuple unpacking sugar: `for pattern, method in handler.fast_paths`.
@@ -226,6 +230,13 @@ class Handler(ABC):
     # towards the tool (the router-bait fixes took it out). Each core
     # phrase lands on its handler (domovoi/tests/test_example_phrases.py).
     example_phrases: tuple[str, ...] = ()
+    # What this handler does IS a model's work (a plugin that makes
+    # pictures on its own engine, not through this box's Ollama): while
+    # the household's AI switch is off (domovoi/ai_features.py) the router
+    # answers its turns with ``ai_features.off_feature_line`` and its code
+    # never runs. A fast path can say otherwise (``FastPath.needs_ai``).
+    # Plugins declare it in the manifest too ([[handlers]] needs_ai).
+    needs_ai: bool = False
 
     @abstractmethod
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:
