@@ -187,7 +187,7 @@ def test_the_updating_flag_rides_the_notice(house):
 def test_updating_is_reported_without_a_notice_too(house):
     """`updating` is the real update state, notice or none (a house on
     main, an update started by hand): Home still reads "Domovoi is
-    updating…"."""
+    restarting…"."""
     house.updating = True
     assert _notice() == {"available": False, "updating": True}
     assert _notice("never") == {"available": False, "updating": True}, "internet No hides the notice only"

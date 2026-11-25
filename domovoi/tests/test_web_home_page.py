@@ -1192,14 +1192,14 @@ def test_the_update_row_shows_under_a_summary_line_too(driven) -> None:
 
 def test_while_updating_anyone_reads_updating_and_no_button(driven) -> None:
     snap = driven["updating_notice"]
-    assert _update_row(snap)["text"] == "Domovoi is updating…"
+    assert _update_row(snap)["text"] == "Domovoi is restarting…"
     assert not any(b["text"] == "Update" for b in snap["buttons"])
 
 
 def test_any_update_under_way_reads_updating_even_without_a_notice(driven) -> None:
     for name in ("updating_without_notice", "member_updating_without_notice"):
         snap = driven[name]
-        assert _update_row(snap)["text"] == "Domovoi is updating…", name
+        assert _update_row(snap)["text"] == "Domovoi is restarting…", name
         assert not any(b["text"] == "Update" for b in snap["buttons"]), name
 
 

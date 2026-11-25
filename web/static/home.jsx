@@ -364,7 +364,7 @@ const HomeUpdateRow = (notice, { admin = false, shared = false } = {}) => {
   // (a house on main, an update started by hand): never a button then.
   if (notice.updating === true) {
     return { key: 'update-available', tone: 'brand', scope: 'household', update: true,
-             text: 'Domovoi is updating…', canUpdate: false, sub: null };
+             text: 'Domovoi is restarting…', canUpdate: false, sub: null };
   }
   if (notice.available !== true) return null;
   const version = typeof notice.version === 'string' && HOME_VERSION_RE.test(notice.version) ? notice.version : null;
