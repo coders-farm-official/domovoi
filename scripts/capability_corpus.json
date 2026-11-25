@@ -1092,7 +1092,7 @@
       "kind": "question",
       "must_include": [
         "offline kit",
-        "\badmin\b"
+        "\\badmin\\b"
       ],
       "must_not_include": [
         "I can't do that yet, I don't think",
@@ -1824,10 +1824,10 @@
       "expect": "EXACT",
       "kind": "question",
       "must_not_include": [
-        "\balex\b",
-        "\bana\b",
-        "\bben\b",
-        "\bamber\b"
+        "\\balex\\b",
+        "\\bana\\b",
+        "\\bben\\b",
+        "\\bamber\\b"
       ],
       "must_include": [
         "^I don't share who lives here\\.$"
@@ -1844,10 +1844,10 @@
       "kind": "question",
       "must_include": [
         "^I know .+\\. That's who has a profile with me; I can't tell who's home right now\\.$",
-        "\bAlex\b",
-        "\bAna\b",
-        "\bBen\b",
-        "\bAmber\b"
+        "\\bAlex\\b",
+        "\\bAna\\b",
+        "\\bBen\\b",
+        "\\bAmber\\b"
       ],
       "stub": true,
       "note": "P1 (batch-cap2 c52e95d3): the People list, never presence: a member, 4 people (any order)"
@@ -2531,7 +2531,7 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "\byes\b"
+        "\\byes\\b"
       ],
       "must_not_include": [
         "no one else can see"
@@ -4014,8 +4014,11 @@
         "ONE_PERSON_LINES",
         "NO_NAME_LINES"
       ],
-      "judge": true,
-      "rubric": "Facts (or a plain answer), never one of the ownership joke lines."
+      "must_include": [
+        "^I don't keep track of who the admin is: the admin is whoever signs in on the dashboard with the admin password\\.$"
+      ],
+      "stub": true,
+      "note": "P2 (batch-cap2): the fixed admin-who facts answer by voice too, never a joke"
     },
     {
       "id": "23.11c",
@@ -4043,8 +4046,11 @@
         "ONE_PERSON_LINES",
         "NO_NAME_LINES"
       ],
-      "judge": true,
-      "rubric": "Facts (or a plain answer), never one of the ownership joke lines."
+      "must_include": [
+        "^An admin approves that, on the dashboard\\.$"
+      ],
+      "stub": true,
+      "note": "P2 (batch-cap2): the fixed admin-who facts answer by voice too, never a joke"
     },
     {
       "id": "23.12c",
@@ -4101,8 +4107,11 @@
         "ONE_PERSON_LINES",
         "NO_NAME_LINES"
       ],
-      "judge": true,
-      "rubric": "Facts (or a plain answer), never one of the ownership joke lines."
+      "must_include": [
+        "^I don't keep a name for that\\. Whoever set up Domovoi chose the admin password, and signs in with it on the dashboard\\.$"
+      ],
+      "stub": true,
+      "note": "P2 (batch-cap2): the fixed admin-who facts answer by voice too, never a joke"
     },
     {
       "id": "23.14c",

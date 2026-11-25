@@ -25,6 +25,7 @@ model call, so these tests never touch Postgres or Ollama.
 from __future__ import annotations
 
 import asyncio
+import json
 import importlib.util
 import re
 import sys
@@ -425,3 +426,23 @@ def test_sandbox_restores_modules_imported_inside_it() -> None:
         assert db_session.session_scope is real_scope
     finally:
         sys.modules.pop(name, None)
+
+
+def test_corpus_patterns_have_no_control_characters() -> None:
+    """A regex written as a JSON string with a single backslash ("\b") reads
+    as a control character (backspace), never as a word boundary; #61 went
+    red on that. Every corpus string must be printable."""
+    raw = json.loads((REPO_ROOT / "scripts" / "capability_corpus.json").read_text(encoding="utf-8"))
+
+    def strings(v):
+        if isinstance(v, str):
+            yield v
+        elif isinstance(v, list):
+            for x in v:
+                yield from strings(x)
+        elif isinstance(v, dict):
+            for x in v.values():
+                yield from strings(x)
+
+    bad = sorted({c["id"] for c in raw["cases"] for s in strings(c) if any(ord(ch) < 32 for ch in s)})
+    assert bad == [], f"control characters in cases {bad}: write regex escapes as two backslashes"
