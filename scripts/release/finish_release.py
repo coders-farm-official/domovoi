@@ -516,7 +516,7 @@ def _highlights_problems(text: str) -> list[str]:
     items = release_highlights_of(text)
     if not items:
         return [f"it needs exactly one \"## {HIGHLIGHTS}\" section of exactly 3 items (\"- text\", each 8 to 80 "
-                "characters, plain words, no nesting): houses show them before they update"]
+                "characters (code points: an emoji counts once), plain words, no nesting): houses show them before they update"]
     problems = release_highlights.markdown_problems(items)
     heads = [(i, lvl, h) for i, lvl, h in _headings(text) if lvl <= 2]
     at = [k for k, (_, _, h) in enumerate(heads) if _heading_text(h).strip() == HIGHLIGHTS]

@@ -96,6 +96,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         /** The app release this core hands out (update/AppUpdate.kt), read
          *  after connecting, at most every few hours; the screen decides. */
         val appOffer: AppOffer? = null,
+        /** The room this phone is in, as the server said it (`ready.room`,
+         *  the `room` frame; 1.5.0); null before that, or from an older
+         *  core. The screen says its name, never its id. */
+        val place: RoomProtocol.RoomPlace? = null,
     )
 
     private val _status = MutableStateFlow(Status(muted = store.muted))
@@ -124,7 +128,9 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
     }
 
     override suspend fun art(path: String): ByteArray? {
-        if (!RoomDisplayFeed.isArtPath(path)) return null
+        // A cover or a photo result's thumbnail, on this room's own server,
+        // with no credential (the room key goes on no HTTP request).
+        if (!RoomDisplayFeed.isImagePath(path)) return null
         val client = http ?: return null
         val core = store.enrolment?.coreUrl?.trimEnd('/') ?: return null
         return withContext(Dispatchers.IO) {
@@ -363,7 +369,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
                         delay(backoff)
                     }
                 }
-                "awaiting_approval", "pairing_rejected", "approval_conflict", "approval_throttled" -> {
+                "awaiting_approval", "pairing_rejected", "approval_conflict", "approval_throttled", "satellite_id_mismatch" -> {
                     // Parked or refused: ask again later (RoomSessionRules),
                     // or at once on "check now".
                     lastNudge = waitOrNudge(RoomSessionRules.retryAfterMs(result, backoff), lastNudge)
@@ -409,9 +415,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         closed = end
         val words = reportedWords()
         helloWords = words
+        // The room the room code asked to join (`in=`), until approved.
         val hello = RoomProtocol.hello(
             enrol.roomId, wakeWord, token, store.approvalCode, echoCanceller,
-            wakeWords = words, wakeWordsMax = wakeWordsMax,
+            wakeWords = words, wakeWordsMax = wakeWordsMax, requestedRoom = store.requestedRoom,
         )
         val request = RoomNetwork.streamRequest(RoomProtocol.streamUrl(enrol.coreUrl, enrol.roomId))
         val socket = client.newWebSocket(request, object : WebSocketListener() {
@@ -452,6 +459,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         when (val f = RoomProtocol.parse(text)) {
             is RoomProtocol.ServerFrame.Ready -> onReady(f)
             is RoomProtocol.ServerFrame.Error -> onError(f)
+            is RoomProtocol.ServerFrame.Room -> onRoom(f)
             is RoomProtocol.ServerFrame.Transcript -> Log.i(TAG, "heard: ${SpokenLog.said(f.text)}")
             is RoomProtocol.ServerFrame.ResponseStart -> onResponseStart(f)
             is RoomProtocol.ServerFrame.ResponseEnd -> onResponseEnd(f)
@@ -488,6 +496,17 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
 
     private fun onReady(f: RoomProtocol.ServerFrame.Ready) {
         store.setApprovedOnce()
+        // Accepted: the server decides the room from now on, so the room
+        // code's `in=` is asked for no more.
+        store.clearRequestedRoom()
+        val own = store.enrolment?.roomId
+        if (f.satelliteId != null && own != null && f.satelliteId != own) {
+            Log.w(TAG, "ready names this phone ${f.satelliteId}, not $own")
+        }
+        f.room?.let { here ->
+            store.noteRoom(here)
+            update { it.copy(place = here) }
+        }
         features = f.features
         roomVoice = f.roomVoice
         ready = true
@@ -503,6 +522,21 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         scope.launch { onBattery(RoomDevice.battery(context)) }
     }
 
+    /**
+     * The `room` frame (1.5.0): an admin moved this phone to another room,
+     * or the room's wake claims changed. The phone stays connected and
+     * carries on in [f]'s room: its name on the screen, the rest (wake
+     * words, voice, music, the room display) the server sends as for any
+     * room. Only a hello that named `satellite_id` gets this frame.
+     */
+    private fun onRoom(f: RoomProtocol.ServerFrame.Room) {
+        val here = f.room ?: return
+        val before = _status.value.place
+        if (before?.roomId != here.roomId) Log.i(TAG, "moved to another room (${here.roomId})")
+        store.noteRoom(here)
+        update { it.copy(place = here) }
+    }
+
     /** Work off the socket's thread; dropped once the room has stopped. */
     private fun background(work: () -> Unit) {
         runCatching { worker.execute(work) }
@@ -512,6 +546,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
         val v = RoomSessionRules.verdict(f.reason, f.code, store.approvalCode, store.approvedOnce)
         v.code?.let { store.setApprovalCode(it) }
         v.link?.let { link -> update { it.copy(link = link) } }
+        if (f.reason == "satellite_id_mismatch") Log.w(TAG, "server refused this phone's id: ${f.message}")
         if (v.outcome != null) {
             outcome?.complete(v.outcome)
             return

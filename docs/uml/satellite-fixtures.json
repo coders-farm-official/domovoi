@@ -1183,10 +1183,11 @@
       }
     },
     "android_room": {
-      "about": "An Android phone in room mode (android roommode/, what RoomProtocol.hello sends on a phone with an echo canceller; a phone without one leaves full_duplex and dropin_ready out): only `supports`, no boolean keys. Echo cancellation for drop-ins (finishing the reply that announces one first) but no chat mode; it mirrors the server's sounds and wake models; it updates through its app store, so no restart, code sync, settings, live log or clip recording. Since 1.4.0 it shows the room display (`room_display`: the room's music, timers and alarms, and one going off); and it runs several wake words on one front end, saying which it loaded and how many it can run (`wake_words`, `wake_words_max`: 5, or 3 on a 32-bit or ~2 GB phone).",
+      "about": "An Android phone in room mode (android roommode/, what RoomProtocol.hello sends on a phone with an echo canceller; a phone without one leaves full_duplex and dropin_ready out): only `supports`, no boolean keys. Echo cancellation for drop-ins (finishing the reply that announces one first) but no chat mode; it mirrors the server's sounds and wake models; it updates through its app store, so no restart, code sync, settings, live log or clip recording. Since 1.4.0 it shows the room display (`room_display`: the room's music, timers and alarms, and one going off); and it runs several wake words on one front end, saying which it loaded and how many it can run (`wake_words`, `wake_words_max`: 5, or 3 on a 32-bit or ~2 GB phone). Since 1.5.0 it names itself (`satellite_id`, the path's id) so it carries on in a new room when an admin moves it, and until it is approved it sends `requested_room`, the room its room code's `in=` asked to join (left out here: this room code asked for none). The iPhone's room (`ios_room`) sends the same hello with its own board.",
       "hello": {
         "type": "hello",
         "room_id": "nursery",
+        "satellite_id": "nursery",
         "wake_word": "hey_jarvis",
         "wake_words": [
           "hey_jarvis"
@@ -1672,5 +1673,75 @@
       "expires_in_ms",
       "items"
     ]
+  },
+  "rooms": {
+    "about": [
+      "Rooms (1.5.0): a room is a place, a satellite is a device in it. docs/uml/satellite-protocol.md, 'Rooms and satellites'.",
+      "Read by domovoi/tests/test_rooms_fixtures.py (the core) and satellite/tests/test_rooms_client.py (the Pi and PC client); the phone apps' room mode follows the same contract.",
+      "The devices above are hellos from before 1.5.0, kept as they are: an older device must keep working. A 1.5.0 Pi, PC or phone adds hello_adds to its hello."
+    ],
+    "hello_adds": [
+      "satellite_id"
+    ],
+    "hello_adds_about": "satellite_id is the device's id, exactly the path's (/v1/stream/{id}, the hello's room_id). With it the core moves the device with a `room` frame instead of closing it (1001), and re-sends that frame when room.claim changes. requested_room is added only until the first ready, and only when the enrolment's in= named a room id (in_room_rule).",
+    "hello_requested_room": "living-room",
+    "in_room_rule": "^[a-z0-9][a-z0-9_-]{0,31}\\Z",
+    "in_room_rule_about": "ONE rule for a room id from outside (domovoi/room_ids.py is_room_id): an enrolment's in=, the hello's requested_room, the dashboard's in_room, ready.room.room_id. Lowercase ASCII letters, digits, _ and -, starting with a letter or digit, at most 32 characters. Looser than the rule for an id a device MAKES from its name (^[a-z][a-z0-9_]{0,31}): the Wi-Fi setup portal named rooms like living-room and 2nd-bedroom, and those rooms can be joined. A value that breaks it is ignored like an unknown key (never an error).",
+    "in_room_valid": [
+      "kitchen",
+      "living-room",
+      "2nd-bedroom",
+      "room_2",
+      "a",
+      "abcdefghijklmnopqrstuvwxyz012345"
+    ],
+    "in_room_invalid": [
+      "",
+      "Kitchen",
+      "-den",
+      "_den",
+      "kitchen\n",
+      "den room",
+      "k\u00fcche",
+      "abcdefghijklmnopqrstuvwxyz0123456",
+      "../den"
+    ],
+    "ready_room": {
+      "room_id": "kitchen",
+      "name": "Kitchen",
+      "shared": true,
+      "claim": true
+    },
+    "ready_room_unnamed": {
+      "room_id": "kitchen",
+      "name": null,
+      "shared": false,
+      "claim": false
+    },
+    "name_about": "ready.room.name and room.name are the room's name, or null when the core could not read the room's row. A missing key, null and a blank string all mean 'no name': keep the name last shown for the SAME room_id; for another room_id (a move), or with none known, say 'this room' in household words. Never show room_id as a name.",
+    "room_move": {
+      "type": "room",
+      "room": {
+        "room_id": "den",
+        "name": "Den",
+        "shared": false,
+        "claim": false
+      }
+    },
+    "room_move_unnamed": {
+      "type": "room",
+      "room": {
+        "room_id": "den",
+        "name": null,
+        "shared": false,
+        "claim": false
+      }
+    },
+    "mismatch_error": {
+      "type": "error",
+      "reason": "satellite_id_mismatch",
+      "message": "the hello's satellite_id is not the one in the path"
+    },
+    "mismatch_about": "The core closes the socket with 1008 after it. The device says in plain words that the server did not recognise it and retries like any refusal; it changes nothing it stored."
   }
 }

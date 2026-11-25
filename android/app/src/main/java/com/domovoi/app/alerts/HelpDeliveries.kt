@@ -19,13 +19,14 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 
 // ---------------------------------------------------------------------------
-// Help steps sent by voice (assistant plan part 9): someone asks a room
-// "how do I…", Domovoi answers in a sentence and offers "Want me to send the
-// steps to your phone?". A yes opens a home-server chat ("Help: …") and
-// lists a delivery for the asker. This phone posts a notification for a
-// delivery only when it is for the person this phone belongs to on that
-// server (Settings → Connection, "This phone belongs to"), once, and never
-// on a shared screen. Tapping it opens Chat on that thread.
+// Something Domovoi sent to a person's phone: a home-server chat opened for
+// them and listed as a delivery for that person (photos found for them, for
+// one; 1.5.0 removed the voice "send the steps to your phone" offer, and a
+// 1.4.x server may still send its "Help: …" threads). This phone posts a
+// notification for a delivery only when it is for the person this phone
+// belongs to on that server (Settings → Connection, "This phone belongs
+// to"), once, and never on a shared screen. Tapping it opens Chat on that
+// thread.
 //
 // The shape of IncidentEngine: the engine is pure (fake sink, fake book and
 // a MockWebServer in the JVM tests); HelpAlerts wires it to the live socket
@@ -74,16 +75,10 @@ fun parseDeliveries(el: JsonElement?): List<HelpDelivery>? {
     return list.mapNotNull { parseDelivery(it) }
 }
 
-/** The notification's title: the row's own ("Help: add a room"), with the
- *  "Help: " the plan names added when the row lacks it. */
-fun helpTitle(row: HelpDelivery): String {
-    val t = row.title.trim()
-    return when {
-        t.isEmpty() -> "Help from Domovoi"
-        t.startsWith("Help:", ignoreCase = true) -> t
-        else -> "Help: $t"
-    }
-}
+/** The notification's title: the chat's title exactly as sent ("Photos:
+ *  The beach"; an older server's "Help: add a room" as it is), or
+ *  "From Domovoi" when it has none. Nothing is added to it. */
+fun helpTitle(row: HelpDelivery): String = row.title.trim().ifEmpty { "From Domovoi" }
 
 /** What to post and what to remember, from [rows] (any order). */
 data class HelpPlan(val post: List<HelpDelivery>, val seen: Long?)

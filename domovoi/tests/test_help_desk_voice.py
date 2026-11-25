@@ -1,12 +1,12 @@
-"""Voice "how do I…" (part 9): routing, and who the steps go to.
+"""Voice "how do I…" (part 9): routing, and the spoken answer.
 
 * The fast path takes a how-to question about Domovoi and DECLINES every
   other one, and no other handler's phrases reach it (the bands in
   ``domovoi/handlers/__init__.py``).
-* Delivery is to the asker only: the speaker voice ID recognised, on the
-  phones marked "This phone belongs to <them>"; unknown → "Who should I
-  send it to?"; no answer → nothing sent; no phone → said plainly; never
-  every phone.
+* The answer is the page's first sentences and one pointer ("The full
+  answer is in the manual."). Since 1.5.0 nothing is offered, asked or
+  sent: the "send the steps to your phone" follow-up is gone (owner
+  decision, 2026-11-25), so a "yes" after it is not an answer to anything.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from sqlalchemy import text
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import as_fast_path, example_phrases_of
-from domovoi.handlers.help_desk import HelpDeskHandler, parse_who
+from domovoi.handlers.help_desk import PLUGIN_POINTER_TEXT, POINTER_TEXT, HelpDeskHandler, pointer
 from domovoi.models import Context, Intent
 from domovoi.router import normalize_transcript, route, strip_leading_filler
 from domovoi.tests.conftest import fast_path_winner, requires_db
@@ -112,15 +112,29 @@ def test_help_keeps_how_do_i_use_you() -> None:
     assert not _matches("how do i use you")
 
 
-@pytest.mark.parametrize(
-    ("said", "want"),
-    [("no", ("decline", "")), ("never mind", ("decline", "")), ("", ("decline", "")),
-     ("send it to sarah", ("name", "sarah")), ("to Sarah please", ("name", "sarah")),
-     ("it's for alex", ("name", "alex")), ("me", ("self", "")),
-     ("what time is it in tokyo right now", ("pass", ""))],
-)
-def test_who_should_i_send_it_to(said, want) -> None:
-    assert parse_who(said) == want
+def test_the_pointer_says_where_the_rest_is_and_asks_nothing() -> None:
+    assert pointer("manual") == POINTER_TEXT == "The full answer is in the manual."
+    assert pointer("faq") == POINTER_TEXT
+    assert pointer("plugin") == PLUGIN_POINTER_TEXT == "The full answer is in that plugin's help."
+    for t in (POINTER_TEXT, PLUGIN_POINTER_TEXT):
+        assert not t.endswith("?") and "phone" not in t
+
+
+def test_it_parks_no_question() -> None:
+    """The send offer and the name question (``core.help_send``,
+    ``core.help_who``) were removed in 1.5.0: the handler declares no
+    confirmation or choice kinds, so one parked before an upgrade resumes
+    nothing (``router.dispatchable_confirmation``) and the turn routes as
+    usual."""
+    from domovoi.router import dispatchable_confirmation
+
+    h = HANDLER_BY_NAME["help_desk"]
+    assert tuple(h.confirmation_kinds) == () and tuple(h.choice_kinds) == ()
+    for kind in ("core.help_send", "core.help_who"):
+        assert dispatchable_confirmation({"handler": "help_desk", "kind": kind}) is None
+    import domovoi.handlers.help_desk as mod
+
+    assert not hasattr(mod, "SEND_KIND") and not hasattr(mod, "WHO_KIND")
 
 
 # ── through the router, on the lane's database ───────────────────────────
@@ -172,12 +186,13 @@ async def _pending(say, room="kitchen"):
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_how_to_is_answered_from_the_manual_then_offered(voice) -> None:
+async def test_a_how_to_is_answered_from_the_manual_with_a_pointer(voice) -> None:
     r = await voice("how do I change the wake word")
     assert (r.matched_handler, r.matched_path) == ("help_desk", "fast")
     assert r.text.startswith("From the manual's ")
-    assert r.text.endswith("Want me to send the steps to your phone?") and r.expect_followup
-    assert (await _pending(voice))["kind"] == "core.help_send"
+    assert r.text.endswith(" " + POINTER_TEXT) and not r.expect_followup
+    assert "phone" not in r.text.split(":", 1)[0] and "Want me to send" not in r.text
+    assert await _pending(voice) is None
 
 
 @requires_db
@@ -190,138 +205,28 @@ async def test_a_question_the_help_does_not_hold_routes_on(voice) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_yes_sends_to_the_recognised_askers_phones_only(voice) -> None:
+async def test_nothing_is_sent_even_to_a_recognised_asker_with_a_phone(voice) -> None:
+    """The case the send offer used to serve: a voice ID'd person with a
+    phone marked as theirs. The answer is spoken, nothing waits for a yes,
+    and a "yes" after it writes no chat and no delivery."""
     sarah = await voice.person("Sarah")
-    alex = await voice.person("Alex")
     await voice.phone("android-sarah", sarah)
-    await voice.phone("android-alex", alex)
-    await voice.phone("android-kitchen", sarah, shared=True)   # a shared screen is nobody's phone
-    await voice("how do I change the wake word", person=sarah)
+    threads = (await voice.db.execute(text("SELECT count(*) FROM chat_threads"))).scalar_one()
+    r = await voice("how do I change the wake word", person=sarah)
+    assert r.matched_handler == "help_desk" and r.text.endswith(POINTER_TEXT) and not r.expect_followup
+    assert await _pending(voice) is None
     r = await voice("yes", person=sarah)
-    assert r.text.startswith("Sent to your phone. It's in Chat as Help: How do I change the wake word")
-    got = await voice.deliveries()
-    assert len(got) == 1 and got[0]["person_id"] == sarah and got[0]["thread_person"] == sarah
-    assert got[0]["title"] == got[0]["thread_title"] and got[0]["title"].startswith("Help: ")
-    assert got[0]["msgs"] == 2  # the question, then the steps
-
-
-@requires_db
-@pytest.mark.asyncio
-async def test_no_sends_nothing(voice) -> None:
-    sarah = await voice.person("Sarah")
-    await voice.phone("android-sarah", sarah)
-    await voice("how do I change the wake word", person=sarah)
-    r = await voice("no", person=sarah)
-    assert r.text == "Okay, I won't send it."
+    assert r.matched_handler != "help_desk" and "Sent to" not in r.text
     assert await voice.deliveries() == []
+    assert (await voice.db.execute(text("SELECT count(*) FROM chat_threads"))).scalar_one() == threads
 
 
 @requires_db
 @pytest.mark.asyncio
-async def test_no_phone_linked_is_said_plainly(voice) -> None:
-    sarah = await voice.person("Sarah")
-    await voice("how do I change the wake word", person=sarah)
-    r = await voice("yes", person=sarah)
-    assert "no phone marked as yours" in r.text and "This phone belongs to" in r.text
-    # The app's section since the Settings regroup (SettingsScreen.kt).
-    assert "Phones and browsers" in r.text and "Connection" not in r.text
-    assert await voice.deliveries() == []
-
-
-@requires_db
-@pytest.mark.asyncio
-async def test_an_unknown_speaker_is_asked_who_and_a_name_sends_it(voice) -> None:
-    sarah = await voice.person("Sarah")
-    await voice.phone("android-sarah", sarah)
-    await voice("how do I change the wake word")
-    r = await voice("yes")
-    assert r.text == "Who should I send it to?" and r.expect_followup
-    r = await voice("send it to sarah")
-    assert r.text.startswith("Sent to Sarah's phone.")
-    assert [d["person_id"] for d in await voice.deliveries()] == [sarah]
-
-
-@requires_db
-@pytest.mark.asyncio
-async def test_an_unknown_speaker_with_no_answer_sends_nothing(voice) -> None:
-    sarah = await voice.person("Sarah")
-    await voice.phone("android-sarah", sarah)
-    await voice("how do I change the wake word")
-    await voice("yes")
-    r = await voice("never mind")
-    assert "send" in r.text.lower() and await voice.deliveries() == []
-    # A name nobody has, or one two people share: nothing is guessed.
-    await voice("how do I change the wake word")
-    await voice("yes")
-    r = await voice("to bob")
-    assert r.matched_handler != "help_desk"          # not a name it knows: routed on
-    await voice.person("Sarah")
-    await voice("how do I change the wake word")
-    await voice("yes")
-    r = await voice("sarah")
-    assert "won't guess" in r.text
-    assert await voice.deliveries() == []
-
-
-@requires_db
-@pytest.mark.asyncio
-async def test_a_phone_turn_gets_the_answer_without_the_offer(voice) -> None:
+async def test_a_phone_turn_gets_the_same_answer(voice) -> None:
     ctx = Context(room_id="phone-1", person_id=None, online=True, device_kind="phone")
     r = await route(Intent(transcript="how do I change the wake word"), ctx, voice.db)
-    assert r.matched_handler == "help_desk" and "Want me to send" not in r.text and not r.expect_followup
-
-
-# ── round 1 review: limits, the name question, commands in how-to clothes ──
-
-
-@requires_db
-@pytest.mark.asyncio
-async def test_the_same_steps_go_once_and_a_person_gets_a_few_an_hour(voice) -> None:
-    alex = await voice.person("Alex")
-    await voice.phone("android-alex", alex)
-    said = []
-    for _ in range(4):                                   # the reviewer's spam loop
-        await voice("how do I change the wake word")
-        await voice("yes")
-        said.append((await voice("alex")).text)
-    assert said[0].startswith("Sent to Alex's phone.")
-    assert all("already sent those steps" in s for s in said[1:])
-    assert len(await voice.deliveries()) == 1
-    # Different steps: at most PER_PERSON_HOUR an hour, from any session.
-    from domovoi.help_desk import delivery
-
-    for q, room in (("how do I add a room", "office"), ("how do I install a plugin", "garage"),
-                    ("how do I pair the app", "den")):
-        await voice(q, room=room)
-        await voice("yes", room=room)
-        await voice("alex", room=room)
-    assert len(await voice.deliveries()) == delivery.PER_PERSON_HOUR
-
-
-@requires_db
-@pytest.mark.asyncio
-async def test_one_session_sends_a_few_an_hour(voice) -> None:
-    from domovoi.help_desk import delivery
-
-    people = [await voice.person(n) for n in ("Ann", "Bea", "Cid", "Dee")]
-    for i, pid in enumerate(people):
-        await voice.phone(f"android-{i}", pid)
-    texts = []
-    for name in ("ann", "bea", "cid", "dee"):
-        await voice("how do I change the wake word")
-        await voice("yes")
-        texts.append((await voice(name)).text)
-    assert len(await voice.deliveries()) == delivery.PER_SESSION_HOUR
-    assert "enough help steps from here" in texts[-1]
-
-
-@requires_db
-@pytest.mark.asyncio
-async def test_the_name_question_eats_no_command(voice) -> None:
-    await voice("how do I change the wake word")
-    assert (await voice("yes")).text == "Who should I send it to?"
-    r = await voice("next song")
-    assert r.matched_handler == "music" and await voice.deliveries() == []
+    assert r.matched_handler == "help_desk" and r.text.endswith(POINTER_TEXT) and not r.expect_followup
 
 
 @requires_db
@@ -333,27 +238,6 @@ async def test_a_command_in_how_to_clothes_runs_the_command(voice) -> None:
     assert r.matched_handler != "help_desk"
     r = await voice("how do I fix my phone screen")
     assert r.matched_handler != "help_desk"
-
-
-@requires_db
-@pytest.mark.asyncio
-async def test_a_help_chat_keeps_its_title_and_its_steps_are_the_helps(voice) -> None:
-    """Chat history (C2) retitles threads in the background and offers a
-    retry on model replies: a "Help: …" chat is neither's."""
-    from domovoi.help_desk import delivery
-
-    sarah = await voice.person("Sarah")
-    await voice.phone("android-sarah", sarah)
-    await voice("how do I change the wake word", person=sarah)
-    await voice("yes", person=sarah)
-    row = (await voice.db.execute(text(
-        "SELECT m.stats->>'model_role' FROM chat_messages m JOIN help_deliveries d ON d.thread_id = m.thread_id "
-        "WHERE m.role = 'assistant'"))).scalar_one()
-    assert row == "help"
-    if await delivery.has_title_generated(voice.db):       # V034 (wf/chat-history) present
-        kept = (await voice.db.execute(text(
-            "SELECT t.title_generated FROM chat_threads t JOIN help_deliveries d ON d.thread_id = t.id"))).scalar_one()
-        assert kept is True
 
 
 @requires_db
@@ -369,5 +253,5 @@ async def test_a_how_to_about_a_command_is_answered_never_carried_out(voice, sai
     teaches the command."""
     r = await voice(said)
     assert (r.matched_handler, r.matched_path) == ("help_desk", "fast"), (said, r.matched_handler, r.text)
-    assert r.text.startswith("From the manual's "), r.text
+    assert r.text.startswith("From the manual's ") and r.text.endswith(POINTER_TEXT), r.text
     assert "reconnecting" not in r.text and r.text != "Stopped."

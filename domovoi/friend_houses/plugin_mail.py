@@ -56,6 +56,30 @@ Every string in the value reaches the handler as a
 The breaker per (friend, plugin) lives in the pair row
 (:class:`domovoi.plugins_runtime.isolated.Breaker`, integer hundredths, on
 the wall clock); this module is the decoders' charge sink.
+
+Lock order
+----------
+Every transaction that touches these tables takes its row locks in this
+order, and only in this order (it may skip a level, never go back up one):
+
+1. **friend rows** (``friend_houses_friends``), ``FOR NO KEY UPDATE``;
+   several at once in ``id`` order (:func:`lock_friends`). Only a
+   transaction that deletes the friend (unfriend, block) takes
+   ``FOR UPDATE`` (:func:`lock_friend_for_delete`), first.
+2. **pair rows** (``friend_houses_plugin_pairs``), ``FOR NO KEY UPDATE``;
+   several at once in ``(friend_id, slug)`` order (:func:`lock_pairs`).
+3. **the friend's sender row** (``friend_houses_plugin_sender``).
+4. **the house's state row** (``friend_houses_state``: the house budgets).
+5. **outbox and inbox rows**.
+6. **the quota advisory lock** (:func:`quota_ok`), just before the insert.
+
+``FOR NO KEY UPDATE``, never ``FOR UPDATE``, on a row whose keys don't
+change: every insert into a child table (pairs, sender, outbox, inbox)
+checks its foreign key with a ``KEY SHARE`` lock on the friend row, which
+``FOR UPDATE`` blocks and ``FOR NO KEY UPDATE`` doesn't. A ``FOR UPDATE``
+friend lock there, with the pair locked in the other order by ``send``,
+was a deadlock (store_mail vs send for one friend). A plain ``UPDATE`` of
+a friend row takes ``FOR NO KEY UPDATE`` by itself, so it counts as level 1.
 """
 
 from __future__ import annotations
@@ -246,12 +270,38 @@ def _friend(r: Any) -> dict[str, Any]:
 
 async def friend_row(s, *, friend_id: str | None = None, house: bytes | None = None,
                      lock: bool = False) -> dict[str, Any] | None:
+    """One friend row; with ``lock``, locked ``FOR NO KEY UPDATE`` (lock
+    order level 1, see the module docstring)."""
     where = "id = :k" if friend_id is not None else "house_key = :k"
     row = (await s.execute(text(
         f"SELECT {_FRIEND_COLS} FROM friend_houses_friends WHERE {where}"
-        + (" FOR UPDATE" if lock else "")),
+        + (" FOR NO KEY UPDATE" if lock else "")),
         {"k": friend_id if friend_id is not None else house})).first()
     return _friend(row) if row else None
+
+
+async def lock_friends(s, where: str, params: dict[str, Any] | None = None) -> list[str]:
+    """Lock the friend rows matching ``where`` ``FOR NO KEY UPDATE``, in
+    ``id`` order (lock order level 1); their ids."""
+    return [r[0] for r in await s.execute(text(
+        f"SELECT id FROM friend_houses_friends WHERE {where} ORDER BY id FOR NO KEY UPDATE"),
+        params or {})]
+
+
+async def lock_friend_for_delete(s, friend_id: str) -> None:
+    """The friend row ``FOR UPDATE``, first in a transaction that deletes it
+    (unfriend, block): its key goes, so this one may block foreign key
+    checks, and taking it first means it is never an upgrade."""
+    await s.execute(text("SELECT 1 FROM friend_houses_friends WHERE id = :i FOR UPDATE"),
+                    {"i": friend_id})
+
+
+async def lock_pairs(s, where: str, params: dict[str, Any] | None = None) -> list[tuple[str, str]]:
+    """Lock the pair rows matching ``where`` ``FOR NO KEY UPDATE``, in
+    ``(friend_id, slug)`` order (lock order level 2); their keys."""
+    return [(r[0], r[1]) for r in await s.execute(text(
+        f"SELECT friend_id, slug FROM friend_houses_plugin_pairs WHERE {where} "
+        "ORDER BY friend_id, slug FOR NO KEY UPDATE"), params or {})]
 
 
 _PAIR_COLS = ("friend_id, slug, allowed, confirmed_at, generation, out_seq, in_epoch, in_mark, "
@@ -272,7 +322,7 @@ def _pair(r: Any) -> dict[str, Any]:
 async def pair_row(s, friend_id: str, slug: str, *, lock: bool = False) -> dict[str, Any] | None:
     row = (await s.execute(text(
         f"SELECT {_PAIR_COLS} FROM friend_houses_plugin_pairs WHERE friend_id = :f AND slug = :s"
-        + (" FOR UPDATE" if lock else "")), {"f": friend_id, "s": slug})).first()
+        + (" FOR NO KEY UPDATE" if lock else "")), {"f": friend_id, "s": slug})).first()
     return _pair(row) if row else None
 
 
@@ -335,18 +385,32 @@ def _bucket(states: dict, key: str, per_hour: float, burst: float) -> fb.Bucket:
     return fb.Bucket.restore(per_hour, burst, states.get(key))
 
 
+async def lock_send_budget(s, friend_id: str) -> None:
+    """Lock the friend's sender row (made if missing) and the house's state
+    row, lock order levels 3 and 4: before any outbox row or the quota
+    lock, in a transaction that may then spend the budgets."""
+    await s.execute(text(
+        "INSERT INTO friend_houses_plugin_sender (friend_id) VALUES (:f) "
+        "ON CONFLICT (friend_id) DO NOTHING"), {"f": friend_id})
+    await s.execute(text(
+        "SELECT 1 FROM friend_houses_plugin_sender WHERE friend_id = :f FOR NO KEY UPDATE"),
+        {"f": friend_id})
+    await s.execute(text("SELECT 1 FROM friend_houses_state WHERE id = 1 FOR NO KEY UPDATE"))
+
+
 async def spend_send_budget(s, friend_id: str, slug: str, size: int) -> int:
     """Spend the five sender buckets for one mail (at enqueue and again on
     every resend): 0, or seconds to wait (nothing spent). Locks the friend's
-    sender row and the house's state row."""
+    sender row and the house's state row; a caller that already holds an
+    outbox row or the quota lock took them first (:func:`lock_send_budget`)."""
     await s.execute(text(
         "INSERT INTO friend_houses_plugin_sender (friend_id) VALUES (:f) "
         "ON CONFLICT (friend_id) DO NOTHING"), {"f": friend_id})
     row = (await s.execute(text(
-        "SELECT buckets FROM friend_houses_plugin_sender WHERE friend_id = :f FOR UPDATE"),
+        "SELECT buckets FROM friend_houses_plugin_sender WHERE friend_id = :f FOR NO KEY UPDATE"),
         {"f": friend_id})).first()
     house = (await s.execute(text(
-        "SELECT plugin_buckets FROM friend_houses_state WHERE id = 1 FOR UPDATE"))).first()
+        "SELECT plugin_buckets FROM friend_houses_state WHERE id = 1 FOR NO KEY UPDATE"))).first()
     if row is None or house is None:
         return 60
     mine = row[0] if isinstance(row[0], dict) else json.loads(row[0] or "{}")
@@ -429,12 +493,14 @@ async def send(slug: str, friend_id: str, payload: bytes, *, ttl_s: int = TTL_MA
         raise sdk.NotAllowed("this plugin isn't running with apps with friends")
     mail_id = secrets.token_bytes(16)
     async with _db() as s:
-        friend = await friend_row(s, friend_id=friend_id)
+        # Lock order: friend, pair, sender + house budgets, outbox, quota.
+        friend = await friend_row(s, friend_id=friend_id, lock=True)
         if friend is None or friend["state"] != "active" or not friend["apps_on"]:
             raise sdk.NotAllowed("apps aren't on with that friend")
         pair = await pair_row(s, friend_id, slug, lock=True)
         if pair is None or not pair["allowed"]:
             raise sdk.NotAllowed("this plugin isn't allowed with that friend")
+        await lock_send_budget(s, friend_id)
         if replace_key is not None:
             await s.execute(text(
                 "DELETE FROM friend_houses_plugin_outbox WHERE friend_id = :f AND slug = :s "
@@ -609,17 +675,46 @@ async def _lane_worker(q: asyncio.Queue) -> None:
         event = await q.get()
         try:
             msg_id = svc._msg_id_of(event)
-            try:
-                answer = await store_mail(event)
-            except Exception:  # noqa: BLE001 — answered unavailable: the sender keeps it
-                log.exception("Friend Houses: storing a plugin mail failed")
-                answer = ("unavailable", LANE_FULL_RETRY_SEC)
+            answer = await _store_or_unavailable(event)
             if msg_id and answer is not None:
                 line = f"stored {msg_id}" if answer == "stored" else \
                     f"refused {msg_id} {answer[0]} {int(answer[1])}"
                 await svc._answer_listener(line)
         finally:
             q.task_done()
+
+
+#: Tries for one mail when the database says try again (a deadlock, a
+#: serialization failure): the whole transaction ran back, nothing stored.
+STORE_TRIES = 3
+_TRANSIENT_SQLSTATES = frozenset({"40P01", "40001"})
+
+
+def _transient(exc: BaseException) -> bool:
+    """A database error that a new try of the same transaction may not
+    meet (deadlock detected, serialization failure)."""
+    for e in (exc, getattr(exc, "orig", None), getattr(getattr(exc, "orig", None), "__cause__", None)):
+        if e is not None and (getattr(e, "sqlstate", None) or getattr(e, "pgcode", None)) in _TRANSIENT_SQLSTATES:
+            return True
+    return False
+
+
+async def _store_or_unavailable(event: dict) -> str | tuple[str, int] | None:
+    """:func:`store_mail`, tried again at once on a transient database error;
+    any failure left is ``unavailable`` (a NACK: the sender keeps the mail
+    and resends it, same mail id and seq), never an ACK. A failed try rolled
+    back, so the pair's mark didn't move and the resend is stored."""
+    for attempt in range(1, STORE_TRIES + 1):
+        try:
+            return await store_mail(event)
+        except Exception as exc:  # noqa: BLE001 — answered unavailable: the sender keeps it
+            if attempt < STORE_TRIES and _transient(exc):
+                log.info("Friend Houses: storing a plugin mail met %s; trying again",
+                         type(getattr(exc, "orig", exc)).__name__)
+                continue
+            log.exception("Friend Houses: storing a plugin mail failed")
+            return ("unavailable", LANE_FULL_RETRY_SEC)
+    return ("unavailable", LANE_FULL_RETRY_SEC)
 
 
 def _hex(event: dict, key: str) -> bytes:
@@ -638,6 +733,8 @@ async def note_epoch(s, friend: dict[str, Any], epoch: bytes) -> bool:
         return True
     retired = friend["peer_epochs_retired"] + ([old] if old is not None else [])
     retired = retired[-RETIRED_MAX:]
+    # The caller holds the friend row (level 1); its pairs next, in order.
+    await lock_pairs(s, "friend_id = :i", {"i": friend["id"]})
     await s.execute(text(
         "UPDATE friend_houses_friends SET peer_epoch = :e, peer_epochs_retired = :r, probe_at = NULL "
         "WHERE id = :i"), {"e": epoch, "r": retired, "i": friend["id"]})
@@ -757,6 +854,7 @@ async def on_caps(house: bytes, proto: int, slugs: tuple[str, ...], epoch: bytes
             "UPDATE friend_houses_friends SET peer_proto = :p, peer_caps = :c, peer_caps_at = now(), "
             "peer_caps_epoch = :e, probe_closes = 0, first_close_at = NULL WHERE id = :i"),
             {"p": int(proto), "c": list(slugs), "e": epoch, "i": friend["id"]})
+        await lock_pairs(s, "friend_id = :i", {"i": friend["id"]})  # level 2, in order
         await s.execute(text(
             "UPDATE friend_houses_plugin_pairs SET na_hold_until = NULL, na_first_at = NULL, "
             "pair_retry_at = NULL, pair_backoff_sec = 0 WHERE friend_id = :i AND slug = ANY(:c)"),
@@ -808,11 +906,18 @@ async def listener_apps(s) -> dict[str, list[str]]:
 
 
 async def set_caps_needed(s, friend_ids: list[str] | None = None, *, all_apps_on: bool = False) -> None:
+    """Mark friends due a CAPS. Their rows are locked in ``id`` order first
+    (level 1), so the caller must not hold a pair, sender, state or mail
+    row unless it locked these friends before them."""
     if all_apps_on:
-        await s.execute(text("UPDATE friend_houses_friends SET caps_needed = TRUE WHERE apps_on"))
+        ids = await lock_friends(s, "apps_on")
     elif friend_ids:
+        ids = await lock_friends(s, "id = ANY(:i)", {"i": list(friend_ids)})
+    else:
+        return
+    if ids:
         await s.execute(text("UPDATE friend_houses_friends SET caps_needed = TRUE WHERE id = ANY(:i)"),
-                        {"i": list(friend_ids)})
+                        {"i": ids})
 
 
 # ─── closure (§6.9) ──────────────────────────────────────────────────────
@@ -832,6 +937,9 @@ async def close_pairs(s, *, friend_id: str | None = None, slug: str | None = Non
         where.append("slug = :s")
         params["s"] = slug
     cond = " AND ".join(where) or "TRUE"
+    # Lock order: the friends, then their pairs, then the mail rows.
+    await lock_friends(s, f"id IN (SELECT friend_id FROM friend_houses_plugin_pairs WHERE {cond})", params)
+    await lock_pairs(s, cond, params)
     pairs = [(r[0], r[1]) for r in await s.execute(text(
         f"UPDATE friend_houses_plugin_pairs SET generation = generation + 1, "
         f"allowed = CASE WHEN :r THEN FALSE ELSE allowed END, na_hold_until = NULL, na_first_at = NULL "
@@ -972,7 +1080,7 @@ async def set_pair(friend_id: str, slug: str, allowed: bool, *, by: str = "admin
         friends_changed([slug])
     else:
         async with _db() as s:
-            friend = await friend_row(s, friend_id=friend_id)
+            friend = await friend_row(s, friend_id=friend_id, lock=True)  # level 1 before the pair
             if friend is None or friend["state"] != "active":
                 return None
             await _ensure_pair(s, friend_id, slug)
@@ -992,6 +1100,8 @@ async def resume(friend_id: str, slug: str) -> dict[str, Any] | None:
     friend is told again (``caps_needed``), so its sender doesn't sit out a
     pause that has ended (L11)."""
     async with _db() as s:
+        # set_caps_needed updates the friend row: lock it before the pair.
+        await friend_row(s, friend_id=friend_id, lock=True)
         pair = await pair_row(s, friend_id, slug, lock=True)
         if pair is None:
             return None
@@ -1091,10 +1201,14 @@ async def on_plugin_new(slug: str) -> None:
         return
     try:
         async with _db() as s:
+            # Lock order: every friend touched below, then the pairs.
+            await lock_friends(s, "apps_on OR id IN (SELECT friend_id FROM friend_houses_plugin_pairs "
+                                  "WHERE slug = :s)", {"s": slug})
             await s.execute(text(
                 "INSERT INTO friend_houses_plugin_pairs (friend_id, slug) SELECT id, :s "
                 "FROM friend_houses_friends WHERE apps_on AND state = 'active' "
                 "ON CONFLICT (friend_id, slug) DO NOTHING"), {"s": slug})
+            await lock_pairs(s, "slug = :s", {"s": slug})
             await s.execute(text(
                 "UPDATE friend_houses_plugin_pairs SET allowed = FALSE, confirmed_at = NULL, "
                 "confirmed_by = NULL WHERE slug = :s"), {"s": slug})
@@ -1111,6 +1225,10 @@ async def on_plugin_upgraded(slug: str) -> None:
     are told again (L11)."""
     try:
         async with _db() as s:
+            # Lock order: the friends set_caps_needed marks, then the pairs.
+            await lock_friends(s, "id IN (SELECT friend_id FROM friend_houses_plugin_pairs WHERE slug = :s)",
+                               {"s": slug})
+            await lock_pairs(s, "slug = :s", {"s": slug})
             await s.execute(text(
                 "UPDATE friend_houses_plugin_pairs SET paused_until = CASE WHEN pause_cause IN "
                 "('handler', 'restart') THEN NULL ELSE paused_until END, pause_cause = CASE WHEN "
@@ -1331,14 +1449,15 @@ async def _decode_step(row_id: int, friend_id: str, slug: str) -> bool:
         result = await pool.decode(friend_id, bytes(row[1]), item_key=str(row_id), on_start=on_start)
     if result.ok:
         async with _db() as s:
+            # Lock order: the pair (level 2) before its inbox row (level 5).
+            await s.execute(text(
+                "UPDATE friend_houses_plugin_pairs SET decode_ms_hour = least(decode_ms_hour + :ms, 2000000000) "
+                "WHERE friend_id = :f AND slug = :s"), {"ms": int(result.elapsed_ms), "f": friend_id, "s": slug})
             res = await s.execute(text(
                 "UPDATE friend_houses_plugin_inbox SET state = 'decoded', canonical = :c, payload = NULL, "
                 "image_png = :png, attempt_id = NULL, started_at = NULL, next_try_at = NULL "
                 "WHERE id = :i AND attempt_id = CAST(:a AS uuid)"),
                 {"c": result.canonical, "png": result.image, "i": row_id, "a": attempt})
-            await s.execute(text(
-                "UPDATE friend_houses_plugin_pairs SET decode_ms_hour = least(decode_ms_hour + :ms, 2000000000) "
-                "WHERE friend_id = :f AND slug = :s"), {"ms": int(result.elapsed_ms), "f": friend_id, "s": slug})
         return bool(res.rowcount)
     if result.outcome == "refused":
         # The decoder said no, a schema refusal, or a failed re-check: the
@@ -1478,7 +1597,13 @@ async def _sweep_loop() -> None:
             if time.monotonic() - _HOUR["at"] >= 3600:
                 _HOUR["at"] = time.monotonic()
                 async with _db() as s:
-                    await s.execute(text("UPDATE friend_houses_plugin_pairs SET decode_ms_hour = 0"))
+                    keys = await lock_pairs(s, "decode_ms_hour <> 0")  # level 2, in order
+                    if keys:
+                        await s.execute(text(
+                            "UPDATE friend_houses_plugin_pairs SET decode_ms_hour = 0 "
+                            "WHERE (friend_id, slug) IN (SELECT * FROM unnest(CAST(:f AS text[]), "
+                            "CAST(:s AS text[])))"),
+                            {"f": [k[0] for k in keys], "s": [k[1] for k in keys]})
             if time.monotonic() - last_caps >= CAPS_PASS_EVERY_SEC:
                 last_caps = time.monotonic()
                 await plugin_sender.caps_pass()

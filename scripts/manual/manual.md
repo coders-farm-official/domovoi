@@ -1010,12 +1010,10 @@ says "The manual doesn't cover that." rather than guessing.
 - "how do I change the wake word"
 - "how do I add a printer"
 
-After the short answer, Domovoi asks "Want me to send the steps to your
-phone?" Say yes, and they arrive as a chat called "Help: …" on the phones
-marked as yours ([Settings → Household → Phones &
-browsers](#app/connection), **This phone belongs to**, in the app). If
-Domovoi doesn't know your voice, it asks who to send them to. It never
-sends them to every phone.
+Domovoi says the short answer and where it came from, then "The full
+answer is in the manual." Open the page with **?** on the dashboard, or
+in the app's manual. A plugin's own help ends "The full answer is in that
+plugin's help."
 
 **If something's wrong**
 
@@ -2024,7 +2022,7 @@ word, answers, plays the room's music, and takes announcements.
 5. Approve the six-digit code on the dashboard.
 
 **App:** a phone that already has the app can do this from [Settings →
-Household → Rooms](#settings/rooms) → **Use this device as a room**,
+Household → Rooms](#settings/rooms) → **Use this phone in a room**,
 or from the **Domovoi Room** icon. A phone you also use every day needs a
 screen lock, and while it's in room mode, the rest of the app is locked.
 
@@ -2272,7 +2270,7 @@ Everything stays on your server, or on your phone.
 
 | What | Kept |
 |---|---|
-| What you said to Domovoi by voice, and its replies | 90 days, or what **Keep voice history** says |
+| What you said to Domovoi by voice, and its replies | 90 days, or what [Settings → Privacy → Keep voice history](#settings/keep-voice-history) says |
 | Chats on the home server, with the pictures, documents and letter photos attached | until you delete the chat |
 | Every version of a draft in a chat | until you delete the chat |
 | A draft or a letter you saved | a file in Documents → From Chat, until you delete it |
@@ -2295,12 +2293,13 @@ each room's **Conversations** tab.
 
 - "forget me", in your own voice: deletes your profile, voice samples,
   memories and everything you said to Domovoi.
-- *(admin)* [Settings → Household → People](#settings/people) → **Voice history** → **Keep voice
-  history**: 30 days, 90 days (the default), 1 year or Forever. Older
-  turns are deleted every day. It's also in [Settings → System →
-  Advanced](#settings/advanced) → **show the settings** → **Privacy**.
-- *(admin)* **Delete all voice history**, on the same page, deletes it all
-  at once. People, voice samples, memories, notes, timers and chats stay.
+- How long what you say is kept: [Settings → Privacy → Keep voice
+  history](#settings/keep-voice-history). *(admin)* choose 30 days,
+  90 days (the default), 1 year or Forever. Older turns are deleted every
+  day, and at once when you save. Everyone else sees what it is set to.
+- *(admin)* **Delete all voice history**, on [Settings → Household →
+  People](#settings/people) → **Voice history**, deletes it all at once.
+  People, voice samples, memories, notes, timers and chats stay.
 - Clear your own listening history: your name on
   [Settings → Household → People](#settings/people) → **listening history**
   → **clear**, from your own phone or browser, from 10 minutes after you
@@ -2315,12 +2314,12 @@ each room's **Conversations** tab.
 - Delete a chat: the bin icon in [Chat](#chat). Its pictures, documents,
   letters and draft versions go with it.
 - *(admin)* turn recordings off in a room's **Settings** tab (**Stop and
-  delete**); the commands kept so far are in [Settings → Privacy → Voice
-  history](#settings/voice-history).
+  delete**); the commands kept so far are in [Settings → Privacy → Command
+  recordings](#settings/command-recordings).
 - *(admin)* listen to a room's command recordings, mark whether each one
-  ended at the right moment, and delete them: [Settings → Privacy → Voice
-  history](#settings/voice-history). A room keeps them only while an admin
-  has turned them on for it.
+  ended at the right moment, and delete them: [Settings → Privacy → Command
+  recordings](#settings/command-recordings). A room keeps them only while
+  an admin has turned them on for it.
 
 An admin can change play history, news and timer history in [Settings →
 System → Advanced](#settings/advanced). [More detail](docs/SECURITY_PRIVACY.md#data-at-rest)

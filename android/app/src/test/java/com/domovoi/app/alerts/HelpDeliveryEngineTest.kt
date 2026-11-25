@@ -180,8 +180,10 @@ class HelpDeliveryEngineTest {
         val rows = parseDeliveries(DomovoiJson.parseToJsonElement("""[${row(1, 3)},{"id":"bad"}]"""))!!
         assertEquals(1, rows.size)
         assertEquals(HelpDelivery(1, 3, 101, "Help: add a room", "2026-10-21T10:00:00Z"), rows.single())
-        assertEquals("Help: add a room", helpTitle(rows.single().copy(title = "add a room")))
-        assertEquals("Help from Domovoi", helpTitle(rows.single().copy(title = " ")))
+        // The chat's title as sent: nothing added (1.5.0), an old "Help: …" kept.
+        assertEquals("Photos: The beach", helpTitle(rows.single().copy(title = "Photos: The beach")))
+        assertEquals("Help: add a room", helpTitle(rows.single()))
+        assertEquals("From Domovoi", helpTitle(rows.single().copy(title = " ")))
         assertTrue(planHelp(emptyList(), 3, null, false).post.isEmpty())
         assertNull(planHelp(emptyList(), 3, null, false).seen)
     }

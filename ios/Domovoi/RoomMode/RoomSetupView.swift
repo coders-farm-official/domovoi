@@ -311,13 +311,20 @@ struct RoomCodeView: View {
                         .font(.footnote)
                         .foregroundStyle(Color.fgMuted)
                         .fixedSize(horizontal: false, vertical: true)
-                    TextField(RoomModeStrings.roomName, text: name, prompt: ShellHintPrompt.text(RoomModeStrings.roomName))
+                    // `in=`: an existing room, said by its name; the code's
+                    // name is then this phone's own.
+                    if let joinLine = model.joinLine {
+                        Text(joinLine)
+                            .font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    TextField(model.nameFieldLabel, text: name, prompt: ShellHintPrompt.text(model.nameFieldLabel))
                         .font(.body)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 10)
                         .frame(minHeight: 44)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
-                        .accessibilityLabel(RoomModeStrings.roomName)
+                        .accessibilityLabel(model.nameFieldLabel)
                         .accessibilityIdentifier("room-name-field")
                     if let nameRefusal = model.nameRefusal {
                         Text(nameRefusal)
@@ -326,7 +333,7 @@ struct RoomCodeView: View {
                     }
                     RoomSetupButtons(
                         cancel: onCancel,
-                        title: RoomModeStrings.becomeThisRoom,
+                        title: model.confirmTitle,
                         enabled: model.canBecome,
                         action: { model.become() }
                     )

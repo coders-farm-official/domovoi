@@ -71,7 +71,9 @@ public final class InMemoryRoomPreferences: RoomPreferences {
 /// (`roommode/RoomStore.kt`):
 ///
 /// - the enrolment (the core's address, the PINNED server fingerprint, the
-///   room), the approval code it shows, the wake word the core pushed;
+///   phone's own id, and the room it asked to join until it is approved),
+///   the approval code it shows, the wake word the core pushed, and the
+///   name of the room it is in as the server last said it;
 /// - the room's pairing key: 32 random bytes minted here, in the Keychain
 ///   under room mode's own service (``RoomKeychainKey``). Only its sha256
 ///   ever reaches the core. Never the household device token: a room phone
@@ -109,6 +111,12 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         static let trained = "trained_sha:"
         /// iOS-only: the Guided Access tip was dismissed on the room screen.
         static let guidedTipDismissed = "guided_access_tip_dismissed"
+        /// The room code's `in=` until the first `ready` (1.5.0).
+        static let requested = "requested_room"
+        /// The room's name as the server last said it (1.5.0).
+        static let roomName = "room_name"
+        /// The room id that name belongs to (1.5.0, `RoomStore.kt` K_ROOM_NAME_ID).
+        static let roomNameRoom = "room_name_room_id"
     }
 
     private let prefs: any RoomPreferences
@@ -169,7 +177,32 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
               let fp = prefs.string(Keys.fingerprint),
               let room = prefs.string(Keys.room)
         else { return nil }
-        return RoomEnrolment(coreURL: core, fingerprint: fp, roomID: room, roomLabel: prefs.string(Keys.label) ?? room)
+        return RoomEnrolment(
+            coreURL: core, fingerprint: fp, roomID: room, roomLabel: prefs.string(Keys.label) ?? room,
+            inRoom: requestedRoom
+        )
+    }
+
+    public var requestedRoom: String? {
+        prefs.string(Keys.requested).flatMap { RoomEnrolmentParser.isRoomID($0) ? $0 : nil }
+    }
+
+    public func clearRequestedRoom() {
+        if prefs.string(Keys.requested) != nil { prefs.setString(nil, Keys.requested) }
+    }
+
+    public var roomName: String? {
+        prefs.string(Keys.roomName).flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+    }
+
+    public var roomNameRoom: String? {
+        prefs.string(Keys.roomNameRoom).flatMap { RoomEnrolmentParser.isRoomID($0) ? $0 : nil }
+    }
+
+    public func noteRoom(_ place: RoomPlace) {
+        guard let kept = RoomNameKeeping.nameToKeep(place, keptName: roomName, keptFor: roomNameRoom) else { return }
+        prefs.setString(kept.name, Keys.roomName)
+        prefs.setString(kept.roomID, Keys.roomNameRoom)
     }
 
     /// The Keychain item that keeps the seal (``seal``).
@@ -234,11 +267,22 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
                 prefs.setFloat(nil, Keys.threshold)
                 prefs.setString(nil, Keys.wakeWords)
                 prefs.setBool(false, Keys.approved)
+                prefs.setString(nil, Keys.roomName)
+                prefs.setString(nil, Keys.roomNameRoom)
             }
             prefs.setString(e.coreURL, Keys.core)
             prefs.setString(e.fingerprint, Keys.fingerprint)
             prefs.setString(e.roomID, Keys.room)
             prefs.setString(e.roomLabel, Keys.label)
+            // The room the code says this phone joins (`in=`): asked for in
+            // each hello until the server accepts the phone.
+            let asked = e.inRoom.flatMap { RoomEnrolmentParser.isRoomID($0) ? $0 : nil }
+            prefs.setString(asked, Keys.requested)
+            // The room's name, kept with the room it names.
+            if let known = RoomNameKeeping.enrolled(e) {
+                prefs.setString(known.name, Keys.roomName)
+                prefs.setString(known.roomID, Keys.roomNameRoom)
+            }
             return true
         }
     }

@@ -42,9 +42,11 @@ public enum RoomEnrolmentParse: Equatable, Sendable {
 /// parser `satellite/enrolment.py`), held to the shared contract
 /// `docs/uml/spare-device-enrol-fixture.json` (`RoomEnrolmentParserTests`).
 ///
-///     domovoi-room:1?core=<core base URL>&fp=<SHA256:… fingerprint>&room=<room name>
+///     domovoi-room:1?core=<core base URL>&fp=<SHA256:… fingerprint>&room=<room name>[&in=<room id>]
 ///
-/// percent-encoded UTF-8, with no secret in it. The dashboard's QR code
+/// (`in=`, 1.5.0: "Add a satellite to the Kitchen" names the device in
+/// `room` and the existing room it joins in `in`), percent-encoded UTF-8,
+/// with no secret in it. The dashboard's QR code
 /// carries it inside a join link, `<core>/join#<payload>`; ``parse(_:allowingLoopback:)``
 /// takes either form.
 ///
@@ -175,7 +177,47 @@ public enum RoomEnrolmentParser {
         let fp = fields["fp"] ?? ""
         if !isFingerprint(fp) { throw refuse(.badFp, "the fingerprint must be SHA256: and 43 base64 characters") }
         let room = try checkRoomName(fields["room"] ?? "")
-        return RoomEnrolment(coreURL: core, fingerprint: fp, roomID: try roomIDOrThrow(room), roomLabel: room)
+        // `in=` (1.5.0): a value that is not a room id is ignored, like an
+        // unknown key; the code still works, as a room of its own.
+        let inRoom = fields["in"].flatMap { isRoomID($0) ? $0 : nil }
+        return RoomEnrolment(
+            coreURL: core, fingerprint: fp, roomID: try roomIDOrThrow(room), roomLabel: room,
+            inRoom: inRoom, inRoomName: inRoom.map { _ in invitedRoomName(room) }
+        )
+    }
+
+    // MARK: - `in=` (1.5.0)
+
+    /// What a room id coming in from outside may be (domovoi/room_ids.py
+    /// `is_room_id`): lowercase ASCII letters, digits, `_` and `-`, starting
+    /// with a letter or digit, at most 32 characters (`RoomEnrolment.isRoomId`).
+    public static func isRoomID(_ value: String?) -> Bool {
+        guard let value else { return false }
+        let scalars = Array(value.unicodeScalars)
+        guard let first = scalars.first, scalars.count <= maxRoomIDLength else { return false }
+        func lowerOrDigit(_ s: Unicode.Scalar) -> Bool { (s >= "a" && s <= "z") || isDigit(s) }
+        return lowerOrDigit(first) && scalars.dropFirst().allSatisfy { lowerOrDigit($0) || $0 == "_" || $0 == "-" }
+    }
+
+    /// The room's name from an invitation's device name: the core names one
+    /// more device of the Kitchen "Kitchen 2" (domovoi/room_invites.py), so
+    /// the room is the name without its number. A name with no number (one
+    /// an admin typed) is taken as it is, and so is one that is only a
+    /// number. The server says the room's own name in `ready.room`, which
+    /// then wins (`RoomEnrolment.invitedRoomName`).
+    public static func invitedRoomName(_ deviceName: String) -> String {
+        // Kotlin's `\s+[0-9]+$`: ASCII digits after Java's whitespace class.
+        let javaSpace: Set<Unicode.Scalar> = [" ", "\t", "\n", "\u{0B}", "\u{0C}", "\r"]
+        var scalars = Array(deviceName.unicodeScalars)
+        var end = scalars.count
+        while end > 0, isDigit(scalars[end - 1]) { end -= 1 }
+        guard end < scalars.count, end > 0, javaSpace.contains(scalars[end - 1]) else { return deviceName }
+        while end > 0, javaSpace.contains(scalars[end - 1]) { end -= 1 }
+        scalars.removeSubrange(end...)
+        var out = ""
+        out.unicodeScalars.append(contentsOf: scalars)
+        let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? deviceName : trimmed
     }
 
     // MARK: - the room id

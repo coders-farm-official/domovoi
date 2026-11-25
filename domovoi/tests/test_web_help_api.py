@@ -217,15 +217,16 @@ def test_deliveries_are_read_per_person() -> None:
         async with session_scope() as s:
             a = (await s.execute(text("INSERT INTO people (name) VALUES ('A') RETURNING id"))).scalar_one()
             b = (await s.execute(text("INSERT INTO people (name) VALUES ('B') RETURNING id"))).scalar_one()
-            await delivery.deliver(s, person_id=a, question="how do i add a room", steps="steps",
-                                   phones=[delivery.Phone("p", "p")])
+            await delivery.deliver(s, person_id=a, question="Photos of the beach", reply="I found 1 photo.",
+                                   phones=[delivery.Phone("p", "p")], title="Photos: The beach",
+                                   stats={"model_role": "media"})
             await s.commit()
             return int(a), int(b)
 
     a, b = asyncio.run(seed())
     with _client() as c:
         mine = c.get("/api/help/deliveries", params={"person_id": a}).json()["deliveries"]
-        assert [d["title"] for d in mine] == ["Help: How do I add a room"]
+        assert [d["title"] for d in mine] == ["Photos: The beach"]
         assert c.get("/api/help/deliveries", params={"person_id": b}).json()["deliveries"] == []
         assert c.get("/api/help/deliveries", params={"person_id": a, "since_id": mine[0]["id"]}).json()[
             "deliveries"] == []

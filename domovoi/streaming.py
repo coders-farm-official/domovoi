@@ -106,6 +106,8 @@ Client → Server
                            an enrolment's `in=`): the room a device that parks
                            for approval asks to join. It pre-selects the
                            approval card's room; a person still decides.
+                           Devices send it only until their first `ready`.
+                           Both ids follow domovoi/room_ids.py `is_room_id`.
   text  wake_claim         {"type":"wake_claim","claim":N,"word":...,"score":F,"floor_dbfs":F|null,"barge_in":bool}
                            — 1.5.0, one turn per wake word: ONLY from a
                            device that listed `wake_claim` in `supports`
@@ -365,7 +367,11 @@ Server → Client
                            {"room_id":...,"name":...,"shared":bool}: the room
                            the device is in, its name, and whether other
                            devices share it. `room_id` stays the room's id.
-  text  room               {"type":"room","room":{"room_id":...,"name":...,"shared":bool}}
+                           `name` is null when the core could not read the
+                           room's row: the device keeps the name it last had
+                           for that room id, or says "this room"; it never
+                           shows the id as a name.
+  text  room              {"type":"room","room":{"room_id":...,"name":...,"shared":bool}}
                            — 1.5.0: an admin moved this device to another
                            room (POST /v1/admin/satellites/{id}/room). Sent
                            only to a device whose hello carried
@@ -3953,7 +3959,11 @@ class StreamSession:
         shared = room_devices.registry(self.ws.app).is_shared(self.room_id)
         if row is not None:
             shared = shared or int(row["satellites"]) > 1
-        name = row["name"] if row is not None else self.room_id
+        # No row read (the database blinked): no name, never the id in its
+        # place. A device shows an id as the room's name otherwise ("kitchen_2"
+        # on a phone that says "This phone is in the Kitchen"); it keeps the
+        # name it last had for this room id instead.
+        name = row["name"] if row is not None else None
         claims = wake_claims.arbiter(self.ws.app)
         try:
             await claims.refresh_links()

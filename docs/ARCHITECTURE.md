@@ -1060,9 +1060,11 @@ described here, which every paired device shares.
   summaries of the system's own records back "what is wrong?" questions, and
   "Report a problem" builds a summary the person reads and copies: nothing is
   sent or kept. By voice, the `help_desk` handler (band 106) speaks the best
-  passage's first sentences and offers to send the steps to the asker's
-  phone as a "Help: …" chat (`help_deliveries`): only to phones marked as
-  theirs, never to everyone.
+  passage's first sentences and ends "The full answer is in the manual."
+  It asks nothing and sends nothing (the send-to-your-phone offer was
+  removed in 1.5.0). The send path it used (`domovoi/help_desk/delivery.py`,
+  `help_deliveries`) now carries only a voice photo search's results to the
+  asker's own phones.
 
 ### Server identity and the signed file channels (`domovoi/server_identity.py`)
 

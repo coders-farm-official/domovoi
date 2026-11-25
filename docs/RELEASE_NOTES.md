@@ -4,6 +4,79 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Phones: room media and update notices
+
+- **Room media on the phones.** A phone in room mode shows what the room
+  is playing on its screen, the same as other room displays (Android and
+  iPhone).
+- **Update notices on the phones.** Home on the Android and iPhone apps
+  says when a new signed Domovoi release is available, worded the same as
+  the dashboard. For now every phone gets the household row ("An admin
+  can install it."); the update itself is started from the dashboard.
+- **Photos sent to a phone** arrive under the chat's own title, no
+  longer prefixed with "Help: ".
+
+## 1.5.0 (unreleased) — Voice help no longer sends the steps to your phone
+
+- **What changed.** Ask "how do I add a room?" out loud and Domovoi says
+  the short answer and the page it came from, then "The full answer is in
+  the manual." (for a plugin's page: "The full answer is in that plugin's
+  help."). It no longer asks "Want me to send the steps to your phone?",
+  never asks "Who should I send it to?", and makes no "Help: …" chat. It
+  needed three things at once (Domovoi knowing your voice, a phone marked
+  as yours, and the app reaching the server), and the manual is a tap
+  away. The **?** panel, **ask Domovoi** and help in chat work as before.
+- **What to know.** Nothing to do, no migration. "Help: …" chats sent
+  before stay in Chat. Photos are unchanged: a voice photo search still
+  asks "Do you want them on your phone?" and sends a "Photos: …" chat.
+  `GET /api/help/deliveries` and the `help_deliveries` live channel stay,
+  for the photos and for the apps that read them; they just get no new
+  help rows.
+
+## 1.5.0 (unreleased) — Settings → Privacy: Keep voice history, Command recordings
+
+- **What changed.** "What's kept and for how long" is in one place,
+  Settings → Privacy. **Keep voice history** (`voice_history_keep`: 30
+  days, 90 days by default, 1 year or Forever) has its own section there,
+  `#settings/keep-voice-history`; an admin changes it, through the same
+  config edit as before (`PATCH /api/config/editable`). Settings →
+  Household → People → Voice history (which keeps **Delete all voice
+  history**) and Settings → System → Advanced → Privacy now show its value
+  and link there instead of a second control.
+- **Renamed.** The page that was called **Voice history** in Settings →
+  Privacy holds the opt-in command recordings, so it is now **Command
+  recordings**, at `#settings/command-recordings`. Its old addresses,
+  `#settings/voice-history` and `#settings/recordings`, still open it. The
+  room drawer's capture hint, the manual, the FAQ and SECURITY_PRIVACY.md
+  use the new names.
+
+## 1.5.0 (unreleased) — Rooms: satellites name themselves; press Upgrade satellite
+
+- **What to do.** Press **Upgrade satellite** on every Raspberry Pi and
+  spare-computer satellite (the room drawer's Overview tab) once the server
+  runs 1.5.0. Until then a Pi or spare computer learns only when it
+  connects whether its room takes one turn per wake word (a satellite
+  added to its room later goes unnoticed until it reconnects), and moving
+  it to another room closes its connection (it comes back in the new room
+  a few seconds later) instead of carrying on.
+- **What changed.** A satellite now names itself in its hello
+  (`satellite_id`, the id in its address), as the phone apps do since
+  1.5.0, so a move reaches it without a reconnect. The room it was asked
+  to join (an enrolment's `in=`, `[satellite] requested_room`) is sent only
+  until it is first accepted, then cleared from its `config.toml`. If the
+  server ever reads another device's name in its hello, the satellite says
+  so in plain words ("the Domovoi server did not recognise this device")
+  and changes nothing.
+- **"Add a satellite to the …" works for every room.** A room named by the
+  Wi-Fi setup portal (`living-room`, `2nd-bedroom`) was refused by the
+  dashboard's add-a-satellite code (422) and by a Pi or PC reading the code.
+  One rule now checks a room id everywhere (`domovoi/room_ids.py`
+  `is_room_id`).
+- **For API readers:** `ready.room.name` (and the `room` frame's) is `null`
+  when the server could not read the room's row; it used to be the room's
+  id. Clients keep the name they last had for that room, or say "this
+  room". docs/uml/satellite-protocol.md, "Rooms and satellites".
+
 ## 1.5.0 (unreleased) — Update notices: Domovoi says when a new release is out
 
 - **What changed.** Domovoi looks for a new **signed release** by itself,
@@ -408,7 +481,11 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   moves into a room, only while the room is idle and never in quiet hours
   (it waits for them to end), and **Settings → Rooms → Tune speakers on
   their own** turns that off. The phone apps say "the Kitchen", never
-  "satellite".
+  "satellite": the Android and iPhone apps' room mode is **Use this phone
+  in a room**, its screen says **This phone is in the Kitchen**, a code from
+  **Add a satellite to the Kitchen** says **This phone will join the
+  Kitchen** (and asks for that room on the approval card), and a phone
+  moved to another room on the dashboard follows it without reconnecting.
 - **Also in rooms.** **Add a satellite to the Kitchen** in a room's drawer
   makes the setup code for one more satellite there ("Kitchen 2"), and
   its approval card has the Kitchen pre-selected, older phone apps

@@ -25637,7 +25637,7 @@
           "help"
         ],
         "summary": "Deliveries",
-        "description": "Help steps sent by voice (V035): newest first, or after ``since_id``\noldest first. The app reads its owner's on start and after a\n``help_deliveries.changed`` event.",
+        "description": "Results sent by voice to a person's phones (V035; a voice photo\nsearch's since 1.5.0): newest first, or after ``since_id`` oldest\nfirst. The app reads its owner's on start and after a\n``help_deliveries.changed`` event.",
         "operationId": "deliveries_api_help_deliveries_get",
         "parameters": [
           {
@@ -37477,7 +37477,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
               },
               {
                 "type": "null"

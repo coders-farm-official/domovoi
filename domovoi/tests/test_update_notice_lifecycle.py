@@ -184,6 +184,46 @@ def test_the_updating_flag_rides_the_notice(house):
     assert _notice()["updating"] is True
 
 
+def test_updating_is_reported_without_a_notice_too(house):
+    """`updating` is the real update state, notice or none (a house on
+    main, an update started by hand): Home still reads "Domovoi is
+    restarting…"."""
+    house.updating = True
+    assert _notice() == {"available": False, "updating": True}
+    assert _notice("never") == {"available": False, "updating": True}, "internet No hides the notice only"
+    with egress.override_policy("always"):
+        assert _run(update_notice.updates_state())["notice"] == {"available": False, "updating": True}
+        house.head = None
+        assert _run(update_notice.updates_state())["notice"] == {"available": False, "updating": True}
+    house.head = HEAD
+    _check("manual")
+    with egress.override_policy("always"):
+        up = _run(update_notice.updates_state())
+    assert up["notice"]["available"] is True and up["notice"]["updating"] is True
+    house.updating = False
+    assert _notice()["updating"] is False
+
+
+def test_updating_is_the_version_read_s_restart_in_progress(monkeypatch):
+    """The same test as the version read's restart_in_progress:
+    self_restart.underway on the update unit's last result."""
+    from domovoi import self_restart
+
+    last = {"status": "running"}
+    seen = []
+    monkeypatch.setattr(git_version, "read_last_update", lambda: last)
+    monkeypatch.setattr(self_restart, "underway", lambda lu=None, mode=None: seen.append(lu) or True)
+    assert update_notice._updating() is True and seen == [last]
+    monkeypatch.setattr(self_restart, "underway", lambda lu=None, mode=None: False)
+    assert update_notice._updating() is False
+
+    def boom(*a, **k):
+        raise OSError("can't tell")
+
+    monkeypatch.setattr(self_restart, "underway", boom)
+    assert update_notice._updating() is False, "can't tell reads as not updating"
+
+
 def test_a_press_during_an_automatic_check_waits_and_answers_its_result(house, monkeypatch):
     gate = asyncio.Event()
     real = git_version.commits_behind

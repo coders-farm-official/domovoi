@@ -292,11 +292,17 @@
     "dashboard": true
    }
   },
-  "settings/voice-history": {
-   "dashboard": "#settings/voice-history",
+  "settings/command-recordings": {
+   "dashboard": "#settings/command-recordings",
    "app": {
     "screen": "Settings",
     "tab": "voice-history"
+   }
+  },
+  "settings/keep-voice-history": {
+   "dashboard": "#settings/keep-voice-history",
+   "app": {
+    "dashboard": true
    }
   },
   "settings/listening-history": {
@@ -2814,7 +2820,7 @@
     "screenshot",
     "report a problem",
     "diagnostics",
-    "send the steps",
+    "full answer",
     "question mark"
    ],
    "blocks": [
@@ -2878,7 +2884,7 @@
     },
     {
      "type": "p",
-     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Household → Phones & browsers](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
+     "text": "Domovoi says the short answer and where it came from, then \"The full answer is in the manual.\" Open the page with **?** on the dashboard, or in the app's manual. A plugin's own help ends \"The full answer is in that plugin's help.\""
     },
     {
      "type": "label",
@@ -4892,7 +4898,7 @@
     },
     {
      "type": "p",
-     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's in room mode, the rest of the app is locked.",
+     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this phone in a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's in room mode, the rest of the app is locked.",
      "only": "app"
     },
     {
@@ -5470,7 +5476,7 @@
      "rows": [
       [
        "What you said to Domovoi by voice, and its replies",
-       "90 days, or what **Keep voice history** says"
+       "90 days, or what [Settings → Privacy → Keep voice history](route:settings/keep-voice-history) says"
       ],
       [
        "Chats on the home server, with the pictures, documents and letter photos attached",
@@ -5547,10 +5553,10 @@
        "text": "\"forget me\", in your own voice: deletes your profile, voice samples, memories and everything you said to Domovoi."
       },
       {
-       "text": "{admin} [Settings → Household → People](route:settings/people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → System → Advanced](route:settings/advanced) → **show the settings** → **Privacy**."
+       "text": "How long what you say is kept: [Settings → Privacy → Keep voice history](route:settings/keep-voice-history). {admin} choose 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day, and at once when you save. Everyone else sees what it is set to."
       },
       {
-       "text": "{admin} **Delete all voice history**, on the same page, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
+       "text": "{admin} **Delete all voice history**, on [Settings → Household → People](route:settings/people) → **Voice history**, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
       },
       {
        "text": "Clear your own listening history: your name on [Settings → Household → People](route:settings/people) → **listening history** → **clear**, from your own phone or browser, from 10 minutes after you said **this is me** there. Anywhere else, or sooner, it asks for the admin password."
@@ -5568,10 +5574,10 @@
        "text": "Delete a chat: the bin icon in [Chat](route:chat). Its pictures, documents, letters and draft versions go with it."
       },
       {
-       "text": "{admin} turn recordings off in a room's **Settings** tab (**Stop and delete**); the commands kept so far are in [Settings → Privacy → Voice history](route:settings/voice-history)."
+       "text": "{admin} turn recordings off in a room's **Settings** tab (**Stop and delete**); the commands kept so far are in [Settings → Privacy → Command recordings](route:settings/command-recordings)."
       },
       {
-       "text": "{admin} listen to a room's command recordings, mark whether each one ended at the right moment, and delete them: [Settings → Privacy → Voice history](route:settings/voice-history). A room keeps them only while an admin has turned them on for it."
+       "text": "{admin} listen to a room's command recordings, mark whether each one ended at the right moment, and delete them: [Settings → Privacy → Command recordings](route:settings/command-recordings). A room keeps them only while an admin has turned them on for it."
       }
      ]
     },

@@ -1,6 +1,6 @@
 """A voice photo search offers to send the results to the asker's phone
 (1.5.0, design MEDIA-UNDERSTANDING §9 "Voice"; domovoi/handlers/media_search.py
-over the help desk's path, domovoi/help_desk/delivery.py).
+over the send-to-their-phone path, domovoi/help_desk/delivery.py).
 
 "I found 1 photo that might show the beach. It's on the Photos page. Want
 them on your phone?" only for a recognized household voice with a phone
@@ -91,3 +91,48 @@ async def test_never_offered_to_a_guest_a_phoneless_person_or_for_nothing_found(
         pending = await _pending(voice)
         assert not pending or pending.get("kind") != "core.media_send"
     assert await _replies(voice.db) == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_photo_send_still_reaches_the_phone_after_voice_help_stopped_sending(voice, house) -> None:  # noqa: F811
+    """1.5.0 removed voice help's send (core.help_send / core.help_who) but
+    the photos ride the same path to the phone: the row, the NOTIFY the
+    live socket turns into ``help_deliveries.changed``, that channel's
+    snapshot, and ``GET /api/help/deliveries`` (the apps' catch-up read).
+    Every piece must still carry a "Photos: …" send, end to end."""
+    import asyncio
+
+    import asyncpg
+
+    from domovoi.config import settings
+    from domovoi.help_desk import delivery
+    from web.backend import realtime
+    from web.backend.api import help as help_api
+
+    await _beach()
+    sarah = await voice.person("FT Sarah")
+    await voice.phone("android-sarah", sarah)
+    # The worker's own database (xdist gives each worker a copy, and a
+    # NOTIFY only reaches listeners on the same database).
+    url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+    heard: asyncio.Queue[str] = asyncio.Queue()
+    conn = await asyncpg.connect(url)
+    try:
+        await conn.add_listener(delivery.NOTIFY_CHANNEL, lambda *a: heard.put_nowait(a[3]))
+        await voice("show me photos of the beach", person=sarah)
+        r = await voice("yes", person=sarah)
+        assert r.text == "Sent to your phone. It's in Chat as Photos: The beach."
+        delivery_id = r.data["delivery_id"]
+        assert await asyncio.wait_for(heard.get(), timeout=5) == str(delivery_id)
+    finally:
+        await conn.close()
+    # The live socket maps the NOTIFY to the channel the apps listen on.
+    assert realtime.NOTIFY_CHANNEL_TO_REALTIME[delivery.NOTIFY_CHANNEL] == "help_deliveries"
+    pushed = await realtime._snapshot_help_deliveries()
+    assert [(d["id"], d["person_id"], d["title"]) for d in pushed][:1] == [(delivery_id, sarah, "Photos: The beach")]
+    # The catch-up read: the asker's row, and nothing for anyone else.
+    mine = (await help_api.deliveries(person_id=sarah, since_id=None, limit=20))["deliveries"]
+    assert [(d["id"], d["title"], d["thread_id"]) for d in mine] == [
+        (delivery_id, "Photos: The beach", r.data["thread_id"])]
+    assert (await help_api.deliveries(person_id=sarah, since_id=delivery_id, limit=20))["deliveries"] == []
