@@ -571,8 +571,11 @@ struct SettingsSectionScreen: View {
             // Dashboard-only, as Models is: `GET /api/config/internet` is the
             // panel's only data and is `require_admin_read`.
             AiSettingsDashboardPanel(model: model, section: section)
-        case "voice-history":
-            // slot: voice-history
+        case "keep-voice-history":
+            // slot: keep-voice-history (1.5.0)
+            KeepVoiceHistoryPanel(model: model)
+        case "command-recordings":
+            // slot: command-recordings ("voice-history" until 1.5.0)
             VoiceSettingsDashboardPanel(model: model, section: section)
         case "about":
             // slot: about

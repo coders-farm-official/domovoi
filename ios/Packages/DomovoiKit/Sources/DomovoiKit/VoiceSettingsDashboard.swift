@@ -6,7 +6,7 @@ import Foundation
 ///
 /// Three of this item's four sections are signposts, exactly as Android's are:
 /// `SettingsScreen.kt:252-262` dispatches `Voices -> VoicePanel()` and lets
-/// `wake-words`, `greetings` and `voice-history` fall into
+/// `wake-words`, `greetings` and `command-recordings` fall into
 /// `else -> DashboardPanel(place.section)` (`:397-452`), because every write
 /// behind them is admin and a phone holds no admin session. All six strings
 /// those panels say are already ported (`ShellStrings.swift:237-251`); the
@@ -15,13 +15,14 @@ import Foundation
 /// ### Why the address comes from ``SettingsSection/dashboard`` and not from
 /// the section's key
 ///
-/// For thirteen of the fourteen sections the two are the same word, and for
-/// **Voice history they are not**: its key is `voice-history` and its
-/// dashboard address is `recordings` (`SettingsSections.swift`, ported from
-/// `SettingsScreen.kt:140`). A builder who reached for `section.key` would
-/// pass every other section and send Voice history to a page that does not
-/// exist. That is a test, not a comment
-/// (`VoiceSettingsDashboardTests.testVoiceHistoryGoesToRecordingsNotToItsOwnKey`).
+/// For every section but one the two are the same word. **Command
+/// recordings** ("Voice history" until 1.5.0) is the exception: its key is
+/// `command-recordings` and its dashboard address `recordings`, the one every
+/// dashboard version understands (a 1.4.x dashboard has no
+/// `command-recordings`; a 1.5.0 one redirects `recordings` there). A builder
+/// who reached for `section.key` would send it to a page an older dashboard
+/// does not have. That is a test, not a comment
+/// (`VoiceSettingsDashboardTests.testCommandRecordingsOpensRecordingsWhateverKeyALinkUsed`).
 ///
 /// ### Needs a shared change — after the night, not tonight
 ///

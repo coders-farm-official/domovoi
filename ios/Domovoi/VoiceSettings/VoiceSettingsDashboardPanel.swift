@@ -7,7 +7,8 @@ import SwiftUI
 /// A port of `DashboardPanel` (`android/.../ui/screens/settings/SettingsScreen.kt:397-452`),
 /// and it is drawn here for the same three sections Android draws it for:
 /// `SettingsScreen.kt:252-262` dispatches `Voices -> VoicePanel()` and lets
-/// `wake-words`, `greetings` and `voice-history` fall into
+/// `wake-words`, `greetings` and `command-recordings` ("Voice history" until
+/// 1.5.0) fall into
 /// `else -> DashboardPanel(place.section)`, because every write behind them is
 /// `require_admin_mutation` and a phone holds no admin session. So these
 /// sections are **not thinner than Android's** — over there they are a

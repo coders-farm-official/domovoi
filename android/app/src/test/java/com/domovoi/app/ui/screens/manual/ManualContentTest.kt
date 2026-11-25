@@ -51,13 +51,15 @@ class ManualContentTest {
 
     @Test fun everyRouteOpensAScreenTheAppHasOrTheDashboard() {
         val screens = Route.entries.map { it.name }.toSet()
-        val tabs = SettingsSection.entries.map { it.key }.toSet()
         doc.routes.forEach { (id, r) ->
             if (r.app.dashboard) {
                 assertNotNull("$id opens the dashboard at a page it has", r.dashboard)
             } else {
                 assertTrue("$id: ${r.app.screen}", r.app.screen in screens)
-                r.app.tab?.let { assertTrue("$id: tab $it", r.app.screen == "Settings" && it in tabs) }
+                // A tab by its key or a key it had before ("voice-history"
+                // opens Command recordings since 1.5.0), as openSettingsTab
+                // resolves it.
+                r.app.tab?.let { assertTrue("$id: tab $it", r.app.screen == "Settings" && SettingsSection.named(it) != null) }
             }
         }
     }

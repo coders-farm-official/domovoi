@@ -73,6 +73,8 @@ final class ShellStringsTests: XCTestCase {
         "ui/screens/settings/LocalSettingsScreen.kt",
         "ui/screens/settings/DeveloperOptionsSection.kt",
         "ui/screens/settings/ConnectionPanel.kt",
+        // Settings → Privacy → Keep voice history (1.5.0).
+        "ui/screens/settings/KeepVoiceHistoryPanel.kt",
         "alerts/ContainerIncidents.kt",
         // Home's header (I1-D part 1). The rest of `ui/screens/home/` comes
         // with part 2's sections.
@@ -937,7 +939,7 @@ final class ShellStringsTests: XCTestCase {
     /// Every section's label and `sub`, and the five group labels, read from
     /// the table they were ported from.
     func testEverySettingsSectionMatchesTheKotlin() throws {
-        XCTAssertEqual(17, SettingsSection.all.count)
+        XCTAssertEqual(18, SettingsSection.all.count)
         XCTAssertEqual(5, SettingsGroup.allCases.count)
         // Before the merge brings the regroup's Kotlin, the fields it added
         // are pinned one by one against adb2ad06's own literals
@@ -977,15 +979,27 @@ final class ShellStringsTests: XCTestCase {
             if let dashboard = section.dashboard { assertKotlinSaysWhole(dashboard) }
         }
         // The keys are unique, and every alias resolves.
-        XCTAssertEqual(17, Set(SettingsSection.all.map(\.key)).count)
+        XCTAssertEqual(18, Set(SettingsSection.all.map(\.key)).count)
         XCTAssertEqual("rooms", SettingsSection.named("satellites")?.key)
         XCTAssertEqual("phones-and-browsers", SettingsSection.named("connection")?.key)
         XCTAssertEqual("advanced", SettingsSection.named("configuration")?.key)
+        // "Voice history" until 1.5.0, and "recordings" before that.
+        XCTAssertEqual("command-recordings", SettingsSection.named("voice-history")?.key)
+        XCTAssertEqual("command-recordings", SettingsSection.named("recordings")?.key)
         XCTAssertNil(SettingsSection.named("nope"))
         XCTAssertNil(SettingsSection.named(nil))
         // Two of the subs carry a character worth protecting.
-        XCTAssertTrue(SettingsSection.named("voice-history")!.sub.contains("—"), "em dash")
+        XCTAssertTrue(SettingsSection.named("command-recordings")!.sub.contains("—"), "em dash")
         XCTAssertTrue(SettingsSection.named("advanced")!.sub.contains("—"), "em dash")
+    }
+
+    /// Keep voice history (1.5.0), against `KeepVoiceHistoryPanel.kt`.
+    func testKeepVoiceHistorySaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(KeepVoiceHistory.valueLabel)
+        assertKotlinSaysWhole(KeepVoiceHistory.adminChangesIt)
+        assertKotlinSaysWhole(KeepVoiceHistory.unpaired)
+        assertKotlinSaysWhole(KeepVoiceHistory.olderServer, "a curly apostrophe")
+        assertKotlinSaysWhole(KeepVoiceHistory.dashboard)
     }
 
     // MARK: - §7.10 toasts
