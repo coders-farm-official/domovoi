@@ -2,7 +2,7 @@
 
 Every Domovoi term you'll meet in these docs, in the dashboard, or in the code — alphabetical, defined in plain English. Cross-references in *italics* point at other entries here.
 
-**Room or satellite?** Two different things. A **room** is a place in the house: its name, voice, music queue, wake words, timers and quiet hours ("the Kitchen room"). A **satellite** is a device that gives a room an ability ("a satellite in the Kitchen"). Today's satellites are *voice satellites*: a Raspberry Pi, a spare PC or laptop, or a phone or tablet in the app's *room mode*. A room can hold several satellites (1.5.0). Some dashboard and app labels still name the device after its room ("prepare a room's SD card", "Use this device as a room", "room mode"); they mean the satellite. Spoken commands that say "satellite" or "room" both work.
+**Room or satellite?** Two different things. A **room** is a place in the house: its name, voice, music queue, wake words, timers and quiet hours ("the Kitchen room"). A **satellite** is a device that gives a room an ability ("a satellite in the Kitchen"). Today's satellites are *voice satellites*: a Raspberry Pi, a spare PC or laptop, or a phone or tablet in the app's *room mode*. A room can hold several satellites (1.5.0). Some dashboard and app labels still name the device after its room ("prepare a room's SD card", "room mode"; the phone apps say "Use this phone in a room"); they mean the satellite. Spoken commands that say "satellite" or "room" both work.
 
 ---
 

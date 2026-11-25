@@ -123,9 +123,12 @@ struct RoomFadingScroll<Content: View>: View {
     }
 }
 
-/// The room's name, "domovoi room" under it, and the mic chip.
+/// The room's name, where this phone is under it ("This phone is in the
+/// Kitchen"; "domovoi room" when there is no line), and the mic chip.
 struct RoomTopRow: View {
     let label: String
+    /// The line under the name (``RoomKioskModel/whereLine``); nil: "domovoi room".
+    var whereLine: String? = nil
     let compact: Bool
     let palette: RoomPalette
     let micOpen: Bool
@@ -141,9 +144,11 @@ struct RoomTopRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .accessibilityAddTraits(.isHeader)
-                Text(RoomModeStrings.roomBrand)
+                Text(whereLine ?? RoomModeStrings.roomBrand)
                     .font(.footnote)
                     .foregroundStyle(palette.text2)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
             }
             Spacer(minLength: 0)
             RoomMicChip(open: micOpen, live: micLive, muted: muted)

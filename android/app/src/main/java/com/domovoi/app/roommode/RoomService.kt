@@ -117,7 +117,7 @@ class RoomService : Service() {
         }
         RoomNotifications.createChannels(this)
         RoomNotifications.cancelResume(this)
-        val label = store.enrolment?.roomLabel ?: "room"
+        val label = store.roomName ?: store.enrolment?.roomLabel ?: "room"
         val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -135,9 +135,12 @@ class RoomService : Service() {
             RoomMode.attach(e)
             acquireLocks()
             statusJob = scope.launch {
-                e.status.map { RoomStatusText.notificationLine(it) }.distinctUntilChanged().collect {
-                    RoomNotifications.update(this@RoomService, label, it)
-                }
+                // The room's name follows the server's (a move to another
+                // room renames the notification too).
+                e.status.map { RoomStatusText.roomName(it, null, label) to RoomStatusText.notificationLine(it) }
+                    .distinctUntilChanged().collect { (name, line) ->
+                        RoomNotifications.update(this@RoomService, name, line)
+                    }
             }
         }
         return START_STICKY
@@ -226,7 +229,7 @@ object RoomNotifications {
     fun showResume(context: Context) {
         createChannels(context)
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
-        val label = RoomStore(context).enrolment?.roomLabel ?: "room"
+        val label = RoomStore(context).let { it.roomName ?: it.enrolment?.roomLabel } ?: "room"
         val n = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_room)
             .setContentTitle("Domovoi Room · $label is not listening")

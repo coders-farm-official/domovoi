@@ -116,4 +116,70 @@ class RoomRulesTest {
         assertTrue(stops, stops.contains("no files, browsing or chats, on the home server or on this phone"))
         assertTrue(EXPLAINER.none { (t, b) -> "assistant" in t || "assistant" in b })
     }
+
+    // ── household words (1.5.0): a room is a place, this phone is in it ──
+
+    private val kitchen = RoomProtocol.RoomPlace("kitchen", "Kitchen", shared = false)
+
+    @Test
+    fun theScreenSaysTheRoomsNameNeverItsId() {
+        // The server's name wins, then the kept one, then the room code's.
+        assertEquals("Kitchen", RoomStatusText.roomName(status().copy(place = kitchen), "Den", "Kitchen 2"))
+        assertEquals("Den", RoomStatusText.roomName(status(), "Den", "Kitchen 2"))
+        assertEquals("Kitchen 2", RoomStatusText.roomName(null, null, "Kitchen 2"))
+        assertEquals("Kitchen 2", RoomStatusText.roomName(null, " ", "Kitchen 2"))
+    }
+
+    @Test
+    fun thisPhoneIsInTheKitchen() {
+        val here = status().copy(place = kitchen)
+        assertEquals("This phone is in the Kitchen", RoomStatusText.whereLine(here, "Kitchen", approved = true))
+        assertEquals(
+            "This phone is in the Kitchen, with other devices",
+            RoomStatusText.whereLine(status().copy(place = kitchen.copy(shared = true)), "Kitchen", approved = true),
+        )
+        // Not yet approved: where it is going (the room code's `in=`).
+        val parked = status(link = RoomEngine.Link.AwaitingApproval("305117"))
+        assertEquals("This phone will join the Kitchen", RoomStatusText.whereLine(parked, "Kitchen", approved = false))
+        assertEquals("This phone is in the Kitchen", RoomStatusText.whereLine(null, "Kitchen", approved = true))
+        assertEquals("This phone will join the Kitchen.", RoomStatusText.joinLine("Kitchen"))
+        // A name that already reads as one keeps its own words.
+        assertEquals("The Den", RoomStatusText.theRoom("The Den"))
+        assertEquals("Alex's room", RoomStatusText.theRoom("Alex's room"))
+        assertEquals("the Kids' Room", RoomStatusText.theRoom("Kids' Room"))
+        assertEquals("the Theatre", RoomStatusText.theRoom("Theatre"))
+    }
+
+    @Test
+    fun roomModeIsOfferedAsThisPhoneInARoom() {
+        assertEquals("Use this phone in a room", RoomStatusText.ENTRY_TITLE)
+        val waiting = RoomStatusText.detail(status(link = RoomEngine.Link.AwaitingApproval("305117")), true, "hey_jarvis")!!
+        assertTrue(waiting, "approve this phone" in waiting)
+    }
+
+    /**
+     * The phone never says "satellite" (the dashboard's admin pages do): no
+     * text in room mode's sources with a space in it names one. Protocol
+     * names (`satellite_id`, `satellite-sounds`) are words, not sentences.
+     */
+    @Test
+    fun roomModeNeverSaysSatellite() {
+        val repo = File(System.getProperty("domovoi.repo.dir") ?: "../..")
+        val dir = File(repo, "android/app/src/main/java/com/domovoi/app/roommode")
+        val literal = Regex("\"((?:[^\"\\\\]|\\\\.)*)\"")
+        val said = mutableListOf<String>()
+        for (f in dir.listFiles { x -> x.name.endsWith(".kt") }.orEmpty()) {
+            for (line in f.readLines()) {
+                val code = line.trimStart()
+                if (code.startsWith("*") || code.startsWith("/*") || code.startsWith("//")) continue
+                for (m in literal.findAll(code.substringBefore(" // "))) {
+                    // A template's code (`${f.satelliteId}`) is not words.
+                    val text = m.groupValues[1].replace(Regex("\\$\\{[^}]*\\}"), "")
+                    if (' ' in text && "satellite" in text.lowercase()) said += "${f.name}: $text"
+                }
+            }
+        }
+        assertTrue(dir.path, dir.isDirectory)
+        assertEquals(emptyList<String>(), said)
+    }
 }

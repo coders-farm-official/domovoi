@@ -118,6 +118,9 @@ import kotlin.random.Random
 @Composable
 fun RoomDisplay(
     label: String,
+    /** The line under the room's name, in household words ("This phone is
+     *  in the Kitchen", [RoomStatusText.whereLine]); null: "domovoi room". */
+    where: String? = null,
     status: RoomEngine.Status?,
     running: Boolean,
     approvalCode: String?,
@@ -178,8 +181,8 @@ fun RoomDisplay(
         )
         val inner = Modifier.fillMaxSize().offset(drift.x.dp, drift.y.dp).padding(if (s.compact) 16.dp else 24.dp)
         when (s.layout) {
-            Layout.PORTRAIT -> Portrait(inner, label, status, running, s, c, art, update, actions)
-            Layout.LANDSCAPE -> Landscape(inner, label, status, running, s, c, art, update, actions)
+            Layout.PORTRAIT -> Portrait(inner, label, where, status, running, s, c, art, update, actions)
+            Layout.LANDSCAPE -> Landscape(inner, label, where, status, running, s, c, art, update, actions)
         }
     }
 }
@@ -199,13 +202,13 @@ private class DisplayActions(
  *  scroll area fades out above it and ends with room to scroll clear. */
 @Composable
 private fun Portrait(
-    modifier: Modifier, label: String, status: RoomEngine.Status?, running: Boolean,
+    modifier: Modifier, label: String, where: String?, status: RoomEngine.Status?, running: Boolean,
     s: RoomDisplayModel.State, c: RoomColors, art: ImageBitmap?, update: AppUpdateNotice?, a: DisplayActions,
 ) {
     val gap = if (s.compact) 12.dp else 20.dp
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         FadingScroll(Modifier.weight(1f).fillMaxWidth()) {
-            TopRow(label, status, running, s, c)
+            TopRow(label, where, status, running, s, c)
             s.ringing?.let { Spacer(Modifier.height(gap)); RingingCard(it, s.compact, c, a) }
             Spacer(Modifier.height(gap))
             // With cards to show, the clock and the ring step down so the
@@ -230,12 +233,12 @@ private fun Portrait(
  *  column has the screen. */
 @Composable
 private fun Landscape(
-    modifier: Modifier, label: String, status: RoomEngine.Status?, running: Boolean,
+    modifier: Modifier, label: String, where: String?, status: RoomEngine.Status?, running: Boolean,
     s: RoomDisplayModel.State, c: RoomColors, art: ImageBitmap?, update: AppUpdateNotice?, a: DisplayActions,
 ) {
     val gap = if (s.compact) 12.dp else 20.dp
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        TopRow(label, status, running, s, c)
+        TopRow(label, where, status, running, s, c)
         Row(Modifier.weight(1f).fillMaxWidth().padding(top = gap), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
             FadingScroll(Modifier.weight(1f).fillMaxHeight(), centered = true) {
                 Clock(s, c, if (s.compact) 72.sp else 120.sp)
@@ -290,14 +293,14 @@ private fun FadingScroll(modifier: Modifier, centered: Boolean = false, content:
 private val FADE = 32.dp
 
 @Composable
-private fun TopRow(label: String, status: RoomEngine.Status?, running: Boolean, s: RoomDisplayModel.State, c: RoomColors) {
+private fun TopRow(label: String, where: String?, status: RoomEngine.Status?, running: Boolean, s: RoomDisplayModel.State, c: RoomColors) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f, fill = false)) {
             Text(
                 label, color = c.text1, fontSize = if (s.compact) 22.sp else 28.sp, fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() },
             )
-            Text("domovoi room", color = c.text2, fontSize = 13.sp)
+            Text(where ?: "domovoi room", color = c.text2, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(12.dp))
         MicChip(open = status?.micOpen == true && running, live = status?.micLive == true, muted = status?.muted == true, c = c)

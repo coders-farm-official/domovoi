@@ -58,7 +58,8 @@ class RoomDisplayPreviewActivity : ComponentActivity() {
         setContent {
             DomovoiTheme(mode = ThemeMode.Dark) {
                 RoomDisplay(
-                    label = "kitchen",
+                    label = "Kitchen",
+                    where = RoomStatusText.whereLine(status, "Kitchen", approved = true),
                     status = status,
                     running = true,
                     approvalCode = null,

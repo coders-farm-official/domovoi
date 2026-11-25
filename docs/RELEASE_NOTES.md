@@ -408,7 +408,11 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   moves into a room, only while the room is idle and never in quiet hours
   (it waits for them to end), and **Settings → Rooms → Tune speakers on
   their own** turns that off. The phone apps say "the Kitchen", never
-  "satellite".
+  "satellite": the Android and iPhone apps' room mode is **Use this phone
+  in a room**, its screen says **This phone is in the Kitchen**, a code from
+  **Add a satellite to the Kitchen** says **This phone will join the
+  Kitchen** (and asks for that room on the approval card), and a phone
+  moved to another room on the dashboard follows it without reconnecting.
 - **Also in rooms.** **Add a satellite to the Kitchen** in a room's drawer
   makes the setup code for one more satellite there ("Kitchen 2"), and
   its approval card has the Kitchen pre-selected, older phone apps

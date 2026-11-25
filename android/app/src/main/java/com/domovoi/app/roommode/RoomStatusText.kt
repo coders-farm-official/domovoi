@@ -44,10 +44,10 @@ object RoomStatusText {
         }
         return when (val l = s.link) {
             is RoomEngine.Link.AwaitingApproval -> if (l.removed) {
-                "This room was removed on the dashboard (or its pairing reset). Approve it again with the code below, " +
+                "This phone was removed on the dashboard (or its pairing reset). Approve it again with the code below, " +
                     "or hold Exit to leave room mode and forget this room."
             } else {
-                "Waiting for approval. On the dashboard, open Settings → Rooms and approve this room with the code below."
+                "Waiting for approval. On the dashboard, open Settings → Rooms and approve this phone with the code below."
             }
             is RoomEngine.Link.Rejected -> l.reason
             is RoomEngine.Link.Conflict -> l.reason
@@ -102,6 +102,50 @@ object RoomStatusText {
     const val KEEP_OR_FORGET =
         "Keep this room to come back to it later, or forget it: its key is deleted from this phone, and the room " +
             "stays on the dashboard until you remove it there."
+
+    // ── where the phone is, in household words (1.5.0) ─────────────────
+    //
+    // A room is a place; this phone is one device in it. The phone says the
+    // room's NAME ("This phone is in the Kitchen") and never its id, and it
+    // never says "satellite": that word is for the dashboard's admin pages.
+
+    /** Settings → Rooms' card and the explainer's heading. */
+    const val ENTRY_TITLE = "Use this phone in a room"
+
+    /** The room's name to show: the server's ([RoomEngine.Status.place]),
+     *  else the one kept from the last connect or the room code's `in=`
+     *  ([RoomStore.roomName]), else the room code's own ([Enrolment.roomLabel]). */
+    fun roomName(s: RoomEngine.Status?, kept: String?, label: String): String =
+        s?.place?.name?.takeIf { it.isNotBlank() } ?: kept?.takeIf { it.isNotBlank() } ?: label
+
+    /** "the Kitchen"; a name that already reads as one ("The Den",
+     *  "Alex's room") is left as it is. */
+    fun theRoom(name: String): String {
+        val n = name.trim()
+        val possessive = Regex("['’]s(\\s|$)").containsMatchIn(n)
+        return if (n.startsWith("the ", ignoreCase = true) || possessive) n else "the $n"
+    }
+
+    /**
+     * The line under the room's name on the room screen: "This phone is in
+     * the Kitchen" once the server has said so (with "with other devices"
+     * when it shares the room), "This phone will join the Kitchen" until the
+     * phone has been approved ([approved]: [RoomStore.approvedOnce]).
+     */
+    fun whereLine(s: RoomEngine.Status?, roomName: String, approved: Boolean): String {
+        val room = theRoom(roomName)
+        val place = s?.place
+        return when {
+            place != null && place.shared -> "This phone is in $room, with other devices"
+            place != null || approved -> "This phone is in $room"
+            else -> "This phone will join $room"
+        }
+    }
+
+    /** The room code screen, before the phone joins: `in=` names an
+     *  existing room ([Enrolment.inRoomName]); without it the phone is set
+     *  up as the room the code names. */
+    fun joinLine(roomName: String): String = "This phone will join ${theRoom(roomName)}."
 
     /** `hey_jarvis` → "Hey Jarvis". */
     fun spoken(wakeWord: String): String =

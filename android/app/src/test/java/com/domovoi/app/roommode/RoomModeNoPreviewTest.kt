@@ -24,7 +24,9 @@ class RoomModeNoPreviewTest {
             }
         }
         assertFalse(shown.toString(), "preview" in shown)
-        assertTrue(shown.toString(), shown.count { it == "Use this device as a room" } == 2)
+        // Household words (1.5.0): this phone, in a room; never "satellite".
+        assertTrue(shown.toString(), shown.count { it == "Use this phone in a room" } == 2)
+        assertFalse(shown.toString(), shown.any { "satellite" in it.lowercase() })
     }
 
     /** The explainer is an Activity; its source has no preview pill under the heading. */

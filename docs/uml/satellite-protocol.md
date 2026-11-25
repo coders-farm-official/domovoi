@@ -215,10 +215,15 @@ core may send it (`frames_sent` / `frames_never`, the `upgrade` extra
 field, the settings sections hidden, the `pi_action`s kept, the dashboard
 actions offered). The core's tests (`domovoi/tests/test_satellite_supports.py`)
 and the Pi client's (`satellite/tests/test_protocol_fixtures.py`) read it,
-and the Android room mode's JVM tests (`android/.../roommode/RoomProtocolTest.kt`)
-do too, so the implementations can't drift apart. The `android_room` entry
+and the room modes' tests, Android's JVM tests (`android/.../roommode/RoomProtocolTest.kt`)
+and the iPhone's (`ios/.../DomovoiKitTests/RoomProtocolTests.swift`), do too,
+so the implementations can't drift apart. The `android_room` entry
 is what the app's room mode sends on a phone with an echo canceller (one
-without leaves `full_duplex` out, and so gets no drop-ins); the `linux_pc`
+without leaves `full_duplex` out, and so gets no drop-ins); the iPhone's
+room mode sends the same hello with `board: ios_room`. Since 1.5.0 both
+name themselves (`satellite_id`, the path's id), and send `requested_room`
+until approved when the room code had an `in=` (the entry's code had none,
+so it leaves the key out); the `linux_pc`
 and `windows_pc` entries are what a spare Linux or Windows computer sends
 (`satellite/pc_engine.py` `hello_fields()`). Change them with the code that
 sends them. Tokens and codes in it are placeholders.
@@ -503,8 +508,12 @@ Since 1.5.0 the payload may carry an optional `in=<room id>`: "Add a
 satellite to the Kitchen" makes `room=Kitchen%202&in=kitchen`, where `room`
 names the device and `in` the existing room it joins. A device that reads it
 (`satellite/enrolment.py` `Enrolment.in_room`; the Pi and PC installers
-write it as `[satellite] requested_room`) sends it in its hello as
-`requested_room`. A parser from before ignores it (unknown keys are
+write it as `[satellite] requested_room`; the phone apps' room mode keeps
+it with the room until its first `ready`, Android's roommode/RoomStore.kt
+and the iPhone's RoomMode/RoomStore.swift) sends it in its hello as
+`requested_room`. The phone shows the room by name before
+it joins ("This phone will join the Kitchen", the name being `room` without
+the number the core added) and, from `ready.room` on, the server's name. A parser from before ignores it (unknown keys are
 ignored) and connects as `kitchen_2`; the server remembered the invitation
 and pre-selects the Kitchen on the approval card either way. A value that
 is not a room id is ignored like an unknown key.

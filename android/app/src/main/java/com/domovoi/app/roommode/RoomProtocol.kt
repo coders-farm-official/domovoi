@@ -62,6 +62,13 @@ object RoomProtocol {
      * word ([wakeWord]) first (1.4.0, [WakeWords]); [wakeWordsMax]: how
      * many this phone can run at once ([WakeWords.limitFor]). The core never
      * pushes more words than that; without the key it pushes one.
+     *
+     * 1.5.0: [roomId] is the phone's own id, the one in the socket's path,
+     * and the hello repeats it as `satellite_id`: that marks a client that
+     * carries on in its new room when an admin moves it (the `room` frame)
+     * rather than being closed. [requestedRoom]: the room the room code's
+     * `in=` asked to join, sent only until the phone is approved
+     * ([RoomStore.requestedRoom]); it pre-selects the approval card's room.
      */
     fun hello(
         roomId: String,
@@ -72,9 +79,12 @@ object RoomProtocol {
         micEnabled: Boolean = true,
         wakeWords: List<String>? = null,
         wakeWordsMax: Int? = null,
+        requestedRoom: String? = null,
     ): JsonObject = buildJsonObject {
         put("type", "hello")
         put("room_id", roomId)
+        put("satellite_id", roomId)
+        requestedRoom?.takeIf { RoomEnrolment.isRoomId(it) }?.let { put("requested_room", it) }
         put("wake_word", wakeWord)
         helloWords(wakeWords)?.let { words -> put("wake_words", JsonArray(words.map(::JsonPrimitive))) }
         wakeWordsMax?.let { put("wake_words_max", it.coerceIn(1, WakeWords.MAX_WORDS)) }
@@ -195,17 +205,34 @@ object RoomProtocol {
 
     // ── what the core sends ─────────────────────────────────────────────
 
+    /**
+     * The room this phone is in (1.5.0, `ready.room` and the `room` frame):
+     * its id, its NAME (what the phone shows: "This phone is in the
+     * Kitchen"; never the id), whether other devices share it, and `claim`
+     * (another satellite is in it or a linked room: the one-turn-per-wake
+     * claims, which this phone does not declare yet, so it is only kept).
+     */
+    data class RoomPlace(val roomId: String, val name: String, val shared: Boolean, val claim: Boolean = false)
+
     sealed class ServerFrame {
         /** [roomVoice]: the voice the server keeps for this room and renders
          *  its speech in (`room_voice`, null: the server's own voice). This
          *  device keeps no voice choice ("voice" is not in [supports]), so
-         *  the server does; the room mirrors that voice's greeting clips. */
+         *  the server does; the room mirrors that voice's greeting clips.
+         *  [satelliteId] / [room] (1.5.0): the phone's own id as the server
+         *  knows it, and the room it is in; null from an older core. */
         data class Ready(
             val features: Set<String>,
             val roomId: String?,
             val botName: String?,
             val roomVoice: String? = null,
+            val satelliteId: String? = null,
+            val room: RoomPlace? = null,
         ) : ServerFrame()
+        /** 1.5.0: an admin moved this phone to another room, or the room's
+         *  `claim` changed (same room). The phone carries on, connected,
+         *  in [room]; null: a frame without a usable room (ignored). */
+        data class Room(val room: RoomPlace?) : ServerFrame()
         data class Error(val reason: String?, val message: String?, val code: String?) : ServerFrame()
         data object Pong : ServerFrame()
         data class Transcript(val text: String) : ServerFrame()
@@ -262,7 +289,10 @@ object RoomProtocol {
                 roomId = s("room_id"),
                 botName = s("bot_name"),
                 roomVoice = s("room_voice")?.takeIf { it.isNotBlank() },
+                satelliteId = s("satellite_id")?.takeIf { it.isNotBlank() },
+                room = place(o["room"]),
             )
+            "room" -> ServerFrame.Room(place(o["room"]))
             "error" -> ServerFrame.Error(s("reason"), s("message"), s("code"))
             "pong" -> ServerFrame.Pong
             "transcript" -> ServerFrame.Transcript(s("text").orEmpty())
@@ -286,6 +316,18 @@ object RoomProtocol {
             "room_display" -> ServerFrame.Display(RoomDisplayFeed.parse(o))
             else -> ServerFrame.Other(type)
         }
+    }
+
+    /** `ready.room` / the `room` frame's room: null unless it names a room
+     *  id; a missing or blank name falls back to the id, as the core's own
+     *  `_room_info` does for a room it cannot read. */
+    internal fun place(e: JsonElement?): RoomPlace? {
+        val o = e as? JsonObject ?: return null
+        fun s(k: String): String? = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        fun b(k: String): Boolean = (o[k] as? JsonPrimitive)?.booleanOrNull ?: false
+        val id = s("room_id")?.takeIf { RoomEnrolment.isRoomId(it) } ?: return null
+        val name = s("name")?.trim()?.takeIf { it.isNotEmpty() } ?: id
+        return RoomPlace(id, name, b("shared"), b("claim"))
     }
 
     /** Only an http(s) URL with no whitespace or control characters is a
