@@ -247,6 +247,69 @@ async def test_an_upgraded_app_gets_its_key_on_its_next_start_without_pairing_ag
 
 @requires_db
 @pytest.mark.asyncio
+async def test_a_claimed_row_takes_its_first_key_only_with_its_claim_key() -> None:
+    """Pre-merge review M1: a 1.4.x phone that said "this is me" holds a
+    claim key and no device key. Someone who only knows its id must not be
+    minted its key (and with it the phone's migrated private chats and its
+    claim); the phone's own updated app, presenting the claim key, is."""
+    from web.backend.api import devices as devices_api
+
+    dev = f"android-{uuid.uuid4().hex[:10]}"
+    claim = "claim-" + uuid.uuid4().hex
+    async with session_scope() as s:
+        pid = (await s.execute(text("INSERT INTO people (name) VALUES (:n) RETURNING id"),
+                               {"n": "Dad " + uuid.uuid4().hex[:6]})).scalar_one()
+        await s.execute(text("INSERT INTO devices (device_id, name, owner_person_id, owner_claimed_at, claim_key_hash) "
+                             "VALUES (:d, 'dad phone', :p, now(), :h)"),
+                        {"d": dev, "p": pid, "h": devices_api.claim_key_hash(claim)})
+        tid = (await s.execute(text("INSERT INTO chat_threads (title, owner_device_id, shared) "
+                                    "VALUES ('dad''s', :d, false) RETURNING id"), {"d": dev})).scalar_one()
+    try:
+        async with web_client() as c:
+            for headers in ({}, {**RW, devices_api.CLAIM_KEY_HEADER: "not-the-claim-key"}):
+                r = (await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True},
+                                  headers=headers or None)).json()
+                assert r["device_key"] is None and r["device_key_ok"] is False
+                assert chat_access.DEVICE_KEY_COOKIE not in c.cookies
+            # Nothing was minted, and the claim is untouched.
+            async with session_scope() as s:
+                row = (await s.execute(text("SELECT device_key_hash, owner_person_id, claim_key_hash FROM devices "
+                                            "WHERE device_id = :d"), {"d": dev})).one()
+            assert row[0] is None and row[1] == pid and row[2] == devices_api.claim_key_hash(claim)
+            # The phone's own app, with its claim key: the key, and its chat.
+            r = (await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True},
+                              headers={**RW, devices_api.CLAIM_KEY_HEADER: claim})).json()
+            key = r["device_key"]
+            assert key and r["device_key_ok"] is True
+            c.cookies.clear()
+            got = await c.get(f"/api/chat/threads/{tid}/messages", headers={**RW, KEY: key})
+            assert got.status_code == 200 and got.json()["thread"]["mine"] is True
+    finally:
+        await _cleanup(tid)
+        async with session_scope() as s:
+            await s.execute(text("DELETE FROM devices WHERE device_id = :d"), {"d": dev})
+            await s.execute(text("DELETE FROM people WHERE id = :p"), {"p": pid})
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_row_with_no_claim_still_mints_on_first_ask() -> None:
+    """A row nobody claimed keeps the first-use rule (the window
+    PRIVATE-CHATS §2.1 documents)."""
+    dev = f"browser-{uuid.uuid4().hex[:10]}"
+    async with session_scope() as s:
+        await s.execute(text("INSERT INTO devices (device_id, name) VALUES (:d, 'a browser')"), {"d": dev})
+    try:
+        async with web_client() as c:
+            r = (await c.post("/api/devices/register", json={"device_id": dev, "want_device_key": True})).json()
+            assert r["device_key"] and r["device_key_ok"] is True
+    finally:
+        async with session_scope() as s:
+            await s.execute(text("DELETE FROM devices WHERE device_id = :d"), {"d": dev})
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_two_devices_can_never_share_a_key_hash() -> None:
     from sqlalchemy.exc import IntegrityError
 

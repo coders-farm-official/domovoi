@@ -756,7 +756,10 @@ async def _device_key(
 ) -> tuple[str | None, bool | None]:
     """Mint ``ident``'s device key when its row has none and the client
     keeps one (``want``; PRIVATE-CHATS §2.1), else check the one
-    presented. Returns ``(new key or None, presented key matches)``;
+    presented. A row with a claim ("this is me": a claim key, or
+    ``owner_claimed_at``) is given its first key only on a registration
+    that also presents that claim key (``X-Domovoi-Claim-Key``); without
+    it the answer is ``device_key_ok: false`` and nothing is minted. Returns ``(new key or None, presented key matches)``;
     ``(None, None)`` without V086, or for a keyless row whose client
     didn't ask. A repeat registration with the stored key changes
     nothing. The mint is one conditional UPDATE, so two first
@@ -764,15 +767,27 @@ async def _device_key(
     with it."""
     if not await chat_access.has_device_keys(s):
         return None, None
-    stored = (
+    claims = await _has_claim_keys(s)
+    claim_cols = "claim_key_hash, owner_claimed_at" if claims else "NULL, NULL"
+    row = (
         await s.execute(
-            text("SELECT device_key_hash FROM devices WHERE device_id = :id"), {"id": ident},
+            text(f"SELECT device_key_hash, {claim_cols} FROM devices WHERE device_id = :id"), {"id": ident},
         )
-    ).scalar_one_or_none()
+    ).first()
+    stored = row[0] if row is not None else None
     if stored:
         return None, chat_access.key_matches(stored, chat_access.presented_device_key(request))
     if not want:
         return None, None
+    if row is not None and (row[1] or row[2] is not None):
+        # A row that said "this is me" (a 1.4.x phone keeps its claim key,
+        # never a device key): only the device holding that claim key may
+        # take the row's first device key (pre-merge review M1). Anyone
+        # else who knows the id would otherwise take its migrated private
+        # chats and its claim. The 1.5.0 apps send the claim key they kept.
+        if not claim_key_matches(row[1], presented_claim_key(request)):
+            log.info("device %s: device key not minted: the row holds a claim and no matching claim key came", ident)
+            return None, False
     key = secrets.token_urlsafe(32)
     won = (
         await s.execute(
