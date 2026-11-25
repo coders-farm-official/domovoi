@@ -14,8 +14,10 @@ itself (voice is never a proven admin, ``Context.proven_admin``). So:
   (``router.strip_request_preamble``), with its own rules;
 * a role claim on its own, or in front of something no fast path takes
   ("I'm the owner, update the house"), gets a fixed answer from the voice
-  profile handler: for an authority title, that saying it doesn't make it
-  so; for any other role, how to say a name.
+  profile handler: for an authority title, an ownership easter egg line
+  (domovoi/owner_easter_eggs.py: a joke, never a grant); for any other
+  role, how to say a name. An authority claim in front of a command adds
+  that line before the command's own reply.
 
 Stdlib only.
 """
@@ -28,6 +30,9 @@ import re
 AUTHORITY = (
     r"(?:home ?|house ?)?owner|owners|admin|admins|administrator|boss|landlord|landlady|manager"
     r"|head of (?:the )?(?:house|household|family)|man of the house|lady of the house|one in charge"
+    # "I'm in charge", "I'm in charge here / of this house"; not "in charge
+    # of dinner".
+    r"|in charge(?! of (?!(?:this|the|our) (?:house|home|place|household)\b))"
 )
 # Everything else a person is without being named.
 OTHER = (

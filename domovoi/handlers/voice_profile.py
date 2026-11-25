@@ -115,7 +115,7 @@ from domovoi.clients.voice_embedder import (
     UNAVAILABLE_SPOKEN,
     voice_id_unavailable,
 )
-from domovoi import role_claims
+from domovoi import owner_easter_eggs, role_claims
 from domovoi.config import settings
 from domovoi.db.repositories import (
     PeopleRepository,
@@ -403,6 +403,12 @@ _NAME_BLOCKLIST = frozenset(
 )
 
 
+def _egg_key(ctx: Context) -> str:
+    """Where an easter egg must not repeat its last line: this conversation
+    (or room)."""
+    return str(ctx.session_id or ctx.room_id or "")
+
+
 def _clean_name(raw: str) -> str | None:
     """Title-case a captured name, stripping trailing junk and rejecting
     obvious non-names. Returns None if the name fails the sniff test."""
@@ -494,13 +500,6 @@ def _corrected_question(name: str) -> str:
     return f"Got it, {name}: {spell_out(name)}. Is that right?"
 
 
-#: "I'm the owner" / "I'm the admin": saying it changes nothing, since who
-#: may do an admin's job is the dashboard's admin sign-in, never a voice
-#: (domovoi/role_claims.py). The member answer.
-_ROLE_CLAIM_ADMIN_TEXT = (
-    "Saying so doesn't make it so: I can't tell who's an admin by voice. "
-    "An admin does admin jobs on the dashboard, signed in with the admin password."
-)
 #: "I'm the mom", "I'm the guest", "I'm the …": no name was said.
 _ROLE_CLAIM_NAME_TEXT = 'I learn people by name. Say "my name is" and then your name.'
 
@@ -1129,6 +1128,9 @@ class VoiceProfileHandler(Handler):
             FastPath(_FORGET_RE, VoiceProfileHandler._forget_from_match),
             FastPath(_WHOAMI_RE, VoiceProfileHandler._whoami_from_match),
             FastPath(_WHEREAMI_RE, VoiceProfileHandler._whereami_from_match),
+            # "Who's the owner?" / "who's in charge here?": a joke about the
+            # People list (owner_easter_eggs). Never "who's the admin?".
+            FastPath(owner_easter_eggs.WHO_RE, VoiceProfileHandler._who_owner_from_match),
             # Third-party intros must come before self-intros — both can
             # match "this is Alex", but the third-party form's leading
             # "Domovoi," disambiguator wins when present.
@@ -1347,6 +1349,18 @@ class VoiceProfileHandler(Handler):
             )
         return await self._start_self_intro(name, ctx, session)
 
+    async def _who_owner_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        """"Who's the owner?": a joke naming people on the People list
+        (``people`` rows only), or none when it can't be read."""
+        try:
+            names = [n for _i, n in await PeopleRepository(session).names()]
+        except Exception as e:  # noqa: BLE001 — the no-names lines still answer
+            log.warning("who's the owner: the People list couldn't be read: %s", type(e).__name__)
+            names = []
+        return self._say(owner_easter_eggs.who_line(names, _egg_key(ctx)), ctx)
+
     async def _role_claim_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response | None:
@@ -1354,15 +1368,18 @@ class VoiceProfileHandler(Handler):
         a role where a name would go. Nothing is enrolled and nothing is
         granted. A command after the claim that a fast path takes never gets
         here: the router drops the claim and runs it
-        (``router.strip_request_preamble``). An authority title gets the
-        member answer whatever follows it; any other role, on its own, how
-        to say a name, and with more after it the turn routes on."""
+        (``router.strip_request_preamble``) and its reply follows a joke
+        line. An authority title gets a joke line (owner_easter_eggs)
+        whatever follows it, and nothing more; any other role, on its own,
+        how to say a name, and with more after it the turn routes on."""
         found = role_claims.split_claim(m.group(0))
         if found is None:
             return None
         role, rest = found
         if role_claims.is_authority(role):
-            return self._say(_ROLE_CLAIM_ADMIN_TEXT, ctx)
+            # A joke, never a grant: who may do an admin's job is the
+            # dashboard's admin sign-in, never a voice (owner_easter_eggs).
+            return self._say(owner_easter_eggs.claim_line(_egg_key(ctx)), ctx)
         if rest:
             return None
         return self._say(_ROLE_CLAIM_NAME_TEXT, ctx)

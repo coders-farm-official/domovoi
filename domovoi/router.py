@@ -913,6 +913,27 @@ async def _record_failed_turn(
     return response
 
 
+def _claim_line_for(unstripped: str, transcript: str, ctx: Context) -> str | None:
+    """The easter-egg line for an authority claim the router dropped from
+    in front of a command (``strip_request_preamble``), or None."""
+    if unstripped == transcript:
+        return None
+    from domovoi import owner_easter_eggs, role_claims
+
+    claim = role_claims.split_claim(unstripped)
+    if claim is None or not claim[1] or not role_claims.is_authority(claim[0]):
+        return None
+    return owner_easter_eggs.claim_line(ctx.session_id or ctx.room_id or "")
+
+
+def _after_claim(response: Response, line: str | None) -> None:
+    """"<claim line> <the command's own reply>"."""
+    if line and response.text:
+        response.text = f"{line} {response.text}"
+    elif line:
+        response.text = line
+
+
 async def _settings_answer(transcript: str, ctx: Context) -> str | None:
     """A fixed answer for a turn no fast path took, when the house's own
     settings already decide it; None otherwise (the turn goes on to the
@@ -1089,7 +1110,13 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
     # tool-call and QA fallback paths below intentionally use
     # `intent.transcript` (raw) so the LLM sees the user's natural
     # phrasing, not the stripped version.
-    transcript = strip_request_preamble(strip_leading_filler(transcript))
+    unstripped = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(unstripped)
+    # "I'm the owner, set a timer for 10 minutes": the claim was dropped and
+    # the command is the turn. It grants nothing (Context.proven_admin is
+    # untouched); its reply is a joke line, then the command's own reply
+    # (domovoi/owner_easter_eggs.py).
+    claim_line = _claim_line_for(unstripped, transcript, ctx)
 
     # 1. Fast paths (with offline gate), over the band-sorted registry.
     #
@@ -1116,6 +1143,7 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         handler, fp, m = hit
         if offline_blocked(handler, fp, ctx) and phone_refusal(handler, ctx) is None:
             response = await handler.fallback_offline(intent, ctx, session)
+            _after_claim(response, claim_line)
             response.matched_handler = handler.name
             response.matched_path = "fast_offline"
             response.session_id = session_id
@@ -1141,6 +1169,7 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
         if response is not None:
+            _after_claim(response, claim_line)
             response.matched_handler = handler.name
             response.matched_path = "fast"
             response.session_id = session_id
