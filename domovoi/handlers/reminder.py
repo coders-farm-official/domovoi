@@ -337,6 +337,25 @@ _CANCEL_ALARM_RE = re.compile(
     rf"(?:(?P<clock>{TIME_PATTERN}) )?alarms?$"
 )
 
+# "is my alarm set" / "what alarms do I have" / "do I have any alarms" /
+# "when is my alarm": the room's alarms, read from the table (N11). Closed
+# phrasings only; "do I have any X" is the library's shape (band 310).
+_ALARMS_ON = r"(?: (?:set|on))?(?: for (?:tomorrow|tomorrow morning|the morning))?"
+_LIST_ALARMS_RE = re.compile(
+    r"^(?:"
+    rf"(?:is|are) (?:my|our|the|an?) alarms? (?:set|on){_ALARMS_ON}"
+    rf"|(?:is there an?|are there any) alarms?{_ALARMS_ON}"
+    rf"|(?:do (?:i|we) have|have (?:i|we) got|any) (?:an? |any )?alarms?{_ALARMS_ON}"
+    rf"|(?:what|which|how many) alarms? (?:do (?:i|we) have|are (?:there|set|on)|is (?:set|on)){_ALARMS_ON}"
+    r"|what are (?:my|our|the) alarms"
+    r"|(?:what time|when) is (?:my|our|the) alarm(?: set)?(?: for)?"
+    r"|(?:list|show me) (?:my |our |the |all (?:my |the )?)?alarms"
+    r")$"
+)
+
+#: "What alarms do I have" reads this many aloud, then says how many more.
+_ALARMS_SAID = 4
+
 # What "wake me up" says when it goes off ("Reminder: time to wake up").
 _WAKE_MESSAGE = "time to wake up"
 # The labels alarms get (lower-cased, a Postgres regex): "7 am alarm",
@@ -605,6 +624,7 @@ class ReminderHandler(Handler):
         "remind me at 6 pm to take the bins out",
         "wake me up at 7",
         "what reminders do I have",
+        "is my alarm set",
     )
     requires_network = "no"
 
@@ -666,6 +686,7 @@ class ReminderHandler(Handler):
             FastPath(_WAKE_IN_RE, ReminderHandler._wake_in_from_match),
             FastPath(_CREATE_ALARM_RE, ReminderHandler._alarm_from_match),
             FastPath(_CANCEL_ALARM_RE, ReminderHandler._cancel_alarm_from_match),
+            FastPath(_LIST_ALARMS_RE, ReminderHandler._list_alarms_from_match, early_commit="A"),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -849,6 +870,40 @@ class ReminderHandler(Handler):
         if deleted == 1:
             return self._reply(ctx, "Cancelled the alarm.")
         return self._reply(ctx, f"Cancelled {deleted} alarms.")
+
+    async def _list_alarms_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        """The room's alarms ("set an alarm for 7", "wake me up at 7"), from
+        the table, soonest first (N11): the same rows "cancel my alarm"
+        cancels, in the same room."""
+        rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT expires_at FROM timers
+                    WHERE room_id IS NOT DISTINCT FROM :room_id
+                      AND message IS NOT NULL
+                      AND lower(label) ~ :alarm_label
+                    ORDER BY expires_at ASC
+                    """
+                ),
+                {"room_id": ctx.satellite_room_id, "alarm_label": _ALARM_LABEL_SQL_RE},
+            )
+        ).scalars().all()
+        if not rows:
+            return self._reply(ctx, "You don't have any alarms set.")
+        now_local = household_time.now()
+        when = [
+            spoken_time_and_day(household_time.to_local(at), now_local)
+            for at in rows[:_ALARMS_SAID]
+        ]
+        if len(rows) == 1:
+            return self._reply(ctx, f"You have one alarm, set for {when[0]}.")
+        more = len(rows) - len(when)
+        items = ", ".join(when[:-1]) + (", " if len(when) > 2 else " ") + "and " + when[-1]
+        tail = f" There {'is' if more == 1 else 'are'} {more} more." if more > 0 else ""
+        return self._reply(ctx, f"You have {len(rows)} alarms: {items}.{tail}")
 
     # ─── Core actions ─────────────────────────────────────────────────
     def _reply(self, ctx: Context, text_: str) -> Response:

@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "Voice history kept 30 days.",
+  "voice_history_days": 30
+}

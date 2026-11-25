@@ -28,6 +28,7 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import off_answers
 from domovoi.clients import mpd as _mpd
 from domovoi.config import settings
 from domovoi.dropin_common import (
@@ -191,7 +192,11 @@ class DropInHandler(Handler):
             # no live mic to open.
             return self._say("Drop-in only works from a room.", ctx)
         if not getattr(settings, "dropin_enabled", True):
-            return self._say("Drop-in is turned off right now.", ctx)
+            return self._say(
+                off_answers.with_turn_on(
+                    "Drop-in is turned off right now.", off_answers.DROP_IN, admin=ctx.proven_admin,
+                ), ctx
+            )
         if not room_may_reach_other_rooms(ctx.app, ctx.room_id):
             # CORE-11: a satellite the core let in WITHOUT a pairing token
             # (strict pairing off) is whatever LAN device named itself

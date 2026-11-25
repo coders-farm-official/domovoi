@@ -54,6 +54,7 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import off_answers
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
@@ -185,7 +186,9 @@ class ChatModeHandler(Handler):
             # A conversation is the language model talking (Letta on the
             # local Ollama); with AI features off there is none to have.
             return Response(
-                text="Chat mode needs the AI features, and they're turned off.",
+                text=off_answers.with_turn_on(
+                    "Chat mode needs AI, which is turned off.", off_answers.AI, admin=ctx.proven_admin,
+                ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )

@@ -44,6 +44,7 @@ CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "dismiss",       "label": "Dismiss",        "tone": "neutral"},
     {"name": "help",          "label": "Help",           "tone": "info"},
     {"name": "help_desk",     "label": "Help desk",      "tone": "info"},
+    {"name": "house_facts",   "label": "House facts",    "tone": "info"},
     {"name": "voice_profile", "label": "Voice Profile",  "tone": "info"},
     {"name": "wifi",          "label": "Wi-Fi",          "tone": "device"},
     {"name": "voice",         "label": "Voice",          "tone": "device"},
@@ -88,7 +89,7 @@ def _features() -> dict[str, bool]:
     ``ai`` is live."""
     from domovoi import ai_features
 
-    # The household's AI switch (Settings → Models), read live from .env
+    # The household's AI switch (Settings → Chat & AI → Models), read live from .env
     # like the core does (domovoi/ai_features.py): false hides Chat in the
     # dashboard and the app, which treat a missing key as true (an older
     # server). Not restart-tier, unlike the flags below.

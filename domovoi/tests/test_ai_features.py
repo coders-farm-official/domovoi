@@ -173,7 +173,7 @@ async def test_chat_mode_needs_the_ai_features() -> None:
     h = ChatModeHandler()
     with ai_features.override(False):
         r = await h._enter(Context(room_id="kitchen"), None)
-        assert "AI features" in r.text and "turned off" in r.text
+        assert "needs AI" in r.text and "turned off" in r.text and "Settings → Chat & AI → Models" in r.text
         assert h.example_phrases == ()
 
 

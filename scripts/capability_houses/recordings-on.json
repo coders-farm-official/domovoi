@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "Command recordings on for this room (kept 14 days).",
+  "command_recordings": true
+}

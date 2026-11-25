@@ -1,0 +1,6 @@
+{
+  "extends": "base",
+  "note": "Friend Houses on, no friend's house added.",
+  "friend_houses": "no_friends",
+  "friends": []
+}

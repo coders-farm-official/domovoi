@@ -147,6 +147,20 @@ async def _admin_ok(request: HTTPConnection) -> bool:
     return await check_admin_request(request) in ("ok", "pre-setup")
 
 
+def _refuse_if_ai_off(slug: str, conn: HTTPConnection) -> None:
+    from domovoi import ai_features
+
+    route = conn.scope.get("route")
+    path = ai_features.route_path_under(
+        getattr(route, "path", None), conn.url.path, f"/v1/plugins/{slug}"
+    )
+    refusal = ai_features.plugin_route_refusal(
+        ai_features.plugin_ai(slug), conn.scope.get("method", "GET"), path
+    )
+    if refusal is not None:
+        raise refusal
+
+
 def _make_gate(slug: str, mount: list[Any] | None = None):
     """The per-slug gate dependency. ``mount`` is the ``_mounted`` entry
     of the mount that includes the route: once the slug is mounted again
@@ -176,6 +190,9 @@ def _make_gate(slug: str, mount: list[Any] | None = None):
         # Default-DENY for mutations: the admin tier unless the route
         # function carries a tier marker (shared body with the web gate).
         await enforce_route_tier(conn)  # type: ignore[arg-type] — an http scope is a Request
+        # A route the plugin says makes something with a model ([ai]
+        # routes), while the household's AI switch is off.
+        _refuse_if_ai_off(slug, conn)
         # The tier check can await the DB. A disable (or disable and
         # re-enable) that ran meanwhile tore this route's SDK down, so
         # look again before the endpoint runs against it.

@@ -1603,6 +1603,26 @@ async def check_admin_request(
         raise AuthCheckUnavailable() from e
 
 
+async def request_is_proven_admin(request: Request | None) -> bool:
+    """Whether ``request`` comes from a PROVEN admin, for an answer's
+    wording only (``Context.proven_admin``, N1): True exactly when
+    :func:`check_admin_request` says ``"ok"`` — a live Bearer session.
+
+    Never ``"cookie-only"`` (the cookie only renders), never
+    ``"pre-setup"`` (no admin exists yet: nobody has proven anything), and
+    a check that can't run (:class:`AuthCheckUnavailable`, anything else)
+    is False. Asked once per turn and never cached, so a session that
+    ended is a member from the next turn. It moves no idle clock (the
+    check runs with ``activity=False``). It authorizes nothing: every
+    admin action keeps its own gate."""
+    if request is None:
+        return False
+    try:
+        return await check_admin_request(request) == "ok"
+    except Exception:  # noqa: BLE001 — can't tell: a member
+        return False
+
+
 async def require_admin_mutation(request: Request) -> None:
     """Dependency for gated MUTATING endpoints (§7.3 list): Bearer-only.
     Keeps the pre-setup LAN-trust grace (daily surfaces work on a fresh

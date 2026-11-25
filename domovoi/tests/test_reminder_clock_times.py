@@ -431,3 +431,47 @@ async def _fire_clock_time_reminders(db_session) -> None:
         f"Here's your {spoken_clock(due)} reminder, from 2 hours ago.",
         "Reminder from 2 hours ago: take the bins out",
     }
+
+
+# ─── "Is my alarm set" / "what alarms do I have" (N11) ────────────────────
+
+
+@pytest.mark.parametrize("said", [
+    "is my alarm set", "Is my alarm set?", "is the alarm on", "is there an alarm set for tomorrow",
+    "what alarms do I have", "what alarms are set", "do I have any alarms", "do I have an alarm",
+    "are there any alarms", "any alarms", "when is my alarm", "what time is my alarm set for",
+    "how many alarms do I have", "what are my alarms", "list my alarms",
+])
+def test_alarm_questions_reach_the_reminder_handler(said: str) -> None:
+    assert fast_path_winner(said) == "reminder"
+
+
+@pytest.mark.parametrize("said,winner", [
+    ("set an alarm for 7", "reminder"),
+    ("cancel my alarm", "reminder"),
+    ("wake me up at 7", "reminder"),
+    ("what reminders do I have", "reminder"),
+    ("set an alarm for 10 minutes", None),  # as before: the tool model
+    ("do I have any beatles", "library"),
+])
+def test_alarm_neighbours_route_as_before(said: str, winner: str | None) -> None:
+    assert fast_path_winner(said) == winner
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_alarm_questions_read_the_rooms_alarms_exactly(db_session) -> None:
+    with at(2026, 10, 16, 23, 20):
+        r = await _say(db_session, "is my alarm set")
+        assert r.text == "You don't have any alarms set."
+        await _say(db_session, "set an alarm for 6:30")
+        # a task that ends in the word is no alarm; another room's alarm isn't this room's
+        await _say(db_session, "remind me at 8 am to check the smoke alarm")
+        await _say(db_session, "set an alarm for 5", _ctx("garage"))
+        r = await _say(db_session, "is my alarm set")
+        assert r.text == "You have one alarm, set for 6:30 AM tomorrow."
+        await _say(db_session, "wake me up at 7:15")
+        r = await _say(db_session, "what alarms do I have")
+        assert r.text == "You have 2 alarms: 6:30 AM tomorrow and 7:15 AM tomorrow."
+        r = await _say(db_session, "do I have any alarms", _ctx("garage"))
+        assert r.text == "You have one alarm, set for 5 AM tomorrow."

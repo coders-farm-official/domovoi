@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "Quiet hours active now.",
+  "quiet_hours_active": true
+}

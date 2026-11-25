@@ -281,7 +281,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # Ollama swaps models per-request, so clearing the cached client
     # (reset_ollama_client) is enough — no server restart, unlike
     # Whisper (whisper_model is 'restart', loaded once at boot).
-    # The household's AI switch comes first: Settings → Models shows it as
+    # The household's AI switch comes first: Settings → Chat & AI → Models shows it as
     # its own card (web/static/models.jsx), and with it off the model rows
     # below have nothing to do.
     FieldSpec(
@@ -293,7 +293,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "intercom, notes, news headlines and more), and so do speech "
         "recognition, the voices and the wake word; a question gets 'I'm "
         "set up for home commands', and Chat is hidden. Turning it on needs "
-        "the AI models (Settings → Models offers to download them). "
+        "the AI models (Settings → Chat & AI → Models offers to download them). "
         "Applies immediately.",
         "bool", tier="reapply",
     ),
@@ -526,7 +526,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
 
     # ─── Privacy ───────────────────────────────────────────────────────
-    # Also on People → Voice history, beside "Delete all voice history"
+    # Also on Settings → Household → People → Voice history, beside
+    # "Delete all voice history"
     # (domovoi/voice_history.py). 'reapply': a save prunes at once.
     FieldSpec(
         "voice_history_keep", "Keep voice history", "Privacy",

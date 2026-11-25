@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "Voice ID on, the voice close to two people.",
+  "voice_id": "ambiguous"
+}

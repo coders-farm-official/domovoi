@@ -20,6 +20,12 @@ A help question ("how do I add a room?", "why is the kitchen offline?",
 Voice gets :func:`spoken_answer`: the best page's first sentence or two,
 said with the section's name, from the passage itself (no model), so it is
 the same with AI on or off.
+
+An admin's job ("how do I add a room?", "can you update yourself?": the
+:mod:`.admin_tasks` table) gets a fixed answer instead, with no model:
+the steps for a proven admin (``plan(admin=True)``, from the server's own
+check for this turn, never from anything the client said), else who can
+do it and where. Words only: it authorizes nothing.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from domovoi.help_desk import admin_tasks
 from domovoi.help_desk.index import Hit, HelpIndex, first_words
 from domovoi.help_desk.troubleshoot import Finding, for_question
 from domovoi.help_desk.troubleshoot import render as render_findings
@@ -175,10 +182,23 @@ class HelpTurn:
     has_screenshot: bool = False
     #: The question is about something not working: the findings count.
     troubleshoot: bool = False
+    #: The asker is a PROVEN admin for this turn (``Context.proven_admin``,
+    #: or in a chat ``admin_auth.request_is_proven_admin``): an admin task
+    #: is answered with its steps. Words only.
+    admin: bool = False
+    #: The admin's job the question asks about (:mod:`.admin_tasks`), if
+    #: any: answered by :attr:`task_answer`, no model asked.
+    task: admin_tasks.AdminTask | None = None
 
     @property
     def covered(self) -> bool:
-        return bool(self.hits or self.facts_text or self.findings_text)
+        return bool(self.task or self.hits or self.facts_text or self.findings_text)
+
+    @property
+    def task_answer(self) -> str | None:
+        """The fixed answer to an admin task, by who is asking; None when
+        the question is no admin task."""
+        return admin_tasks.answer(self.task, admin=self.admin) if self.task else None
 
     @property
     def findings_text(self) -> str | None:
@@ -202,13 +222,19 @@ def plan(
     findings: list[Finding] | None = None,
     has_screenshot: bool = False,
     extra_query: str = "",
+    admin: bool = False,
+    provided: Any = (),
 ) -> HelpTurn:
     """What a help answer may use: the confident passages, and the facts
-    and findings when the question is about them."""
+    and findings when the question is about them. ``admin``: the asker is
+    a proven admin for this turn (the server's check, never a client's
+    word); ``provided``: the capabilities this house's plugins provide
+    (``admin_tasks.provided_by``)."""
     query = f"{question} {extra_query}".strip()
     hits = [h for h in index.search(query, limit=MAX_PASSAGES) if h.confident()]
     turn = HelpTurn(question=question, hits=hits, on_screen=mentions_screen(question),
-                    has_screenshot=has_screenshot)
+                    has_screenshot=has_screenshot, admin=bool(admin),
+                    task=admin_tasks.match(question, provided=provided))
     if facts_text and wants_facts(question):
         turn.facts_text = facts_text
     if findings is not None and (wants_troubleshoot(question) or wants_troubleshoot(extra_query)):
@@ -327,7 +353,9 @@ def not_covered_answer(turn: HelpTurn, *, ai_on: bool = True) -> str:
 
 def extractive_answer(turn: HelpTurn) -> str:
     """With AI off: the passages themselves, best first. A plain manual
-    search, nothing generated."""
+    search, nothing generated. An admin task: its fixed answer."""
+    if turn.task_answer is not None:
+        return turn.task_answer
     if not turn.covered:
         return not_covered_answer(turn, ai_on=False)
     lines = ["Here's what Domovoi's help says:"]
@@ -364,6 +392,9 @@ async def answer(
     model's reply; it is called only with AI on and something found."""
     if not turn.covered:
         return HelpAnswer(not_covered_answer(turn, ai_on=ai_on), [], False, False)
+    if turn.task_answer is not None:
+        # An admin's job: the fixed answer, by who is asking; no model.
+        return HelpAnswer(turn.task_answer, [], False, True)
     if not ai_on or ask_model is None:
         return HelpAnswer(extractive_answer(turn), turn.sources, False, True)
     messages = [{"role": "system", "content": system_prompt(turn, bot=bot)}]

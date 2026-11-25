@@ -1488,10 +1488,9 @@
     },
     {
       "utterance": "write me a song about letters",
-      "handler": "voice_notes",
-      "path": "fast",
+      "handler": null,
       "tags": ["review-d7", "documents"],
-      "note": "2026-10-21 D7 review r1: voice_notes' 'write …' capture, as before D7 (wanted None)"
+      "note": "2026-10-21 D7 review r1 wanted None; 2026-11-25 voice_notes leaves 'write me a <poem/song/story…>' alone"
     },
     {
       "utterance": "write a poem about my letter carrier",

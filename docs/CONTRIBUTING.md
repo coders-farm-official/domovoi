@@ -194,6 +194,34 @@ Facts about the suite you should know before touching it:
   from the command line via `scripts/eval_routing.py --core URL` or
   `--ollama URL --model NAME`; run it before and after any change to the
   routing prompt, a `tool_schema` description, or an `offers_tool` gate.
+* The capability corpus (`scripts/capability_corpus.json`) is its sibling
+  for questions about Domovoi's OWN abilities ("can you X?", "what can you
+  do?", "are you recording me?"), asked of a house described by a small
+  fixture in `scripts/capability_houses/` (each extends `base.json` and
+  lists only what differs: internet answer, AI switch, plugins, rooms,
+  asker, …). `domovoi/tests/test_capability_corpus.py` checks its shape,
+  the global reply checks (no can't-do hedge on a question, no plugin or
+  provider names, no secrets, every `Settings → …` path real per
+  `web/static/settings.jsx`) and runs every `stub: true` case, with no
+  model, network or database; a case with `needs_change` is an expected
+  failure (xfail). From the command line:
+
+  ```powershell
+  python scripts/eval_capabilities.py                    # stub: fast paths and fixed lines only
+  python scripts/eval_capabilities.py --case 4.28 -v     # one case, with its reply
+  python scripts/eval_capabilities.py --only-group 16 --json out.json
+  python scripts/eval_capabilities.py --ollama http://192.168.1.20:11434 --model llama3.2:3b `
+      --judge-model qwen3:8b                             # real model; judge cases scored 0-3
+  ```
+
+  Each voice case runs the real `router.route()` (each chat case the
+  chat's own house-facts step first), with the database reads a fixture
+  holds (Home location, printers, plugins, friends, timers, ...) answered
+  from it. Stub mode reports a turn it can't answer honestly as "needs
+  model", "needs db" or "needs live" (more of the running core's rooms
+  than the fixture gives) instead of guessing. Known gaps print as "known gap (Nx)" and don't fail the run;
+  one that starts passing prints as "fixed?". It exits 1 only on an
+  unexpected failure.
 
 ### In parallel: `pytest -n`
 

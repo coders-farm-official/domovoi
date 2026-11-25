@@ -58,6 +58,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import off_answers
 from domovoi.confirmations import request_confirmation, take_parked_choice, PENDING_CONFIRMATION_KEY
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
@@ -603,8 +604,9 @@ class DocumentsHandler(Handler):
                                     "type it in Chat.")
         if ai_features.turned_off():
             # Plainly, before any dictation: nothing would write it up.
-            return self._reply(ctx, "Writing a letter needs the AI features, and they're turned off. Reading "
-                                    "documents aloud still works.")
+            return self._reply(ctx, off_answers.with_turn_on(
+                "Writing a letter needs AI, which is turned off.", off_answers.AI, admin=ctx.proven_admin,
+            ) + " Reading documents aloud still works.")
         author, author_id = await self._speaker(ctx, session)
         state = letters.new_state(ask, author=author, author_id=author_id, room=ctx.satellite_room_id)
         await self._set(session, ctx, LETTER_KEY, state)

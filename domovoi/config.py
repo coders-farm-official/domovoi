@@ -457,7 +457,7 @@ class Settings(BaseSettings):
     # screenshots, receipts and charts well at the 1280 px the chat sends.
     # The exact -instruct tag, never a bare one: the bare qwen3-vl tags are
     # the thinking builds. On a box with an NVIDIA GPU, pick qwen2.5vl:7b
-    # (Settings → Models, the Vision row; minutes per picture on a CPU).
+    # (Settings → Chat & AI → Models, the Vision row; minutes per picture on a CPU).
     # scripts/linux/provision.sh writes its tier's pin here and pulls it.
     ollama_vision_model: str = "qwen3-vl:2b-instruct-q4_K_M"
     # Per-request read timeout (seconds) for Ollama. A stalled Ollama (model
@@ -499,7 +499,7 @@ class Settings(BaseSettings):
     # satellite when a voice turn needs a model that isn't loaded, rather
     # than leaving the room silent through the load.
     ollama_cold_start_notice: bool = True
-    # The household's "AI features" switch (Settings → Models; both
+    # The household's "AI features" switch (Settings → Chat & AI → Models; both
     # installers ask "Include AI chat and questions?"). Off: nothing asks
     # a language model — no questions, no Chat, no news summary, no
     # warm-up — while voice commands keep running on their fixed phrases,
@@ -1527,8 +1527,10 @@ class Settings(BaseSettings):
     # core deletes everything older from intents_log and conversation_log,
     # the rooms' short-term conversations (sessions idle that long; older
     # exchanges in a room still talking) and the satellites' logs kept on
-    # this server. "Keep voice history" on People → Voice history and in
-    # Settings → Advanced (Privacy); a save prunes at once.
+    # this server. "Keep voice history" is on the dashboard's Settings →
+    # Household → People → Voice history and in Settings → System →
+    # Advanced (Privacy); a save prunes at once. (Settings → Privacy →
+    # Voice history is the command recordings, not this.)
     # Never fatal and never shorter than asked: see the validator.
     voice_history_keep: str = VOICE_HISTORY_KEEP_DEFAULT
     # How often the pruner looks (workers/voice_history_pruner.py): it

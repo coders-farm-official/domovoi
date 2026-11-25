@@ -220,12 +220,14 @@ time it comes; add morning, evening, am or pm to be sure.
 - "set a timer for 10 minutes"
 - "set a timer for 8 minutes for the pasta"
 - "how much time is left on the timer"
+- "what timers do I have"
 - "cancel the timer"
 - "remind me to call Mom in 20 minutes"
 - "remind me in 2 hours to take the bins out"
 - "remind me at 6 pm to take the bins out"
 - "wake me up at 7"
 - "set an alarm for 6:30"
+- "is my alarm set"
 - "cancel the 7 am alarm"
 - "what reminders do I have"
 
@@ -334,7 +336,9 @@ to house, with no company server in between): friends are other Domovoi houses. 
 everyone in the household; making and managing friends is under **Friends and connections** *(admin)*.
 To send one a message, say "message" and its name with the message, like
 "message the Smiths dinner's at six" (or "tell the Smiths …" when AI
-features are on): Domovoi reads it back and sends it when you say yes. Messages are read aloud only when you ask, and anyone in the
+features are on): Domovoi reads it back and sends it when you say yes. It says "Sent" once
+their house has it; when their house can't be reached, it says the message is queued and will go when
+it can. Ask "did my message send?" to hear where it is. Messages are read aloud only when you ask, and anyone in the
 room will hear them.
 
 **App:** on a room's page, tap **drop in from this phone** to talk to that
@@ -1493,8 +1497,8 @@ Change an event where it lives (the event says where).
   **Sometimes**); with the internet answer **No**
   it keeps the last copy and says how old it is. **refresh now** reads it
   at once.
-- **From a phone**: in the Domovoi app on Android, [Settings → Phone
-  calendars](#app/phone-calendars) (under Household), turn on **Share this phone's calendars with the
+- **From a phone**: in the Domovoi app on Android, [Settings → Household →
+  Phone calendars](#app/phone-calendars), turn on **Share this phone's calendars with the
   house** and pick the calendars. The phone sends them to your Domovoi
   over your home network (no internet needed) and keeps them up to date;
   turn it off and they leave the house. A phone that stops sending (the
@@ -2206,6 +2210,14 @@ Everything stays on your server, or on your phone.
 
 Paired phones and browsers in the house can read the voice history, in
 each room's **Conversations** tab.
+
+Ask Domovoi itself: it answers from this house's own settings.
+
+**Try saying**
+
+- "are you recording me"
+- "do you keep what I say"
+- "does anything leave the house"
 
 **How to**
 

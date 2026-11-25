@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "Offline library plugin whose handler raises.",
+  "plugins": [
+    {
+      "slug": "kiwix",
+      "enabled": true,
+      "status": "crash"
+    }
+  ]
+}

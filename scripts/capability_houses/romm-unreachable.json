@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "Retro games plugin enabled, its game server unreachable.",
+  "plugins": [
+    {
+      "slug": "romm",
+      "enabled": true,
+      "status": "error"
+    }
+  ]
+}

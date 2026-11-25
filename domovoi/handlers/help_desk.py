@@ -44,6 +44,14 @@ FAQ, the troubleshooting guide, plugins' help files —
   phone screen" and "how do I set an alarm on my phone" are not) AND the
   help index holds a confident page.
 
+**An admin's job** ("how do I add a room", "how do I update Domovoi", "how
+do I install a plugin", "how do I change the admin password":
+:mod:`domovoi.help_desk.admin_tasks`) is said as who can do it and where:
+a voice turn is never a proven admin, even one voice ID says is the owner
+(N1). Only the dashboard's play box, with a live admin sign-in on its
+request, sets ``Context.proven_admin``; such a turn hears the steps. The
+offer to send the manual's steps stays: they are the public manual's.
+
 **Sending is limited** (:mod:`domovoi.help_desk.delivery`): a few sends
 an hour per person (and so per phone) and per asking session, and the same
 steps to the same person once an hour. After "Who should I send it to?",
@@ -65,8 +73,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi.capabilities import CAPABILITIES
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.help_desk import admin_tasks
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -263,11 +273,19 @@ class HelpDeskHandler(Handler):
         if not hits:
             return None
         said = spoken_answer(hits[0])
+        task = admin_tasks.match(question, provided=CAPABILITIES.names())
+        if task is not None:
+            # An admin's job: who can do it and where, or the steps for a
+            # proven admin (the server's own check; voice never is). Words
+            # only: nothing here is allowed or refused by it.
+            said = admin_tasks.answer(task, admin=ctx.proven_admin)
         data = {"question": question, "passages": [h.passage.id for h in hits],
                 "section": hits[0].passage.section}
-        if ctx.from_phone or ctx.session_id is None:
-            # A phone turn is on the phone already; a turn with no session
-            # can't hear a yes. The page is named either way.
+        if ctx.from_phone or ctx.session_id is None or not ctx.answerable:
+            # A phone turn is on the phone already; a turn with no session,
+            # or from a surface that can't answer back (the dashboard's play
+            # box, Context.answerable False), can't say yes, so the offer
+            # isn't made. The page is named either way.
             return self._reply(ctx, said, data=data)
         await request_confirmation(
             session, ctx.session_id, kind=SEND_KIND, handler=self.name,

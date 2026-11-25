@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "A dashboard chat whose admin session expired mid-chat.",
+  "admin_session": "expired"
+}

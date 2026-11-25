@@ -155,7 +155,10 @@ async def test_a_turn_that_failed_brings_the_music_back(room) -> None:
     room.reply = _boom
     await room.turn()
     await _settle()
-    assert room.kinds()[-3:] == ["error", "response_end", "music_start"]
+    # Capability N5: a failed turn is said out loud ("Sorry, that didn't
+    # work."), an ordinary reply, not a bare error frame; the music still
+    # comes back after it.
+    assert room.kinds()[-3:] == ["response_start", "response_end", "music_start"]
 
 
 # ─── the question and its answer ──────────────────────────────────────────

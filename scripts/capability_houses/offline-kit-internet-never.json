@@ -1,0 +1,5 @@
+{
+  "extends": "offline-kit",
+  "note": "Offline kit, internet never.",
+  "internet": "never"
+}

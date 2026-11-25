@@ -1,0 +1,12 @@
+{
+  "extends": "base",
+  "note": "Picture plugin working, AI off.",
+  "plugins": [
+    {
+      "slug": "imagegen",
+      "enabled": true,
+      "status": "ok"
+    }
+  ],
+  "ai": false
+}

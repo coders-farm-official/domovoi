@@ -1,0 +1,8 @@
+{
+  "extends": "base",
+  "note": "Home location in the UK.",
+  "home_location": {
+    "name": "Bristol",
+    "country": "GB"
+  }
+}

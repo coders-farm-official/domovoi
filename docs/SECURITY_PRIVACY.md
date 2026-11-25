@@ -2226,7 +2226,7 @@ delete. Now there is a limit, a delete, and forgetting someone removes what
 they said. Everything below is `domovoi/voice_history.py`,
 `domovoi/workers/voice_history_pruner.py`, V030 and Settings → Household → People → **Voice
 history** on the dashboard (the same "Keep voice history" setting is also
-under Settings → Advanced → Privacy; Settings → Privacy → Voice history is
+under Settings → System → Advanced → Privacy; Settings → Privacy → Voice history is
 the page for command recordings, below). Chat is not voice history: a
 home-server chat is kept until it is deleted (see [Data at rest](#data-at-rest)).
 
@@ -2466,9 +2466,14 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   promise is a value Domovoi never saw, written in a way no pattern
   matches. Reading the checks is household tier (`GET /api/help/checks`),
   and what Home shows only to an admin (the update's details, the internet
-  question) is shown only to one, on that page — **never in a chat**: a
-  help chat on the home server is household-shared, so its answers use the
-  household view whoever asks, and say where an admin reads the rest. The
+  question, approvals waiting) is shown only to one, on that page — **never
+  in a chat, even a proven admin's**: a help chat on the home server is
+  household-shared, so its records use the household view whoever asks,
+  and say where an admin reads the rest. What a chat does show a proven
+  admin (below) is the **steps** of an admin's job — add a room, update,
+  install a plugin, the admin password, deleting files — which are the
+  public manual's own words; a member asking the same gets who can do it
+  and where. The
   passages and records reach a model only on this box, in a block marked
   as data with a marker no passage can know; a plugin's help file is quoted
   as third-party text with its web addresses removed, and a reply keeps
@@ -2496,6 +2501,30 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   help steps are offered, nothing more. The steps are a home-server chat
   (household-shared, like every server chat); the delivery row holds only
   the person, the chat and its title.
+* **A "proven admin" changes words, never what is allowed.** A turn's
+  `Context.proven_admin` (N1, owner 2026-11-25) is derived by the server
+  on that turn's own request, never taken from a client:
+  `admin_auth.request_is_proven_admin` is true only when
+  `check_admin_request` answers `ok`, a live admin Bearer. The dashboard
+  cookie alone (`cookie-only`, which only renders), a box with no admin
+  yet (`pre-setup`) and a check that can't run are all a member. It is
+  asked again on every turn and never cached, so a sign-in that ended
+  (sign-out, the idle hour) is a member from the next turn, mid-thread
+  included, and the check moves no idle clock. Two places set it: a
+  home-server chat's send, "try again" and heads-up answer, and the
+  dashboard's play box and room controls (`main._admin_route_intent`;
+  those routes are device tier, so a guest's or a household device's
+  press stays a member). Nothing else does: no voice turn (a satellite,
+  room mode, the phone chat mic — even when voice ID recognises the
+  owner), `/v1/intent`, Friend Houses mail, timers or background work. No
+  request body carries it (`Intent` and the chat bodies drop unknown keys
+  such as `admin` or `proven_admin`). What it changes: an "off" answer
+  ends with the steps ("Turn it on in Settings → … : press …") instead of
+  "An admin can turn it on in …" (`domovoi/off_answers.py`), and a help
+  question about an admin's job gets the steps instead of who can do it
+  and where (`domovoi/help_desk/admin_tasks.py`). Every admin action keeps
+  its own endpoint gate, so the flag can only ever change which words are
+  said. `domovoi/tests/test_proven_admin.py` pins each of these.
 
 ## Documents in chat
 
@@ -2516,7 +2545,7 @@ letter and write drafts. Who may, where it lives, and what can't happen:
   name; the chat keeps a one-line summary of each file and, with a reply,
   the passages the model was given. All of it goes when the chat is deleted,
   and a file picked in the composer and never sent is cleared out after an
-  hour. The text goes to the server's language model (Settings → Models) and
+  hour. The text goes to the server's language model (Settings → Chat & AI → Models) and
   nowhere else; a model that runs off the box (an `OLLAMA_URL` elsewhere,
   or a cloud model) takes the passages with it, the case the internet
   switch warns about. Documents are outside "Keep voice history", and the
@@ -2697,7 +2726,7 @@ and what can't happen:
   deletes them; stopping a job deletes what it had understood so far.
 * **On the household's server only.** What was said is transcribed by the
   server's own speech model; the frames are described by the chat's vision
-  model (Settings → Models) and the summary written by the chat model, all
+  model (Settings → Chat & AI → Models) and the summary written by the chat model, all
   through the server's Ollama. Nothing goes anywhere else, unless the house
   points `OLLAMA_URL` at a model off the box, the case the internet switch
   warns about. Videos are outside "Keep voice history", and the copies in
@@ -2902,9 +2931,9 @@ refused.
 
 **Messages.** There is one inbox for the whole house; Domovoi has no
 per-person sign-in, so per-person inboxes wait for one. Every message is
-**signed** by the house that sent it. A house can therefore show exactly
-what a friend sent (the export carries each signed envelope), and the
-same holds the other way round: a friend can prove what this house said.
+**signed** by the house that sent it, and a saved copy of a conversation
+includes each message's signature. The same holds the other way round:
+the friend's house keeps this house's signed messages.
 The connection uses fresh keys each time, so a stolen house key doesn't
 unlock recorded traffic. A message waits in the sender's outbox until the
 friend confirms it is stored, and is shown as "Not delivered" after 7
@@ -3448,7 +3477,7 @@ lists every outbound touchpoint, and [INTERNET.md](INTERNET.md) covers a
 server that has internet, one that only sometimes does, and one that never
 does.
 
-**If you turn AI features off** (Settings → Models), nothing in Domovoi
+**If you turn AI features off** (Settings → Chat & AI → Models), nothing in Domovoi
 asks a language model. Chat takes no new text, picture or document; a
 question no command answers gets a fixed line; the web-answer row above
 ("check that online", the weather) says "I can't look that up with AI

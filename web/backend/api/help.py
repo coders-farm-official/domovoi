@@ -22,7 +22,8 @@
 Chat answers help questions through the same pieces
 (``web/backend/api/chat.py``, :func:`help_turn_for`): a thread titled
 "Help: …" is a help chat; in any other thread, a question about Domovoi
-whose answer the help holds is answered from it too.
+whose answer the help holds is answered from it too, and so is a question
+about an admin's job (``domovoi/help_desk/admin_tasks.py``).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from sqlalchemy import text
 
 from domovoi import admin_auth, ai_features, egress
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.help_desk import admin_tasks
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery, diagnostics
 from domovoi.help_desk import facts as help_facts
@@ -92,6 +94,10 @@ def index_for(rows: list[dict[str, Any]]) -> HelpIndex:
 
 
 async def caller_is_admin(request: Request | None) -> bool:
+    """May this request READ what Home shows only to an admin (the checks
+    page, the report): a live sign-in, the dashboard cookie (it renders),
+    or a box with no admin yet. Not what a chat answer's wording follows:
+    that is :func:`request_is_proven_admin`."""
     if request is None:
         return False
     try:
@@ -99,6 +105,15 @@ async def caller_is_admin(request: Request | None) -> bool:
     except Exception:  # noqa: BLE001 — can't tell: not an admin
         return False
     return result in ("ok", "cookie-only", "pre-setup")
+
+
+async def request_is_proven_admin(request: Request | None) -> bool:
+    """Whether a chat turn's asker is a PROVEN admin, for the answer's
+    words only (N1): a live admin sign-in on this request (the Bearer,
+    ``check_admin_request == "ok"``). Never the cookie alone, never "no
+    admin set up yet", and False when the check can't run. Asked per
+    turn, never cached (``admin_auth.request_is_proven_admin``)."""
+    return await admin_auth.request_is_proven_admin(request)
 
 
 # ── live state ──────────────────────────────────────────────────────────
@@ -213,23 +228,33 @@ async def household_findings(rooms: list[dict[str, Any]], plugins: list[dict[str
 # ── chat's help turn ────────────────────────────────────────────────────
 
 
-async def help_turn_for(question: str, *, help_thread: bool,
+async def help_turn_for(question: str, *, help_thread: bool, admin: bool = False,
                         has_screenshot: bool = False, extra_query: str = "") -> help_answer.HelpTurn | None:
     """The help turn for a chat message, or None when it isn't one (a
     message in an ordinary chat that isn't about Domovoi, or that the help
     holds nothing for: that chat goes on as before).
 
-    Always the HOUSEHOLD view, whoever asks: a chat on the home server is
-    shared with every paired device, so what Home shows only to an admin
-    (the update's details, the internet question) never goes into it; the
+    ``admin``: the asker is a PROVEN admin on this turn
+    (:func:`request_is_proven_admin`). It changes one thing: a question
+    about an admin's job (admin_tasks: add a room, update, install a
+    plugin, the admin password, deleting files) is answered with the
+    steps instead of who can do it and where. Those steps are the public
+    manual's, so a shared chat may hold them (owner D1, part a).
+
+    Everything else stays the HOUSEHOLD view, whoever asks, a proven admin
+    included (D1, part b): a chat on the home server is shared with every
+    paired device, so what Home shows only to an admin (the update's
+    details, the internet question, approvals) never goes into it; the
     finding says where an admin reads it instead."""
     rooms: list[dict[str, Any]] | None = None
     plugins = await _plugins()
     index = index_for(plugins)
-    if not help_thread:
+    provided = admin_tasks.provided_by(plugins)
+    task = admin_tasks.match(question, provided=provided)
+    if not help_thread and task is None:
         # An ordinary chat: only a question about Domovoi itself (its rooms
         # count: "why is the kitchen offline"), never one merely worded
-        # like one ("how do I train a model").
+        # like one ("how do I train a model"); or one about an admin's job.
         rooms = await _rooms()
         names = [r.get("room_id") for r in rooms]
         if not help_answer.looks_like_help(question, index, anchors=names):
@@ -241,9 +266,11 @@ async def help_turn_for(question: str, *, help_thread: bool,
     if rooms is None:
         rooms = await _rooms() if (want_facts or want_checks) else []
     facts_text = help_facts.render(await gather_facts(rooms, plugins)) if want_facts else None
+    # admin=False, always (D1, part b): admin-only state never enters a chat.
     found = await household_findings(rooms, plugins, admin=False) if want_checks else None
     turn = help_answer.plan(question, index, facts_text=facts_text, findings=found,
-                            has_screenshot=has_screenshot, extra_query=extra_query)
+                            has_screenshot=has_screenshot, extra_query=extra_query,
+                            admin=admin, provided=provided)
     if not help_thread and not turn.covered:
         return None
     return turn

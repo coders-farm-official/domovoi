@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "Internet answer: sometimes (asks first).",
+  "internet": "sometimes"
+}

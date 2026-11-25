@@ -1,0 +1,11 @@
+{
+  "extends": "base",
+  "note": "Offline library plugin enabled, no library downloaded yet.",
+  "plugins": [
+    {
+      "slug": "kiwix",
+      "enabled": true,
+      "status": "error"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "extends": "garage-offline",
+  "note": "Garage offline and quiet hours active.",
+  "quiet_hours_active": true
+}

@@ -1,0 +1,5 @@
+{
+  "extends": "base",
+  "note": "Installed from the offline kit.",
+  "offline_kit": true
+}

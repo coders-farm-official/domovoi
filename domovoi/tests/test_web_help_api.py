@@ -143,17 +143,19 @@ def test_a_help_chat_that_finds_nothing_never_asks_the_model(quiet_state, stub_s
 def test_a_help_chat_answers_from_the_passages_with_the_sources_under_it(quiet_state, stub_stream) -> None:
     with _client() as c:
         t = c.post("/api/chat/threads", json={"title": "Help: Settings"}).json()
-        r = c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "how do I change the wake word"})
+        r = c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "how do I pair my phone"})
         events = _sse(r.text)
         system = stub_stream[0]["messages"][0]["content"]
-        assert "HELP-DATA-" in system and "#manual/wake-word" in system
+        # Not the wake word: changing it is an admin task with a fixed
+        # answer and no model (help_desk/admin_tasks.py, F5).
+        assert "HELP-DATA-" in system and "#manual/connect" in system
         assert "Answer ONLY from the material" in system
         deltas = "".join(d["text"] for ev, d in events if ev == "delta")
         done = next(d for ev, d in events if ev == "done")
         assert done["content"] == deltas and "*From:*" in done["content"]
-        assert "(#manual/wake-word)" in done["content"]
+        assert "(#manual/connect)" in done["content"]
         assert done["stats"]["help"]["covered"] and done["stats"]["help"]["model_asked"]
-        assert any(s["link"] == "#manual/wake-word" for s in done["stats"]["help"]["sources"])
+        assert any(s["link"] == "#manual/connect" for s in done["stats"]["help"]["sources"])
 
 
 @requires_db
@@ -164,7 +166,7 @@ def test_an_ordinary_chat_is_help_only_for_a_domovoi_question_it_holds(quiet_sta
         assert "HELP-DATA-" not in stub_stream[-1]["messages"][0]["content"]
         c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "how do i bake bread for the kitchen"})
         assert "HELP-DATA-" not in stub_stream[-1]["messages"][0]["content"]
-        c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "how do I change the wake word?"})
+        c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "how do I pair my phone with domovoi?"})
         assert "HELP-DATA-" in stub_stream[-1]["messages"][0]["content"]
 
 

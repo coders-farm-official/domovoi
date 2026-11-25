@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.db.repositories import VoiceNotesRepository, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.house_facts import GENERIC_OBJECT
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -37,9 +38,15 @@ log = logging.getLogger(__name__)
 _CAPTURE_VERBS = r"(?:jot|write|note|save)"
 _ADD_RE = re.compile(
     rf"^{_CAPTURE_VERBS}"
+    # "write me a poem" asks for writing, not a note to keep: the note
+    # would be "me a poem".
+    r"(?! (?:me|us) (?:a |an |another |one )?(?:\w+ )?"
+    r"(?:poem|story|song|joke|haiku|limerick|riddle|rhyme)s?\b)"
     r"(?: this)?(?: down)?"
     r"(?: a note)?(?: that)?"
-    r"\s*[:,]?\s+(?P<body>.+)$"
+    # "(can you) jot down things", "note stuff down": a question about the
+    # ability, never a note called "things" (G1; house_facts answers it).
+    rf"\s*[:,]?\s+(?!(?:down )?(?:{GENERIC_OBJECT})(?: down)?(?:,? (?:please|for me|for us))?$)(?P<body>.+)$"
 )
 
 # "what did I jot down today" / "what notes did I take this week" /

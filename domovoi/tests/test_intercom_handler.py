@@ -237,3 +237,15 @@ async def test_execute_from_tool_with_room_all() -> None:
             assert response.announce_text == "test"
     finally:
         mpd_module._room_ports = {}
+
+
+@pytest.mark.parametrize("said", [
+    "tell everyone things", "tell everybody stuff", "announce stuff", "broadcast things",
+])
+def test_a_generic_object_is_never_broadcast(said: str) -> None:
+    # G1: "can you announce stuff?" asks about the ability; the word
+    # "stuff" is never played in every room.
+    from domovoi.handlers.intercom import _ANNOUNCE_BARE_RE, _TELL_RE
+
+    assert _ANNOUNCE_BARE_RE.match(said) is None and _TELL_RE.match(said) is None
+    assert _TELL_RE.match("tell everyone dinner's ready") is not None

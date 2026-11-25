@@ -1,0 +1,13 @@
+{
+  "extends": "base",
+  "note": "Video downloads working, asked by a proven admin.",
+  "plugins": [
+    {
+      "slug": "video-downloads",
+      "enabled": true,
+      "status": "ok"
+    }
+  ],
+  "asker": "proven_admin",
+  "admin_session": "live"
+}

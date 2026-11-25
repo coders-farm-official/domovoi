@@ -1,0 +1,14 @@
+{
+  "extends": "base",
+  "note": "The garage's satellite is offline.",
+  "rooms": [
+    {
+      "id": "kitchen",
+      "online": true
+    },
+    {
+      "id": "garage",
+      "online": false
+    }
+  ]
+}
