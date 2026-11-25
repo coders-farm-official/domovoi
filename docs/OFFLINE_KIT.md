@@ -7,10 +7,9 @@ would otherwise download: the installers, the models, the phone app, the
 packages.
 
 > **Coming in 1.5.0, being built.** This page describes the kit's format,
-> how to check a stick, how a server makes a kit and how a Linux computer
-> (Ubuntu 26.04) and a Windows 11 PC install from one, and how a server
-> updates from a newer one. The Mac installing
-> from a kit arrives in a later step of 1.5.0; this page grows with it.
+> how to check a stick, how a server makes a kit, how a Linux computer
+> (Ubuntu 26.04), a Windows 11 PC and a Mac with an Apple chip install from
+> one, and how a server updates from a newer one.
 
 ## Making a kit
 
@@ -158,8 +157,124 @@ takes WSL and Ubuntu's image from `windows\` and `provision.sh` from
 inside Domovoi's Linux system for `provision.sh --offline-kit`. Keep the
 stick in until Setup finishes.
 [WINDOWS_HOST.md, Installing without internet](WINDOWS_HOST.md#installing-without-internet)
-has the steps, the checks and the refusals. The Mac follows in a later
-step of 1.5.0.
+has the steps, the checks and the refusals.
+
+**Mac (Apple chip).** Make the kit with **A Mac with an Apple chip**
+ticked. Open `release/DomovoiSetup-mac.pkg` on the stick. The setup app
+finds the kit (any `/Volumes/<name>/kit.json`), checks it before it
+uses anything from it (checksums, nothing on it a link or missing from
+`kit.json`, the release signature, that the kit is the package's own
+release, the parts), and says so on its first page: "Installing from the
+offline kit on DOMOVOIKIT, Domovoi 1.5.0: nothing is downloaded". It takes
+Ubuntu's arm64 cloud image, Ollama for macOS and the speech model from
+`mac/`, and the AI models from `ollama/models/` into the Mac's own Ollama
+folder, each against the package's pins; Lima shares the stick read-only
+with Domovoi's virtual machine for `provision.sh --offline-kit` with the
+arm64 packages. Keep the stick in until Setup finishes.
+[Installing on a Mac](#installing-on-a-mac) below has the details.
+
+| Computer | Open | Takes from the stick itself | Then |
+|---|---|---|---|
+| Linux (Ubuntu 26.04) | `linux/install.sh --kit` | everything | `provision.sh --offline-kit` |
+| Windows 11 | `release\DomovoiSetup.exe` | WSL, Ubuntu's WSL image, `provision.sh` | the same, in Domovoi's Linux system |
+| Mac (Apple chip) | `release/DomovoiSetup-mac.pkg` | Ubuntu's arm64 image, Ollama for macOS, the speech model, the AI models (Lima is in the package) | the same, in Domovoi's virtual machine |
+
+## Installing on a Mac
+
+The package on the stick, `release/DomovoiSetup-mac.pkg`, is the release's
+own, so the kit and the package are one release. Its setup app looks for a
+kit in every `/Volumes/<name>` (the stick's label is `DOMOVOIKIT`, but a
+renamed stick is found too; with two kits plugged in, the one of the
+package's release). `sudo DomovoiHelper install --system --kit DIR` takes a
+kit in any folder; `--no-kit` never uses one.
+
+**What the Mac checks before it uses anything from the stick**
+(`mac/Sources/DomovoiMacKit/OfflineKit.swift`; the Windows Setup's checks,
+in the same order and words):
+
+1. **Checksums.** `kit.json` and the release's signed Mac manifest
+   (`release/DomovoiSetup-mac.manifest.json` and its `.sig`) against the
+   stick's `SHA256SUMS`. They catch only a bad copy.
+2. **The kit.** A kit format this package reads, made for "A Mac with an
+   Apple chip", naming a release. Nothing on the stick is a link or
+   missing from `kit.json`, and no package folder under `apt/` has a name
+   apt doesn't use (the system's own files, `.DS_Store`, `._*` and the
+   like, are let be, and its folders, such as `.Spotlight-V100`, at the
+   stick's top).
+3. **The release signature.** The manifest is signed with Domovoi's
+   release key, the one the package already pins for the Mac update
+   (`share/installer/release-signing.pub`, checked by
+   `ReleaseSignature.swift`), under the Mac manifest's own namespace; it
+   names the tag and commit `kit.json` names; and that commit is the one
+   the package was built from (`share/build.json`). A kit of an older
+   release is never used (a kit never takes Domovoi back); a newer one is
+   refused with "Open the DomovoiSetup-mac.pkg on the stick".
+4. **The parts.** Ubuntu's arm64 cloud image, Ollama for macOS and
+   whisper.cpp's model, each listed with the SHA-256
+   `mac/installer/pins.conf` pins; the tier's AI models as
+   `provision-manifest.conf` pins them (the package carries a copy); and
+   what `provision.sh --offline-kit` needs on the virtual machine (the
+   source, Ubuntu's and Docker's arm64 packages, the aarch64 Python
+   packages, the images, the speech models and voices).
+
+Then every file the Mac takes is read through the same check: each stored
+file or part against `SHA256SUMS` and `kit.json`, a split file joined in
+order and the whole against `kit.json` and its pin. Nothing that fails is
+kept. A 24 GB Mac takes the standard tier's models when the stick has
+them, and the floor's when the kit came from a house with less memory.
+
+**The install, from the stick.**
+- Lima comes from the package; Ubuntu's image, Ollama for macOS and the
+  speech model from `mac/`.
+- The AI models go into the Mac's own Ollama folder
+  (`/Library/Application Support/Domovoi/ollama-models`), the way `provision.sh` puts them
+  into Linux's: each manifest must be the pinned build before anything is
+  copied, each blob must hash to its name, the manifest goes in last. An
+  install from a kit always runs Domovoi's own Ollama: the setup app
+  doesn't offer the Ollama already on the Mac, and asks to quit it.
+- Lima shares the stick with the virtual machine read-only, at
+  `/mnt/domovoi-kit` (the path Windows uses too), and `provision.sh` runs
+  with `--offline-kit /mnt/domovoi-kit` and the arm64 packages; it finds
+  the models in the Mac's Ollama at their pinned digests and pulls
+  nothing. A kit made without AI chat installs with `--no-ai-models`.
+- When provisioning ends, done or not, the stick comes out of the virtual
+  machine's settings and the virtual machine starts again without it (the
+  one extra restart of a kit install): with the stick gone it would not
+  start otherwise. If that fails, the next run of Setup takes it out
+  before the virtual machine starts.
+
+**Nothing reaches the internet.** Every place the Mac install would reach
+out is closed in kit mode: the pinned downloads come from the package and
+the stick (a file neither holds stops the install, saying so, and nothing
+is downloaded); the setup app's "Internet now" check is replaced by the
+kit's; the wait for the virtual machine's internet before provisioning is
+skipped; the models are on the Mac before `provision.sh` runs, whose own
+guard lets it reach only this machine and the Mac's Ollama. The internet
+question stays: a house with no internet answers **No**.
+
+**Repair.** Setup's **Repair** uses a kit that is plugged in when it is
+the release this Mac runs (the same checks; "Repair uses the offline kit
+on DOMOVOIKIT"), so a house with no internet can repair from its stick. A
+kit of another release, or one that fails a check, is not used, and the
+page says why; the repair then runs as one with internet would. A repair
+of a house that was installed from a kit, with the stick not plugged in,
+runs as one with internet would too. Updating a Mac from a newer kit isn't
+part of this: the server updates from it in the dashboard (below).
+
+**Plain refusals.** Each says what to do, before anything changes:
+
+| Setup says | Why |
+|---|---|
+| This kit holds Domovoi 1.5.1, and this Setup installs Domovoi 1.5.0: they don't go together. Open the DomovoiSetup-mac.pkg on the stick... | Another release's package. |
+| This kit holds Domovoi 1.4.9, older than 1.5.0, and a kit never takes Domovoi back to an older release. | Newer kits only. |
+| This kit was made for a Windows or Linux PC only. | Make the kit again with "A Mac with an Apple chip" ticked. |
+| This kit is missing what Setup needs: ... | A part isn't on it. Ollama for macOS goes on a kit only with AI chat ticked, and every Mac install needs it. |
+| This kit's mac/... isn't the one this Setup's release pins. | A file of another release. |
+| This stick has a damaged file: ... Make the stick again. | A checksum doesn't match. |
+| This stick holds what a kit never does, so Setup used nothing from it. ... | The stick was changed. |
+| This kit is not a Domovoi release signed with Domovoi's release key ... | Nothing on it is used. |
+| An install from an offline kit runs Domovoi's own Ollama ... | Quit the Ollama already on this Mac, then check again. |
+| The VM can't see the offline kit at /mnt/domovoi-kit (is the stick ... still plugged in?) | Plug it in and run Setup again. |
 
 ## Updating from a kit
 
