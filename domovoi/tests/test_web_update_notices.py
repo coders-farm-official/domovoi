@@ -49,6 +49,15 @@ Auth = { status: { authenticated: false, setup_complete: true }, subscribe: () =
          isLoggedIn: () => false, headers: () => ({}), modalOpen: false };
 """
 _UPDATE_NOW = _SETUP + "window.location.hash = '#settings/about/update-now';\n"
+# An update under way: the card follows it (components.jsx
+# followServerRestart), polling the version every 2 s until
+# restart_in_progress clears, and follows again while the card's own read
+# still says busy. This table never clears, so here the poll's wait never
+# fires: the snapshot is the card while the update runs.
+_UNDER_WAY = _SETUP + r"""
+const __st = setTimeout;
+setTimeout = (fn, ms, ...a) => (Number(ms) === 2000 ? 0 : __st(fn, ms, ...a));
+"""
 
 _SCRIPT = r"""
 const w = h.global('window'); h.render(); await w.__settle(h);
@@ -147,7 +156,8 @@ SCENARIOS = {
     # An update under way (restart_in_progress, the same state as the
     # notice's `updating`): no Update button, no "is available".
     "updating": _scenario(_version(_updates(latest=_latest("1.5.0"), relation="behind",
-                                            notice={**NOTICE, "updating": True}), restart_in_progress=True)),
+                                            notice={**NOTICE, "updating": True}), restart_in_progress=True),
+                          setup=_UNDER_WAY),
     "notice_no_highlights": _scenario(_version(_updates(notice={**NOTICE, "highlights": []}))),
     "main_behind": _scenario(_version(_updates(latest=_latest("1.5.0"), relation="behind", notice=NOTICE),
                                       channel="main", version="1.4.1 + 12 (4d6b414)")),
