@@ -102,10 +102,10 @@ async def test_a_photo_send_still_reaches_the_phone_after_voice_help_stopped_sen
     snapshot, and ``GET /api/help/deliveries`` (the apps' catch-up read).
     Every piece must still carry a "Photos: …" send, end to end."""
     import asyncio
-    import os
 
     import asyncpg
 
+    from domovoi.config import settings
     from domovoi.help_desk import delivery
     from web.backend import realtime
     from web.backend.api import help as help_api
@@ -113,7 +113,9 @@ async def test_a_photo_send_still_reaches_the_phone_after_voice_help_stopped_sen
     await _beach()
     sarah = await voice.person("FT Sarah")
     await voice.phone("android-sarah", sarah)
-    url = os.environ["TEST_DATABASE_URL"].replace("postgresql+asyncpg://", "postgresql://")
+    # The worker's own database (xdist gives each worker a copy, and a
+    # NOTIFY only reaches listeners on the same database).
+    url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
     heard: asyncio.Queue[str] = asyncio.Queue()
     conn = await asyncpg.connect(url)
     try:
