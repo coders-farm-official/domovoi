@@ -1191,21 +1191,6 @@
       ]
     },
     {
-      "id": "6.8",
-      "utterance": "Do you remember my birthday?",
-      "where": "voice",
-      "house": "memory-off",
-      "expect": "EXACT",
-      "kind": "question",
-      "must_include": [
-        "memory"
-      ],
-      "must_not_include": [
-        "march"
-      ],
-      "note": "memory is off; must not recite anything"
-    },
-    {
       "id": "6.9",
       "utterance": "Can you remember things about me?",
       "where": "voice",
@@ -1215,20 +1200,6 @@
       "must_include": [
         "remember that|forget"
       ],
-      "stub": true
-    },
-    {
-      "id": "6.10",
-      "utterance": "Can you remember things about me?",
-      "where": "voice",
-      "house": "memory-off",
-      "expect": "CANT",
-      "kind": "question",
-      "must_include": [
-        "memory",
-        "admin"
-      ],
-      "note": "memory is off; an admin can turn it on (Q2)",
       "stub": true
     },
     {
@@ -1990,14 +1961,14 @@
       "id": "9.10",
       "utterance": "What do you remember about me?",
       "where": "voice",
-      "house": "memory-off",
+      "house": "extractor-off",
       "expect": "EXACT",
       "kind": "question",
+      "handler": "memory",
       "must_include": [
-        "memory"
+        "^Here's what I remember: birthday is March 3\\.$"
       ],
-      "judge": true,
-      "rubric": "Says memory is off, and whether anything older is still stored.",
+      "note": "there is no memory switch: the only one (memory_extractor_enabled) stops background offers; reading memories still works (= 15.19)",
       "stub": true
     },
     {
