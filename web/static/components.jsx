@@ -2353,7 +2353,7 @@ const CapabilitiesStore = (() => {
   };
 })();
 
-/* The household's AI switch (Settings → Models; features.ai in
+/* The household's AI switch (Settings → Chat & AI → Models; features.ai in
  * /api/capabilities, domovoi/ai_features.py). Off hides Chat from every
  * launcher (navItemsFor) — a page that can't work is not offered. Until
  * the server answers, this browser's last answer (localStorage, a per-

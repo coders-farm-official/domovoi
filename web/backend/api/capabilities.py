@@ -89,7 +89,7 @@ def _features() -> dict[str, bool]:
     ``ai`` is live."""
     from domovoi import ai_features
 
-    # The household's AI switch (Settings → Models), read live from .env
+    # The household's AI switch (Settings → Chat & AI → Models), read live from .env
     # like the core does (domovoi/ai_features.py): false hides Chat in the
     # dashboard and the app, which treat a missing key as true (an older
     # server). Not restart-tier, unlike the flags below.

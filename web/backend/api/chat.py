@@ -133,7 +133,7 @@ READ = [Depends(require_device_read)]
 
 def _require_ai() -> None:
     """A message to the model, or a picture for one, while the household's
-    AI features are off (Settings → Models, domovoi/ai_features.py): the 409
+    AI features are off (Settings → Chat & AI → Models, domovoi/ai_features.py): the 409
     ai-off refusal, before anything is stored or Ollama is asked. Reading
     the threads already there stays open."""
     if ai_features.turned_off():
@@ -462,7 +462,7 @@ ERR_TIMEOUT = "model_timeout"                      # Ollama took too long to tak
 ERR_MODEL = "model_error"                          # anything else Ollama reported
 ERR_EMPTY = "empty_reply"                          # the model answered with nothing
 
-_SETTINGS_MODELS = "Settings → Models"
+_SETTINGS_MODELS = "Settings → Chat & AI → Models"
 
 
 def vision_missing_text(model: str) -> str:

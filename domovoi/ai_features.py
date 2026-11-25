@@ -1,6 +1,6 @@
 """The household's "AI features" switch: may Domovoi use its chat models?
 
-One question, ``AI_FEATURES`` (Settings → Models, both installers'
+One question, ``AI_FEATURES`` (Settings → Chat & AI → Models, both installers'
 "Include AI chat and questions?", ``provision.sh --no-ai-models``):
 
 * on (the default, and every install from before the switch existed) —
@@ -68,7 +68,7 @@ OFF_LOOKUP_LINE = off_lookup_line()
 
 # The one sentence an API refusal carries (HTTP detail, the SDK's
 # exception text, the dashboard's toast).
-TURNED_OFF_REASON = "AI features are turned off for this home (Settings → Models)"
+TURNED_OFF_REASON = "AI features are turned off for this home (Settings → Chat & AI → Models)"
 REFUSAL_HEADER = "X-Domovoi-Refusal"
 REFUSAL_VALUE = "ai-off"
 
@@ -80,7 +80,7 @@ ANSWER_LOCKED = "set in the server's environment (AI_FEATURES); change it there"
 # Download sizes of the chat models the installers pull, in GB, as the
 # Ollama library lists them (the repo pins these by digest in
 # scripts/linux/provision-manifest.conf; a test keeps the two in step).
-# Settings → Models shows them before turning AI on; provision.sh and the
+# Settings → Chat & AI → Models shows them before turning AI on; provision.sh and the
 # Windows Setup page say the tier totals below.
 MODEL_DOWNLOAD_GB: dict[str, float] = {
     "llama3.2:3b-instruct-q4_K_M": 2.0,

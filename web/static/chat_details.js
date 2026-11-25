@@ -137,9 +137,9 @@ const ChatDetails = (() => {
 
   const visionMissingText = (model) => (String(model || '').trim()
     ? `Pictures need the vision model ${model}, which isn't installed on this Domovoi. `
-      + 'An admin can install it in Settings → Models, or pick another vision model there.'
+      + 'An admin can install it in Settings → Chat & AI → Models, or pick another vision model there.'
     : 'Pictures need a vision model, and none is set on this Domovoi. '
-      + 'An admin can pick one in Settings → Models.');
+      + 'An admin can pick one in Settings → Chat & AI → Models.');
 
   /* Is a picture sure to be refused? Only when the server said so
    * (/api/chat/models `vision_installed: false`); not knowing — Ollama
@@ -147,11 +147,11 @@ const ChatDetails = (() => {
   const visionMissing = (info) => !!info && info.vision_installed === false;
 
   // Codes whose answer is a model to install or pick: an admin's job,
-  // in Settings → Models.
+  // in Settings → Chat & AI → Models.
   const MODEL_CODES = ['vision_model_missing', 'model_missing', 'vision_unsupported', 'model_memory'];
 
   /* How a reply's error reads: {text, code, models} — `models` true when
-   * Settings → Models is where it gets fixed. Null when there is none.
+   * Settings → Chat & AI → Models is where it gets fixed. Null when there is none.
    * The code is the row's `stats.error_code` (or a live stream's). */
   const errorView = (m) => {
     if (!m || !m.error) return null;

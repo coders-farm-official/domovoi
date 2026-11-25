@@ -9,7 +9,7 @@
  * When that model isn't installed (/api/chat/models `vision_installed:
  * false`) the paperclip says so instead of opening the picker, and a
  * reply's error reads as a plain sentence (ChatDetails.errorView), with
- * Settings → Models one press away for an admin.
+ * Settings → Chat & AI → Models one press away for an admin.
  *
  * Documents (PDF, Word, OpenDocument, Excel, CSV, text, markdown) ride the
  * same paperclip to /api/chat/documents (chat_documents.jsx, ChatDocs); a
@@ -62,7 +62,7 @@ const chatSendStream = async (threadId, body, onDelta, onStatus, onJob, opts = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  // The household turned AI chat off (Settings → Models): the server
+  // The household turned AI chat off (Settings → Chat & AI → Models): the server
   // answers 409 with X-Domovoi-Refusal: ai-off before any reply; say so
   // plainly instead of "409 Conflict" or an empty bubble.
   if (r.status === 409 && r.headers && r.headers.get && r.headers.get('X-Domovoi-Refusal') === 'ai-off') {
@@ -117,10 +117,10 @@ const chatSendStream = async (threadId, body, onDelta, onStatus, onJob, opts = {
   return { done, errorDetail, errorCode, errorModel };
 };
 
-/* "open Settings → Models", for an admin, where a model is the fix. */
+/* "open Settings → Chat & AI → Models", for an admin, where a model is the fix. */
 const ChatModelsLink = () => (
   <a href="#settings/models" className="chat-note-link">
-    open Settings → Models
+    open Settings → Chat & AI → Models
   </a>
 );
 
@@ -144,7 +144,7 @@ const ChatReplyError = ({ m, admin }) => {
 };
 
 /* The composer's note when a picture can't be read here: why, what chat
- * takes, and Settings → Models for an admin. */
+ * takes, and Settings → Chat & AI → Models for an admin. */
 const ChatPictureNote = ({ model, admin, onClose }) => (
   <div className="chat-note info" role="note">
     <div className="chat-note-row">
@@ -507,7 +507,7 @@ const useChatNarrow = (ref) => {
   return narrow;
 };
 
-/* Chat while the household's AI features are off (Settings → Models): the
+/* Chat while the household's AI features are off (Settings → Chat & AI → Models): the
  * page is off every launcher then (navItemsFor), and a link or an old
  * bookmark that still lands here says why instead of offering a composer
  * whose every send would be refused. */
@@ -522,8 +522,8 @@ const ChatAiOff = () => {
   return (
     <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Empty title="chat is off"
-             sub="AI chat and questions are turned off for this home. Voice commands still work. An admin can turn AI on in Settings → Models."
-             action={<a href="#settings/models" className="home-link">Settings → Models</a>}/>
+             sub="AI chat and questions are turned off for this home. Voice commands still work. An admin can turn AI on in Settings → Chat & AI → Models."
+             action={<a href="#settings/models" className="home-link">Settings → Chat & AI → Models</a>}/>
       {Drafts && !open && <Drafts.List onOpen={(id) => setOpen(id)}/>}
       {Drafts && open && (
         <Drafts.Canvas draftId={open} reloadKey={0} wide={false} fire={fire}

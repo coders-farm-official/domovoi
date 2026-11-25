@@ -1,4 +1,4 @@
-"""Settings → Models, the role rows (``GET /api/models/active`` and
+"""Settings → Chat & AI → Models, the role rows (``GET /api/models/active`` and
 ``models.jsx`` ActiveRow) — the three things found on the Beelink's phone
 view on 2026-10-12:
 

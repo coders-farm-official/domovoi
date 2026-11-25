@@ -61,8 +61,6 @@ STUB_CASES = [c for c in CASES if c.stub]
 # CI stays green; remove a line once fixed (it shows up as XPASS first).
 STUB_FINDINGS = {
     "9.9": "the memory list doesn't say how to forget one (handlers/memory.py _list_memories)",
-    "21.10": "the AI-off chat refusal names 'Settings → Models' (ai_features.TURNED_OFF_REASON); "
-             "the place is Settings → Chat & AI → Models",
 }
 
 

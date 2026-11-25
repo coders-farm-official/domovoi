@@ -1,4 +1,4 @@
-"""Settings → Models: errors stay until dismissed, and a pull of a name
+"""Settings → Chat & AI → Models: errors stay until dismissed, and a pull of a name
 that doesn't exist says what was probably meant (owner report 2026-10-13).
 
 The owner typed ``qwen3-v1:2b`` (the model is ``qwen3-vl:2b``) into "pull by
