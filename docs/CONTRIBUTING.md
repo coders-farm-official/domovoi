@@ -1086,7 +1086,7 @@ with the highlights (a list), and its own headings are `###` and none of
 finish-release's (`Download`, `What's new…`, `Files`, `Files and
 checksums`, `Install or update`). From 1.5.0 it also has exactly one
 `## Highlights` right above `## At a glance`: exactly three `- ` items,
-8 to 80 characters each, plain words (no `` ` * _ [ ] < > | # \ ``), the
+8 to 80 characters each (Unicode code points: an emoji counts once), plain words (no `` ` * _ [ ] < > | # \ ``), the
 same three as the `### Highlights` of its dated section of
 `docs/RELEASE_NOTES.md`. The plan job and finish-release both
 refuse a file that isn't so (`release_doc_problems` in

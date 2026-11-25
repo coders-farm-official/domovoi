@@ -36,6 +36,7 @@ MAX_FILE_BYTES = 256 * 1024
 #: The section, from the line after the heading to the next heading.
 MAX_SECTION_BYTES = 2 * 1024
 COUNT = 3
+#: An item's length, in Unicode code points (see :func:`parse_highlights`).
 MIN_CHARS = 8
 MAX_CHARS = 80
 #: Unicode categories no item may hold: controls, format characters (bidi
@@ -97,7 +98,12 @@ def parse_highlights(raw: bytes) -> list[str]:
     nesting, no continuation lines, no ``*`` bullets), exactly 3 items,
     each NFC with no control, format, private-use, surrogate or separator
     character, runs of spaces collapsed, 8 to 80 characters. Anything else
-    is ``[]``: the whole section, never a part of it."""
+    is ``[]``: the whole section, never a part of it.
+
+    A "character" is a Unicode code point (Python's ``len``), after NFC:
+    not a UTF-16 unit (JavaScript's ``.length``) and not a grapheme
+    cluster, so an emoji outside the BMP counts once. Every reader (the
+    web, the phones) counts the same way."""
     lines = section_lines(raw)
     if lines is None:
         return []

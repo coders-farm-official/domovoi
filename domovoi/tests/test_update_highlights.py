@@ -79,6 +79,22 @@ def test_8_and_80_characters_pass_7_and_81_do_not():
     assert _parse(_doc(["a" * 81, "b" * 40, "c" * 40])) == []
 
 
+#: A cat face, U+1F431: one code point, two UTF-16 units (a surrogate pair).
+CAT = "🐱"
+
+
+def test_the_length_is_code_points_so_an_emoji_counts_once():
+    """One rule everywhere (web, phones, release check): 8 to 80 Unicode
+    code points, not UTF-16 units. 80 code points with an emoji is 81
+    UTF-16 units and still passes; 81 code points does not."""
+    at_80, at_81 = CAT + "a" * 79, CAT + "a" * 80
+    at_8, at_7 = CAT + "a" * 7, CAT + "a" * 6
+    assert len(at_80) == 80 and len(at_80.encode("utf-16-le")) // 2 == 81
+    assert _parse(_doc([at_80, at_8, GOOD[2]])) == [at_80, at_8, GOOD[2]]
+    assert _parse(_doc([at_81, GOOD[1], GOOD[2]])) == []
+    assert _parse(_doc([at_7, GOOD[1], GOOD[2]])) == []
+
+
 @pytest.mark.parametrize("char", [
     "\x07",        # Cc
     "\t",          # Cc

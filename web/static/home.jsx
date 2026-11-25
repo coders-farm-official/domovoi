@@ -359,13 +359,16 @@ const HOME_UPDATE_NOTICE = '/api/updates/notice';
 const HOME_UPDATE_HREF = '#settings/about/update-now';
 const HOME_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 const HomeUpdateRow = (notice, { admin = false, shared = false } = {}) => {
-  if (!notice || notice.available !== true) return null;
+  if (!notice) return null;
+  // `updating` is the house's real update state, with or without a notice
+  // (a house on main, an update started by hand): never a button then.
+  if (notice.updating === true) {
+    return { key: 'update-available', tone: 'brand', scope: 'household', update: true,
+             text: 'Domovoi is restarting…', canUpdate: false, sub: null };
+  }
+  if (notice.available !== true) return null;
   const version = typeof notice.version === 'string' && HOME_VERSION_RE.test(notice.version) ? notice.version : null;
   if (!version) return null;
-  if (notice.updating) {
-    return { key: 'update-available', tone: 'brand', scope: 'household', update: true,
-             text: 'Domovoi is updating…', canUpdate: false, sub: null };
-  }
   const canUpdate = !!admin && !shared;
   return { key: 'update-available', tone: 'brand', scope: 'household', update: true,
            text: `Domovoi ${version} is available`, canUpdate,
