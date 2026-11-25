@@ -214,9 +214,12 @@ Facts about the suite you should know before touching it:
       --judge-model qwen3:8b                             # real model; judge cases scored 0-3
   ```
 
-  Stub mode reports a turn it can't answer honestly as "needs model",
-  "needs db" or "needs live" (the running core's rooms) instead of
-  guessing. Known gaps print as "known gap (Nx)" and don't fail the run;
+  Each voice case runs the real `router.route()` (each chat case the
+  chat's own house-facts step first), with the database reads a fixture
+  holds (Home location, printers, plugins, friends, timers, ...) answered
+  from it. Stub mode reports a turn it can't answer honestly as "needs
+  model", "needs db" or "needs live" (more of the running core's rooms
+  than the fixture gives) instead of guessing. Known gaps print as "known gap (Nx)" and don't fail the run;
   one that starts passing prints as "fixed?". It exits 1 only on an
   unexpected failure.
 

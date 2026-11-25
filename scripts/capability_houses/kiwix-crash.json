@@ -1,9 +1,9 @@
 {
   "extends": "base",
-  "note": "Weather plugin whose handler raises.",
+  "note": "Offline library plugin whose handler raises.",
   "plugins": [
     {
-      "slug": "weather",
+      "slug": "kiwix",
       "enabled": true,
       "status": "crash"
     }

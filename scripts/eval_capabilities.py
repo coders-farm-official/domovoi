@@ -14,27 +14,32 @@ a small declarative house fixture, and scores every reply:
   scripts/capability_houses/_plugins.json
                                      the stand-in plugins a house can list
 
-Two targets, like scripts/eval_routing.py:
+Every voice case runs the real ``router.route()``, and every chat case
+runs chat.py's own deterministic step (house_facts.chat_reply, the privacy
+and "can you ...?" matcher) first, inside a sandbox: the database reads a
+house fixture holds (its Home location, printers, plugins, friends,
+calendars, command recordings, timers and alarms, the room's board) come
+from the fixture, the room's connected satellites from its rooms, and the
+router's own session bookkeeping is kept in memory. Two targets, like
+scripts/eval_routing.py:
 
-  (default) stub   No model, no database, no network. The turn runs
-                   route()'s deterministic tiers: the fast paths (offline
-                   gate included), the AI-off lines and the offline
-                   volatile-question line. A turn that would need the model
-                   reports "needs model"; one whose handler touches the
-                   database, the live rooms (ctx.app) or the network
-                   reports "needs db" / "needs live" / "needs network"
-                   instead of guessing. The live database is never
-                   dialled: the run points DATABASE_URL at a dead address
-                   and refuses every connect.
+  (default) stub   No model, no network, and no other database read: a
+                   turn that would ask the model reports "needs model";
+                   one that reads or writes database state the fixture
+                   doesn't hold, reads more of the live rooms than their
+                   names, or goes online reports "needs db" / "needs
+                   live" / "needs network" instead of guessing. The live
+                   database is never dialled: the run points DATABASE_URL
+                   at a dead address and refuses every connect.
 
-  --ollama URL     Real-model runs: what the stub can't answer goes on as
-                   route() would — the tool model (``--tool-model``,
-                   default settings.ollama_tool_model) with this checkout's
-                   prompt and tool gate, the volatile gate, then the Q&A
-                   model (``--model``, default settings.ollama_model) with
-                   the voice prompt. A chat case ("where": "chat") gets the
-                   chat's system prompt (or the help desk's, for a help
-                   question). No database: no speaker profile, no history.
+  --ollama URL     Real-model runs: the same route() with the real model
+                   client (``--model`` answers, default
+                   settings.ollama_model; ``--tool-model`` routes, default
+                   settings.ollama_tool_model). Reads the fixture doesn't
+                   hold come back empty and writes are dropped (noted in
+                   the result), so a profile or history read doesn't stop
+                   the turn. A chat case gets the chat's system prompt (or
+                   the help desk's, for a help question).
 
   --judge-model M  Also score ``judge: true`` cases 0-3 against their
                    rubric, on the same Ollama server (2 or more passes).
@@ -101,10 +106,12 @@ INTERNET = ("always", "sometimes", "never")
 VOICE_ID = ("off", "unknown", "enrolled", "ambiguous")
 FRIEND_HOUSES = ("off", "no_friends", "friends")
 PLUGIN_STATUS = ("ok", "error", "crash")
-# N7 (the hedge) and N10 (plugin names when asked) were resolved by the
-# owner on 2026-11-25: the hedge is scored per case kind, and a "which
-# plugins" question may name them (``allow_plugin_names``).
-NEEDS_CHANGE_IDS = ("N1", "N2", "N3", "N4", "N5", "N6", "N8", "N9", "N11", "N12")
+# The list's "needs change" items. N7 (the hedge) and N10 (plugin names
+# when asked) were resolved by the owner on 2026-11-25: the hedge is scored
+# per case kind, and a "which plugins" question may name them
+# (``allow_plugin_names``). 1.4.1 fixed N2-N6, N8, N9 and N11-N16; a case
+# keeps ``needs_change`` only while its gap is open (N1 today).
+NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 17) if i not in (7, 10))
 CASE_STATUS = ("verified", "unverified")
 
 # What a house fixture may say (the schema the test checks).
@@ -501,12 +508,13 @@ def global_problems(
     )
 
 
-# ─── The sandbox: no database, no network, the model only when asked ──
+# ─── The sandbox: the house's state from its fixture, nothing else ───
 
 
 class NeedsDB(BaseException):
-    """Raised (as a BaseException, so a handler's ``except Exception``
-    can't swallow it) when a turn touches the database."""
+    """Raised (as a BaseException, so a handler's or the router's ``except
+    Exception`` can't swallow it) when a turn reads database state the
+    fixture doesn't answer, or writes anything (stub mode)."""
 
 
 class NeedsNetwork(BaseException):
@@ -517,40 +525,239 @@ class NeedsModel(BaseException):
     pass
 
 
+class NeedsLive(BaseException):
+    """The turn reads more of the running core's live rooms (``ctx.app``)
+    than the fixture's rooms give."""
+
+
+class NeedsPluginError(BaseException):
+    """A stand-in can't say what the real plugin says on this path (its
+    service down, its model with AI off, its offline answer): such a turn
+    is reported "needs plugin"."""
+
+
 @dataclass
 class Touches:
     db: list[str] = field(default_factory=list)
     net: list[str] = field(default_factory=list)
     model: list[str] = field(default_factory=list)
     live: list[str] = field(default_factory=list)
+    # --ollama: reads the fixture doesn't answer, given no rows instead.
+    empty: list[str] = field(default_factory=list)
 
     def clear(self) -> None:
-        self.live.clear()
-        self.db.clear()
-        self.net.clear()
-        self.model.clear()
+        for v in (self.db, self.net, self.model, self.live, self.empty):
+            v.clear()
 
 
 TOUCHES = Touches()
+# The house the running case is in, and whether reads the fixture doesn't
+# answer fail the turn (stub) or come back empty (--ollama, so a model run
+# isn't stopped by a profile or history read).
+CURRENT: dict[str, Any] = {"house": {}, "lenient": False}
 
 
-class NoDBSession:
-    """Stands where route() passes its AsyncSession: any use is a touch."""
+class _Rows:
+    """Enough of a SQLAlchemy result for the reads below."""
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+
+    def scalar(self) -> Any:
+        return next(iter(self._rows[0].values())) if self._rows else None
+
+    def scalar_one_or_none(self) -> Any:
+        return self.scalar()
+
+    def first(self) -> Any:
+        return tuple(self._rows[0].values()) if self._rows else None
+
+    def all(self) -> list[tuple]:
+        return [tuple(r.values()) for r in self._rows]
+
+    fetchall = all
+
+    def scalars(self) -> "_List":
+        return _List([next(iter(r.values())) for r in self._rows])
+
+    def mappings(self) -> "_List":
+        return _List(list(self._rows))
+
+
+class _List:
+    def __init__(self, items: list[Any]) -> None:
+        self._items = items
+
+    def all(self) -> list[Any]:
+        return list(self._items)
+
+    def first(self) -> Any:
+        return self._items[0] if self._items else None
+
+
+def _plugin_rows(house: dict) -> list[dict[str, Any]]:
+    catalogue = CURRENT.get("catalogue") or {}
+    rows = []
+    for p in house.get("plugins") or []:
+        spec = catalogue.get(p["slug"], {})
+        rows.append({
+            "slug": p["slug"],
+            "enabled": bool(p.get("enabled", True)),
+            # A stand-in that raises or whose service is missing: the
+            # registry's "error" status.
+            "status": "ok" if p.get("status", "ok") == "ok" else "error",
+            "manifest": {"capabilities": {"provides": list(spec.get("capabilities") or [])}},
+        })
+    return rows
+
+
+def _home_value(house: dict) -> Any:
+    loc = house.get("home_location")
+    return json.dumps(loc) if loc else None
+
+
+def _alarm_rows(house: dict) -> list[dict[str, Any]]:
+    """The fixture's alarms ("07:00") as the timers table holds them: the
+    next time each goes off, in UTC."""
+    from datetime import timedelta, timezone
+
+    from domovoi import household_time
+
+    now = household_time.now()
+    out = []
+    for a in house.get("alarms") or []:
+        hh, mm = (int(x) for x in str(a["at"]).split(":"))
+        at = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if at <= now:
+            at += timedelta(days=1)
+        out.append({"expires_at": at.astimezone(timezone.utc)})
+    return sorted(out, key=lambda r: r["expires_at"])
+
+
+def _timer_rows(house: dict) -> list[dict[str, Any]]:
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        {"expires_at": now + timedelta(minutes=float(t["minutes_left"])),
+         "created_at": now - timedelta(minutes=1), "label": t.get("label")}
+        for t in house.get("timers") or []
+    ]
+    return sorted(rows, key=lambda r: r["expires_at"])
+
+
+# The database reads a house fixture answers: (what, SQL pattern, rows).
+FIXTURE_READS: list[tuple[str, re.Pattern[str], Any]] = [
+    ("home location", re.compile(r"FROM household_settings WHERE key", re.I),
+     lambda h, p: [{"value": _home_value(h)}] if (p or {}).get("k") == "home_location" else []),
+    ("command recordings", re.compile(r"FROM command_capture_rooms", re.I),
+     lambda h, p: [{"x": 1}] if h.get("command_recordings") else []),
+    ("friends", re.compile(r"count\(\*\) FROM friend_houses_friends", re.I),
+     lambda h, p: [{"n": len(h.get("friends") or []) if h.get("friend_houses") != "off" else 0}]),
+    ("calendars", re.compile(r"count\(\*\) FROM calendar_sources", re.I),
+     lambda h, p: [{"n": sum(1 for c in h.get("calendars") or [] if c.get("kind") == "ics")}]),
+    ("printers", re.compile(r"count\(\*\) FROM printers", re.I),
+     lambda h, p: [{"n": int(h.get("printers") or 0)}]),
+    ("plugins", re.compile(r"FROM plugins\b", re.I), lambda h, p: _plugin_rows(h)),
+    ("alarms", re.compile(r"SELECT expires_at FROM timers .*message IS NOT NULL", re.I),
+     lambda h, p: _alarm_rows(h)),
+    ("timers", re.compile(r"SELECT expires_at, created_at, label FROM timers", re.I),
+     lambda h, p: _timer_rows(h)),
+    ("room board", re.compile(r"SELECT board FROM satellites", re.I),
+     lambda h, p: [{"board": "android_room" if h.get("asker") == "room_mode_phone" else "pi"}]),
+]
+
+
+class FixtureSession:
+    """Stands where route() passes its AsyncSession and where
+    ``session_scope()`` opens one: the reads in FIXTURE_READS come from the
+    house fixture; any other read or any write is "needs db" (stub), or an
+    empty answer / a no-op (--ollama, noted in the result)."""
+
+    async def execute(self, stmt: Any, params: Any = None, *a: Any, **k: Any) -> _Rows:
+        sql = " ".join(str(stmt).split())
+        house = CURRENT["house"]
+        for _what, rx, rows in FIXTURE_READS:
+            if rx.search(sql):
+                return _Rows(rows(house, params if isinstance(params, dict) else {}))
+        if CURRENT["lenient"]:
+            TOUCHES.empty.append(sql[:70])
+            return _Rows([])
+        TOUCHES.db.append(sql[:70])
+        raise NeedsDB(sql[:70])
+
+    async def scalar(self, stmt: Any, params: Any = None, *a: Any, **k: Any) -> Any:
+        return (await self.execute(stmt, params)).scalar()
+
+    async def scalars(self, stmt: Any, params: Any = None, *a: Any, **k: Any) -> _List:
+        return (await self.execute(stmt, params)).scalars()
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
+
+    async def flush(self, *a: Any) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        if CURRENT["lenient"]:
+            TOUCHES.empty.append(f"session.{name}")
+
+            async def nothing(*a: Any, **k: Any) -> Any:
+                return None
+
+            return nothing if name not in ("add", "add_all", "expunge") else (lambda *a, **k: None)
         TOUCHES.db.append(f"session.{name}")
         raise NeedsDB(f"session.{name}")
 
 
-class NeedsLive(BaseException):
-    """The turn reads the running core's live rooms (``ctx.app``: the
-    connected satellites, their calls and players)."""
+@contextlib.asynccontextmanager
+async def fixture_scope(*a: Any, **k: Any):
+    yield FixtureSession()
 
 
-class NoLiveApp:
-    """Stands where the streaming layer stamps ``ctx.app``: any use is a
-    touch. (None would be wrong: a handler reads None as "not from a room"
-    and answers that, which is not what this house's rooms would hear.)"""
+class _LiveRoom:
+    """One connected room of the fixture: its board, nothing more."""
+
+    def __init__(self, room_id: str, board: str) -> None:
+        self.room_id = room_id
+        self.board = board
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        TOUCHES.live.append(f"room.{name}")
+        raise NeedsLive(f"room.{name}")
+
+
+class _LiveState:
+    def __init__(self, house: dict) -> None:
+        board = "android_room" if house.get("asker") == "room_mode_phone" else "pi"
+        self.active_sessions = {
+            r["id"]: _LiveRoom(r["id"], board) for r in house.get("rooms") or [] if r.get("online", True)
+        }
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        TOUCHES.live.append(f"app.state.{name}")
+        raise NeedsLive(f"app.state.{name}")
+
+
+class LiveApp:
+    """Stands where the streaming layer stamps ``ctx.app``: the fixture's
+    online rooms are connected (``state.active_sessions``); anything else
+    a handler reads there (calls, players, pairing) is "needs live"."""
+
+    def __init__(self, house: dict) -> None:
+        self.state = _LiveState(house)
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("__"):
@@ -588,14 +795,48 @@ def _swap_everywhere(original: Any, replacement: Any) -> list[tuple[Any, str, An
     return undo
 
 
+# The router's own bookkeeping, kept in memory: the session row and its
+# context (parked questions), and the turn's log rows (not written).
+_SESSIONS: dict[Any, dict[str, Any]] = {}
+
+
+async def _mem_get_or_create(self: Any, session_id: Any, room_id: Any) -> Any:
+    from uuid import uuid4
+
+    if session_id is not None and session_id in _SESSIONS:
+        return session_id
+    new_id = session_id or uuid4()
+    _SESSIONS[new_id] = {}
+    return new_id
+
+
+async def _mem_get_context(self: Any, session_id: Any) -> dict[str, Any]:
+    return dict(_SESSIONS.get(session_id) or {})
+
+
+async def _mem_set_context_key(self: Any, session_id: Any, key: str, value: Any) -> None:
+    _SESSIONS.setdefault(session_id, {})[key] = value
+
+
+async def _mem_record_exchange(self: Any, *a: Any, **k: Any) -> None:
+    return None
+
+
+async def _no_persist(*a: Any, **k: Any) -> None:
+    return None
+
+
 @contextlib.contextmanager
 def sandbox(model_client: Any = None) -> Iterator[None]:
-    """No database connect, no outbound HTTP, and the language model only
-    when ``model_client`` is given (else every call is "needs model")."""
+    """No database (FixtureSession answers the fixture's reads), no
+    outbound HTTP, and the language model only when ``model_client`` is
+    given (else every call is "needs model")."""
     import asyncpg
     import httpx
 
+    from domovoi import router
     from domovoi.clients import ollama as ollama_mod
+    from domovoi.db import repositories
     from domovoi.db import session as db_session
 
     def no_db(*a: Any, **k: Any) -> Any:
@@ -605,12 +846,6 @@ def sandbox(model_client: Any = None) -> Iterator[None]:
     async def no_db_async(*a: Any, **k: Any) -> Any:
         TOUCHES.db.append("connect")
         raise NeedsDB("connect")
-
-    @contextlib.asynccontextmanager
-    async def no_scope(*a: Any, **k: Any):
-        TOUCHES.db.append("session_scope")
-        raise NeedsDB("session_scope")
-        yield  # pragma: no cover
 
     async def no_send(self: Any, request: Any, *a: Any, **k: Any) -> Any:
         url = str(getattr(request, "url", "?"))
@@ -631,8 +866,15 @@ def sandbox(model_client: Any = None) -> Iterator[None]:
     _ORIG["sync_send"] = httpx.Client.send
     undo: list[tuple[Any, str, Any]] = []
     undo += _swap_everywhere(ollama_mod.get_ollama_client, lambda: client)
-    undo += _swap_everywhere(db_session.session_scope, no_scope)
-    undo += _swap_everywhere(db_session.SessionLocal, no_db)
+    undo += _swap_everywhere(db_session.session_scope, fixture_scope)
+    undo += _swap_everywhere(db_session.SessionLocal, lambda *a, **k: FixtureSession())
+    repo = repositories.SessionRepository
+    for name, fn in (("get_or_create", _mem_get_or_create), ("get_context", _mem_get_context),
+                     ("set_context_key", _mem_set_context_key), ("record_exchange", _mem_record_exchange)):
+        undo.append((repo, name, getattr(repo, name)))
+        setattr(repo, name, fn)
+    undo.append((router, "_persist_turn", router._persist_turn))
+    router._persist_turn = _no_persist
     undo.append((asyncpg, "connect", asyncpg.connect))
     asyncpg.connect = no_db_async
     undo.append((httpx.AsyncClient, "send", httpx.AsyncClient.send))
@@ -644,6 +886,7 @@ def sandbox(model_client: Any = None) -> Iterator[None]:
     finally:
         for obj, name, value in reversed(undo):
             setattr(obj, name, value)
+        _SESSIONS.clear()
 
 
 _ORIG: dict[str, Any] = {}
@@ -661,12 +904,12 @@ def _is_model_url(url: str) -> bool:
 
 def _stand_in(slug: str, spec: dict, status: str) -> Any:
     """A stand-in for an installed plugin, built from _plugins.json: its
-    feature label, example phrase, tool and (approximate) fast paths, so
-    the help answer, the capability seams, the tool list and fast-path
-    order see the plugin. Its reply is a marker, not the plugin's words."""
-    from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
-
+    feature label, example phrase, tool, AI declaration and (approximate)
+    fast paths, so the help answer, the capability seams, the tool list,
+    the AI-off gate and fast-path order see the plugin. Its reply is a
+    marker, not the plugin's words."""
     from domovoi import ai_features
+    from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 
     async def answer(self: Any, m: Any, ctx: Any, session: Any, uses_ai: bool = False) -> Any:
         from domovoi.models import Response
@@ -678,7 +921,7 @@ def _stand_in(slug: str, spec: dict, status: str) -> Any:
         if uses_ai and ai_features.turned_off():
             raise NeedsPluginError(f"{slug} asks the model on this path, and AI is off")
         return Response(
-            text=f"[stand-in: the {spec['feature']} feature handled this]",
+            text=f"{STAND_IN_PREFIX}the {spec['feature']} feature handled this]",
             session_id=ctx.session_id, matched_handler=self.name,
         )
 
@@ -697,6 +940,7 @@ def _stand_in(slug: str, spec: dict, status: str) -> Any:
             "display": HandlerDisplay(label=spec["feature"], tone="info"),
             "example_phrases": tuple(spec.get("example_phrases") or ()),
             "requires_network": spec.get("requires_network", "no"),
+            "needs_ai": bool(spec.get("needs_ai", False)),
             "tool_schema": {
                 "name": spec.get("handler", slug.replace("-", "_")),
                 "description": spec.get("tool_description", spec["feature"]),
@@ -724,31 +968,44 @@ async def _offline_fallback(self: Any, intent: Any, ctx: Any, session: Any) -> A
     raise NeedsPluginError(f"{self.plugin_slug}'s offline answer")
 
 
-class NeedsPluginError(BaseException):
-    """A stand-in can't say what the real plugin says when its own service
-    is down: such a turn is reported "needs plugin"."""
+def _keep_setting(days: Any) -> str:
+    return "forever" if not days else str(days)
 
 
 @contextlib.contextmanager
-def applied(house: dict, catalogue: dict[str, dict]) -> Iterator[None]:
-    """The house's switches, in-process: the internet answer, the AI
-    switch, Friend Houses (and its friends' names, which its fast paths
-    match on), the memory extractor, and its enabled plugins
-    registered as stand-ins (with their capability seams). Everything else
-    in the fixture is state the database holds: a handler that reads it
-    reports "needs db"."""
-    from domovoi import ai_features, egress
+def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -> Iterator[None]:
+    """The house, in-process: the internet answer, the AI switch, the
+    settings its facts read (Friend Houses, voice history, the memory
+    extractor), Friend Houses' friend names (its fast paths match on them),
+    the printers and the database reads in FIXTURE_READS, and its enabled
+    plugins as stand-ins (with their capability seams and AI declaration).
+    Anything else a turn reads from the database is "needs db" (stub)."""
+    from domovoi import ai_features, egress, home_location
     from domovoi.capabilities import CAPABILITIES
     from domovoi.config import settings
+    from domovoi.handlers import friend_houses as fh
     from domovoi.handlers import register_handler, unregister_handler
+    from domovoi.printing import store as printer_store
 
     saved = {
         "friend_houses_enabled": settings.friend_houses_enabled,
         "memory_extractor_enabled": settings.memory_extractor_enabled,
+        "voice_history_keep": settings.voice_history_keep,
+        "command_capture_retention_days": settings.command_capture_retention_days,
+        "music_similar_artists_enabled": settings.music_similar_artists_enabled,
+        "music_popularity_enabled": settings.music_popularity_enabled,
     }
-    from domovoi.handlers import friend_houses as fh
-
     saved_names = dict(fh._NAMES)
+    saved_home = (home_location._cache, home_location._cached_at)
+    saved_list_printers = printer_store.list_printers
+
+    async def fixture_printers(s: Any = None) -> list[dict[str, Any]]:
+        return [
+            {"id": i, "name": f"Printer {i}", "ipp_address": f"192.168.1.{50 + i}", "rooms": []}
+            for i in range(1, int(house.get("printers") or 0) + 1)
+        ]
+
+    CURRENT.update(house=house, lenient=lenient, catalogue=catalogue)
     added: list[tuple[str, str]] = []
     with egress.override_policy(house.get("internet", "always")), ai_features.override(
         bool(house.get("ai", True))
@@ -756,14 +1013,22 @@ def applied(house: dict, catalogue: dict[str, dict]) -> Iterator[None]:
         try:
             settings.friend_houses_enabled = house.get("friend_houses", "friends") != "off"
             settings.memory_extractor_enabled = bool(house.get("memory_extractor", True))
-            # The friend names Friend Houses' fast paths listen for (read
-            # from the database in the background on a live core).
+            settings.voice_history_keep = _keep_setting(house.get("voice_history_days", 90))
+            settings.command_capture_retention_days = 14
+            # Up next's online music suggestions (the listening-history
+            # service the list calls by name).
+            settings.music_similar_artists_enabled = bool(house.get("listenbrainz"))
+            settings.music_popularity_enabled = bool(house.get("listenbrainz"))
             fh._NAMES["forms"] = frozenset(
                 form.replace("'", "")
                 for f in house.get("friends") or []
                 for form in fh.spoken_forms(f["name"])
             )
             fh._NAMES["at"] = time.monotonic()
+            loc = house.get("home_location")
+            home_location._cache, home_location._cached_at = (
+                home_location.clean(loc, rematch=False) if loc else None, time.monotonic())
+            printer_store.list_printers = fixture_printers
             for p in house.get("plugins") or []:
                 if not p.get("enabled", True):
                     continue
@@ -773,22 +1038,32 @@ def applied(house: dict, catalogue: dict[str, dict]) -> Iterator[None]:
                 added.append((h.name, p["slug"]))
                 for cap in spec.get("capabilities") or []:
                     CAPABILITIES.register(cap, object(), slug=p["slug"])
+                ai_features.set_plugin_ai(
+                    p["slug"], ai_features.plugin_ai_from_manifest(
+                        {"ai": spec["ai"]} if spec.get("ai") else
+                        {"capabilities": {"provides": list(spec.get("capabilities") or [])}}
+                    ),
+                )
             yield
         finally:
             for name, slug in added:
                 unregister_handler(name)
                 CAPABILITIES.unregister_all_for(slug)
+                ai_features.set_plugin_ai(slug, None)
             for k, v in saved.items():
                 setattr(settings, k, v)
             fh._NAMES.clear()
             fh._NAMES.update(saved_names)
+            home_location._cache, home_location._cached_at = saved_home
+            printer_store.list_printers = saved_list_printers
+            CURRENT.update(house={}, lenient=False)
 
 
 def build_context(house: dict) -> Any:
     from domovoi import voice_identifier as vi
     from domovoi.models import Context
 
-    rooms = house.get("rooms") or [{"id": "kitchen"}]
+    rooms = house.get("rooms") or []
     room = rooms[0]["id"] if rooms else "kitchen"
     vid = house.get("voice_id", "enrolled")
     speaker = house.get("speaker") or {}
@@ -796,7 +1071,7 @@ def build_context(house: dict) -> Any:
         "room_id": room,
         "online": house.get("internet", "always") != "never",
         "trigger": "wake_word",
-        "app": NoLiveApp(),
+        "app": LiveApp(house),
     }
     if vid == "enrolled":
         fields.update(person_id=int(speaker.get("person_id", 1)), voice_outcome=vi.OUTCOME_CONFIDENT,
@@ -813,7 +1088,7 @@ def build_context(house: dict) -> Any:
 
 @dataclass
 class Turn:
-    # reply | raised | skipped | needs_model | needs_db | needs_live |
+    # reply | skipped | needs_model | needs_db | needs_live |
     # needs_network | needs_plugin
     outcome: str
     text: str = ""
@@ -822,128 +1097,41 @@ class Turn:
     detail: str = ""
 
 
-async def run_voice_turn(utterance: str, ctx: Any, *, client: Any = None) -> Turn:
-    """route()'s tiers without a database. ``client``: the real model
-    client (--ollama), or None for stub mode."""
-    from domovoi import ai_features, egress, weather
-    from domovoi.clients.mpd import MPDNotProvisioned
-    from domovoi.handlers import HANDLER_BY_NAME
-    from domovoi.handlers.shared.tool_gate import answers_without_tools
+async def run_voice_turn(utterance: str, ctx: Any) -> Turn:
+    """The real ``router.route()``, with the fixture's session and rooms.
+    The model is whatever the sandbox gives (none in stub mode)."""
     from domovoi.models import Intent
-    from domovoi.router import (
-        _no_speakers_yet, first_fast_path, normalize_transcript, offered_tool_schemas,
-        offline_blocked, phone_refusal, strip_leading_filler, strip_request_preamble,
-        tool_action_offered,
-    )
-    from domovoi.uncertainty import CATEGORY_WEATHER, VOLATILE_CATEGORIES, categorize_question
+    from domovoi.router import route
 
-    session = NoDBSession()
-    intent = Intent(transcript=utterance, room_id=ctx.room_id)
-    t = strip_request_preamble(strip_leading_filler(normalize_transcript(utterance)))
-
-    hit = first_fast_path(t)
-    if hit is not None:
-        handler, fp, m = hit
-        try:
-            if offline_blocked(handler, fp, ctx) and phone_refusal(handler, ctx) is None:
-                resp, path = await handler.fallback_offline(intent, ctx, session), "fast_offline"
-            else:
-                resp, path = phone_refusal(handler, ctx), "fast"
-                if resp is None:
-                    resp = await fp.method(handler, m, ctx, session)
-        except MPDNotProvisioned:
-            resp, path = _no_speakers_yet(None, ctx), "fast"
-        if resp is not None:
-            return Turn("reply", resp.text or "", handler.name, path)
-        # declined: route on
-
-    if ai_features.turned_off():
-        category = categorize_question(t)
-        text = (
-            ai_features.OFF_LOOKUP_LINE
-            if category is not None and category in VOLATILE_CATEGORIES
-            else ai_features.OFF_LINE
-        )
-        return Turn("reply", text, None, "qa")
-
-    if not answers_without_tools(t):
-        if client is None:
-            return Turn("needs_model", detail="the tool model")
-        schemas = offered_tool_schemas(t)
-        call = await client.route(utterance, schemas)
-        if call is not None:
-            handler = HANDLER_BY_NAME.get(call.get("handler", ""))
-            if handler is not None and any(s["name"] == handler.name for s in schemas) \
-                    and tool_action_offered(handler, call.get("args")):
-                if handler.requires_network == "yes" and not ctx.online:
-                    resp = await handler.fallback_offline(intent, ctx, session)
-                else:
-                    try:
-                        resp = await handler.execute_from_tool(call.get("args", {}), ctx, session)
-                    except MPDNotProvisioned:
-                        resp = _no_speakers_yet(None, ctx)
-                if resp is not None:
-                    return Turn("reply", resp.text or "", handler.name, "llm",
-                                f"args={json.dumps(call.get('args'))[:80]}")
-
-    category = categorize_question(t)
-    if category == CATEGORY_WEATHER and weather.plugin_handles_weather():
-        category = None
-    if category is not None and category in VOLATILE_CATEGORIES:
-        if not ctx.online:
-            text = (
-                "I'd need the internet to answer that, and I'm set to stay off it."
-                if egress.internet_turned_off()
-                else "I'd need the internet to answer that, and we're offline right now."
-            )
-            return Turn("reply", text, None, "qa")
-        if client is None:
-            return Turn("needs_model", detail="the volatile gate names the subject")
-        subj = await client.extract_search_subject(utterance, history=[])
-        from domovoi.router import _VOLATILE_SUBJECT_FALLBACK
-
-        phrase = (subj.subject or "").strip() or _VOLATILE_SUBJECT_FALLBACK.get(category, "that")
-        return Turn("reply", f"I'd need the internet to get you that. Want me to check {phrase}?",
-                    None, "volatile_offer")
-    if client is None:
-        return Turn("needs_model", detail="the Q&A model")
-    return await _qa_turn(utterance, ctx, client, category)
-
-
-async def _qa_turn(utterance: str, ctx: Any, client: Any, category: str | None) -> Turn:
-    from domovoi.router import (
-        _LLM_UNREACHABLE_TEXT, _NO_ANSWER_TEXT, _ONLINE_CHECK_OFFER, _end_sentence,
-        answer_admits_staleness, answer_offers_lookup, looks_like_question,
-    )
-
-    qa = await client.qa_with_uncertainty(utterance, history=[], profile_prefix=None)
-    answer = (qa.answer or "").strip()
-    if getattr(qa, "unreachable", False) or not answer:
-        text = _LLM_UNREACHABLE_TEXT if getattr(qa, "unreachable", False) else _NO_ANSWER_TEXT
-        return Turn("reply", text, None, "error")
-    offers = answer_offers_lookup(answer)
-    doubt = looks_like_question(utterance) and (
-        qa.needs_verification or answer_admits_staleness(answer) or offers
-    )
-    if ctx.online and (category is not None or doubt) and not offers:
-        answer = _end_sentence(answer) + " " + _ONLINE_CHECK_OFFER
-    return Turn("reply", answer, None, "qa")
+    resp = await route(Intent(transcript=utterance, room_id=ctx.room_id), ctx, FixtureSession())
+    return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path)
 
 
 async def run_chat_turn(utterance: str, *, model_url: str | None, model: str | None) -> Turn:
-    """The home-server chat: refused with AI off; otherwise always the
-    model (the help desk's prompt for a help question)."""
-    from domovoi import ai_features
+    """The home-server chat (web/backend/api/chat.py send_message): refused
+    with AI off; then the house's own answer (house_facts.chat_reply, the
+    privacy and "can you …?" matcher), then the help desk's fixed reply,
+    then the model."""
+    from domovoi import ai_features, house_facts
     from domovoi.clients import ollama as ollama_mod
     from domovoi.config import settings
     from domovoi.help_desk import answer as help_answer
 
     if ai_features.turned_off():
         return Turn("reply", ai_features.TURNED_OFF_REASON, None, "chat_refused")
+
+    async def previous_assistant() -> None:
+        return None
+
+    fact = await house_facts.chat_reply(
+        utterance, get_setting=house_facts.core_setting, scope=fixture_scope,
+        previous_assistant=previous_assistant,
+    )
+    if fact is not None:
+        return Turn("reply", fact, "house_facts", "chat")
     if model_url is None:
         return Turn("needs_model", detail="the chat model")
     system = ollama_mod.chat_system_prompt(None)
-    fixed = None
     if help_answer.looks_like_help(utterance):
         from web.backend.api import help as help_api
 
@@ -951,9 +1139,7 @@ async def run_chat_turn(utterance: str, *, model_url: str | None, model: str | N
         if turn is not None:
             system = help_answer.system_prompt(turn, bot=settings.bot_name)
             if not turn.covered:
-                fixed = help_answer.not_covered_answer(turn)
-    if fixed is not None:
-        return Turn("reply", fixed, None, "chat_help")
+                return Turn("reply", help_answer.not_covered_answer(turn), None, "chat_help")
     import ollama
 
     resp = await ollama.AsyncClient(host=model_url).chat(
@@ -965,15 +1151,16 @@ async def run_chat_turn(utterance: str, *, model_url: str | None, model: str | N
 
 async def run_case(
     case: Case, house: dict, catalogue: dict[str, dict], *,
-    client: Any = None, model_url: str | None = None, model: str | None = None,
+    model_url: str | None = None, model: str | None = None,
 ) -> Turn:
     if case.skip_reason:
         return Turn("skipped", detail=case.skip_reason)
     TOUCHES.clear()
-    with applied(house, catalogue):
+    lenient = model_url is not None
+    with applied(house, catalogue, lenient=lenient):
         try:
             if case.where == "voice":
-                turn = await run_voice_turn(case.utterance, build_context(house), client=client)
+                turn = await run_voice_turn(case.utterance, build_context(house))
             else:
                 turn = await run_chat_turn(case.utterance, model_url=model_url, model=model)
         except NeedsModel as e:
@@ -986,17 +1173,18 @@ async def run_case(
             return Turn("needs_live", detail=f"reads the live rooms ({e})")
         except NeedsPluginError as e:
             return Turn("needs_plugin", detail=f"the stand-in can't speak for the plugin: {e}")
-        except Exception as e:  # noqa: BLE001 - the router doesn't catch it either: silence
-            return Turn("raised", "", None, None, f"{type(e).__name__}: {e}"[:200])
-    # A handler that swallowed the refusal still read state we don't have.
+    # Something swallowed a refusal: the turn still read what we don't have.
     if TOUCHES.live:
         return Turn("needs_live", turn.text, turn.handler, turn.path, f"read {TOUCHES.live[0]}")
     if TOUCHES.db:
         return Turn("needs_db", turn.text, turn.handler, turn.path, f"touched {TOUCHES.db[0]}")
     if TOUCHES.net:
         return Turn("needs_network", turn.text, turn.handler, turn.path, f"reached {TOUCHES.net[0]}")
-    if TOUCHES.model and client is None:
+    if TOUCHES.model and not lenient:
         return Turn("needs_model", turn.text, turn.handler, turn.path, f"called {TOUCHES.model[0]}")
+    if TOUCHES.empty:
+        turn.detail = (turn.detail + "; " if turn.detail else "") + (
+            f"{len(TOUCHES.empty)} database read(s) answered empty, e.g. {TOUCHES.empty[0]}")
     return turn
 
 
@@ -1160,7 +1348,7 @@ async def run_all(
     with sandbox(client):
         for case in cases:
             house = houses[case.house]
-            turn = await run_case(case, house, catalogue, client=client, model_url=model_url, model=model)
+            turn = await run_case(case, house, catalogue, model_url=model_url, model=model)
             r = score(case, turn, house, tree, catalogue)
             results.append(r)
     if judge_model and model_url:
@@ -1184,6 +1372,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--list", action="store_true", help="print the corpus and exit")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    # Handlers log their expected failures (a stand-in that raises); the
+    # report says what matters.
+    import logging
+
+    logging.basicConfig(level=logging.CRITICAL)
     if args.judge_model and not args.ollama:
         p.error("--judge-model needs --ollama")
 

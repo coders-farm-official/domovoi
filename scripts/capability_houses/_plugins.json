@@ -3,17 +3,19 @@
     "Stand-ins for the plugins a house fixture can list (scripts/eval_capabilities.py).",
     "The real plugins live in their own repos; a stand-in carries only what core",
     "reads from an installed plugin: its feature label and example phrase (the",
-    "'what can you do' answer), its tool (the router's list), its capability seams",
-    "(a weather plugin makes core's weather step aside) and APPROXIMATE fast paths.",
+    "'what can you do' answer), its tool (the router's list), the capabilities it",
+    "provides (core's seams, and the plugins row house_facts reads), its AI",
+    "declaration (needs_ai / ai) and APPROXIMATE fast paths. The picture and video",
+    "plugins have no voice handler of their own (core recognises those requests).",
     "A stand-in's reply is a marker ('[stand-in: the X feature handled this]'):",
     "it says the plugin took the turn, never what the real plugin would say.",
-    "  feature   - the feature name a reply may use (never the plugin's own name)",
-    "  names     - extra words a reply must not say (global no-plugin-names check)",
+    "  feature     - the feature name a reply may use (never the plugin's own name)",
+    "  names       - extra words a reply must not say (global no-plugin-names check)",
     "  fast_paths  - regexes, or {pattern, uses_ai}: uses_ai marks a path the real plugin",
-    "              answers with the model, so with AI off the stand-in can't speak for it",
+    "                answers with the model, so with AI off the stand-in can't speak for it",
     "  status in a house: ok (works), error (its service is missing: the stand-in",
-    "              can't speak for the plugin, the case reports 'needs plugin'),",
-    "              crash (its handler raises, as a broken plugin would)"
+    "                can't speak for the plugin, the case reports 'needs plugin'),",
+    "                crash (its handler raises, as a broken plugin would)"
   ],
   "plugins": {
     "video-downloads": {
@@ -25,10 +27,11 @@
         "download that video"
       ],
       "tool_description": "Download a video from a link or the last one mentioned into the Videos library.",
-      "fast_paths": [
-        "^(?:download|save|grab) (?:that|this|the|a) video\\b.*$"
-      ],
-      "names": []
+      "fast_paths": [],
+      "names": [],
+      "capabilities": [
+        "media-acquisition-fulfiller"
+      ]
     },
     "imagegen": {
       "feature": "Pictures",
@@ -38,8 +41,9 @@
         "make a picture of a cat"
       ],
       "tool_description": "Make a picture from a description.",
-      "fast_paths": [
-        "^(?:make|draw|create|generate|paint) (?:me )?(?:a |an )?(?:picture|image|drawing|painting) of .+$"
+      "fast_paths": [],
+      "capabilities": [
+        "imagegen"
       ],
       "names": []
     },
