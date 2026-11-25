@@ -13,6 +13,12 @@ a rule per country: ``"*"`` means everywhere. A country without its own
 rule uses ``"*"``, then the US rule, so a Canadian asking about Memorial
 Day still gets the US date. Countries are ISO 3166-1 codes, as the Home
 location stores them.
+
+Where a holiday is kept: the countries with a rule of their own, or, for
+a date that is the same everywhere but kept only in some countries
+(Boxing Day, Bonfire Night), :data:`_KEPT_IN`. :func:`find` says whether
+the asker's country keeps it, so the answer can say "Thanksgiving isn't a
+UK holiday. In the US it's …" instead of a bare US date.
 """
 
 from __future__ import annotations
@@ -133,6 +139,23 @@ _TABLE: tuple[tuple[str, tuple[str, ...], dict[str, Rule]], ...] = (
 )
 
 
+# Same date everywhere, kept only in these countries (a "*" rule otherwise
+# reads as everywhere).
+_KEPT_IN: dict[str, frozenset[str]] = {
+    "Boxing Day": frozenset({"GB", "IE", "CA", "AU", "NZ"}),
+    "Guy Fawkes Night": frozenset({"GB"}),
+    "Remembrance Day": frozenset({"GB", "CA", "AU", "NZ"}),
+    "Veterans Day": frozenset({"US"}),
+}
+
+# How an answer names a country the table knows: "In the UK it's …",
+# "… isn't a UK holiday".
+COUNTRY_PLACE = {"US": "the US", "GB": "the UK", "IE": "Ireland", "CA": "Canada",
+                 "AU": "Australia", "NZ": "New Zealand"}
+COUNTRY_ADJECTIVE = {"US": "US", "GB": "UK", "IE": "Irish", "CA": "Canadian",
+                     "AU": "Australian", "NZ": "New Zealand"}
+
+
 def _key(name: str) -> str:
     """Lowercase, no apostrophes or dots, single spaces, no leading 'the'."""
     s = re.sub(r"['’.]", "", name.lower())
@@ -159,6 +182,14 @@ def spoken_names() -> list[str]:
 class Holiday:
     name: str
     rule: Rule
+    #: The country whose rule gave the date; None when the date is the
+    #: same everywhere.
+    rule_country: str | None = None
+    #: Whether the asker's country keeps it; None when the country isn't
+    #: known (no Home location).
+    kept_here: bool | None = None
+    #: The countries that keep it; empty for everywhere.
+    kept_in: frozenset[str] = frozenset()
 
     def on(self, year: int) -> date:
         return self.rule(year)
@@ -180,9 +211,22 @@ def find(label: str, country: str | None = None) -> Holiday | None:
     if hit is None:
         return None
     name, rules = hit
-    cc = (country or DEFAULT_COUNTRY).upper()
-    rule = rules.get(cc) or rules.get("*") or rules.get(DEFAULT_COUNTRY) or next(iter(rules.values()))
-    return Holiday(name, rule)
+    asked = (country or "").strip().upper() or None
+    cc = asked or DEFAULT_COUNTRY
+    if cc in rules:
+        rule_country: str | None = cc
+    elif "*" in rules:
+        rule_country = None
+    elif DEFAULT_COUNTRY in rules:
+        rule_country = DEFAULT_COUNTRY
+    else:
+        rule_country = next(iter(rules))
+    rule = rules[rule_country if rule_country is not None else "*"]
+    kept_in = _KEPT_IN.get(name) or frozenset(c for c in rules if c != "*")
+    if "*" in rules and name not in _KEPT_IN:
+        kept_in = frozenset()
+    kept_here = None if asked is None else (not kept_in or asked in kept_in)
+    return Holiday(name, rule, rule_country=rule_country, kept_here=kept_here, kept_in=kept_in)
 
 
 def next_occurrence(name: str, today: date, country: str | None = None) -> date | None:

@@ -60,7 +60,6 @@ STUB_CASES = [c for c in CASES if c.stub]
 # never changes the product to make a case pass). Expected failures here so
 # CI stays green; remove a line once fixed (it shows up as XPASS first).
 STUB_FINDINGS = {
-    '7.13': 'Home location in the UK: Thanksgiving is answered with no word of the US',
     '8.1': "the help desk's member answer doesn't say an admin adds a room",
     '8.7a': "the help desk's member answer doesn't say an admin adds a room",
 }
