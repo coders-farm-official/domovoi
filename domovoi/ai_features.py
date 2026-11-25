@@ -361,6 +361,39 @@ def plugin_ai(slug: str | None) -> PluginAI | None:
     return _PLUGIN_AI.get(slug) if slug else None
 
 
+# Requests only the model answers, asked while AI is off: a conversation,
+# a story, a joke, a poem. They hear that AI is off and how to turn it on
+# (owner Q2) instead of the general "set up for home commands" line, which
+# stays for everything else nothing matched (case 6.2, 6.6).
+_AI_CHAT_REQUEST_RE = re.compile(
+    r"^(?:(?:can|could|may) (?:i|we) |(?:i|we) (?:want|would like|wanna) to |let'?s )"
+    r"(?:chat|talk|have a (?:chat|conversation)|just talk)(?: with you| to you)?\b"
+)
+_AI_MAKE_REQUEST_RE = re.compile(
+    r"^(?:(?:can|could|would|will) you |please )?"
+    r"(?:tell|read|make up|write|give)(?: me| us)? (?:a |an |another |one )?"
+    r"(?:(?:bedtime|short|funny|scary) )?(?P<what>story|stories|joke|jokes|poem|poems|riddle|riddles)\b"
+)
+_AI_MADE = {"story": "tell stories", "joke": "tell jokes", "poem": "write poems", "riddle": "tell riddles"}
+
+
+def off_request_line(transcript: str) -> str | None:
+    """The AI-off answer for a request only the model answers (a chat, a
+    story, a joke, a poem), or None for anything else. Says AI is off, that
+    home commands still work, and how to turn it on."""
+    text = " ".join(str(transcript or "").lower().replace("?", " ").split())
+    if _AI_CHAT_REQUEST_RE.search(text):
+        return off_answers.with_turn_on(
+            "AI chat is off on this house, but home commands like timers and music still work.",
+            off_answers.AI,
+        )
+    m = _AI_MAKE_REQUEST_RE.search(text)
+    if m:
+        what = _AI_MADE[m.group("what").rstrip("s")]
+        return off_answers.with_turn_on(f"{AI_OFF_LEAD}, so I can't {what}.", off_answers.AI)
+    return None
+
+
 def known_capability_request(transcript: str, provided: Any) -> PluginAI | None:
     """The known capability (:data:`KNOWN_AI_CAPABILITIES`) a turn asks
     for, among those ``provided`` (names with a live provider), or None.

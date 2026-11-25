@@ -29,6 +29,19 @@ def test_add_regex_jot_with_colon() -> None:
     assert m and m.group("body") == "replace the air filter"
 
 
+@pytest.mark.parametrize("said", [
+    "write me a poem", "write us a funny story", "write me a song about rain", "write me two jokes",
+])
+def test_add_regex_leaves_a_request_for_writing_alone(said) -> None:
+    """"write me a poem" asks for a poem, not a note reading "me a poem"."""
+    assert _ADD_RE.match(said) is None
+
+
+def test_add_regex_still_takes_a_note_written_for_me() -> None:
+    m = _ADD_RE.match("write me a note that the filter is due")
+    assert m and m.group("body") == "me a note that the filter is due"
+
+
 def test_add_regex_alternate_verbs() -> None:
     for s in (
         "write down call the plumber",

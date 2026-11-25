@@ -1137,10 +1137,13 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         from domovoi.capabilities import CAPABILITIES
 
         asked = ai_features.known_capability_request(transcript, CAPABILITIES.names())
+        model_only = ai_features.off_request_line(transcript)
         response = Response(
             text=(
                 ai_features.off_feature_line(asked.does)
                 if asked is not None
+                else model_only
+                if model_only is not None
                 else ai_features.OFF_LOOKUP_LINE
                 if category is not None and category in VOLATILE_CATEGORIES
                 else ai_features.OFF_LINE

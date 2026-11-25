@@ -37,6 +37,10 @@ log = logging.getLogger(__name__)
 _CAPTURE_VERBS = r"(?:jot|write|note|save)"
 _ADD_RE = re.compile(
     rf"^{_CAPTURE_VERBS}"
+    # "write me a poem" asks for writing, not a note to keep: the note
+    # would be "me a poem".
+    r"(?! (?:me|us) (?:a |an |another |one )?(?:\w+ )?"
+    r"(?:poem|story|song|joke|haiku|limerick|riddle|rhyme)s?\b)"
     r"(?: this)?(?: down)?"
     r"(?: a note)?(?: that)?"
     r"\s*[:,]?\s+(?P<body>.+)$"
