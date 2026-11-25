@@ -490,6 +490,9 @@ public final class AppContainer: Sendable {
 
     public let store: any ShellStore
     public let vault: TokenVault
+    /// The device keys and the per-server device ids (1.5.0, ``DeviceKeyStore``):
+    /// the app hands the Keychain's; a test's container keeps them in memory.
+    public let deviceKeys: DeviceKeyStore
     public let network: NetworkWatch
     public let tokenHealth: TokenHealth
     public let identity: IdentityGate
@@ -570,6 +573,7 @@ public final class AppContainer: Sendable {
         lock: HouseholdLock = .shared,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         configuration: URLSessionConfiguration = DomovoiClient.defaultConfiguration(),
+        deviceKeys: DeviceKeyStore = DeviceKeyStore(),
         log: @Sendable @escaping (String, String) -> Void = { _, _ in },
         adminGrants: (any GrantShelf)? = nil,
         adminLocker: (any GrantLocker)? = nil,
@@ -577,6 +581,7 @@ public final class AppContainer: Sendable {
     ) {
         self.store = store
         self.vault = vault
+        self.deviceKeys = deviceKeys
         let observers = SinkRegistry()
         self.networkObservers = observers
         let healthSinks = SinkRegistry()
@@ -590,7 +595,8 @@ public final class AppContainer: Sendable {
 
         let book = ServerBook(
             activeServer: { store.serverURL },
-            tokenForServer: { url in store.token(for: url) }
+            tokenForServer: { url in store.token(for: url) },
+            deviceKeyForServer: { url in deviceKeys.deviceKey(for: url) }
         )
 
         let sink = DeferredSink(log: { log("NetworkWatch", $0) })

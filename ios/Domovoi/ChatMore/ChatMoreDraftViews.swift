@@ -201,6 +201,13 @@ struct ChatMoreDraftCanvasView: View {
     /// reliably coexist.
     @State private var printingVersion: ChatMoreDraftPrintVersion?
 
+    /// A save from a private chat, waiting for its yes (the format).
+    @State private var savingFormat: String?
+
+    private func askSave(_ format: String) {
+        if model.privateChat { savingFormat = format } else { _ = model.save(format: format) }
+    }
+
     @State private var exporting = false
     /// The export on its way to the share sheet.
     ///
@@ -247,6 +254,18 @@ struct ChatMoreDraftCanvasView: View {
                         onClose: { printingVersion = nil }
                     )
                 }
+            }
+            .alert(ChatPrivacyStrings.savePrivateTitle, isPresented: Binding(
+                get: { savingFormat != nil },
+                set: { if !$0 { savingFormat = nil } }
+            )) {
+                Button(ChatPrivacyStrings.savePrivateConfirm) {
+                    if let format = savingFormat { _ = model.save(format: format) }
+                    savingFormat = nil
+                }
+                Button(ChatMoreStrings.cancel, role: .cancel) { savingFormat = nil }
+            } message: {
+                Text(ChatPrivacyStrings.savePrivateAsk)
             }
             .navigationTitle(model.view?.draft.title ?? ChatMoreStrings.draft)
             .navigationBarTitleDisplayMode(.inline)
@@ -384,10 +403,12 @@ struct ChatMoreDraftCanvasView: View {
     private var actions: some View {
         VStack(alignment: .leading, spacing: 4) {
             if model.editing == nil {
-                HomeLink(ChatMoreStrings.edit) { model.beginEdit() }
-                HomeLink(ChatMoreStrings.saveAs(model.format)) { model.save() }
-                HomeLink(ChatMoreStrings.saveAs(model.otherFormat)) {
-                    model.save(format: model.otherFormat)
+                // A hand edit and a save are writes (1.5.0): none in a chat
+                // this phone reads only; a save from a private chat asks first.
+                if !model.readOnly {
+                    HomeLink(ChatMoreStrings.edit) { model.beginEdit() }
+                    HomeLink(ChatMoreStrings.saveAs(model.format)) { askSave(model.format) }
+                    HomeLink(ChatMoreStrings.saveAs(model.otherFormat)) { askSave(model.otherFormat) }
                 }
                 HomeLink(ChatMoreStrings.share) { exporting = true }
                     .disabled(exporting)

@@ -153,6 +153,9 @@ public final class ShellModel {
     /// install on B, where the conservative default is `shared` until the
     /// server says otherwise. So the answer is kept with the address it is
     /// about. `testASharedScreenAnswerDoesNotFollowTheServerSwitch` is that.
+    /// Moves whenever a device key comes or goes (1.5.0). Carries no key.
+    public private(set) var deviceKeyTick = 0
+
     public var sharedScreenAnswer: Bool? {
         guard sharedAnswerFor == inputs.serverURL else { return nil }
         return sharedAnswer
@@ -299,6 +302,18 @@ public final class ShellModel {
         self.container = container
         self.admin = AdminModel(session: container.admin)
         self.phoneCanChat = phoneCanChat
+        // The id this phone uses at the ACTIVE server: the install's own,
+        // unless it lost its device key there and started over under a new
+        // one (1.5.0, ``DeviceKeyStore``). Read at every call, like the server.
+        let deviceSelf: (@Sendable () -> DeviceSelf)? = deviceSelf.map { base in
+            let keys = container.deviceKeys
+            let store = container.store
+            return {
+                let who = base()
+                guard let id = keys.startedOverID(for: store.serverURL) else { return who }
+                return DeviceSelf(deviceID: id, name: who.name, userAgent: who.userAgent)
+            }
+        }
         self.deviceSelf = deviceSelf
         let listenerStore = listeners ?? PlayerListenerStore()
         self.listeners = listenerStore
@@ -383,6 +398,10 @@ public final class ShellModel {
         owners.changed = { [weak self] in
             Task { @MainActor in self?.ownersChanged() }
         }
+        // The device key came or went (1.5.0): Chat reads its lists again.
+        container.deviceKeys.changed = { [weak self] in
+            Task { @MainActor in self?.deviceKeyTick += 1 }
+        }
         // A server forgotten, or a different machine at its address (a
         // replaced pin): whose phone this was there, its claim key, the
         // "listening as" pick and the songs waiting for it all go, at the
@@ -406,6 +425,9 @@ public final class ShellModel {
                 Task { @MainActor in shell?.listens?.forget(server: normalized) }
             }
             owners.forget(server: url)
+            // The device key goes too (1.5.0): it belongs to the identity the
+            // phone paired with, and must not go to whatever answers there now.
+            container.deviceKeys.forget(server: url)
             listenerStore.forgetPick(for: url)
             listenOutbox?.forget(server: normalized)
             Task { @MainActor in
@@ -1368,6 +1390,7 @@ public final class ShellModel {
         let row = await DeviceRegistry.register(
             with: container.client,
             book: owners,
+            keys: container.deviceKeys,
             server: asked,
             deviceID: who.deviceID,
             name: who.name,

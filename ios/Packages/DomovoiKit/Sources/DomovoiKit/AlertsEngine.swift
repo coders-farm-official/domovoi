@@ -429,22 +429,42 @@ public actor AlertsHelpEngine {
         self.log = log
     }
 
-    /// A `help_deliveries.changed` push: the last hour's rows, newest first.
-    public func onDeliveries(_ rows: [AlertsHelpDelivery]) async {
+    /// A `help_deliveries.changed` push (1.5.0): a reason to read, and no
+    /// more. The rows that post are this phone's own read (filtered by its
+    /// device key, titled with the chat's real title); the push's titles are
+    /// only the fallback for a read row that has none ("Photos from Domovoi").
+    /// With nobody to read for, the push's ids still move the mark, so naming
+    /// an owner later never posts what was already there.
+    public func onPush(_ hints: [AlertsHelpPushHint]) async {
         guard let key = serverKey() else { return }
-        await apply(key, rows: rows)
+        guard alertsOwnerID(owner()) != nil else {
+            let marks = hints.map { AlertsHelpDelivery(id: $0.id, personID: -1, threadID: -1) }
+            if !marks.isEmpty { await apply(key, rows: marks) }
+            return
+        }
+        var titles: [Int64: String] = [:]
+        for hint in hints where !hint.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            titles[hint.id] = hint.title
+        }
+        await refresh(pushTitles: titles)
     }
 
-    /// The catch-up read, for what was sent while the socket was down. Without
-    /// an owner there is nothing to ask for — the route takes `person_id` and
-    /// there is no "whoever this phone is" form of it. Never throws.
-    public func refresh() async {
+    /// The same, from rows (what a push decoded to before 1.5.0).
+    public func onDeliveries(_ rows: [AlertsHelpDelivery]) async {
+        await onPush(rows.map { AlertsHelpPushHint(id: $0.id, title: $0.title) })
+    }
+
+    /// The catch-up read, for what was sent while the socket was down (and on
+    /// every push). Without an owner there is nothing to ask for — the route
+    /// takes `person_id` and there is no "whoever this phone is" form of it.
+    /// Never throws.
+    public func refresh(pushTitles: [Int64: String] = [:]) async {
         guard let key = serverKey(), let person = alertsOwnerID(owner()) else { return }
         do {
             let seen = books.helpSeen(key)
             let list = try await reader.help(alertsHelpPath(personID: person, sinceID: seen))
             guard serverKey() == key else { return }
-            await apply(key, rows: list.deliveries)
+            await apply(key, rows: alertsWithPushTitles(list.deliveries, pushTitles))
         } catch {
             log("help deliveries read failed: \(error)")
         }

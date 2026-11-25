@@ -58,11 +58,14 @@ struct ChatMoreLookupCardView: View {
     /// A column at an accessibility size and whenever there are three of them
     /// to fit (NIGHT-RULES §3): "Allow in this chat" alone is most of a phone's
     /// width at `large`.
-    private var answers: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            answer(ChatMoreStrings.allowOnce, ChatMoreLookupRules.once, strong: true)
-            answer(ChatMoreStrings.allowInThisChat, ChatMoreLookupRules.chat, strong: false)
-            answer(ChatMoreStrings.notNow, ChatMoreLookupRules.no, strong: false)
+    @ViewBuilder private var answers: some View {
+        // An answer is a write: none in a chat this phone reads only (1.5.0).
+        if !more.readOnly {
+            VStack(alignment: .leading, spacing: 4) {
+                answer(ChatMoreStrings.allowOnce, ChatMoreLookupRules.once, strong: true)
+                answer(ChatMoreStrings.allowInThisChat, ChatMoreLookupRules.chat, strong: false)
+                answer(ChatMoreStrings.notNow, ChatMoreLookupRules.no, strong: false)
+            }
         }
     }
 

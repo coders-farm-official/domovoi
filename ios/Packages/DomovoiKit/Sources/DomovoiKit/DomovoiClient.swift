@@ -17,13 +17,18 @@ import Synchronization
 public struct ServerBook: Sendable {
     public var activeServer: @Sendable () -> String
     public var tokenForServer: @Sendable (String) -> String?
+    /// The device key (1.5.0, ``DeviceKeyBook``) by server address, looked
+    /// up by the active server the request is scoped to, like the token.
+    public var deviceKeyForServer: @Sendable (String) -> String?
 
     public init(
         activeServer: @Sendable @escaping () -> String,
-        tokenForServer: @Sendable @escaping (String) -> String?
+        tokenForServer: @Sendable @escaping (String) -> String?,
+        deviceKeyForServer: @Sendable @escaping (String) -> String? = { _ in nil }
     ) {
         self.activeServer = activeServer
         self.tokenForServer = tokenForServer
+        self.deviceKeyForServer = deviceKeyForServer
     }
 
     /// One server, one token, neither changing. The shape Android's own tests
@@ -295,6 +300,18 @@ public final class DomovoiClient: Sendable {
         return .ask(base: base, token: token, server: raw)
     }
 
+    /// The device key a request to `url` (path `path`) may carry, before the
+    /// gate: not in room mode, only the active server itself (its exact
+    /// scheme, host and port: never the drop-in socket's other port), only a
+    /// key route, and the key THAT server issued. Nil: none goes.
+    func deviceKeyCandidate(for url: ServerURL, path: String) -> String? {
+        if lock.roomModeActive { return nil }
+        let raw = book.activeServer()
+        guard let base = TokenScope.baseOf(raw), TokenScope.sameServer(base, url) else { return nil }
+        guard DeviceKeyRoutes.carries(path) else { return nil }
+        return headerSafeDeviceKey(book.deviceKeyForServer(raw))
+    }
+
     func tokenOutcome(for url: ServerURL, wsUpgrade: Bool) -> TokenOutcome {
         switch tokenDecision(for: url, wsUpgrade: wsUpgrade) {
         case .bare, .unpaired:
@@ -473,9 +490,18 @@ public final class DomovoiClient: Sendable {
             throw DomovoiError.notPermitted(CleartextPolicy.refusalMessage(parsed.host))
         }
 
-        // Whatever a caller set, the decision is made here.
+        // Whatever a caller set, the decision is made here: the token and
+        // the device key are only ever this client's.
         var outgoing = request
         outgoing.setValue(nil, forHTTPHeaderField: deviceTokenHeader)
+        outgoing.setValue(nil, forHTTPHeaderField: deviceKeyHeader)
+        // The device key (1.5.0): only `.scoped`, only the active server's
+        // own key routes, and only once the server has proved itself.
+        let deviceKey: String? = {
+            guard case .scoped = mode else { return nil }
+            return deviceKeyCandidate(for: parsed, path: url.path)
+        }()
+        var keyAdmitted = false
         var sentToken: String?
         var tokenServer: String?
         // The claim key a caller set (``DeviceRegistry``) goes only where the
@@ -498,16 +524,18 @@ public final class DomovoiClient: Sendable {
             await prepareIdentity(for: parsed, wsUpgrade: wsUpgrade)
             switch tokenOutcome(for: parsed, wsUpgrade: wsUpgrade) {
             case .bare:
-                if claimed, case .unpaired(let base) = tokenDecision(for: parsed, wsUpgrade: wsUpgrade) {
+                if claimed || deviceKey != nil, case .unpaired(let base) = tokenDecision(for: parsed, wsUpgrade: wsUpgrade) {
                     do { try gate.requireAdmitted(base) }
                     catch { throw DomovoiError.identityHeld((error as? DomovoiError)?.message ?? "\(error)") }
                     claimAdmitted = true
+                    keyAdmitted = true
                 }
             case .send(let token, let server):
                 outgoing.setValue(token, forHTTPHeaderField: deviceTokenHeader)
                 sentToken = token
                 tokenServer = server
                 claimAdmitted = true
+                keyAdmitted = true
             case .wait(let ms):
                 throw DomovoiError.tokenThrottled(waitMs: ms)
             case .held(let reason):
@@ -516,6 +544,9 @@ public final class DomovoiClient: Sendable {
         }
         if claimed && !claimAdmitted {
             outgoing.setValue(nil, forHTTPHeaderField: claimKeyHeader)
+        }
+        if keyAdmitted, let deviceKey {
+            outgoing.setValue(deviceKey, forHTTPHeaderField: deviceKeyHeader)
         }
 
         // What a HOP may carry, which is **not always the scope rule**: it is
@@ -948,9 +979,22 @@ public final class DomovoiClient: Sendable {
         // outlives every socket. A weak capture would turn "the client is
         // gone" into a silently bare socket, which is the failure this whole
         // method exists to prevent.
-        return SocketUpgrade(url: target) { [self] in
+        return SocketUpgrade(url: target, decide: { [self] in
             tokenOutcome(for: parsed, wsUpgrade: true)
-        }
+        }, deviceKey: { [self] outcome in
+            // The state socket's device key (1.5.0): with the token, or for an
+            // unpaired phone once the server has proved itself; decided at
+            // every connect, like the token.
+            guard let key = deviceKeyCandidate(for: parsed, path: target.path) else { return nil }
+            switch outcome {
+            case .send: return key
+            case .bare:
+                guard case .unpaired(let base) = tokenDecision(for: parsed, wsUpgrade: true),
+                      (try? gate.requireAdmitted(base)) != nil else { return nil }
+                return key
+            case .wait, .held: return nil
+            }
+        })
     }
 
     // ---- turning answers into errors ---------------------------------------
@@ -1037,10 +1081,16 @@ public struct SocketUpgrade: Sendable {
     public let url: URL
 
     private let decide: @Sendable () -> DomovoiClient.TokenOutcome
+    private let deviceKey: @Sendable (DomovoiClient.TokenOutcome) -> String?
 
-    init(url: URL, decide: @Sendable @escaping () -> DomovoiClient.TokenOutcome) {
+    init(
+        url: URL,
+        decide: @Sendable @escaping () -> DomovoiClient.TokenOutcome,
+        deviceKey: @Sendable @escaping (DomovoiClient.TokenOutcome) -> String? = { _ in nil }
+    ) {
         self.url = url
         self.decide = decide
+        self.deviceKey = deviceKey
     }
 
     /// The upgrade request to open **now**, or nil when this phone is not
@@ -1065,11 +1115,14 @@ public struct SocketUpgrade: Sendable {
     ///   is waiting.
     public func mint() -> URLRequest? {
         var request = URLRequest(url: url)
-        switch decide() {
+        let outcome = decide()
+        switch outcome {
         case .bare:
+            if let key = deviceKey(outcome) { request.setValue(key, forHTTPHeaderField: deviceKeyHeader) }
             return request
         case .send(let token, _):
             request.setValue(token, forHTTPHeaderField: deviceTokenHeader)
+            if let key = deviceKey(outcome) { request.setValue(key, forHTTPHeaderField: deviceKeyHeader) }
             return request
         case .wait, .held:
             return nil

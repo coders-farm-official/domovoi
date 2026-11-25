@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.PushPin
@@ -130,7 +131,13 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
     val lastUsed by app.prefs.chatPlace.collectAsState()
     // The household note stays on the chip for this whole visit, so it is
     // still there while the first home-server message is being written.
+    // With a device key (1.5.0) a new home-server chat is private, so the
+    // chip never says "shared with the household" (ChatPrivacy.kt says
+    // what each chat is).
     val serverShareSeen = remember { app.prefs.chatServerShareSeen.value }
+    val serverUrl by app.prefs.serverUrl.collectAsState()
+    val keysTick by app.prefs.deviceKeysChanged.collectAsState()
+    val serverKeyed = remember(serverUrl, keysTick) { app.prefs.holdsDeviceKey(serverUrl) }
     // A help notification's tap: its home-server thread (alerts/HelpNotifier.kt).
     val pendingThread by app.pendingChatThread.collectAsState()
     val pendingPhone by app.pendingPhoneChat.collectAsState()
@@ -138,7 +145,6 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
         ?.takeIf { phoneEngine && !facts.phoneCapable }
         ?.let { unsupportedText(it.marketedGb, it.lowRamDevice) }
     val pins by app.prefs.chatPins.collectAsState()
-    val serverUrl by app.prefs.serverUrl.collectAsState()
     val context = LocalContext.current
     val request by app.pendingChat.collectAsState()
     ChatHome(
@@ -151,7 +157,7 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
         server = ServerCredentials.normalize(serverUrl),
         onPin = app.prefs::setChatPinned,
         onShare = { title, text -> shareText(context, title, text) },
-        serverShareSeen = serverShareSeen,
+        serverShareSeen = serverShareSeen || serverKeyed,
         awayLine = awayLine?.takeIf { away },
         subtitle = chatSubtitle(startable),
         emptyHint = emptyHint(startable, unsupported),
@@ -345,6 +351,7 @@ internal fun ChatHome(
                     },
                     onSent = { onUsed(current.place) },
                     firstMessage = current.first,
+                    truePrivateNote = ChatPlaceKind.Phone in startable,
                 ),
             )
         }
@@ -356,7 +363,9 @@ internal fun ChatHome(
     val openRow = { row: ChatRow -> open = OpenChat(row.place, row, ++visits) }
     val act = { row: ChatRow, action: String ->
         val owner = places.firstOrNull { it.kind == row.place }
-        when (action) {
+        // Only what the row offers (a swipe archives too): what the server
+        // would refuse isn't done.
+        if (action in rowActions(row)) when (action) {
             ACTION_RENAME -> renameTarget = row
             ACTION_PIN, ACTION_UNPIN -> onPin(pinKey(row, server), action == ACTION_PIN)
             ACTION_ARCHIVE -> owner?.setArchived(row, true)
@@ -385,6 +394,12 @@ internal fun ChatHome(
         }
         awayLine?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+            Spacer(Modifier.height(8.dp))
+        }
+        // An admin's filter (1.5.0): this phone's and the shared chats, or
+        // every chat in the house.
+        places.firstOrNull { it.offersScope }?.let { p ->
+            ScopeFilter(p.allChats, p::showAllChats)
             Spacer(Modifier.height(8.dp))
         }
         if (showArchived && !searching) {
@@ -519,6 +534,33 @@ private fun ArchivedEntry(count: Int, onOpen: () -> Unit) {
     }
 }
 
+/** The line under a chat's chip: an admin's view of another device's chat
+ *  names the device first (the dashboard's rail does the same). */
+internal fun rowSnippet(row: ChatRow): String? {
+    val words = (row.match ?: row.snippet)?.takeIf { it.isNotBlank() }
+    return listOfNotNull(row.owner, words).joinToString(" · ").ifEmpty { null }
+}
+
+/** The admin's "My chats" / "All chats in the house". */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ScopeFilter(all: Boolean, onPick: (Boolean) -> Unit) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(false to CHAT_SCOPE_MINE, true to CHAT_SCOPE_ALL).forEach { (value, label) ->
+            FilterChip(
+                selected = all == value,
+                onClick = { if (all != value) onPick(value) },
+                label = { Text(label) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Domovoi.colors.brandSoft,
+                    selectedLabelColor = Domovoi.colors.fg,
+                    labelColor = Domovoi.colors.fgMuted,
+                ),
+            )
+        }
+    }
+}
+
 /** "archived · 3". */
 internal fun archivedLabel(count: Int): String = "archived · $count"
 
@@ -596,6 +638,11 @@ internal fun ChatRowCard(row: ChatRow, chip: String, onOpen: () -> Unit, onActio
                         Icon(Icons.Outlined.PushPin, contentDescription = "pinned", tint = Domovoi.colors.fgMuted,
                             modifier = Modifier.size(14.dp))
                     }
+                    // A private home-server chat (1.5.0): a lock, not words.
+                    if (row.shared == false) {
+                        Icon(Icons.Outlined.Lock, contentDescription = "private", tint = Domovoi.colors.fgMuted,
+                            modifier = Modifier.size(13.dp))
+                    }
                     Text(
                         row.title,
                         style = MaterialTheme.typography.titleSmall,
@@ -623,7 +670,8 @@ internal fun ChatRowCard(row: ChatRow, chip: String, onOpen: () -> Unit, onActio
                 }
                 // A reply that failed leaves the server's snippet blank: no
                 // empty line under the chip.
-                (row.match ?: row.snippet)?.takeIf { it.isNotBlank() }?.let {
+                // Another device's chat, for an admin: that device's name first.
+                rowSnippet(row)?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,

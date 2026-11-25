@@ -82,7 +82,8 @@ class TrackDrawerPlayTest {
             CoverArt.noteFailure(api.absolute(CoverArt.libraryPath(track.id)), 404)
             val prefs = allocateWithoutConstructor(Prefs::class.java)
             setField(prefs, "serverUrl", MutableStateFlow(base))
-            setField(prefs, "deviceId", "android-test")
+            setField(prefs, "baseDeviceId", "android-test")
+            setField(prefs, "deviceIds", emptyMap<String, String>())
             // "Listening as" a person on this server: the room's mix follows them (P4).
             setField(prefs, "_listenerPicks", MutableStateFlow(mapOf(base to "3")))
             setField(prefs, "_sharedScreens", MutableStateFlow(emptyMap<String, Boolean>()))

@@ -282,7 +282,10 @@ struct AssistantPlaceSwitch<House: View>: View {
             Group {
                 switch place {
                 case .server:
-                    house
+                    // Private chats (1.5.0): the phone's own chat is here, so
+                    // a private house chat may say once that that one never
+                    // leaves the phone (``ChatPrivacyBand``).
+                    house.environment(\.phoneChatHere, startable.contains(.phone))
                 case .phone:
                     // The subtitle depends on **both** places
                     // (`chatSubtitle`, `ChatHome.kt:170`), so it is computed

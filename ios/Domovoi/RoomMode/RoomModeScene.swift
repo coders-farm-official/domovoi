@@ -27,12 +27,15 @@ final class HouseholdRoot {
         let vault = TokenVault()
         // Admin on this phone (``AdminSession``): today's grant is kept in the
         // Keychain behind Face ID (``KeychainGrantLocker``), its server and
-        // identity in `UserDefaults` (``SavedGrantShelf``), bound to this
-        // phone's device id. No screen uses it yet.
+        // identity in `UserDefaults` (``SavedGrantShelf``), bound to the
+        // device id this phone uses at that server. The device keys (1.5.0,
+        // private chats): the Keychain's, and the ids this phone started over
+        // under where it lost one (the container's admin reads those first).
         let deviceID = DeviceIdentity.stable(in: DeviceIdentity.UserDefaultsStore())
         let container = AppContainer(
             store: DomovoiApp.store(vault: vault),
             vault: vault,
+            deviceKeys: DeviceKeyStore.forApp(),
             adminGrants: SavedGrantShelf(),
             adminLocker: KeychainGrantLocker(),
             deviceID: { deviceID }

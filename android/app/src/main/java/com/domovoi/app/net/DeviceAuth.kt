@@ -96,27 +96,42 @@ class DeviceAuthInterceptor(
      *  it refused is not sent again, and while it asks the phone to wait,
      *  nothing that would carry the token is sent at all. */
     private val health: TokenHealth? = null,
+    /** The device key for the server at a saved address (net/DeviceKey.kt),
+     *  looked up by the base the request is scoped to, like the token. */
+    private val deviceKeyFor: (base: String) -> String? = { null },
 ) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        // Whatever a caller set, the decision is made here.
-        val bare = request.newBuilder().removeHeader(DEVICE_TOKEN_HEADER).build()
+        // Whatever a caller set, the decision is made here: the token and
+        // the device key are only ever this interceptor's.
+        val stripped = request.newBuilder().removeHeader(DEVICE_TOKEN_HEADER).removeHeader(DEVICE_KEY_HEADER).build()
         // The claim key a caller set (DeviceRegistry) goes only where the
         // token would: to the active server, once it has proved who it is.
         // A request the token skips (room mode, another host, no token, a
         // refused one) carries it only after that same proof, and never off
         // the active server (security review 2026-11-22, L56).
         val claimed = request.header(CLAIM_KEY_HEADER) != null
-        val unclaimed = if (claimed) bare.newBuilder().removeHeader(CLAIM_KEY_HEADER).build() else bare
-        // Room mode: the household token goes nowhere (net/HouseholdLock.kt).
+        val unclaimed = if (claimed) stripped.newBuilder().removeHeader(CLAIM_KEY_HEADER).build() else stripped
+        // Room mode: the household token goes nowhere (net/HouseholdLock.kt),
+        // and neither does the device key.
         if (HouseholdLock.roomModeActive) return chain.proceed(unclaimed)
         val raw = baseUrlProvider()
         val base = TokenScope.baseOf(raw)
         val wsUpgrade = request.tag(TokenScope.WsUpgrade::class.java) != null
         if (!TokenScope.admits(base, request.url, wsUpgrade)) return chain.proceed(unclaimed)
-        /** Sent without the token: the claim key only once the server proved itself. */
+        // The device key (1.5.0): the active server itself (its exact port:
+        // never the drop-in socket's), on the routes that read it, the key
+        // that server issued. Like the claim key it goes only once the
+        // server has proved who it is, token or not.
+        val deviceKey = if (TokenScope.sameServer(base, request.url) && DeviceKeyRoutes.carries(request.url.encodedPath)) {
+            headerSafeDeviceKey(raw?.let(deviceKeyFor))
+        } else {
+            null
+        }
+        val bare = if (deviceKey != null) stripped.newBuilder().header(DEVICE_KEY_HEADER, deviceKey).build() else stripped
+        /** Sent without the token: a claim or device key only once the server proved itself. */
         fun withoutToken(): Response {
-            if (claimed) gate?.requireAdmitted(base!!)
+            if (claimed || deviceKey != null) gate?.requireAdmitted(base!!)
             return chain.proceed(bare)
         }
         val token = headerSafeToken(raw?.let(tokenFor)) ?: return withoutToken()

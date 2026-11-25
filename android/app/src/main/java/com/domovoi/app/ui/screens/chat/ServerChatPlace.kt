@@ -1,6 +1,11 @@
 package com.domovoi.app.ui.screens.chat
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import com.domovoi.app.AppContainer
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
@@ -25,6 +30,10 @@ internal fun ThreadRow.toChatRow(): ChatRow = ChatRow(
     archived = archived,
     match = match_snippet,
     usedInternet = used_internet,
+    shared = shared,
+    canWrite = writable,
+    canDelete = deletable,
+    owner = owner_name?.takeIf { mine != true && it.isNotBlank() },
 )
 
 /** The search route for [query]: `GET /api/chat/threads?q=` (archived
@@ -62,17 +71,22 @@ internal fun serverChatText(title: String, messages: List<MessageRow>): String =
 internal fun rememberServerChatPlace(): ChatPlace {
     val app = LocalApp.current
     val toast = LocalToast.current
-    val threads = rememberApi("chat-threads", eventTypes = setOf("chat.changed")) {
-        it.api.get("/api/chat/threads").decode<ThreadList>().threads
+    // Read again when this phone's device key comes or goes: a list read
+    // without one shows the shared chats only (1.5.0).
+    val keysTick by app.prefs.deviceKeysChanged.collectAsState()
+    // An admin's "All chats in the house" (`scope=all`).
+    var all by rememberSaveable { mutableStateOf(false) }
+    val threads = rememberApi("chat-threads", keysTick, all, eventTypes = setOf("chat.changed")) {
+        it.api.get(threadListPath(archived = false, all = all)).decode<ThreadList>().threads
     }
-    val archived = rememberApi("chat-threads-archived", eventTypes = setOf("chat.changed")) {
-        it.api.get("/api/chat/threads?archived=true").decode<ThreadList>().threads
+    val archived = rememberApi("chat-threads-archived", keysTick, all, eventTypes = setOf("chat.changed")) {
+        it.api.get(threadListPath(archived = true, all = all)).decode<ThreadList>().threads
     }
     // Whether the server's chat model is installed: the first default place.
     val models = rememberApi("chat-models") {
         it.api.get("/api/chat/models").decode<ChatModelsInfo>()
     }
-    return ServerChatPlace(app, toast, threads, archived, serverHasChatModel(models.data))
+    return ServerChatPlace(app, toast, threads, archived, serverHasChatModel(models.data), all) { all = it }
 }
 
 private class ServerChatPlace(
@@ -81,6 +95,8 @@ private class ServerChatPlace(
     private val threads: ApiState<List<ThreadRow>>,
     private val archivedThreads: ApiState<List<ThreadRow>>,
     override val ready: Boolean?,
+    override val allChats: Boolean,
+    private val setAll: (Boolean) -> Unit,
 ) : ChatPlace {
     override val kind = ChatPlaceKind.Server
 
@@ -99,7 +115,13 @@ private class ServerChatPlace(
 
     // F-A010: destructive, so it is confirmed first (web chat.jsx parity);
     // the household's, so it says whose it is.
-    override fun deleteText(row: ChatRow): String = "Delete \"${row.title}\"? $SERVER_DELETE_NOTE This can't be undone."
+    // Private chats (1.5.0): a private one's is this phone's (and the
+    // admins'); a shared one's is the household's.
+    override fun deleteText(row: ChatRow): String = deleteChatText(row.title, row.shared)
+
+    override val offersScope: Boolean = offersAdminScope(rows, allChats)
+
+    override fun showAllChats(all: Boolean) = setAll(all)
 
     override fun delete(row: ChatRow) {
         app.scope.launch {
@@ -147,6 +169,10 @@ private class ServerChatPlace(
         // The title as the list has it now (the model's title arrives after
         // the first reply; a rename on another device shows too).
         val titleOf = { id: Long? -> id?.let { i -> rows.firstOrNull { it.id == i }?.title } }
-        ConversationPane(thread, frame, titleOf = titleOf, onCreated = { threads.refresh() })
+        ConversationPane(
+            thread, frame, titleOf = titleOf,
+            rowOf = { id -> id?.let { i -> rows.firstOrNull { it.id == i } } },
+            onCreated = { threads.refresh() },
+        )
     }
 }

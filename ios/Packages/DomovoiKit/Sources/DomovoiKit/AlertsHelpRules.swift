@@ -41,6 +41,15 @@ public func alertsHelpTitle(_ row: AlertsHelpDelivery) -> String {
     return title.isEmpty ? AlertsStrings.helpUntitled : title
 }
 
+/// `rows` with a blank title filled from `titles` (the push's, by id):
+/// `withPushTitles` (`HelpDeliveries.kt`).
+public func alertsWithPushTitles(_ rows: [AlertsHelpDelivery], _ titles: [Int64: String]) -> [AlertsHelpDelivery] {
+    rows.map { row in
+        guard row.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let title = titles[row.id] else { return row }
+        return AlertsHelpDelivery(id: row.id, personID: row.personID, threadID: row.threadID, title: title, createdAt: row.createdAt)
+    }
+}
+
 /// What to post and what to remember — `HelpPlan` (`HelpDeliveries.kt:89`).
 public struct AlertsHelpPlan: Equatable, Sendable {
 

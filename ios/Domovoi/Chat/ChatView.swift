@@ -143,7 +143,21 @@ struct ChatView: View {
             // model needs the container and a `@State` initialiser runs
             // before the view has one.
             if chat == nil {
-                chat = ChatModel(in: model.container, deviceID: model.deviceID)
+                // Private chats (1.5.0): whether this install is a shared
+                // screen, what to do when the server says it is one, and a
+                // registration to ask for again when the server doesn't know
+                // this phone's key.
+                chat = ChatModel(
+                    in: model.container,
+                    deviceID: model.deviceID,
+                    sharedScreen: { [weak model] in model?.visibility.sharedScreen ?? false },
+                    onSharedScreen: { [weak model] in
+                        guard let model else { return }
+                        model.sharedScreenAnswered(true, for: model.container.store.serverURL)
+                    },
+                    reregister: { [weak model] in model?.sendRegister() },
+                    privateNote: ChatPrivateNoteBook.forApp()
+                )
             }
             // The household's AI switch, which the model holds as its own
             // ``ChatModel/aiEnabled``. **Not a second check** — the route's
@@ -175,6 +189,10 @@ struct ChatView: View {
         }
         .onChange(of: model.capabilities) { _, now in
             chat?.capabilitiesChanged(now)
+        }
+        // The device key came or went (1.5.0): the lists were read without it.
+        .onChange(of: model.deviceKeyTick) { _, _ in
+            chat?.deviceKeyChanged()
         }
         .onChange(of: model.inputs.serverURL) { _, _ in
             guard visible else { return }
@@ -254,6 +272,7 @@ struct ChatView: View {
             Section {
                 header
                 searchField(chat)
+                scopeFilter(chat)
                 newChat(chat)
                 archivedEntry(chat)
             }
@@ -280,6 +299,23 @@ struct ChatView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The admin's "My chats" / "All chats in the house" (1.5.0), only when
+    /// the server's answers show this phone is an admin
+    /// (``ChatModel/offersScope``).
+    @ViewBuilder
+    private func scopeFilter(_ chat: ChatModel) -> some View {
+        if chat.offersScope {
+            Picker(ChatPrivacyStrings.scopeMine, selection: Binding(
+                get: { chat.allChats },
+                set: { chat.showAllChats($0) }
+            )) {
+                Text(ChatPrivacyStrings.scopeMine).tag(false)
+                Text(ChatPrivacyStrings.scopeAll).tag(true)
+            }
+            .pickerStyle(.segmented)
+        }
     }
 
     /// The search field. ``ChatModel/typed(_:)`` **debounces on its own**
@@ -407,10 +443,14 @@ struct ChatView: View {
                     // shorter than the menu's "move back to chats", because a
                     // swipe has a row's width to fit in.
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(
-                            row.archived ? ChatStrings.swipeMoveBack : ChatStrings.actionArchive
-                        ) {
-                            chat.setArchived(row, !row.archived)
+                        // Archive is a write (1.5.0): no swipe on a chat this
+                        // phone reads only.
+                        if row.canWrite {
+                            Button(
+                                row.archived ? ChatStrings.swipeMoveBack : ChatStrings.actionArchive
+                            ) {
+                                chat.setArchived(row, !row.archived)
+                            }
                         }
                     }
             }
