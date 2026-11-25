@@ -43,7 +43,10 @@ struct ChatMoreJobCardView: View {
                     .tint(Color.brandInk)
                     .accessibilityLabel(ChatMoreStrings.partsRead(read: job.read, parts: job.parts))
             }
-            if job.live {
+            if more.readOnly {
+                // Stop and carry on are writes (1.5.0): a chat this phone
+                // reads only shows the job and offers neither.
+            } else if job.live {
                 // The 44 points inside `label:`, not on the `Button` — see
                 // ``ChatMoreLookupCardView`` for what the other way measured.
                 Button {

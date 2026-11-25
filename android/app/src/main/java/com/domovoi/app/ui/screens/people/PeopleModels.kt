@@ -54,9 +54,10 @@ internal data class Person(
 // web People page's PersonNamesakes, for the phone.
 // ---------------------------------------------------------------------------
 
-/** Where renaming and forgetting someone are: both are admin on the server
- *  and a phone has no admin session (the iPhone's
- *  PeopleStrings.renamingIsOnTheDashboard, word for word). */
+/** Where renaming and forgetting someone are, on a shared screen (which
+ *  never holds admin): both are admin on the server. Signed out on a
+ *  household phone it is [PeopleAdminWords.EDIT_OR_PHONE] (PeopleAdmin.kt);
+ *  the iPhone's PeopleStrings.renamingIsOnTheDashboard, word for word. */
 internal const val PEOPLE_EDIT_ON_DASHBOARD =
     "renaming and forgetting someone are done on the dashboard — " +
         "they need an admin sign-in, which a phone doesn't have"

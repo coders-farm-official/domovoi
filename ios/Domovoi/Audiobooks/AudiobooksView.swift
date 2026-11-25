@@ -118,7 +118,8 @@ struct AudiobooksView: View {
                                 openBook = nil
                                 self.page = nil
                             },
-                            saves: saves
+                            saves: saves,
+                            shell: model
                         )
                     } else {
                         library(books)

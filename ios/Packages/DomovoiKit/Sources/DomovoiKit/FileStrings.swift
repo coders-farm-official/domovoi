@@ -167,7 +167,7 @@ public enum FileStrings {
     public static func blocked(_ reason: String?) -> String {
         (reason ?? "this device isn't allowed to change files")
             + ". You can browse and save files, but not move or import them. "
-            + "An admin lifts the block in the dashboard under Settings → Phones & browsers."
+            + AdminDeleteWords.liftedWhere
     }
 
     // MARK: - moving and importing

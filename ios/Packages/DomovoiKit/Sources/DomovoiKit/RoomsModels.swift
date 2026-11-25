@@ -96,12 +96,18 @@ public struct RoomsSatellite: Equatable, Sendable, Decodable, Identifiable {
     /// is every room's default (`SatModels.kt:137-141`).
     public let timersOwnOnly: Bool
 
-    /// An upgrade under way or just finished. **Decode-only here**: nothing on
-    /// this phone can ask for one (see ``RoomsStrings/upgradeIsOnTheDashboard``),
-    /// so the clock, the press ledger and the outcome sentences
-    /// (`SatUpgrade.kt`) are not ported — only the fact that one is running,
-    /// which is why a room may be offline for a minute.
+    /// An upgrade under way or just finished. Only an admin on this phone can
+    /// ask for one (``RoomAdminModel/upgrade(_:)``), and the clock, the press
+    /// ledger and the outcome sentences (`SatUpgrade.kt`) are not ported: the
+    /// server's own record of one running is what the overview says, which
+    /// is why a room may be offline for a minute.
     public let upgrade: RoomsUpgrade?
+
+    /// What the device declared it can do (`supports`, S0). A Pi sends no
+    /// list, which means everything; a phone or tablet room names what it
+    /// does, and one without `restart` or `code_sync` restarts or updates
+    /// itself (``roomsCan(_:_:)``).
+    public let supports: [String]?
 
     public var online: Bool { status == "online" }
 
@@ -121,7 +127,8 @@ public struct RoomsSatellite: Equatable, Sendable, Decodable, Identifiable {
         fullDuplex: Bool = false,
         inCallWith: String? = nil,
         timersOwnOnly: Bool = false,
-        upgrade: RoomsUpgrade? = nil
+        upgrade: RoomsUpgrade? = nil,
+        supports: [String]? = nil
     ) {
         self.roomID = roomID
         self.status = status
@@ -137,6 +144,7 @@ public struct RoomsSatellite: Equatable, Sendable, Decodable, Identifiable {
         self.inCallWith = inCallWith
         self.timersOwnOnly = timersOwnOnly
         self.upgrade = upgrade
+        self.supports = supports
     }
 
     enum CodingKeys: String, CodingKey {
@@ -151,7 +159,7 @@ public struct RoomsSatellite: Equatable, Sendable, Decodable, Identifiable {
         case fullDuplex = "full_duplex"
         case inCallWith = "in_call_with"
         case timersOwnOnly = "timers_own_only"
-        case upgrade
+        case upgrade, supports
     }
 
     public init(from decoder: any Decoder) throws {
@@ -170,6 +178,7 @@ public struct RoomsSatellite: Equatable, Sendable, Decodable, Identifiable {
         inCallWith = try c.decodeIfPresent(String.self, forKey: .inCallWith)
         timersOwnOnly = try c.decodeIfPresent(Bool.self, forKey: .timersOwnOnly) ?? false
         upgrade = try c.decodeIfPresent(RoomsUpgrade.self, forKey: .upgrade)
+        supports = try? c.decodeIfPresent([String].self, forKey: .supports)
     }
 }
 
@@ -317,9 +326,9 @@ public struct RoomsMpdPorts: Equatable, Sendable, Decodable {
 
 /// `SatelliteUpgrade` (`schemas.py:481`) — **decode-only**.
 ///
-/// Nothing here is drawn as a control: the upgrade route is admin security
-/// tier (`satellites.py:1618-1623`), so the screen says where the button is
-/// instead of offering one. ``state`` is read for one honest sentence: a room
+/// The upgrade route is admin security tier (`satellites.py:1618-1623`): only
+/// an admin on this phone asks for one (``RoomAdminModel``). ``state`` is read
+/// for one honest sentence, and to hold the buttons while one runs: a room
 /// that is mid-upgrade is offline on purpose.
 public struct RoomsUpgrade: Equatable, Sendable, Decodable {
 
@@ -676,6 +685,10 @@ public struct RoomsConfigField: Equatable, Sendable, Decodable, Identifiable {
     public let help: String?
     public let value: LooseJSON?
 
+    /// `false` when the room's software doesn't have this setting yet
+    /// (upgrade it first); absent means it does.
+    public let supported: Bool?
+
     public var id: String { name }
 
     public init(
@@ -691,7 +704,8 @@ public struct RoomsConfigField: Equatable, Sendable, Decodable, Identifiable {
         choiceLabels: [String: String]? = nil,
         unit: String? = nil,
         help: String? = nil,
-        value: LooseJSON? = nil
+        value: LooseJSON? = nil,
+        supported: Bool? = nil
     ) {
         self.name = name
         self.label = label
@@ -706,10 +720,11 @@ public struct RoomsConfigField: Equatable, Sendable, Decodable, Identifiable {
         self.unit = unit
         self.help = help
         self.value = value
+        self.supported = supported
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, label, group, section, tier, type, min, max, choices, unit, help, value
+        case name, label, group, section, tier, type, min, max, choices, unit, help, value, supported
         case choiceLabels = "choice_labels"
     }
 
@@ -728,6 +743,7 @@ public struct RoomsConfigField: Equatable, Sendable, Decodable, Identifiable {
         unit = try c.decodeIfPresent(String.self, forKey: .unit)
         help = try c.decodeIfPresent(String.self, forKey: .help)
         value = try c.decodeIfPresent(LooseJSON.self, forKey: .value)
+        supported = try? c.decodeIfPresent(Bool.self, forKey: .supported)
     }
 }
 

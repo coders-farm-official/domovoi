@@ -24,24 +24,30 @@ import SwiftUI
 /// checks, whether the freeze card is drawn, what the Containers foot says.
 /// This file is layout.
 ///
+/// ### Admin on this phone (1.5.0)
+///
+/// Acknowledge and clear are admin-tier at both hops (`containers.py:133`,
+/// `:146`). Signed in as admin on this phone (``AdminSession``), the
+/// incidents are read again through ``AdminSession/call(_:)``, so each shows
+/// what was expected and found and who acknowledged or cleared it, with
+/// acknowledge (an open failure) and clear after review (open tampering,
+/// with a confirm and an optional note). Kept today, one tap asks for Face ID
+/// first. Every change goes through ``AdminSession/act(_:)``, then a re-read
+/// (``HealthIncidentAdminModel``). Signed out, the panel says
+/// ``HealthPanelStrings/adminClearsThese``: the dashboard, or this phone's
+/// own admin sign-in. Never on a shared screen, which keeps the guest words.
+///
 /// ### What is not, and why there is no control for it
 ///
-///  * **No acknowledge and no clear.** Both routes are admin-tier at both
-///    hops (`containers.py:133`, `:146`) and this app holds a household
-///    token, so either button would 401 every time — the
-///    no-misleading-controls rule's own example. The panel says
-///    ``HealthPanelStrings/adminClearsThese`` instead, which is Android's
-///    sentence. Android's panel offers neither either.
 ///  * **No "run a check now", no mpd image rebuild.** Same tier
 ///    (`containers.py:108`, `:118`), and not on Android's panel.
 ///  * **No updates, disk-space, pending-approval or internet rows.** Those
 ///    reads are admin-only, so a grey `not checked yet` row would be a lie
 ///    about *who* did not check. The foot says where they live, which is the
 ///    paragraph at the bottom of all three branches.
-///  * **No `expected` / `found` detail on an incident.** The server adds
-///    those keys for an admin caller only (`container_guard/views.py:107`),
-///    so there is nothing to disclose and ``HealthIncident`` does not declare
-///    them.
+///  * **No `expected` / `found` detail without admin.** The server adds
+///    those keys for an admin caller only (`container_guard/views.py:107`);
+///    ``HealthIncidentAdminModel`` reads them with the Bearer.
 ///  * **No notification when an incident opens.** Android posts one
 ///    (`IncidentNotifier`); that is `alerts/`, not the panel, and it needs a
 ///    local-notification authorisation — which means `project.yml`, which
@@ -61,11 +67,34 @@ struct HealthPanelView: View {
     /// exactly as `rememberApi`'s state dying with the composable is.
     @State private var panel: HealthPanelModel?
 
+    /// The incidents' admin half (``HealthIncidentAdminModel``).
+    @State private var incidentAdmin: HealthIncidentAdminModel?
+
     @Environment(\.openURL) private var openURL
 
     /// `LocalSharedScreen.current` (`:92`) — the kitchen tablet. A shared
     /// screen is a guest here whatever its token could read.
     private var shared: Bool { model.visibility.sharedScreen }
+
+    private var mode: HealthIncidentAdminMode {
+        healthIncidentAdminMode(model.admin.state, sharedScreen: shared)
+    }
+
+    /// What the admin read follows: the mode, and the incidents on screen —
+    /// so a push that changes the list reads the admin half again.
+    private struct AdminKey: Equatable {
+        let mode: HealthIncidentAdminMode
+        let ids: [Int64]
+    }
+
+    private var adminKey: AdminKey {
+        var ids: [Int64] = []
+        if let state = panel?.panel(shared: shared), case .rows(let rows) = state.body {
+            ids = rows.openIncidents.map(\.id)
+            if case .household(let resolved, _) = rows.containersFoot { ids += resolved.map(\.id) }
+        }
+        return AdminKey(mode: mode, ids: ids)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -87,6 +116,14 @@ struct HealthPanelView: View {
             if panel == nil { panel = HealthPanelModel(in: model.container) }
             panel?.start()
         }
+        .task(id: adminKey) {
+            if incidentAdmin == nil { incidentAdmin = HealthIncidentAdminModel(admin: model.container.admin) }
+            switch adminKey.mode {
+            case .live: await incidentAdmin?.load(viaAct: false)
+            case .none: incidentAdmin?.forget()
+            case .kept: break
+            }
+        }
         .onDisappear { panel?.stop() }
     }
 
@@ -103,10 +140,10 @@ struct HealthPanelView: View {
             // house on a shared screen.
             noDetails(
                 HealthPanelState.summaryAdminLine(count: count),
-                note: state.noDetailsNote
+                note: HealthIncidentAdminWords.noDetailsNote(state, mode: mode)
             )
         case .noDetails(let line):
-            noDetails(line, note: state.noDetailsNote)
+            noDetails(line, note: HealthIncidentAdminWords.noDetailsNote(state, mode: mode))
         case .loading:
             loadingLine
         }
@@ -138,7 +175,8 @@ struct HealthPanelView: View {
                         HealthRowDivider(isFirst: index == 0)
                         HealthIncidentRowView(
                             incident: rows.openIncidents[index],
-                            nowMs: nowMs
+                            nowMs: nowMs,
+                            admin: adminRow(rows.openIncidents[index])
                         )
                     }
                 }
@@ -238,13 +276,11 @@ struct HealthPanelView: View {
                     .padding(.top, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 ForEach(resolved) { incident in
-                    HealthIncidentRowView(incident: incident, nowMs: nowMs)
+                    HealthIncidentRowView(incident: incident, nowMs: nowMs, admin: adminRow(incident))
                 }
             }
             if showsAdminNote {
-                // The sentence that stands in for the acknowledge and clear
-                // buttons neither app draws.
-                quietLine(HealthPanelStrings.adminClearsThese)
+                adminLine
             }
         case HealthPanelContainersFoot.none:
             // Nothing has answered yet. The Containers check above already
@@ -316,6 +352,54 @@ struct HealthPanelView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Under the incidents: where acknowledge and clear are. Signed out, the
+    /// dashboard or this phone's admin sign-in; kept today, one tap for Face
+    /// ID; signed in, what the rows offer here.
+    @ViewBuilder
+    private var adminLine: some View {
+        switch mode {
+        case .none:
+            quietLine(HealthPanelStrings.adminClearsThese)
+        case .kept where incidentAdmin?.fields == nil:
+            HomeLink(HealthIncidentAdminWords.unlock) {
+                Task { @MainActor in await incidentAdmin?.load(viaAct: true) }
+            }
+            .disabled(incidentAdmin?.busy == true)
+            .padding(.horizontal, 16)
+        default:
+            quietLine(HealthIncidentAdminWords.live)
+        }
+        if mode != .none, let problem = incidentAdmin?.problem {
+            Text(problem)
+                .font(.footnote)
+                .foregroundStyle(Color.warnInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// An incident's admin half, when this phone has read it.
+    private func adminRow(_ incident: HealthIncident) -> HealthIncidentAdminRow? {
+        guard mode != .none, let zone = incidentAdmin, let fields = zone.fields?[incident.id] else { return nil }
+        return HealthIncidentAdminRow(
+            fields: fields,
+            busy: zone.busy,
+            onAcknowledge: { change { await zone.acknowledge(incident) } },
+            onClear: { note in change { await zone.clear(incident, note: note) } }
+        )
+    }
+
+    /// One change: its toast, then everything read again.
+    private func change(_ work: @escaping @MainActor () async -> String?) {
+        Task { @MainActor in
+            let said = await work()
+            panel?.refresh()
+            if let said { model.showToast(said) }
+        }
     }
 
     private func quietLine(_ text: String) -> some View {

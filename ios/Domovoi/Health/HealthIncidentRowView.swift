@@ -6,13 +6,13 @@ import SwiftUI
 /// What the guard found, the monospaced line that identifies it, and — on the
 /// one holding the freeze — what it is holding back.
 ///
-/// **There is no control on this row, and that is the whole decision.**
-/// Acknowledging and clearing are `require_admin_mutation` and
-/// `require_admin_security` at both hops (`web/backend/api/containers.py:133`,
-/// `:146`); a phone holds a household token, so either button would 401 every
-/// time. Android's panel offers neither either, and both say where they are
-/// done instead — ``HealthPanelStrings/adminClearsThese``, drawn once under
-/// the Containers part rather than once per row.
+/// **Controls only with admin.** Acknowledging and clearing are
+/// `require_admin_mutation` and `require_admin_security` at both hops
+/// (`web/backend/api/containers.py:133`, `:146`). Without admin on this phone
+/// the row has none, and ``HealthPanelStrings/adminClearsThese`` under the
+/// Containers part says where they are. With it (1.5.0), ``admin`` carries
+/// the row's admin half: what was expected and found, who acknowledged or
+/// cleared it, and acknowledge or clear where the server offers them.
 struct HealthIncidentRowView: View {
 
     let incident: HealthIncident
@@ -20,6 +20,12 @@ struct HealthIncidentRowView: View {
     /// ``HealthPanelModel/nowMs``, so `opened 7m ago` moves with the screen's
     /// own thirty-second tick rather than with a clock this view read itself.
     let nowMs: Int64
+
+    /// The admin half, while this phone holds admin and has read it.
+    var admin: HealthIncidentAdminRow?
+
+    @State private var clearing = false
+    @State private var note = ""
 
     /// `toneOf(inc)` (`:342`): a closed incident is **grey**, however bad it
     /// was — the dot grades what is happening now, and the meta line says
@@ -73,13 +79,97 @@ struct HealthIncidentRowView: View {
             }
             Spacer(minLength: 0)
         }
-        // `padding(horizontal = 16.dp, vertical = 12.dp)` (`:351`).
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
         // One stop: what happened, which incident it is, and whether it is
         // holding anything back. Three separate stops would read `#41 ·
         // tampering · different image` as a phrase of its own.
         .accessibilityElement(children: .combine)
+        // `padding(horizontal = 16.dp, vertical = 12.dp)` (`:351`).
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        if let admin {
+            HealthIncidentAdminDetails(incident: incident, admin: admin) {
+                note = ""
+                clearing = true
+            }
+            .padding(.leading, 36)
+            .padding(.trailing, 16)
+            .padding(.bottom, 12)
+            .alert(HealthIncidentAdminWords.clearTitle, isPresented: $clearing) {
+                TextField(HealthIncidentAdminWords.noteLabel, text: Binding(
+                    get: { note },
+                    set: { note = String($0.prefix(HealthIncidentAdminWords.noteMax)) }
+                ))
+                Button(HealthIncidentAdminWords.clearConfirm) { admin.onClear(note) }
+                Button(HealthIncidentAdminWords.cancel, role: .cancel) {}
+            } message: {
+                Text(HealthIncidentAdminWords.clearBody)
+            }
+        }
+    }
+}
+
+/// What a row needs for its admin half (``HealthPanelView`` makes it).
+struct HealthIncidentAdminRow {
+    let fields: HealthIncidentAdminFields
+    let busy: Bool
+    let onAcknowledge: () -> Void
+    let onClear: (String) -> Void
+}
+
+/// An incident's admin half: expected and found, who acknowledged or cleared
+/// it, and acknowledge or clear where the server offers them.
+private struct HealthIncidentAdminDetails: View {
+
+    let incident: HealthIncident
+    let admin: HealthIncidentAdminRow
+    let onClear: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            rows(HealthIncidentAdminWords.expected, admin.fields.expected)
+            rows(HealthIncidentAdminWords.found, admin.fields.found)
+            if let who = HealthIncidentAdminWords.who(admin.fields) {
+                mono(who, Color.fgMuted)
+            }
+            if healthOffersAcknowledge(incident, admin.fields) {
+                Button(HealthIncidentAdminWords.acknowledge, action: admin.onAcknowledge)
+                    .buttonStyle(InkOutlineButtonStyle())
+                    .disabled(admin.busy)
+                hint(HealthIncidentAdminWords.acknowledgeHint)
+            }
+            if healthOffersClear(incident, admin.fields) {
+                Button(HealthIncidentAdminWords.clear, action: onClear)
+                    .buttonStyle(BrandFillButtonStyle())
+                    .disabled(admin.busy)
+                hint(HealthIncidentAdminWords.clearHint)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func rows(_ title: String, _ rows: [HealthDetailRow]) -> some View {
+        if !rows.isEmpty {
+            mono(title, Color.fgMuted)
+            ForEach(rows, id: \.key) { row in
+                mono("\(row.key)  \(row.value)", Color.primary)
+            }
+        }
+    }
+
+    private func mono(_ text: String, _ colour: Color) -> some View {
+        Text(verbatim: text)
+            .font(.footnote.monospaced())
+            .foregroundStyle(colour)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.leading)
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(Color.fgMuted)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

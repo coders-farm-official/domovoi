@@ -134,6 +134,14 @@ public extension SettingsSection {
             sub: "Show this phone's calendars on the household calendar, read-only. Off until you turn it on.",
             words: "calendar calendars share sharing events google microsoft outlook samsung agenda"
         ),
+        // 1.5.0: admin on this phone (``AdminSession``), the Kotlin's words —
+        // "fingerprint or face" is Touch ID or Face ID here. Hidden on a
+        // shared screen, which never holds admin.
+        SettingsSection(
+            key: "admin-on-phone", label: "Admin on this phone", group: .household,
+            sub: "Sign in as the admin here, for an hour or for the rest of the day behind your fingerprint or face.",
+            words: "admin administrator sign in signin password fingerprint face biometric approve approvals day"
+        ),
         SettingsSection(
             key: "wake-words", label: "Wake words", group: .voice,
             sub: "The words that wake Domovoi: train your own, record clips in a room.",
@@ -225,7 +233,7 @@ public extension SettingsSection {
     /// things, as ``sharedScreenHidden`` leaves People off every launcher
     /// (`SharedScreenHiddenSections`, `SettingsScreen.kt:176-181`).
     /// Presentational, like the rest of the shared view.
-    static let sharedScreenHiddenKeys: Set<String> = ["people", "phone-calendars"]
+    static let sharedScreenHiddenKeys: Set<String> = ["people", "phone-calendars", "admin-on-phone"]
 
     /// Whether this section is listed on a phone that is (or is not) a shared
     /// screen (`shownOn`).

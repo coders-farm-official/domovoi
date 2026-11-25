@@ -109,6 +109,11 @@ public enum DeviceRegistry {
     ///
     /// Returning `Data` rather than a dictionary is what lets the test assert
     /// the bytes that go on the wire, including that the owner is *absent*.
+    ///
+    /// **`want_device_key: true` on every registration** (1.5.0, core-0063):
+    /// this app keeps the key (``DeviceKeyBook``), so the server may mint one
+    /// for a row that has none. A 1.4.x app never asked, so its row stayed
+    /// keyless and this app's first start gets the key without pairing again.
     public static func registerPayload(deviceID: String, name: String, userAgent: String) throws -> Data {
         try JSONEncoder().encode(Registration(deviceID: deviceID, name: name, userAgent: userAgent))
     }
@@ -123,6 +128,7 @@ public enum DeviceRegistry {
             case name
             case platform
             case userAgent = "user_agent"
+            case wantDeviceKey = "want_device_key"
         }
 
         func encode(to encoder: any Encoder) throws {
@@ -131,6 +137,7 @@ public enum DeviceRegistry {
             try c.encode(name, forKey: .name)
             try c.encode(DeviceRegistry.platform, forKey: .platform)
             try c.encode(userAgent, forKey: .userAgent)
+            try c.encode(true, forKey: .wantDeviceKey)
         }
     }
 
@@ -152,16 +159,27 @@ public enum DeviceRegistry {
     /// app works unnamed, its queue entries just carry no tag — so no caller
     /// has to decide what to do about a registration that did not happen.
     /// Whether it should be called at all is ``shouldRegister(now:lastAskedAt:reason:connected:paired:)``.
+    ///
+    /// **The device key** (1.5.0, ``DeviceKeyBook``, given with `keys` and
+    /// `server`): the client adds the key held for `server` to the request;
+    /// a `device_key` in the answer (just minted, answered once) is kept
+    /// before anything else can register; `device_key_ok: false` (the row has
+    /// a key this phone didn't present: a reinstall, a Keychain that lost it)
+    /// starts the phone over at `server` under a NEW device id and registers
+    /// again, once; `device_key_ok: true` changes nothing; an answer with
+    /// neither (an older server) leaves the phone keyless. The book's line
+    /// keeps two registrations from racing a first mint.
     public static func register(
         with client: DomovoiClient,
         book: (any ClaimBook)? = nil,
+        keys: (any DeviceKeyBook)? = nil,
         server: String? = nil,
         deviceID: String,
         name: String,
         userAgent: String,
         timeout: TimeInterval = DeviceRegistry.registerTimeoutSec
     ) async -> DeviceRow? {
-        guard let body = try? registerPayload(deviceID: deviceID, name: name, userAgent: userAgent) else {
+        guard (try? registerPayload(deviceID: deviceID, name: name, userAgent: userAgent)) != nil else {
             return nil
         }
         // In the book's line (``ClaimLine``): a registration answer must not
@@ -178,10 +196,29 @@ public enum DeviceRegistry {
                 // Read before the await: a forget while the call is out
                 // makes its answer stale (integration fix B1).
                 let forgets = server.map { book?.forgetCount(for: $0) ?? 0 }
-                guard let data = try? await client.raw(
-                    method: "POST", path: "/api/devices/register", body: body,
-                    timeout: timeout, onlyTo: server
-                ) else { return nil }
+                @Sendable func post(_ id: String) async -> Data? {
+                    guard let body = try? registerPayload(deviceID: id, name: name, userAgent: userAgent) else { return nil }
+                    return try? await client.raw(
+                        method: "POST", path: "/api/devices/register", body: body,
+                        timeout: timeout, onlyTo: server
+                    )
+                }
+                let firstID = server.flatMap { keys?.startedOverID(for: $0) } ?? deviceID
+                guard var data = await post(firstID) else { return nil }
+                if let keys, let server, DeviceKeyAnswer.of(data) == .lost {
+                    // Not this phone's row any more: start over there, once. A
+                    // second "lost" leaves the phone keyless until the next
+                    // start.
+                    guard let again = await post(keys.startOver(at: server)) else { return nil }
+                    data = again
+                }
+                // A minted key is kept even past the deadline: it is answered
+                // once, and dropping it would cost this phone its chats at the
+                // next start. Not for a server forgotten while it was out.
+                if let keys, let server, case .minted(let key) = DeviceKeyAnswer.of(data),
+                   (book?.forgetCount(for: server) ?? 0) == (forgets ?? 0) {
+                    keys.rememberDeviceKey(key, for: server)
+                }
                 guard stillInTime() else { return nil }
                 if let book, let server, (try? DomovoiClient.decode(data, as: DeviceRow.self)) != nil {
                     rememberDeviceAnswer(book, server: server, data: data, forgetCount: forgets)

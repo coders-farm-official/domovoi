@@ -497,3 +497,12 @@ final class PrintingRefreshFlag: Sendable {
         }
     }
 }
+
+extension PrintersPanelModel {
+    /// A printer renamed (PrinterAdmin.swift) or removed as admin on this phone: the toast, and
+    /// the list read again.
+    public func adminChanged(said: String?) {
+        if let said { toast = said }
+        printers.refresh()
+    }
+}

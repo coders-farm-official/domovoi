@@ -109,6 +109,11 @@ import com.domovoi.app.net.Page
 import com.domovoi.app.net.PageRequest
 import com.domovoi.app.net.SERVER_MAX_PAGE
 import com.domovoi.app.net.failureText
+import com.domovoi.app.net.AdminSession
+import com.domovoi.app.net.deleteFiles
+import com.domovoi.app.ui.screens.settings.AdminDeleteWords
+import com.domovoi.app.ui.screens.settings.deletesAdminHeld
+import com.domovoi.app.ui.screens.settings.filesDeleteLine
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.ui.components.LibraryRefreshBox
 import com.domovoi.app.ui.components.LibraryRefreshButton
@@ -313,6 +318,9 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     // where its own chat can run.
     val caps = LocalCapabilities.current
     val sharedScreen = LocalSharedScreen.current
+    // Deleting on the server: admin on this phone (AdminDeletes.kt).
+    val adminState by app.admin.state.collectAsState()
+    val serverDeletes = !source.onPhone && deletesAdminHeld(adminState, sharedScreen)
     val phoneChats = source.onPhone && AssistantSupport.available && !sharedScreen &&
         app.assistant.state.collectAsState().value.tier != DeviceTier.Unsupported
     val serverChats = !source.onPhone && caps.aiEnabled && selectedId == DOCUMENTS_LIBRARY_ID
@@ -425,6 +433,23 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     fun doDelete(e: FileEntry) {
         val id = selectedId ?: return
         busy = "deleting"
+        if (!source.onPhone) {
+            // On the server, as admin on this phone (AdminSession.act).
+            scope.launch {
+                try {
+                    val r = app.admin.act { h, srv -> deleteFiles(app, id, listOf(e.rel), e.isDir, h, srv) }
+                    toast(AdminDeleteWords.filesDeleted(r.deleted, r.failed))
+                    pager.reload()
+                } catch (x: kotlinx.coroutines.CancellationException) {
+                    throw x
+                } catch (x: Exception) {
+                    toast(if (x is AdminSession.AdminUnavailable) x.message ?: "admin isn't available" else failureText("delete", x))
+                } finally {
+                    busy = null
+                }
+            }
+            return
+        }
         scope.launch {
             runCatching { source.delete(id, e) }
                 .onSuccess { r ->
@@ -660,7 +685,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     Text(
                         (data?.blockedReason ?: "this device isn't allowed to change files") +
                             ". You can browse and download, but not upload, move or import. " +
-                            "An admin lifts the block in the dashboard under Settings → Phones & browsers.",
+                            AdminDeleteWords.LIFTED_WHERE,
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted,
                     )
@@ -769,7 +794,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 // The web moves things by drag and drop; a phone
                                 // gets a destination picker instead (FilesMoveSheet).
                                 onMove = if (canWrite) ({ moveEntry = e }) else null,
-                                onDelete = if (editable && source.onPhone) ({ confirmDelete = e }) else null,
+                                onDelete = if (editable && (source.onPhone || serverDeletes)) ({ confirmDelete = e }) else null,
                                 // Other only downloads: no printing from it.
                                 print = if (selectedId == OTHER_LIBRARY_ID) PrintOffer.None
                                 else printOffer(e.name, e.isDir, printers),
@@ -778,9 +803,10 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                         }
                         item(key = "files-footer") {
                             PagedFooter(listing, "items", onRetry = pager::retry, onLoadMore = pager::loadMore)
-                            if (editable && !source.onPhone) {
+                            val deleteLine = filesDeleteLine(adminState, sharedScreen, FILES_DELETE_ON_DASHBOARD)
+                            if (editable && !source.onPhone && deleteLine != null) {
                                 Text(
-                                    FILES_DELETE_ON_DASHBOARD,
+                                    deleteLine,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Domovoi.colors.fgMuted,
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -835,7 +861,15 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     }
 
     confirmDelete?.let { e ->
-        ConfirmDialog(
+        // On the server: the dashboard's words (files.jsx FilesDeleteConfirm).
+        if (!source.onPhone) ConfirmDialog(
+            title = AdminDeleteWords.filesTitle(1),
+            body = AdminDeleteWords.filesBody(if (e.isDir) 1 else 0, listOf(e.rel)),
+            confirmLabel = AdminDeleteWords.filesConfirmLabel(e.isDir),
+            destructive = true,
+            onConfirm = { doDelete(e) },
+            onDismiss = { confirmDelete = null },
+        ) else ConfirmDialog(
             title = if (e.isDir) "delete folder" else "delete file",
             body = if (e.isDir) {
                 "Delete \"${e.name}\" and everything inside it? This can't be undone."

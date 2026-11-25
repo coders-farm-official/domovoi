@@ -317,8 +317,24 @@ public final class SavedShellStore: ShellStore {
     }
 
     public func pin(_ key: String, _ pin: ServerIdentity.Pin) {
+        let before = adminMark()
         state.withLock { $0.saved.book.pins[key] = pin }
         persist()
+        adminWrote(before)
+    }
+
+    /// What an admin session is bound to, before a write: the active server
+    /// and the pins. Every writer that can move either takes one and hands
+    /// it to ``adminWrote(_:)`` — Android's `Prefs.setServerUrl`,
+    /// `forgetActiveServer` and `setPins` hooks (L57).
+    private func adminMark() -> AdminSessions.StoreMark {
+        state.withLock { AdminSessions.StoreMark(server: $0.saved.book.serverURL, pins: $0.saved.book.pins) }
+    }
+
+    /// After the write and outside the lock (forgetting reads the server),
+    /// and before this store's own sinks: ``AdminSessions/storeWrote(before:after:)``.
+    private func adminWrote(_ before: AdminSessions.StoreMark) {
+        AdminSessions.shared.storeWrote(before: before, after: adminMark())
     }
 
     public func markTokenRejected(_ url: String) {
@@ -332,16 +348,20 @@ public final class SavedShellStore: ShellStore {
     }
 
     public func trustServer(_ url: String, identity: ServerIdentity.Pin? = nil) {
+        let before = adminMark()
         state.withLock { $0.saved.book.trust(url, identity: identity) }
         persist()
+        adminWrote(before)
     }
 
     public func setServerURL(_ url: String) -> Bool {
         // A refusal wrote nothing, so there is nothing to save and nobody to
         // tell — the same rule ``InMemoryShellStore/setServerURL(_:)`` keeps.
+        let before = adminMark()
         let written = state.withLock { $0.saved.book.setServerURL(url) }
         if written {
             persist()
+            adminWrote(before)
             selectionChanged()
         }
         return written
@@ -357,24 +377,30 @@ public final class SavedShellStore: ShellStore {
         // and the property finding S-T1 behind it), so the Keychain item goes
         // with it — which is this call, and is the half Android gets for free
         // by keeping both in one file.
+        let before = adminMark()
         state.withLock { $0.saved.book.replacePin(url: url, pin: newPin) }
         persistAndToken(for: url)
+        adminWrote(before)
         serverForgotten(url)
     }
 
     @discardableResult
     public func removeKnownServer(_ url: String) -> TrustBook.ForgetReach {
+        let before = adminMark()
         let reach = state.withLock { $0.saved.book.forget(url) }
         persistAndToken(for: url)
+        adminWrote(before)
         serverForgotten(url)
         return reach
     }
 
     @discardableResult
     public func forgetActiveServer() -> String? {
+        let before = adminMark()
         let gone = state.withLock { $0.saved.book.forgetActiveServer()?.url }
         guard let gone else { return nil }
         persistAndToken(for: gone)
+        adminWrote(before)
         serverForgotten(gone)
         selectionChanged()
         return gone

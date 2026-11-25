@@ -737,7 +737,7 @@ final class FilesModelTests: XCTestCase {
         XCTAssertFalse(model.canWrite)
         XCTAssertEqual(#""a simulator" is blocked from changing files"#, model.blockedReason)
         XCTAssertEqual(
-            #""a simulator" is blocked from changing files. You can browse and save files, but not move or import them. An admin lifts the block in the dashboard under Settings → Phones & browsers."#,
+            #""a simulator" is blocked from changing files. You can browse and save files, but not move or import them. An admin lifts the block in the dashboard under Settings → Phones & browsers, or on an admin's phone under Settings → Admin on this phone."#,
             FileStrings.blocked(model.blockedReason)
         )
         let track = try XCTUnwrap(model.entries.state.items.first { !$0.isDir })

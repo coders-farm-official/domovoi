@@ -25,7 +25,21 @@ final class HouseholdRoot {
         // answer at the one place that builds the graph, and so that a test
         // or a future seam can replace it in one line rather than two.
         let vault = TokenVault()
-        let container = AppContainer(store: DomovoiApp.store(vault: vault), vault: vault)
+        // Admin on this phone (``AdminSession``): today's grant is kept in the
+        // Keychain behind Face ID (``KeychainGrantLocker``), its server and
+        // identity in `UserDefaults` (``SavedGrantShelf``), bound to the
+        // device id this phone uses at that server. The device keys (1.5.0,
+        // private chats): the Keychain's, and the ids this phone started over
+        // under where it lost one (the container's admin reads those first).
+        let deviceID = DeviceIdentity.stable(in: DeviceIdentity.UserDefaultsStore())
+        let container = AppContainer(
+            store: DomovoiApp.store(vault: vault),
+            vault: vault,
+            deviceKeys: DeviceKeyStore.forApp(),
+            adminGrants: SavedGrantShelf(),
+            adminLocker: KeychainGrantLocker(),
+            deviceID: { deviceID }
+        )
         // The device id, and the two things only UIKit can answer. Read HERE,
         // on the main actor, once: ``DeviceSelf`` exists so that a `Sendable`
         // closure running anywhere never reads `UIDevice`, which
@@ -36,7 +50,7 @@ final class HouseholdRoot {
         // is the server's answer (``DeviceSelf``, ``DeviceOwnerBook``).
         let deviceModel = UIDevice.current.model
         let who = DeviceSelf(
-            deviceID: DeviceIdentity.stable(in: DeviceIdentity.UserDefaultsStore()),
+            deviceID: deviceID,
             name: DeviceRegistry.suggestedDeviceName(model: deviceModel),
             userAgent: DeviceRegistry.userAgent(
                 systemVersion: UIDevice.current.systemVersion,

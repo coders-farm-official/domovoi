@@ -133,9 +133,10 @@ public enum PeopleStrings {
     public static let notes = "notes"
     public static let noNotesYet = "no notes yet"
 
-    /// **iOS-only.** In place of Android's `rename` and `forget person`
-    /// buttons — see this enum's heading. Said once, under the stat tiles,
-    /// where the two buttons were.
+    /// Where renaming and forgetting are, on a shared screen (which never
+    /// holds admin); Android's `PEOPLE_EDIT_ON_DASHBOARD`. Signed out on a
+    /// household phone it is ``PeopleAdminWords/editOrPhone``; with admin
+    /// held, the two buttons are drawn instead (``PeopleAdminModel``).
     ///
     /// It names both jobs in one sentence rather than two lines, because they
     /// are refused for one reason, and it says the reason: a reader who

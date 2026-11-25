@@ -138,6 +138,9 @@ internal enum class SettingsSection(
     PhoneCalendars("phone-calendars", "Phone calendars", SettingsGroup.Household,
         "Show this phone's calendars on the household calendar, read-only. Off until you turn it on.",
         "calendar calendars share sharing events google microsoft outlook samsung agenda"),
+    AdminOnPhone("admin-on-phone", "Admin on this phone", SettingsGroup.Household,
+        "Sign in as the admin here, for an hour or for the rest of the day behind your fingerprint or face.",
+        "admin administrator sign in signin password fingerprint face biometric approve approvals day"),
     WakeWords("wake-words", "Wake words", SettingsGroup.Voice,
         "The words that wake Domovoi: train your own, record clips in a room.",
         "wake word hey hello train", dashboard = "wake-words"),
@@ -194,7 +197,8 @@ internal enum class SettingsSection(
 /** Sections a shared screen (the kitchen tablet) leaves out: one person's
  *  things, as ui/shell/Routes.kt SharedScreenHidden leaves People off every
  *  launcher. Presentational, like the rest of the shared view. */
-internal val SharedScreenHiddenSections: Set<SettingsSection> = setOf(SettingsSection.People, SettingsSection.PhoneCalendars)
+internal val SharedScreenHiddenSections: Set<SettingsSection> =
+    setOf(SettingsSection.People, SettingsSection.PhoneCalendars, SettingsSection.AdminOnPhone)
 
 internal fun SettingsSection.shownOn(shared: Boolean): Boolean = !(shared && this in SharedScreenHiddenSections)
 
@@ -310,6 +314,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
                     SettingsSection.MusicMix -> MusicMixPanel()
                     SettingsSection.Printers -> PrintersPanel()
                     SettingsSection.PhoneCalendars -> PhoneCalendarsPanel()
+                    SettingsSection.AdminOnPhone -> AdminPanel()
                     SettingsSection.AppLayout -> PhoneBarPanel()
                     SettingsSection.Voices -> VoicePanel()
                     SettingsSection.About -> AboutPanel(navigate)
@@ -525,6 +530,7 @@ internal fun openInBrowser(context: Context, url: String): Boolean =
 @Composable
 private fun AboutPanel(navigate: (Route) -> Unit) {
     val developerOptions by LocalApp.current.developerOptions.on.collectAsState()
+    val (admin, shared) = rememberServerAdmin()
     val fg = Domovoi.colors.fg
     val strong = SpanStyle(fontWeight = FontWeight.SemiBold, color = fg)
 
@@ -573,11 +579,15 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                         color = Domovoi.colors.fgMuted,
                     )
                     AppVersionLine()
-                    Text(
-                        "The server's build / version identifiers live on the dashboard under About & updates.",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                        color = Domovoi.colors.fgFaint,
-                    )
+                    // With admin held here the server's card below says it;
+                    // signed out the line names this phone's admin sign-in.
+                    serverBuildLine(admin, shared)?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = Domovoi.colors.fgFaint,
+                        )
+                    }
                     Button(onClick = { navigate(Route.Manual) }) {
                         Icon(
                             Icons.AutoMirrored.Filled.MenuBook,
@@ -590,6 +600,8 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
             }
         }
         item { AskForHelpCard(navigate) }
+        // The Domovoi server: install an update, restart (admin on this phone).
+        if (serverAdminHeld(admin, shared)) item { ServerUpdateCard() }
         item { AboutAppUpdateCard() }
         item { ProblemReportsCard() }
         if (assistantIn64BitAppOnly()) item { AssistantIn64BitAppNote() }

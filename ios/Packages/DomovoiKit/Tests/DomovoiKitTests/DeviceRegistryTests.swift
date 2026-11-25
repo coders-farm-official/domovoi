@@ -27,7 +27,10 @@ final class DeviceRegistryTests: XCTestCase {
         XCTAssertEqual(sent["name"] as? String, "iPhone")
         XCTAssertEqual(sent["platform"] as? String, "ios")
         XCTAssertEqual(sent["user_agent"] as? String, "iOS 18.3; iPhone")
-        XCTAssertEqual(sent.count, 4, "and nothing else")
+        // Private chats (1.5.0, core-0063): every registration asks for the
+        // device key.
+        XCTAssertEqual(sent["want_device_key"] as? Bool, true)
+        XCTAssertEqual(sent.count, 5, "and nothing else")
     }
 
     /// Left out, so the server keeps the person the phone already has.

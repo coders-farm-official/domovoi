@@ -162,6 +162,10 @@ internal suspend fun deleteFiles(
     libraryId: String,
     paths: List<String>,
     recursive: Boolean,
+    /** An admin's Bearer and the server it is for (AdminSession.act):
+     *  deleting on the server is admin. */
+    headers: Map<String, String> = emptyMap(),
+    onlyTo: String? = null,
 ): DeleteResult {
     val res = app.api.post(
         "/api/files/delete",
@@ -170,6 +174,8 @@ internal suspend fun deleteFiles(
             put("paths", buildJsonArray { paths.forEach { add(it) } })
             put("recursive", recursive)
         },
+        headers,
+        onlyTo = onlyTo,
     )
     val obj = res as? JsonObject ?: JsonObject(emptyMap())
     return DeleteResult(

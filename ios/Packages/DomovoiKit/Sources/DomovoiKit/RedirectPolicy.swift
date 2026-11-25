@@ -101,6 +101,9 @@ public enum RedirectPolicy {
         // goes to the one server that minted it, on the request made to it,
         // and a redirect — even to the same server — is not that request.
         next.setValue(nil, forHTTPHeaderField: claimKeyHeader)
+        // The device key likewise (1.5.0): to the active server's own key
+        // routes on the request made to it, and never on a hop.
+        next.setValue(nil, forHTTPHeaderField: deviceKeyHeader)
         return next
     }
 

@@ -31,8 +31,12 @@ class DeviceRegistryTest {
     private val book = MapBook()
 
     /** [ClaimBook] as a map, the way Prefs keeps it (by normalised address). */
-    class MapBook : ClaimBook {
+    class MapBook : ClaimBook, DeviceKeyBook {
         val owners = HashMap<String, DeviceOwner>()
+        val deviceKeys = HashMap<String, String>()
+        val ids = HashMap<String, String>()
+        var baseId = "android-1a2b"
+        var startedOver = 0
         val keys = HashMap<String, String>()
         val shared = HashMap<String, Boolean>()
         private fun k(s: String) = s.trim().trimEnd('/')
@@ -43,12 +47,23 @@ class DeviceRegistryTest {
             if (claimKey == null) keys.remove(k(server)) else keys[k(server)] = claimKey
         }
         override fun setSharedScreen(url: String, shared: Boolean) { this.shared[k(url)] = shared }
+        override fun deviceKeyFor(server: String) = deviceKeys[k(server)]
+        override fun rememberDeviceKey(server: String, key: String?): Boolean {
+            if (key == null) deviceKeys.remove(k(server)) else deviceKeys[k(server)] = key
+            return true
+        }
+        override fun deviceIdFor(server: String) = ids[k(server)] ?: baseId
+        override fun startOverAt(server: String): String {
+            startedOver++
+            deviceKeys.remove(k(server))
+            return "android-new$startedOver".also { ids[k(server)] = it }
+        }
     }
 
     @Before fun up() {
         web = MockWebServer().also { it.start() }
         base = web.url("/").toString().trimEnd('/')
-        api = ApiClient(baseUrlProvider = { base })
+        api = ApiClient(baseUrlProvider = { base }, deviceKeyForServer = { book.deviceKeyFor(it) })
     }
 
     @After fun down() = web.shutdown()
@@ -73,7 +88,7 @@ class DeviceRegistryTest {
         MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(body)
 
     private suspend fun register() =
-        registerWith(api, book, base, "android-1a2b", "Pixel 8", "Android 15; Pixel 8")
+        registerWith(api, book, book, base, "Pixel 8", "Android 15; Pixel 8")
 
     // ── The register body ────────────────────────────────────────────────
 

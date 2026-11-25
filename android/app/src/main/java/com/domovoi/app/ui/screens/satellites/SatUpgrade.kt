@@ -128,10 +128,16 @@ fun satUpgradeClock(ms: Long): String {
 }
 
 /** Ask the server to upgrade [room]; the answer says what it recorded.
- *  Admin only on the server, so the phone offers no upgrade button today
- *  (22 Nov 2026); this stays for a phone admin sign-in. */
-suspend fun requestSatUpgrade(api: ApiClient, room: String, nowMs: Long = System.currentTimeMillis()): SatUpgradePress {
-    val answer = api.post(satPath(room, "/upgrade")).decode<SatUpgradeAnswer>()
+ *  Admin only on the server: the phone asks only as admin on this phone
+ *  ([headers] and [onlyTo] from AdminSession.act, SatAdmin.kt). */
+suspend fun requestSatUpgrade(
+    api: ApiClient,
+    room: String,
+    nowMs: Long = System.currentTimeMillis(),
+    headers: Map<String, String> = emptyMap(),
+    onlyTo: String? = null,
+): SatUpgradePress {
+    val answer = api.post(satPath(room, "/upgrade"), null, headers, onlyTo = onlyTo).decode<SatUpgradeAnswer>()
     return SatUpgradePress(
         atMs = nowMs,
         expected = answer.expected_sha ?: answer.upgrade?.expected_sha,

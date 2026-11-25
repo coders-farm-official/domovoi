@@ -325,6 +325,15 @@ final class ShellFoldViewBodyTests: XCTestCase {
                 + "`ShellTopBar`'s own, at every size. (It was banned here while "
                 + "the body did branch, where it was dead: review 3's N2.)"
         )
+        // 1.5.0: the admin badge rides in the same toolbar item, after the
+        // pill and under the same gate, so it is there at the accessibility
+        // sizes too (the bar draws it beside the pill below them).
+        guard let pillSite = Self.chrome.range(of: "ShellPillToolbarButton(pill:"),
+              let badgeSite = Self.chrome.range(of: "AdminBadgeButton(badge: admin") else {
+            return XCTFail("the toolbar item draws no admin badge beside the pill")
+        }
+        XCTAssertLessThan(pillSite.lowerBound, badgeSite.lowerBound, "the badge comes after the pill")
+        XCTAssertEqual("if let admin", Self.innermostGate(before: "AdminBadgeButton(badge: admin", in: Self.chrome))
         XCTAssertEqual(
             Self.count(of: ".toolbar {", in: Self.chrome),
             1,

@@ -1306,6 +1306,25 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
                     Text("unverified", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.warn)
                 }
             }
+            // Admin on this phone (design §1): a badge while signed in, or
+            // while admin is kept today; a tap opens its settings.
+            val admin by app.admin.state.collectAsState()
+            val openSettingsTab = LocalOpenSettingsTab.current
+            if (admin !is com.domovoi.app.net.AdminSession.State.SignedOut && !LocalSharedScreen.current) {
+                Box(Modifier.width(8.dp))
+                Text(
+                    "admin",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (admin is com.domovoi.app.net.AdminSession.State.SignedIn) Domovoi.colors.brandFg else Domovoi.colors.fgMuted,
+                    modifier = Modifier
+                        .background(
+                            if (admin is com.domovoi.app.net.AdminSession.State.SignedIn) Domovoi.colors.brand else Domovoi.colors.sunken,
+                            RoundedCornerShape(999.dp),
+                        )
+                        .clickable(onClickLabel = "admin on this phone") { openSettingsTab("admin-on-phone") }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
             Box(Modifier.width(10.dp))
             StatusDot(if (connected) Tone.Ok else Tone.Idle, live = connected)
             Text(
