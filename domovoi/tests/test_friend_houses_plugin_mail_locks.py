@@ -158,6 +158,76 @@ async def test_send_and_store_mail_for_one_friend_never_deadlock_forced(house, t
         await _cleanup()
 
 
+async def test_caps_store_mail_and_send_for_one_friend_never_deadlock_forced(house, tmp_path, monkeypatch,
+                                                                            guarded_db) -> None:
+    """The CAPS handshake too (on_caps clears the pairs' na_hold_until).
+    send takes its locks first; on_caps then takes the friend row and only
+    then goes for the pairs, while send goes on to the sender row (its
+    foreign key on the friend) and store_mail waits on the friend. With a
+    FOR UPDATE friend lock that was a three-way deadlock; in the lock
+    order, on_caps waits for the friend row in the database and all three
+    finish."""
+    import contextvars
+
+    from domovoi.tests.fh_plugin_mail_kit import EPOCH_F
+
+    friend = await add_friend(tmp=tmp_path, caps=True)
+    await q("UPDATE friend_houses_plugin_pairs SET na_hold_until = now() + interval '10 minutes', "
+            "na_first_at = now(), in_epoch = :e", e=EPOCH_F)
+    who: contextvars.ContextVar[str] = contextvars.ContextVar("who", default="")
+    send_first, caps_first = asyncio.Event(), asyncio.Event()
+    real_note_epoch, real_quota_ok = pm.note_epoch, pm.quota_ok
+
+    async def note_epoch(s, f, epoch):
+        ok = await real_note_epoch(s, f, epoch)
+        if who.get() == "caps":
+            caps_first.set()           # on_caps holds the friend row, the pairs next
+            try:
+                await asyncio.wait_for(asyncio.sleep(3600), HOLD_SEC)
+            except asyncio.TimeoutError:
+                pass                   # let send go for the sender row first
+        return ok
+
+    async def quota_ok(s, table, friend_id, slug, size):
+        if table == "outbox":
+            send_first.set()           # send holds what it locks first
+            try:
+                await asyncio.wait_for(caps_first.wait(), HOLD_SEC)
+            except asyncio.TimeoutError:
+                pass                   # on_caps waits in the database: go on
+        return await real_quota_ok(s, table, friend_id, slug, size)
+
+    monkeypatch.setattr(pm, "note_epoch", note_epoch)
+    monkeypatch.setattr(pm, "quota_ok", quota_ok)
+
+    async def caps():
+        who.set("caps")
+        await asyncio.wait_for(send_first.wait(), 5)
+        await pm.on_caps(friend.house_key, 2, ("games",), EPOCH_F)
+        return "caps"
+
+    async def store(i):
+        who.set("store")
+        await asyncio.wait_for(send_first.wait(), 5)
+        await asyncio.sleep(0.05)
+        event, _ = inbound(friend, house.keys, {"n": i}, seq=i)
+        return await pm.store_mail(event)
+
+    try:
+        for i in range(1, 7):
+            send_first.clear()
+            caps_first.clear()
+            await _reset_budgets()
+            results = await _run_both(pm.send("games", "fa", b'{"n": 1}'), caps(), store(i))
+            errors = [r for r in results if isinstance(r, BaseException)]
+            assert not errors, f"round {i}: {errors!r}"
+            assert results[1:] == ["caps", "stored"]
+        assert await q("SELECT na_hold_until, in_mark FROM friend_houses_plugin_pairs") == [(None, 6)]
+        assert await q("SELECT count(*) FROM friend_houses_plugin_outbox") == [(6,)]
+    finally:
+        await _cleanup()
+
+
 async def test_send_and_store_mail_for_one_friend_in_a_loop(house, tmp_path, guarded_db) -> None:
     """Unforced: sends and stores for the same friend racing, many times."""
     friend = await add_friend(tmp=tmp_path)
