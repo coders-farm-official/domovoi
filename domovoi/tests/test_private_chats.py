@@ -506,8 +506,8 @@ async def test_photos_go_to_one_phone_and_only_it_lists_them() -> None:
                             {"p": pid, "d": new["_id"]})
         async with session_scope() as s:
             phones = await delivery.phones_of(s, pid)
-            sent = await delivery.deliver(s, person_id=pid, question="cats", steps="Here are 3 photos.",
-                                          phones=phones, title="Photos: cats")
+            sent = await delivery.deliver(s, person_id=pid, question="cats", reply="Here are 3 photos.",
+                                          phones=phones, title="Photos: cats", stats={"model_role": "media"})
         try:
             async with session_scope() as s:
                 row = (await s.execute(text("SELECT owner_device_id, shared FROM chat_threads WHERE id = :t"),
@@ -714,4 +714,5 @@ async def test_a_keyed_device_is_never_named_by_its_id_alone() -> None:
         by_key = await devices_api.caller_device_row(s, req({KEY: mine[KEY]}))
         by_id = await devices_api.caller_device_row(s, req({"X-Device-Id": mine["_id"]}))
     assert by_key is not None and by_key.device_id == mine["_id"] and by_key.proof == "device_key"
-    assert by_id is None
+    # Named by its id alone, a keyed device is "unproven": never trusted.
+    assert by_id is not None and by_id.proof == "unproven" and not by_id.trusted

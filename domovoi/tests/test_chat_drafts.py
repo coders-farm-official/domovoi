@@ -563,6 +563,9 @@ def test_each_version_records_the_device_that_made_it(model):
     """Each version records the device its KEY names (1.5.0): a body's
     device_id is ignored. Reads say ``mine`` and never return the ids."""
     with _client() as a, _client() as b:
+        # Named, so a read can show the name without ever showing the id.
+        assert a.patch(f"/api/devices/{a.device_id}", json={"name": "Phone A"}).status_code == 200
+        assert b.patch(f"/api/devices/{b.device_id}", json={"name": "Phone B"}).status_code == 200
         tid = a.post("/api/chat/threads", json={"shared": True}).json()["id"]
         model.replies = [LETTER]
         r = a.post(f"/api/chat/threads/{tid}/messages",
@@ -574,7 +577,7 @@ def test_each_version_records_the_device_that_made_it(model):
         vs = a.get(f"/api/chat/drafts/{did}", headers={"X-Device-Id": b.device_id}).json()["versions"]
         assert [v["mine"] for v in vs] == [True, False]
         assert all("device_id" not in v for v in vs)
-        assert vs[1]["device_name"] == b.device_id
+        assert vs[1]["device_name"] == "Phone B"
         vs = b.get(f"/api/chat/drafts/{did}").json()["versions"]
         assert [v["mine"] for v in vs] == [False, True]
         with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as keyless:
