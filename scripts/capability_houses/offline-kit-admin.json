@@ -1,0 +1,6 @@
+{
+  "extends": "offline-kit",
+  "note": "Installed from the offline kit; a dashboard chat with a live admin session.",
+  "asker": "proven_admin",
+  "admin_session": "live"
+}

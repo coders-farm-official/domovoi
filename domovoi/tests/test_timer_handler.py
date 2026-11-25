@@ -158,10 +158,10 @@ def test_spoken_durations_reach_the_timer_fast_path(transcript: str) -> None:
     assert fast_path_winner(transcript) == "timer"
 
 
-def test_bare_set_a_timer_does_not_fast_path() -> None:
-    # No duration → no fast path anywhere in the registry; the utterance
-    # falls through to LLM tool routing, which can ask for the duration.
-    assert fast_path_winner("set a timer") is None
+def test_bare_set_a_timer_asks_how_long() -> None:
+    # No duration: the timer asks for one (M2, test_ask_detail.py), never
+    # the model. A cut-off "set a timer for" still falls through.
+    assert fast_path_winner("set a timer") == "timer"
     assert fast_path_winner("set a timer for") is None
 
 

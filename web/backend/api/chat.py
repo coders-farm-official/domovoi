@@ -102,7 +102,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from domovoi import ai_features, chat_titles, egress, executors, house_facts, image_safety, live_env, lookup_answer, uncertainty
-from domovoi.admin_auth import require_device, require_device_read
+from domovoi.admin_auth import request_is_guest, require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.help_desk import admin_tasks as help_admin_tasks
 from domovoi.help_desk import answer as help_answer
@@ -962,11 +962,16 @@ async def _help_turn(
         return None
 
 
-async def _house_fact_reply(thread_id: int, content: str, user_row_id: int) -> str | None:
+async def _house_fact_reply(thread_id: int, content: str, user_row_id: int,
+                            request: Request | None = None) -> str | None:
     """The house's own answer to ``content`` (domovoi/house_facts.py), or
     None. Settings come from the core's snapshot (this process's copy goes
     stale on a save); one it doesn't hold is "unknown", never a guess.
+    "Am I signed in as admin?" is answered from THIS request's own admin
+    check (help.request_is_proven_admin), never from the words; "who lives
+    here?" from its guest check (admin_auth.request_is_guest).
     Never fails the send."""
+    from web.backend.api import help as help_api
 
     async def previous_assistant() -> dict[str, Any] | None:
         async with session_scope() as s:
@@ -980,9 +985,26 @@ async def _house_fact_reply(thread_id: int, content: str, user_row_id: int) -> s
         return await house_facts.chat_reply(
             content, get_setting=house_facts.snapshot_setting(get_cached_snapshot()),
             scope=session_scope, previous_assistant=previous_assistant,
+            admin_check=lambda: help_api.request_is_proven_admin(request),
+            guest_check=lambda: request_is_guest(request),
         )
     except Exception as e:  # noqa: BLE001 — the chat answers as before
         log.warning("chat: house facts failed: %s: %s", type(e).__name__, str(e)[:200])
+        return None
+
+
+async def _owner_egg_reply(thread_id: int, content: str, request: Request | None = None) -> str | None:
+    """The ownership easter egg for ``content``, or None; a guest's
+    (``admin_auth.request_is_guest``) names no one. Never fails the send."""
+    from domovoi import owner_easter_eggs
+
+    try:
+        return await owner_easter_eggs.chat_reply(
+            content, scope=session_scope, key=f"chat:{thread_id}",
+            guest_check=lambda: request_is_guest(request),
+        )
+    except Exception as e:  # noqa: BLE001 — the chat answers as before
+        log.warning("chat: owner easter egg failed: %s", type(e).__name__)
         return None
 
 
@@ -1130,9 +1152,14 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         # A privacy or "can you …?" question this house answers from its
         # own state (domovoi/house_facts.py), the same as by voice: said by
         # the app, no model asked.
-        fact = await _house_fact_reply(thread_id, body.content, user_row_id)
+        fact = await _house_fact_reply(thread_id, body.content, user_row_id, request)
         if fact is not None:
             return await _immediate_reply(thread_id, fact, {"model_role": "house_facts"})
+        # "I'm the owner" / "who's in charge?": a fixed joke, as by voice
+        # (domovoi/owner_easter_eggs.py). Grants nothing.
+        egg = await _owner_egg_reply(thread_id, body.content, request)
+        if egg is not None:
+            return await _immediate_reply(thread_id, egg, {"model_role": "owner_easter_egg"})
 
     return await _answer(
         thread_id, thread.person_id, has_images=bool(images), override=body.model,

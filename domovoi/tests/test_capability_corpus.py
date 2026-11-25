@@ -25,6 +25,7 @@ model call, so these tests never touch Postgres or Ollama.
 from __future__ import annotations
 
 import asyncio
+import json
 import importlib.util
 import re
 import sys
@@ -84,6 +85,13 @@ def test_case_is_well_formed(case) -> None:
     for pid, pat in case.stored + case.not_stored:
         assert pid is None or isinstance(pid, int)
         re.compile(pat)
+    for name in case.one_of + case.not_one_of:
+        assert name in ev.LINE_SETS, name
+    if case.one_of_rest is not None:
+        assert case.one_of
+        re.compile(case.one_of_rest)
+    if case.differs_from_before:
+        assert case.before
     assert case.expect in ev.VERDICTS
     assert case.kind in ev.KINDS
     assert case.house in HOUSES, f"{case.id}: no house fixture {case.house!r}"
@@ -114,7 +122,7 @@ def test_the_list_is_covered() -> None:
     """Every group of the question list is in the corpus, the trust groups
     and DO IT concretely enough to check without a judge."""
     groups = {c.group for c in CASES}
-    assert groups == set(range(1, 14)) | set(range(15, 23))
+    assert groups == set(range(1, 14)) | set(range(15, 24))
     for g in (10, 16, 17, 18, 20):
         concrete = [c for c in CASES if c.group == g and not c.judge and not c.skip_reason]
         assert concrete, f"group {g} has no concrete case"
@@ -336,6 +344,24 @@ def test_can_you_download_videos_is_one_answer_for_everyone() -> None:
     assert _reply("8.7e") == _reply("8.7d") == _reply("4.33")
 
 
+def test_line_sets_match_as_templates() -> None:
+    """The owner-approved lines are matched as templates: {name} and
+    {other} are People-list names, two different people."""
+    from domovoi import owner_easter_eggs as eggs
+
+    names = ["Alex", "Ana"]
+    assert ev.match_line("Says you.", ["CLAIM_LINES"], names) == ("Says you.", "")
+    assert ev.match_line("Says you. That's 4.", ["CLAIM_LINES"], names)[1] == "That's 4."
+    line = "I heard it's {name}. Don't tell {other}."
+    assert line in eggs.WHO_LINES
+    assert ev.match_line("I heard it's Ana. Don't tell Alex.", ["WHO_LINES"], names)
+    assert ev.match_line("I heard it's Ana. Don't tell Ana.", ["WHO_LINES"], names) is None
+    assert ev.match_line("I heard it's Zed. Don't tell Alex.", ["WHO_LINES"], names) is None
+    assert ev.match_line("Depends who you ask. Ana says Ana.", ["WHO_LINES"], names)
+    assert ev.match_line("Depends who you ask. Ana says Alex.", ["WHO_LINES"], names) is None
+    assert ev.match_line("An admin adds rooms.", ev.LINE_SETS, names) is None
+
+
 def test_runs_combine_into_a_pass_rate() -> None:
     def r(status: str, text: str = "") -> "ev.Result":
         return ev.Result(id="0.1", group=0, utterance="x", house="base", where="voice",
@@ -400,3 +426,23 @@ def test_sandbox_restores_modules_imported_inside_it() -> None:
         assert db_session.session_scope is real_scope
     finally:
         sys.modules.pop(name, None)
+
+
+def test_corpus_patterns_have_no_control_characters() -> None:
+    """A regex written as a JSON string with a single backslash ("\b") reads
+    as a control character (backspace), never as a word boundary; #61 went
+    red on that. Every corpus string must be printable."""
+    raw = json.loads((REPO_ROOT / "scripts" / "capability_corpus.json").read_text(encoding="utf-8"))
+
+    def strings(v):
+        if isinstance(v, str):
+            yield v
+        elif isinstance(v, list):
+            for x in v:
+                yield from strings(x)
+        elif isinstance(v, dict):
+            for x in v.values():
+                yield from strings(x)
+
+    bad = sorted({c["id"] for c in raw["cases"] for s in strings(c) if any(ord(ch) < 32 for ch in s)})
+    assert bad == [], f"control characters in cases {bad}: write regex escapes as two backslashes"

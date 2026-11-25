@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.db.repositories import TimerRepository, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared import ask_detail
 from domovoi.handlers.shared.number_words import DURATION_PATTERN, parse_duration_seconds
 from domovoi.handlers.shared.tool_gate import is_timer_statement
 from domovoi.models import Context, Intent, Response
@@ -45,6 +46,16 @@ _LIST_RE = re.compile(
     r"|(?:list|show me) (?:my |our |the |all (?:my |the )?)?timers"
     r")$"
 )
+
+# "Set a timer" / "can you set a timer?" (filler-stripped to "set a timer"):
+# no duration, so the answer asks for one (M2, case 10.6) and the reply
+# ("five minutes") finishes it as "timer for five minutes". Whole turn only.
+_ASK_RE = re.compile(
+    r"^(?:(?:just |now )?(?:set|start|make|create|put on|get|give|do) (?:(?:me|us) )?)?"
+    r"(?:a |an |another |one more )?(?:new |quick )?timer(?: for (?:me|us))?(?:,? please)?\Z"
+)
+ASK_DURATION_KIND = "core.timer_how_long"
+ASK_DURATION_TEXT = "Sure. How long should it be?"
 
 # "timer for 10 minutes for the pasta" stores the label "the pasta". Every
 # line that puts its own word in front of the label ("the pasta timer",
@@ -117,6 +128,9 @@ class TimerHandler(Handler):
         "what timers do I have",
     )
     requires_network = "no"
+    # "Sure. How long should it be?": the reply is the duration (ask_detail).
+    confirmation_kinds = (ASK_DURATION_KIND,)
+    choice_kinds = (ASK_DURATION_KIND,)
 
     tool_schema = {
         "name": "timer",
@@ -145,6 +159,7 @@ class TimerHandler(Handler):
             FastPath(_CANCEL_RE, TimerHandler._cancel_from_match, early_commit="B"),
             FastPath(_STATUS_RE, TimerHandler._status_from_match, early_commit="A"),
             FastPath(_LIST_RE, TimerHandler._list_from_match, early_commit="A"),
+            FastPath(_ASK_RE, TimerHandler._ask_duration),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -197,6 +212,31 @@ class TimerHandler(Handler):
             session_id=ctx.session_id,
             matched_handler=self.name,
         )
+
+    async def _ask_duration(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        return await ask_detail.ask(
+            self, ctx, session, kind=ASK_DURATION_KIND, question=ASK_DURATION_TEXT,
+            prefixes=("timer for ",),
+        )
+
+    async def handle_choice_reply(
+        self, kind: str, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The reply to "How long should it be?": "five minutes" sets the timer."""
+        if kind != ASK_DURATION_KIND:
+            return None
+        return await ask_detail.answer(self, kind, data, transcript, ctx, session)
+
+    async def handle_confirmation(
+        self, kind: str, data: dict, affirmative: bool, ctx: Context, session: AsyncSession,
+    ) -> Response:
+        # A choice: the router hands its replies to handle_choice_reply. A
+        # bare yes/no reaching here still gets an answer.
+        return await ask_detail.answer(
+            self, kind, data, "yes" if affirmative else "no", ctx, session,
+        ) or Response(text="Okay.", session_id=ctx.session_id, matched_handler=self.name)
 
     # Fast-path adapters.
     async def _create_from_match(

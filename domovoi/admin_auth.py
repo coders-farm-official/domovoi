@@ -2605,6 +2605,30 @@ async def check_queue_guest(
     )
 
 
+async def request_is_guest(request: Any) -> bool:
+    """Whether ``request`` comes from a GUEST, for an answer's wording only
+    ("who lives here?", "who's the owner?": domovoi/house_facts.py,
+    domovoi/owner_easter_eggs.py). The same rule as
+    :func:`check_queue_guest`: after setup, a caller presenting NO
+    household credential at all (no device token, no Bearer, no dashboard
+    cookie). Anyone presenting one is the household's (a bad one is
+    refused by its route's own gate first); before setup everyone on the
+    LAN is (the pre-setup grace). A check that can't run is a guest: the
+    answers it words hold back the household's names, so they fail
+    closed. It authorizes nothing.
+
+    The chat's routes are household-only (``require_device``), so there
+    this is False unless that gate ever lets a guest in."""
+    if request is None:
+        return False
+    if presents_household_credential(request):
+        return False
+    try:
+        return await check_admin_request(request) == "no-auth"
+    except Exception:  # noqa: BLE001 — can't tell: hold the names back
+        return True
+
+
 def assert_guest_same_site(request: Any) -> None:
     """403 for a guest request carrying none of
     :data:`GUEST_SAME_SITE_HEADERS` — what a cross-site "simple" request

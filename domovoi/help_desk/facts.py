@@ -88,6 +88,43 @@ def build(
                      rooms=room_facts, plugins=plugin_facts)
 
 
+_NUMBER_WORDS = ("No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten")
+
+
+def _count(n: int, one: str, many: str) -> str:
+    word = _NUMBER_WORDS[n] if n < len(_NUMBER_WORDS) else str(n)
+    return f"{word} {one if n == 1 else many}"
+
+
+def _names(plugins: Iterable[PluginFact]) -> str:
+    names = sorted((p.name for p in plugins), key=str.lower)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def spoken_plugins(plugins: Iterable[PluginFact]) -> str:
+    """"Which plugins do you have?" said aloud, from the same list
+    :func:`render` gives the help desk: the working ones by name, then the
+    switched-off and the broken ones. Names are said only because the
+    person asked which plugins are installed (owner, N10)."""
+    plugins = tuple(plugins)
+    if not plugins:
+        return "No plugins are installed on this house. An admin can add them from the Plugins page."
+    on = [p for p in plugins if p.enabled and p.status in ("ok", "degraded")]
+    off = [p for p in plugins if not p.enabled]
+    broken = [p for p in plugins if p.enabled and p.status not in ("ok", "degraded")]
+    parts = []
+    if on:
+        verb = "is" if len(on) == 1 else "are"
+        parts.append(f"{_count(len(on), 'plugin', 'plugins')} {verb} on: {_names(on)}.")
+    else:
+        parts.append("No plugin is on right now.")
+    if off:
+        parts.append(f"{_count(len(off), 'more is', 'more are')} installed but switched off: {_names(off)}.")
+    if broken:
+        parts.append(f"{_count(len(broken), 'is', 'are')} installed but not working: {_names(broken)}.")
+    return " ".join(parts)
+
+
 def render(f: LiveFacts) -> str:
     lines = [
         f"Domovoi version: {f.version or 'unknown'}",

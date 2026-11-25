@@ -123,8 +123,8 @@ MATRIX = [
      "Everyone in this house: chats on this house's server can be read on every paired phone and browser."),
     # §15.15
     ("friend_houses", BASE,
-     "No. A friend's house only sees that this house is running and reachable, never who's home, and "
-     "only the messages and lists you send or share with it."),
+     "No. A friend's house never hears this house and can't see who's in it. It only sees that this "
+     "house is reachable, and only the messages and lists you send or share with it."),
     ("friend_houses", R(BASE, friend_houses=False, friends=0),
      "No. Friend Houses is off, so no other house can reach this one."),
     # §15.17
@@ -203,6 +203,9 @@ def test_the_qa_hedge_is_unchanged() -> None:
     ("who can see my chat history", "chats"),
     ("can my friend's house hear me", "friend_houses"),
     ("can my friend's house see my stuff", "friend_houses"),
+    # 15.15, whole: two verbs joined by "or" (the regex missed it).
+    ("can my friend's house hear me or see my stuff", "friend_houses"),
+    ("can a friend's house hear us and read my messages", "friend_houses"),
     ("is this conversation private", "private"),
     ("does anyone else see my listening history", "listening_history"),
     ("did you use the internet for that", "internet_for_that"),
@@ -227,6 +230,7 @@ def _plan(said: str) -> str | None:
     "Can you order pizza?", "Can you set timers?", "Can you turn on the lights?",
     "Please, can you order pizza?", "Are you able to order pizza?", "Can you download videos?",
     "Is this conversation private?", "Who can see my messages?",
+    "Can my friend's house hear me or see my stuff?",
 ])
 def test_these_land_on_house_facts(said: str) -> None:
     assert _plan(said) == "house_facts"
