@@ -310,7 +310,8 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
 
 - **What changed.** Where the setup code is shown (the core's terminal
   banner and `--reset-admin` in a terminal, the Windows installer's last
-  page under **Set up from a phone**, and the new
+  page under **Set up from a phone**, Mac Setup's last page and its
+  **Show Setup Code...** (when the Mac has a home-network address), and the new
   `python -m domovoi.setup_qr` the Linux installer now names), a QR code
   is shown with it. A phone's camera opens the dashboard with the code
   already in the claim form. The code rides in the address's `#` part
@@ -531,9 +532,12 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
     rooms reconnect by themselves.
   - **House identity backup**: Settings → System → About & updates →
     **Download house identity backup** (admins, with the password typed
-    again). Give it to a new install, `install.sh --restore-identity FILE`
-    or Windows Setup's **Restore the house identity from a backup file**,
-    and the rooms trust it. The file is checked before it is used.
+    again). Give it to a new install, `install.sh --restore-identity FILE`,
+    Windows Setup's **Restore the house identity from a backup file** or
+    Mac Setup's **Restore from a Backup...**, and the rooms trust it. The
+    file is checked before it is used. Mac Setup's **Remove everything**
+    now warns that the rooms will need setting up again, and says where
+    to download the backup first.
   - **A room whose server changed says so**: a teal light (not the
     "no server" orange) and "My Domovoi server has changed… please set me
     up again", once, then at most every 12 hours, and whenever you say the

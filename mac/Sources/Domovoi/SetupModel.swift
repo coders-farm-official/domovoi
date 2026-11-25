@@ -1,6 +1,7 @@
 import AppKit
 import DomovoiMacKit
 import Foundation
+import UniformTypeIdentifiers
 
 /// The setup pages' state (mac-installer PLAN 5): the check, the list of
 /// changes, the questions, then the work, which the root helper does after
@@ -37,6 +38,11 @@ final class SetupModel: ObservableObject {
     /// The finished page's word when provision.sh couldn't download the
     /// phone app (its final line's "phone_app" false); nil otherwise.
     @Published var phoneAppNote: String?
+    /// "Restore from a backup" (the media page; S3-4): the house identity
+    /// backup's bytes, read once when chosen, and what it says of itself.
+    @Published var identityData: Data?
+    @Published var identitySummary: IdentityBackup.Summary?
+    @Published var identityError: String?
     @Published var busy = false
     @Published var workTitle = "Installing Domovoi"
     @Published var uninstallMessage = ""
@@ -132,8 +138,18 @@ final class SetupModel: ObservableObject {
             let dir = try makeWorkDir()
             var answersFile: String?
             if !repair {
+                // The backup goes to the helper as a file of this account's,
+                // 0600 in its private work folder (IdentityBackup.read).
+                var restore: String?
+                if let id = identityData, report?.installState != "kept" {
+                    let f = dir.appendingPathComponent("identity.json")
+                    guard FileManager.default.createFile(atPath: f.path, contents: id, attributes: [.posixPermissions: 0o600]) else {
+                        throw HelperError("Setup couldn't hand the house identity backup over")
+                    }
+                    restore = f.path
+                }
                 let answers = SetupAnswers(internet: internet ?? "never", mediaRoot: mediaRoot, ollama: ollama, keepAwake: keepAwake,
-                                           startAfterPowerFailure: offerPowerFailure ? startAfterPowerFailure : nil)
+                                           startAfterPowerFailure: offerPowerFailure ? startAfterPowerFailure : nil, restoreIdentity: restore)
                 let f = dir.appendingPathComponent("answers.json")
                 try JSONEncoder().encode(answers).write(to: f)
                 answersFile = f.path
@@ -363,6 +379,43 @@ final class SetupModel: ObservableObject {
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Picks the house identity backup the dashboard downloaded (Settings >
+    /// About & updates). Checked for shape here, so a wrong file is caught
+    /// now and not after a long install; the core checks the key itself.
+    func chooseIdentityBackup() {
+        let p = NSOpenPanel()
+        p.canChooseFiles = true
+        p.canChooseDirectories = false
+        p.allowsMultipleSelection = false
+        p.allowedContentTypes = [.json]
+        p.message = "Choose the house identity backup (domovoi-house-identity.json)"
+        p.prompt = "Restore This Backup"
+        guard p.runModal() == .OK, let u = p.url else { return }
+        identityError = nil
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: u.path)
+            if let n = attrs[.size] as? Int, n > IdentityBackup.maxBytes { throw HelperError("this file is far too large to be a house identity backup") }
+            let data = try Data(contentsOf: u)
+            switch IdentityBackup.check(data) {
+            case .success(let sum):
+                identityData = data
+                identitySummary = sum
+            case .failure(let e):
+                throw e
+            }
+        } catch {
+            identityData = nil
+            identitySummary = nil
+            identityError = "\(error is HelperError ? "\(error)" : error.localizedDescription)"
+        }
+    }
+
+    func forgetIdentityBackup() {
+        identityData = nil
+        identitySummary = nil
+        identityError = nil
     }
 
     func chooseMediaFolder() {

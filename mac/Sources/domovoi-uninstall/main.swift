@@ -12,7 +12,10 @@ usage: sudo domovoi-uninstall [--keep-data | --remove-everything --confirm DELET
 Keep data (the default) removes Domovoi's programs and background services,
 and keeps the VM, the AI models, the logs, the answers and the hidden account
 that owns them, so installing again picks up where it left off. Remove
-everything removes those too. Your media folders' files are never deleted.
+everything removes those too, the house identity among them: rooms will need
+setting up again unless you download a house identity backup first (the
+dashboard: Settings > About & updates) and restore it when you install again.
+Your media folders' files are never deleted.
 
 --for-uid UID: the account whose Setup window runs this; its menu-bar icon
 is left running so that window can show how it went (it quits once the

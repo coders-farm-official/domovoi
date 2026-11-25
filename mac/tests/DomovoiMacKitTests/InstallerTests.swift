@@ -191,6 +191,10 @@ final class InstallerTests: XCTestCase {
                     @@DOMOVOI {"v":1,"step":"finish","state":"\(provisionResult == "ok" ? "done" : "fail")","percent":100,"final":true,"result":"\(provisionResult)","failed_step":\(provisionResult == "ok" ? "null" : "\"venv\"")\(provisionFinalExtra)}
                     """)
                 }
+                if inner.starts(with: ["sudo", "rm", "-f"]) {
+                    for p in inner.dropFirst(3) { guestFiles[p] = nil }
+                    return CommandResult(status: 0)
+                }
                 if inner.starts(with: ["sudo", "sha256sum"]) {
                     let d = guestFiles[inner[2]] ?? Data()
                     return CommandResult(status: 0, stdout: "\(SHA256Hex.of(d))  \(inner[2])\n")
@@ -449,6 +453,38 @@ final class InstallerTests: XCTestCase {
                       "\(progress.events.filter { $0.0 == "phone-app" })")
         XCTAssertEqual(progress.events.first { $0.0 == "provision" && $0.1 == "done" }?.2,
                        "provision.sh ok; the phone app couldn't be downloaded")
+    }
+
+    /// S3-4: "Restore from a backup". The backup goes into the VM root's
+    /// only (0600, made under umask 077), provision.sh gets
+    /// --restore-identity for that file, and the file is gone after the
+    /// run, whether it worked or not. Its contents are never logged.
+    func testARestoredIdentityGoesInRootOnlyForOneRunThenIsGone() throws { try restoreRun(result: "ok") }
+    func testARestoredIdentityIsGoneAfterAFailedRunToo() throws { try restoreRun(result: "failed") }
+
+    func restoreRun(result: String) throws {
+        let backup = Data(#"{"kind":"domovoi-server-identity-backup","private_key":"c2VjcmV0","fingerprint":"ab:cd"}"#.utf8)
+        provisionResult = result
+        var o = try options()
+        o.restoreIdentity = backup
+        let inst = try installer(o)
+        if result == "ok" { try inst.run() } else { XCTAssertThrowsError(try inst.run()) }
+        let put = try XCTUnwrap(runner.calls.first { $0.arguments.last?.contains("install -o root") == true && $0.arguments.last!.contains(IdentityBackup.guestFile) })
+        XCTAssertEqual(put.stdin, backup)
+        XCTAssertTrue(put.arguments.last!.contains("-m 0600"), put.arguments.last!)
+        XCTAssertTrue(put.arguments.last!.contains("umask 077"), put.arguments.last!)
+        let prov = try XCTUnwrap(runner.ran("limactl", "shell").first { $0.arguments.contains("bash") })
+        XCTAssertNotNil(prov.arguments.firstRange(of: ["--restore-identity", IdentityBackup.guestFile]))
+        XCTAssertNil(guestFiles[IdentityBackup.guestFile], "\(result): removed after the run")
+        XCTAssertFalse(progress.lines.joined().contains("c2VjcmV0"), "the key is never logged")
+        XCTAssertFalse(progress.events.contains { $0.2.contains("c2VjcmV0") })
+    }
+
+    func testNoBackupNoRestoreArgument() throws {
+        try installer(options()).run()
+        let prov = try XCTUnwrap(runner.ran("limactl", "shell").first { $0.arguments.contains("bash") })
+        XCTAssertFalse(prov.arguments.contains("--restore-identity"))
+        XCTAssertFalse(runner.calls.contains { $0.arguments.contains { $0.contains(IdentityBackup.guestFile) } })
     }
 
     func testAPhoneAppOnTheServerSaysNothing() throws {

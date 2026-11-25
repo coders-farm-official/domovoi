@@ -192,9 +192,17 @@ public enum SetupCommands {
         let seed = share.appendingPathComponent("seed", isDirectory: true)
         if FileManager.default.fileExists(atPath: seed.path) { o.seedCache = [seed] }
         _ = a.value("code-to")   // read after the install (handOverSetupCode)
-        if let uid = try a.int("for-uid") {
+        let forUID = try a.int("for-uid")
+        if let uid = forUID {
             guard uid >= 500, let pw = getpwuid(uid_t(uid)) else { throw HelperError("--for-uid \(uid) is no person's account on this Mac") }
             o.mediaOwner = String(cString: pw.pointee.pw_name)
+        }
+        // Read now, once, into memory (IdentityBackup.read: the account's
+        // own regular file, no link): the step later hands these bytes on.
+        // A repair's answers come from the record, which never holds it.
+        if let f = answers?.restoreIdentity {
+            guard let uid = forUID else { throw HelperError("restoring a house identity needs --for-uid (the account that chose the file)") }
+            o.restoreIdentity = try IdentityBackup.read(path: f, owner: uid_t(uid))
         }
         o.stopAfter = a.value("stop-after")
         if let s = o.stopAfter, !Installer.steps.contains(s) { throw HelperError("--stop-after: no step \(s)") }
