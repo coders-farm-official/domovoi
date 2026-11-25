@@ -135,7 +135,7 @@ ROOMS = ("wo_kitchen", "wo_office", "wo_attic", "wo_porch", "wo_shed")
 async def wake_rooms(db_session):
     async def clean():
         async with session_scope() as s:
-            await s.execute(text("DELETE FROM satellite_health WHERE room_id LIKE 'wo\\_%'"))
+            await s.execute(text("DELETE FROM satellite_health WHERE satellite_id LIKE 'wo\\_%'"))
             await s.execute(text("DELETE FROM room_wake_words WHERE room_id LIKE 'wo\\_%'"))
             await s.execute(text("DELETE FROM wake_words WHERE slug LIKE 'test_wo_%'"))
 
@@ -158,7 +158,7 @@ async def wake_rooms(db_session):
                                 ("wo_porch", "hey_jarvis", 30), ("wo_porch", None, 1)):
             sample = {"mic_fps": 12.5, **({"wake_word": word} if word else {})}
             await s.execute(text(
-                "INSERT INTO satellite_health (room_id, received_at, sample) "
+                "INSERT INTO satellite_health (satellite_id, received_at, sample) "
                 "VALUES (:r, now() - make_interval(mins => :ago), CAST(:s AS JSONB))"),
                 {"r": room, "ago": ago, "s": json.dumps(sample)})
     yield

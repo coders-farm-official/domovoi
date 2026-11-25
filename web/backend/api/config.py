@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 # Imported at module top on purpose: the web import guard refuses a NEW
 # domovoi.* import once startup is done (web/backend/plugin_host.py).
-from domovoi import egress, local_peer
+from domovoi import admin_auth, egress, local_peer
 from domovoi.admin_auth import (
     require_admin_mutation,
     require_admin_read,
@@ -35,6 +35,7 @@ from web.backend.domovoi_client import (
     get_admin,
     get_cached_snapshot,
     post_admin,
+    post_admin_bytes,
     put_admin,
 )
 from web.backend.plugin_host import HOST
@@ -345,6 +346,76 @@ async def get_server_identity(request: Request):
     if status != 200 or not isinstance(payload, dict):
         return bridge_response(status, payload)
     return bridge_response(200, payload.get("identity") or {})
+
+
+class IdentityBackupRequest(BaseModel):
+    password: str = ""
+
+
+@router.post(
+    "/config/server-identity/backup",
+    dependencies=[Depends(require_admin_security)],
+)
+async def download_identity_backup(body: IdentityBackupRequest, request: Request):
+    """The house identity backup (1.5.0, S3-4): this server's private key,
+    for a reinstall to be given so the rooms keep trusting it. The security
+    tier and a password sign-in within five minutes here, and both again
+    at the core (``/v1/admin/server-identity/backup``), which also checks
+    the password typed again behind the login backoff. The file is relayed
+    to the admin who asked, never kept, never logged."""
+    from fastapi.responses import Response
+
+    async with session_scope() as s:
+        if not await admin_auth.signed_in_recently(s, admin_auth.bearer_token(request)):
+            raise HTTPException(
+                status_code=403,
+                detail="sign in with the password again first: the house identity backup "
+                       "needs a password sign-in within the last "
+                       f"{admin_auth.PHONE_GRANT_FRESH_SIGNIN_SEC // 60} minutes",
+            )
+    status, content, _headers = await post_admin_bytes(
+        "/v1/admin/server-identity/backup",
+        body={"password": body.password},
+        headers=auth_forward_headers(request),
+    )
+    if status != 200:
+        detail = "the Domovoi server is unreachable" if status == 0 else None
+        if detail is None:
+            try:
+                import json as _json
+
+                parsed = _json.loads(content.decode("utf-8")) if content else None
+                detail = parsed.get("detail") if isinstance(parsed, dict) else None
+            except (UnicodeDecodeError, ValueError):
+                detail = None
+        raise HTTPException(status_code=status if 400 <= status < 500 else 502,
+                            detail=detail or f"the backup failed (HTTP {status})")
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "Content-Disposition": 'attachment; filename="domovoi-house-identity.json"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get(
+    "/updates/notice",
+    # The device tier's read half at both hops: a paired phone or browser,
+    # or an admin (the cookie after a reload too); never an unpaired guest.
+    dependencies=[Depends(require_device_read)],
+)
+async def updates_notice(request: Request):
+    """Home's update row (1.5.0): ``{available, version, highlights,
+    found_by, found_at, updating}``, or ``{available: false, updating:
+    false}``. Proxy of the core's ``GET /v1/updates/notice``: only a signed
+    release makes a notice, never a commit on main; nothing here installs."""
+    return bridge_response(
+        *await get_admin("/v1/updates/notice", headers=auth_forward_headers(request))
+    )
 
 
 @router.post(

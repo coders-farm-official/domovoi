@@ -1078,7 +1078,11 @@ async def ledger(db_session):
     async with engine.begin() as conn:
         await conn.execute(text("DELETE FROM satellites WHERE room_id IN ('kitchen', 'garage')"))
         await conn.execute(text(
-            "INSERT INTO satellites (room_id, adopted_via) VALUES ('kitchen', 'manual'), ('garage', 'manual')"))
+            "INSERT INTO rooms (room_id, name) VALUES ('kitchen', 'kitchen'), ('garage', 'garage') "
+            "ON CONFLICT DO NOTHING"))
+        await conn.execute(text(
+            "INSERT INTO satellites (satellite_id, room_id, adopted_via) "
+            "VALUES ('kitchen', 'kitchen', 'manual'), ('garage', 'garage', 'manual')"))
     yield
     await _clear()
 

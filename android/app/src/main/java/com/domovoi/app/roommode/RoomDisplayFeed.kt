@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -41,8 +42,9 @@ interface RoomDisplaySource {
      *  the frame a Pi reports its level with). False with no session. */
     fun setVolume(level: Int): Boolean
 
-    /** The bytes of an artwork path from the feed, from the room's own
-     *  server; null when it cannot be had. */
+    /** The bytes of an image path from the feed (a cover, or a photo or
+     *  video result's thumbnail: [RoomDisplayFeed.isImagePath]), from the
+     *  room's own server, with no credential; null when it cannot be had. */
     suspend fun art(path: String): ByteArray?
 }
 
@@ -90,6 +92,42 @@ data class FeedTimer(
 
 data class FeedRinging(val fireId: Long, val kind: TimerKind, val label: String?)
 
+/** A photo or a video result's kind. */
+enum class MediaKind { IMAGE, VIDEO }
+
+/** One photo or video result on the room's screen (`media.items`). */
+data class FeedMediaItem(
+    val kind: MediaKind,
+    /** Its thumbnail on the room's server (`/v1/room-media/{token}`, good
+     *  for 10 minutes, no credential); null: none, a blank tile. */
+    val thumb: String?,
+    /** What it MIGHT show (a picture model's guess, untrusted): drawn as
+     *  plain text, "Might show: …"; null: none. */
+    val caption: String?,
+    /** When it was taken, `YYYY-MM-DD`; null: unknown. */
+    val date: String?,
+    /** A video's best moment, seconds; null: none (and never for a photo). */
+    val atS: Double?,
+)
+
+/**
+ * Photo and video results asked for by voice in this room (1.5.0, the
+ * `media` part of `room_display`, domovoi/room_media.py): shown for
+ * [expiresInMs] from when the frame arrived, replaced by newer results (a
+ * new [id]), gone with a frame whose `media` is null.
+ */
+data class FeedMedia(
+    val id: Long,
+    /** The spoken answer ("I found 12 photos that might show the beach…"). */
+    val said: String,
+    val count: Int,
+    /** More results than the server sent (they are on the Photos page). */
+    val more: Boolean,
+    val expiresInMs: Long,
+    /** At most [RoomDisplayFeed.MAX_MEDIA_ITEMS]. */
+    val items: List<FeedMediaItem>,
+)
+
 data class RoomFeed(
     val nowPlaying: FeedNowPlaying?,
     val timers: List<FeedTimer>,
@@ -101,6 +139,8 @@ data class RoomFeed(
     /** The server's monotonic ms when it sent this frame (`sent_at_ms`):
      *  for ordering only, never shown. Null: an older shape. */
     val sentAtMs: Long? = null,
+    /** Photo and video results (1.5.0); null: none, or an older core. */
+    val media: FeedMedia? = null,
 )
 
 sealed class RoomControl {
@@ -121,7 +161,17 @@ sealed class RoomControl {
  *                             "art":"/v1/music/cover/{id}"|null,"duration_sec":N,"elapsed_sec":N,
  *                             "controls":["pause","resume","skip","previous"]},
  *      "timers": [{"id":N,"kind":"timer"|"alarm","label":..,"remaining_ms":N,"total_ms":N}],
- *      "ringing": null | {"fire_id":N,"kind":"timer"|"alarm","label":..}}
+ *      "ringing": null | {"fire_id":N,"kind":"timer"|"alarm","label":..},
+ *      "media": null | {"id":N,"said":..,"count":N,"more":bool,"expires_in_ms":N,   (1.5.0)
+ *                       "items":[{"kind":"image"|"video","thumb":"/v1/room-media/{token}",
+ *                                 "caption":..,"date":"YYYY-MM-DD","at_s":N}]}}
+ *
+ * `media` ([FeedMedia]): the results of "show me photos of the beach" said
+ * here, at most six, for `expires_in_ms`; null otherwise, and gone with the
+ * next frame sent for any other reason. A caption is a picture model's
+ * guess: plain text, "Might show: …". `thumb` is fetched from the room's own
+ * server with no credential ([isMediaThumbPath]). Read leniently: a `media`
+ * this app cannot use is none, and the rest of the frame still applies.
  *
  * Between frames the phone moves things on itself: `elapsed_sec` while
  * the state is "play", each `remaining_ms` always ([RoomDisplayModel]). A
@@ -149,6 +199,51 @@ object RoomDisplayFeed {
             nowPlaying = np?.let(::nowPlaying),
             timers = (o["timers"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::timer) }.take(MAX_TIMERS),
             ringing = (o["ringing"] as? JsonObject)?.let(::ringing),
+            // Read leniently: a `media` this app cannot use is no media,
+            // never a frame that fails.
+            media = runCatching { (o["media"] as? JsonObject)?.let(::media) }.getOrNull(),
+        )
+    }
+
+    /** Most results the server sends a room (domovoi/room_media.py MAX_ITEMS). */
+    const val MAX_MEDIA_ITEMS = 6
+
+    /** The spoken answer's longest (room_media.py SAID_MAX). */
+    private const val MAX_SAID = 300
+
+    /** The longest a result stays: the server says 90 s; a value past this
+     *  is a mistake, and the screen still clears. */
+    private const val MAX_MEDIA_MS = 300_000L
+
+    private val DATE = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+    private fun media(o: JsonObject): FeedMedia? {
+        val id = o.long("id") ?: return null
+        val items = (o["items"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::mediaItem) }
+            .take(MAX_MEDIA_ITEMS)
+        if (items.isEmpty()) return null
+        return FeedMedia(
+            id = id,
+            said = o.str("said")?.trim()?.take(MAX_SAID).orEmpty(),
+            count = (o.long("count") ?: items.size.toLong()).coerceIn(items.size.toLong(), Int.MAX_VALUE.toLong()).toInt(),
+            more = (o["more"] as? JsonPrimitive)?.booleanOrNull == true,
+            expiresInMs = (o.long("expires_in_ms") ?: 90_000L).coerceIn(0L, MAX_MEDIA_MS),
+            items = items,
+        )
+    }
+
+    private fun mediaItem(o: JsonObject): FeedMediaItem? {
+        val kind = when (o.str("kind")) {
+            "image" -> MediaKind.IMAGE
+            "video" -> MediaKind.VIDEO
+            else -> return null
+        }
+        return FeedMediaItem(
+            kind = kind,
+            thumb = o.str("thumb")?.takeIf(::isMediaThumbPath),
+            caption = o.text("caption"),
+            date = o.str("date")?.takeIf { DATE.matches(it) },
+            atS = o.num("at_s")?.takeIf { kind == MediaKind.VIDEO && it >= 0 },
         )
     }
 
@@ -214,6 +309,19 @@ object RoomDisplayFeed {
     fun isArtPath(p: String): Boolean = ART_PATH.matches(p)
 
     private val ART_PATH = Regex("/v1/music/cover/[0-9]{1,10}")
+
+    /** Only the core's room-media route with one of its tokens, exactly as
+     *  the core writes it (`/v1/room-media/{token}`, domovoi/room_media.py:
+     *  `secrets.token_urlsafe(24)`, held to `TOKEN_RE` there, URL-safe
+     *  base64 of 20 to 64 characters): nothing else, no other host, no
+     *  percent-encoding, `..`, query or fragment. Fetched with no
+     *  credential, like a cover. */
+    fun isMediaThumbPath(p: String): Boolean = MEDIA_PATH.matches(p)
+
+    private val MEDIA_PATH = Regex("/v1/room-media/[A-Za-z0-9_-]{20,64}")
+
+    /** What [RoomDisplaySource.art] fetches: a cover or a result's thumbnail. */
+    fun isImagePath(p: String): Boolean = isArtPath(p) || isMediaThumbPath(p)
 
     /** A cover's longest side is decoded to at most about this. */
     const val ART_LONG_SIDE = 1024

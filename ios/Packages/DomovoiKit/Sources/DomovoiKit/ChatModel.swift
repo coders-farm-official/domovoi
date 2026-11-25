@@ -116,6 +116,35 @@ public final class ChatModel {
     private var stream: Task<Void, Never>?
     private var pinKeys: Set<String>
 
+    // MARK: private chats (1.5.0, ``ChatPrivacyRules``)
+
+    /// The open thread's access as the server last said it (its messages'
+    /// `thread`, a create, a share); nil before it has said.
+    private var storedAccess: ChatThread?
+
+    /// A new chat's "Share with household", turned on before it exists.
+    public private(set) var shareNew = false
+
+    /// The unshare confirmation is open.
+    public private(set) var unsharing = false
+
+    /// An admin's "All chats in the house" (`scope=all`).
+    public private(set) var allChats = false
+    private let scope = ChatScopeBox()
+
+    /// The phone's own chat exists in this build and here (the view says so:
+    /// ``AssistantPlaceSwitch`` knows), so a private chat may say once that
+    /// that one never leaves the phone.
+    public var phoneChatHere = false
+
+    /// The first-use note was put up on this visit (kept until closed).
+    public private(set) var privateNoteUp = false
+
+    private let sharedScreenNow: @MainActor () -> Bool
+    private let onSharedScreen: @MainActor () -> Void
+    private let reregister: @MainActor () -> Void
+    private let noteBook: ChatPrivateNoteBook
+
     /// How many times this app has moved house since it launched.
     ///
     /// **The mechanism for [[read-after-await-wrong-key]], said once.** This
@@ -159,8 +188,16 @@ public final class ChatModel {
             try await Task.sleep(for: .milliseconds($0))
         },
         nowMs: @Sendable @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
-        nowISO: @Sendable @escaping () -> String = { ISO8601DateFormatter().string(from: Date()) }
+        nowISO: @Sendable @escaping () -> String = { ISO8601DateFormatter().string(from: Date()) },
+        sharedScreen: @MainActor @escaping () -> Bool = { false },
+        onSharedScreen: @MainActor @escaping () -> Void = {},
+        reregister: @MainActor @escaping () -> Void = {},
+        privateNote: ChatPrivateNoteBook = ChatPrivateNoteBook()
     ) {
+        self.sharedScreenNow = sharedScreen
+        self.onSharedScreen = onSharedScreen
+        self.reregister = reregister
+        self.noteBook = privateNote
         self.container = container
         self.deviceID = deviceID
         self.book = pins
@@ -170,11 +207,12 @@ public final class ChatModel {
         self.pinKeys = pins.all
 
         let client = container.client
+        let scope = self.scope
         self.threads = ApiRead(in: container, eventTypes: Self.listEvents) {
-            try await client.get(ChatPath.threads(), as: ChatThreadList.self)
+            try await client.get(ChatPrivacyRules.threadsPath(archived: false, all: scope.showingAll), as: ChatThreadList.self)
         }
         self.archivedThreads = ApiRead(in: container, eventTypes: Self.listEvents) {
-            try await client.get(ChatPath.threads(archived: true), as: ChatThreadList.self)
+            try await client.get(ChatPrivacyRules.threadsPath(archived: true, all: scope.showingAll), as: ChatThreadList.self)
         }
         // No `eventTypes`: what Ollama has installed does not change because a
         // chat did, and `chat.changed` arrives on every message.
@@ -372,7 +410,7 @@ public final class ChatModel {
     /// `PATCH /threads/{id}` with `archived`. The server's, so it shows on
     /// every paired device.
     public func setArchived(_ row: ChatRow, _ archived: Bool) {
-        guard let id = row.threadID else { return }
+        guard row.canWrite, let id = row.threadID else { return }
         write(
             verb: archived ? ChatStrings.verbArchive : ChatStrings.verbMoveBack,
             method: "PATCH",
@@ -387,7 +425,7 @@ public final class ChatModel {
 
     /// What the delete confirmation says (`ServerChatPlace.kt:102`). The thread
     /// is the household's, and this is the one place that fact is said.
-    public func deleteText(_ row: ChatRow) -> String { ChatStrings.deleteText(row.title) }
+    public func deleteText(_ row: ChatRow) -> String { ChatPrivacyStrings.deleteText(row.title, shared: row.shared) }
 
     /// `DELETE /threads/{id}` — **for the whole house**.
     ///
@@ -396,7 +434,7 @@ public final class ChatModel {
     /// house ever reused the id it would pin a stranger's chat.
     public func delete(_ row: ChatRow) {
         deleting = nil
-        guard let id = row.threadID else { return }
+        guard row.canDelete, let id = row.threadID else { return }
         setPinned(row, false)
         if openThread == id { closeChat() }
         write(verb: ChatStrings.verbDelete, method: "DELETE", path: ChatPath.thread(id), body: nil)
@@ -482,6 +520,8 @@ public final class ChatModel {
         openThread = id
         newChat = false
         storedTitle = title
+        storedAccess = nil
+        unsharing = false
         transcript.clear()
         loadMessages(id)
     }
@@ -494,6 +534,9 @@ public final class ChatModel {
         openThread = nil
         newChat = true
         storedTitle = nil
+        storedAccess = nil
+        shareNew = false
+        unsharing = false
         transcript.clear()
     }
 
@@ -501,6 +544,9 @@ public final class ChatModel {
         cancelStream()
         openThread = nil
         newChat = false
+        storedAccess = nil
+        unsharing = false
+        privateNoteUp = false
         transcript.clear()
         refreshLists()
     }
@@ -519,7 +565,7 @@ public final class ChatModel {
     /// finishes. That is ``canSend``'s question, not this one, and the two
     /// were conflated here: this comment used to claim the `sending` guard
     /// (`ChatScreen.kt:736`) as well, which the expression has never carried.
-    public var composerOffered: Bool { aiEnabled && conversationOpen }
+    public var composerOffered: Bool { aiEnabled && conversationOpen && openWritable }
 
     /// Whether a send would be taken **now**.
     ///
@@ -579,9 +625,15 @@ public final class ChatModel {
                 // other half, and it is also what drops a read from a house the
                 // person has left when nothing at all is open.
                 guard let self, self.stillHome(epoch), self.openThread == id else { return }
+                if let thread = list.thread, thread.id == id { self.storedAccess = thread }
                 self.transcript.load(list.messages, thisDeviceID: who)
             } catch let trouble as DomovoiError {
                 guard let self, self.stillHome(epoch), self.openThread == id else { return }
+                // Unshared (or deleted) while it was open: said, and closed.
+                if ChatPrivacyRules.isGone(trouble) {
+                    self.gone()
+                    return
+                }
                 // ``ChatStrings/verbOpenChat``, not `verbSend`: **nothing was
                 // sent**. This is the read that draws a conversation, and a
                 // toast reading "send failed (offline?)" for a chat that would
@@ -647,8 +699,19 @@ public final class ChatModel {
             } catch {
                 // The thread could not even be made: the refusal goes where the
                 // reply would have been, as Android's `onFailure` puts it
-                // (`ChatScreen.kt:773`).
-                self.transcript.failLive(sendFailureLine(error, verb: ChatStrings.verbNewChat))
+                // (`ChatScreen.kt:773`). A private chat the server can't keep
+                // private (1.5.0) says why in this app's words, and the chip
+                // follows: a shared screen now, or a key to register again.
+                switch ChatRefusal.of(error) {
+                case .sharedScreen:
+                    self.onSharedScreen()
+                    self.transcript.failLive(ChatPrivacyStrings.sharedScreenLine)
+                case .keyMissing:
+                    self.reregister()
+                    self.transcript.failLive(claimDetail(error) ?? sendFailureLine(error, verb: ChatStrings.verbNewChat))
+                case nil:
+                    self.transcript.failLive(sendFailureLine(error, verb: ChatStrings.verbNewChat))
+                }
                 self.endStream()
             }
         }
@@ -694,6 +757,11 @@ public final class ChatModel {
         } catch let trouble as DomovoiError {
             guard stillHome(epoch) else { return }
             transcript.failLive(sendFailureLine(trouble, verb: verb))
+            if ChatPrivacyRules.isGone(trouble) {
+                endStream()
+                gone()
+                return
+            }
         } catch {
             guard stillHome(epoch) else { return }
             transcript.failLive(failureText(verb, .unreachable("\(error)")))
@@ -778,11 +846,149 @@ public final class ChatModel {
     /// on screen.
     private func ensureThread(_ epoch: Int) async throws(DomovoiError) -> Int64? {
         if let openThread { return openThread }
-        let made = try await container.client.post(ChatPath.newThread, as: ChatThread.self)
+        let body = ChatPrivacyRules.createBody(hasKey: hasDeviceKey, sharedScreen: isSharedScreen, shareNew: shareNew)
+        let made = try await container.client.post(ChatPath.newThread, body: body, as: ChatThread.self)
         guard stillHome(epoch), newChat, openThread == nil, !Task.isCancelled else { return nil }
         openThread = made.id
         newChat = false
+        if made.knowsSharing { storedAccess = made }
         return made.id
+    }
+
+    // MARK: - private chats (1.5.0)
+
+    /// This phone holds a device key for the server: a new chat is private
+    /// unless the switch says otherwise.
+    public var hasDeviceKey: Bool { container.deviceKeys.holdsDeviceKey(for: container.store.serverURL) }
+
+    /// The server marked this install a shared screen.
+    public var isSharedScreen: Bool { sharedScreenNow() }
+
+    /// The open thread with its access fields: what its messages, a create or
+    /// a share last said, else the list's row. Nil for a new chat, or before
+    /// a server from before 1.5.0 has said anything about sharing.
+    public var openAccess: ChatThread? {
+        guard let openThread else { return nil }
+        if let storedAccess, storedAccess.id == openThread { return storedAccess }
+        let known = (threads.data?.threads ?? []) + (archivedThreads.data?.threads ?? [])
+        return known.first { $0.id == openThread && $0.knowsSharing }
+    }
+
+    /// Whether the server lets this phone write in the open chat. A new chat
+    /// is this phone's; an older server denies nothing.
+    public var openWritable: Bool { openAccess?.writable ?? true }
+
+    /// The chip under the conversation's title, or nil when nothing is said
+    /// (an older server, or a keyless phone's new chat: the household's).
+    public var privacyLine: String? {
+        if let access = openAccess {
+            return ChatPrivacyRules.line(shared: access.shared == true, sharedScreen: isSharedScreen)
+        }
+        guard newChat else { return nil }
+        return ChatPrivacyRules.newChatLine(hasKey: hasDeviceKey, sharedScreen: isSharedScreen, shareNew: shareNew)
+    }
+
+    /// Whether the chip's lock or people icon is the shared one.
+    public var privacyShared: Bool {
+        if isSharedScreen { return true }
+        if let access = openAccess { return access.shared == true }
+        return shareNew
+    }
+
+    /// The "Share with household" switch is drawn: for the owner or an admin
+    /// of an open chat, or for a new chat on a phone with a key; never on a
+    /// shared screen.
+    public var showsShareSwitch: Bool {
+        if let access = openAccess { return ChatPrivacyRules.showsShareSwitch(access, sharedScreen: isSharedScreen) }
+        return newChat && hasDeviceKey && !isSharedScreen
+    }
+
+    /// The admin's banner over another device's private chat.
+    public var adminBanner: String? {
+        guard let access = openAccess, access.adminView else { return nil }
+        return ChatPrivacyStrings.adminBanner(access.ownerName)
+    }
+
+    /// The first-use note, while it is up.
+    public var privateNote: String? { privateNoteUp ? ChatPrivacyStrings.trulyPrivateNote : nil }
+
+    public func closePrivateNote() { privateNoteUp = false }
+
+    /// Put the note up once on this phone, in a home-server chat on a phone
+    /// with a key, where the phone's own chat exists. The conversation's view
+    /// asks when it appears (it knows whether the phone's chat is here).
+    public func showPrivateNoteIfDue() {
+        guard conversationOpen, !privateNoteUp else { return }
+        guard phoneChatHere, hasDeviceKey, !isSharedScreen, !noteBook.seen else { return }
+        noteBook.markSeen()
+        privateNoteUp = true
+    }
+
+    /// The switch was flipped. Off asks first (``unsharing``).
+    public func shareSwitched(_ on: Bool) {
+        if newChat && openThread == nil {
+            shareNew = on
+            return
+        }
+        if on { setShared(true) } else { unsharing = true }
+    }
+
+    public func cancelUnshare() { unsharing = false }
+
+    public func confirmUnshare() {
+        unsharing = false
+        setShared(false)
+    }
+
+    /// `PATCH /threads/{id}` with `shared` (the owning phone, or an admin).
+    private func setShared(_ want: Bool) {
+        guard let id = openThread else { return }
+        let client = container.client
+        let epoch = houseEpoch
+        Task { @MainActor [weak self] in
+            do throws(DomovoiError) {
+                let answer = try await client.patch(ChatPath.thread(id), body: ChatPrivacyRules.shareBody(want), as: ChatThread.self)
+                guard let self, self.stillHome(epoch), self.openThread == id else { return }
+                if answer.knowsSharing { self.storedAccess = answer }
+                self.toast = want ? ChatPrivacyStrings.sharedToast : ChatPrivacyStrings.unsharedToast
+                self.refreshLists()
+            } catch {
+                guard let self, self.stillHome(epoch), self.openThread == id else { return }
+                if ChatPrivacyRules.isGone(error) {
+                    self.gone()
+                } else if ChatRefusal.of(error) == .sharedScreen {
+                    self.onSharedScreen()
+                    self.toast = ChatPrivacyStrings.sharedScreenLine
+                } else {
+                    self.toast = failureText(ChatPrivacyStrings.shareSwitch, error)
+                }
+            }
+        }
+    }
+
+    /// This chat isn't this phone's to see any more: said, and closed.
+    private func gone() {
+        toast = ChatPrivacyStrings.goneLine
+        closeChat()
+    }
+
+    /// The admin's filter is offered (``ChatPrivacyRules/offersScope(_:showingAll:)``).
+    public var offersScope: Bool {
+        ChatPrivacyRules.offersScope(
+            (threads.data?.threads ?? []) + (archivedThreads.data?.threads ?? []), showingAll: allChats
+        )
+    }
+
+    public func showAllChats(_ all: Bool) {
+        guard all != allChats else { return }
+        allChats = all
+        scope.showingAll = all
+        refreshLists()
+    }
+
+    /// The device key came or went: the lists were read with the old one.
+    public func deviceKeyChanged() {
+        refreshLists()
     }
 
     // MARK: - coming and going
@@ -851,6 +1057,11 @@ public final class ChatModel {
         renaming = nil
         deleting = nil
         sharing = nil
+        storedAccess = nil
+        shareNew = false
+        unsharing = false
+        allChats = false
+        scope.showingAll = false
         // The pins are **not** cleared: they are keyed by address, so the
         // other house's are simply not matched, and coming home finds them
         // where they were.

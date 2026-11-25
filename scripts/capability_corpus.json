@@ -1099,14 +1099,14 @@
         "About & updates"
       ],
       "note": "member: 'This house has no internet, so it updates from a newer offline kit. An admin needs to do it.' (1.5.0)",
-      "skip_reason": "1.5.0 only: the offline-kit update answer is built on next/1.5.0"
+      "stub": true
     },
     {
       "id": "5.11b",
       "utterance": "Can you update yourself?",
       "where": "chat",
       "house": "offline-kit-admin",
-      "expect": "CAN",
+      "expect": "EXACT",
       "kind": "question",
       "must_include": [
         "offline kit",
@@ -1116,7 +1116,7 @@
         "I can't do that yet, I don't think"
       ],
       "note": "proven admin: '...Plug in the new kit's USB stick and open Settings → System → About & updates → Update from an offline kit.' (1.5.0)",
-      "skip_reason": "1.5.0 only: the offline-kit update answer is built on next/1.5.0"
+      "stub": true
     },
     {
       "id": "5.12",

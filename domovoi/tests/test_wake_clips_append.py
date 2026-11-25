@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import time
+import types
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +88,10 @@ async def _set(wid: int, **cols: Any) -> None:
 
 
 class _FakeWS:
+    # ``app``: every utterance_start asks the app's wake-claim arbiter
+    # (1.5.0), as a real socket's ``ws.app`` allows.
     def __init__(self) -> None:
+        self.app = types.SimpleNamespace(state=types.SimpleNamespace())
         self.sent_text: list[dict] = []
 
     async def send_text(self, data: str) -> None:

@@ -257,7 +257,7 @@ public enum RoomsStrings {
     public static let dropInStartIsOnTheDashboard =
         "starting a call between two rooms needs the dashboard — from here this phone can join this room"
 
-    // MARK: - maintenance (facts only: both buttons are admin)
+    // MARK: - maintenance (both buttons are admin: RoomAdmin.swift)
 
     public static let maintenanceLabel = "maintenance"
 
@@ -290,12 +290,11 @@ public enum RoomsStrings {
     public static let netStepNotInstalled = "not installed"
     public static let netStepRunning = "running"
 
-    /// **iOS only.** Android's `restart` and `upgrade` buttons and their
-    /// confirm dialogs are not ported: `…/restart` is admin
-    /// (`satellites.py:1576-1581`) and `…/upgrade` is admin security
-    /// (`:1618-1623`), so both 401 every time from a phone. The pills above
-    /// stay — they are facts from two device-tier reads — and this one line
-    /// says where the buttons are.
+    /// Where restart and upgrade are without admin held here: Android's
+    /// `ROOM_MAINTENANCE_ON_DASHBOARD`. `…/restart` is admin and `…/upgrade`
+    /// admin security, so this is what a **shared screen** says; signed out on
+    /// a household phone it is ``RoomAdminWords/maintenanceOrPhone``, and with
+    /// admin held the two buttons are drawn instead.
     public static let upgradeIsOnTheDashboard =
         "restarting and upgrading a room are done from the dashboard on a computer"
 
@@ -439,7 +438,7 @@ public enum RoomsStrings {
         }
     }
 
-    // MARK: - the settings tab, which is read-only here
+    // MARK: - the settings tab (the editor is admin: RoomAdmin.swift)
 
     /// Android's empty state is `"settings unavailable"` with
     /// `"the room must be online to edit its config"`
@@ -449,10 +448,10 @@ public enum RoomsStrings {
     public static let settingsUnavailable = "settings unavailable"
     public static let settingsNeedsOnlineRoom = "the room must be online to report its settings"
 
-    /// **iOS only**, in place of Android's "Saving rewrites the Pi's
-    /// config.toml and restarts the room device to apply"
-    /// (`SatSettingsTab.kt:137-139`): the PATCH is admin
-    /// (`satellites.py:1712-1716`), so these fields are shown and not offered.
+    /// Android's `ROOM_CONFIG_READ_ONLY`: the PATCH is admin security, so a
+    /// **shared screen** shows the fields as words under this line; signed
+    /// out on a household phone it is ``RoomAdminWords/configOrPhone``, and
+    /// with admin held the common fields are an editor.
     public static let configIsReadOnly =
         "what this room is set to. Changing any of it is done from the dashboard on a computer."
 
@@ -470,8 +469,9 @@ public enum RoomsStrings {
     public static let valueUnknown = dash
 
     /// **iOS only.** A `bool` field is a `Switch` on Android
-    /// (`SatSettingsTab.kt:311`); nothing here is editable, so the state is
-    /// read as a word instead. Lower case, like the rest of this screen.
+    /// (`SatSettingsTab.kt:311`) and here while admin is held; without admin
+    /// the state is read as a word instead. Lower case, like the rest of this
+    /// screen.
     public static let boolOn = "on"
     public static let boolOff = "off"
 }

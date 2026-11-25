@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from starlette.websockets import WebSocketDisconnect
 
-from domovoi import room_ids, streaming
+from domovoi import room_devices, room_ids, streaming
 from domovoi.config import settings
 from domovoi.db.repositories import SatelliteApprovalRepository
 from domovoi.db.session import SessionLocal, engine
@@ -171,9 +171,15 @@ async def test_web_routes_refuse_a_bad_room_id(method: str, path: str) -> None:
 
 
 def test_the_approval_buttons_encode_the_room_id() -> None:
+    # Since rooms slice 8 the approval is addressed by the device's own
+    # satellite id (the core's path segment is the satellite id since
+    # piece 2), falling back to the room id from an older core. Either one
+    # rides encoded, never raw.
     src = (STATIC / "satellites.jsx").read_text(encoding="utf-8")
-    assert "`/api/satellites/approvals/${encodeURIComponent(a.room_id)}/${action}`" in src
+    assert ("`/api/satellites/approvals/${encodeURIComponent(a.satellite_id || a.room_id)}/${action}`"
+            in src)
     assert "/api/satellites/approvals/${a.room_id}" not in src
+    assert "/api/satellites/approvals/${a.satellite_id" not in src
 
 
 _ROOM_IN_URL = re.compile(
@@ -210,7 +216,10 @@ def test_core_room_routes_check_the_room_id() -> None:
             if (method, path) in _CORE_REMOVALS:
                 continue
             calls = [d.call for d in route.dependant.dependencies]
-            if room_ids.require_room_id_path not in calls:
+            # The 1.5.0 rooms drawer's routes check every id in their path
+            # (room_devices.require_id_paths), DELETE included.
+            if (room_ids.require_room_id_path not in calls
+                    and room_devices.require_id_paths not in calls):
                 missing.append(f"{method} {path}")
     assert missing == []
 

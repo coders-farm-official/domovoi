@@ -19,6 +19,10 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Help steps sent by voice, on the phone: only this phone's owner's rows
  * post, a first run posts nothing old, a row never posts twice (push, read,
  * both), a shared screen never posts, and each server keeps its own mark.
+ *
+ * Since 1.5.0 a push is only a reason to read: the rows that post are the
+ * ones the read answers (filtered to this phone by its device key, which
+ * the read carries), titled from the row, the push's title the fallback.
  */
 class HelpDeliveryEngineTest {
     private class FakeSink : HelpSink {
@@ -43,6 +47,10 @@ class HelpDeliveryEngineTest {
     private lateinit var web: MockWebServer
     private val answers = HashMap<String, String>()
     private val paths = CopyOnWriteArrayList<String>()
+    private val keys = CopyOnWriteArrayList<String?>()
+    /** What any other deliveries read answers: the rows the last push
+     *  named, as the server would list them. */
+    @Volatile private var served: List<String> = emptyList()
     private val sink = FakeSink()
     private val book = FakeBook()
     private var owner: String? = "3"
@@ -55,13 +63,20 @@ class HelpDeliveryEngineTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.path ?: ""
                 paths += path
-                return answers[path]?.let { MockResponse().setBody(it) }
-                    ?: MockResponse().setResponseCode(404).setBody("""{"detail":"Not Found"}""")
+                keys += request.getHeader(com.domovoi.app.net.DEVICE_KEY_HEADER)
+                answers[path]?.let { return MockResponse().setBody(it) }
+                if (path.startsWith(HelpDeliveriesApi.PATH)) {
+                    return MockResponse().setBody("""{"deliveries":[${served.joinToString(",")}]}""")
+                }
+                return MockResponse().setResponseCode(404).setBody("""{"detail":"Not Found"}""")
             }
         }
         web.start()
         url = web.url("/").toString().trimEnd('/')
-        engine = HelpDeliveryEngine(ApiClient({ url }), book, sink, serverUrl = { url }, owner = { owner })
+        engine = HelpDeliveryEngine(
+            ApiClient({ url }, deviceKeyForServer = { "device-key-abc" }), book, sink,
+            serverUrl = { url }, owner = { owner },
+        )
     }
 
     @After fun tearDown() {
@@ -71,7 +86,9 @@ class HelpDeliveryEngineTest {
     private fun row(id: Long, person: Long, thread: Long = 100 + id, title: String = "Help: add a room") =
         """{"id":$id,"person_id":$person,"thread_id":$thread,"title":"$title","created_at":"2026-10-21T10:00:00Z"}"""
 
+    /** A push naming [rows], which the read then lists. */
     private fun push(vararg rows: String) = runBlocking {
+        served = rows.toList()
         engine.onEvent(DomovoiJson.parseToJsonElement("[${rows.joinToString(",")}]"))
     }
 
@@ -163,7 +180,7 @@ class HelpDeliveryEngineTest {
     @Test fun eachServerKeepsItsOwnMark() {
         book.marks[key] = 1
         push(row(2, 3))
-        val other = MockWebServer().also { it.start() }
+        val other = MockWebServer().also { it.dispatcher = web.dispatcher; it.start() }
         try {
             val otherUrl = other.url("/").toString().trimEnd('/')
             url = otherUrl
@@ -175,13 +192,63 @@ class HelpDeliveryEngineTest {
         }
     }
 
+    // ── 1.5.0: the read decides, the push only asks ─────────────────────
+
+    @Test fun deliveriesAreTitledFromTheFetchedRow() {
+        book.marks[key] = 1
+        // The push says "Photos from Domovoi"; the read has the chat's title.
+        served = listOf(row(2, 3, title = "Photos: The beach"))
+        runBlocking {
+            engine.onEvent(DomovoiJson.parseToJsonElement("[${row(2, 3, title = "Photos from Domovoi")}]"))
+        }
+        assertEquals("Photos: The beach", helpTitle(sink.posted.single().second))
+        assertEquals("the push asked for a read", "/api/help/deliveries?person_id=3&since_id=1", paths.single())
+    }
+
+    @Test fun aFetchedRowWithNoTitleFallsBackToThePushTitle() {
+        book.marks[key] = 1
+        served = listOf(row(2, 3, title = ""))
+        runBlocking {
+            engine.onEvent(DomovoiJson.parseToJsonElement("[${row(2, 3, title = "Photos from Domovoi")}]"))
+        }
+        assertEquals("Photos from Domovoi", helpTitle(sink.posted.single().second))
+    }
+
+    @Test fun thePushsOwnRowsNeverPost() {
+        // The read is filtered to this phone by its key: a row the push
+        // names that the read doesn't list is another phone's.
+        book.marks[key] = 1
+        served = emptyList()
+        runBlocking { engine.onEvent(DomovoiJson.parseToJsonElement("[${row(2, 3)}]")) }
+        assertEquals(emptyList<Any>(), sink.posted)
+        // A push with no person or thread in its rows still reads.
+        served = listOf(row(3, 3, title = "Photos: Rome"))
+        runBlocking { engine.onEvent(DomovoiJson.parseToJsonElement("""[{"id":3,"title":"Photos from Domovoi"}]""")) }
+        assertEquals(listOf("Photos: Rome"), sink.posted.map { helpTitle(it.second) })
+    }
+
+    @Test fun theReadCarriesTheDeviceKey() {
+        book.marks[key] = 1
+        push(row(2, 3))
+        assertEquals("device-key-abc", keys.single())
+    }
+
+    @Test fun pushTitlesReadOnlyIdAndTitle() {
+        val titles = pushTitles(DomovoiJson.parseToJsonElement("""[{"id":4,"title":" Photos from Domovoi "},{"id":5},{"title":"x"}]"""))
+        assertEquals(mapOf(4L to "Photos from Domovoi"), titles)
+        assertEquals(mapOf(4L to "Photos from Domovoi"), pushTitles(DomovoiJson.parseToJsonElement("""{"deliveries":[{"id":4,"title":"Photos from Domovoi"}]}""")))
+        assertEquals(emptyMap<Long, String>(), pushTitles(null))
+    }
+
     @Test fun parsingAndTitles() {
         assertNull(parseDeliveries(DomovoiJson.parseToJsonElement("""{"detail":"x"}""")))
         val rows = parseDeliveries(DomovoiJson.parseToJsonElement("""[${row(1, 3)},{"id":"bad"}]"""))!!
         assertEquals(1, rows.size)
         assertEquals(HelpDelivery(1, 3, 101, "Help: add a room", "2026-10-21T10:00:00Z"), rows.single())
-        assertEquals("Help: add a room", helpTitle(rows.single().copy(title = "add a room")))
-        assertEquals("Help from Domovoi", helpTitle(rows.single().copy(title = " ")))
+        // The chat's title as sent: nothing added (1.5.0), an old "Help: …" kept.
+        assertEquals("Photos: The beach", helpTitle(rows.single().copy(title = "Photos: The beach")))
+        assertEquals("Help: add a room", helpTitle(rows.single()))
+        assertEquals("From Domovoi", helpTitle(rows.single().copy(title = " ")))
         assertTrue(planHelp(emptyList(), 3, null, false).post.isEmpty())
         assertNull(planHelp(emptyList(), 3, null, false).seen)
     }

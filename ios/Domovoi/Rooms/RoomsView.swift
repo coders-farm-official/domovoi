@@ -42,7 +42,7 @@ import SwiftUI
 /// * **Display controls and logs** — `:1597-1602` and `:1679-1684`, both
 ///   admin. Android's phone screen draws neither either.
 ///
-/// **"Use this device as a room" IS here now** (`SatellitesScreen.kt:166-169`,
+/// **"Use this phone in a room" IS here now** (`SatellitesScreen.kt:166-169`,
 /// ``RoomModeEntryCard``): room mode landed (I7), so the card is drawn after
 /// the roster in every state, as Android's last grid item is.
 ///
@@ -269,6 +269,9 @@ struct RoomsView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
+                // Devices asking to join (1.5.0): only while this phone
+                // holds admin (``JoinRequestsCard``).
+                JoinRequestsCard(model: model)
                 // The roster, always: a room is pushed on top of this screen
                 // now (D56), so this one stays mounted underneath rather
                 // than being swapped for the detail.

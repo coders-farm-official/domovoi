@@ -449,6 +449,8 @@ class DoubleCheckHandler(Handler):
     #   nothing else does, but this band is the right place if media
     #   handlers ever grow such phrasings.
     priority_band = 190
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Double-Check", tone="info")
     @property
     def example_phrases(self) -> tuple[str, ...]:  # type: ignore[override]

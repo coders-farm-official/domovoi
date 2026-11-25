@@ -38,6 +38,9 @@ struct FileRowView: View {
     /// prints — leaves the row exactly as it was.
     var printOffer: PrintingOffer = .none
 
+    /// Delete on the server, as admin on this phone; nil draws none.
+    var onDelete: (() -> Void)? = nil
+
     /// Open the Print sheet for this row.
     var onPrint: (() -> Void)? = nil
 
@@ -157,7 +160,7 @@ struct FileRowView: View {
     /// does nothing.
     @ViewBuilder
     private var menu: some View {
-        if files.offersSave(entry) || files.canWrite || canImport || offersPrint {
+        if files.offersSave(entry) || files.canWrite || canImport || offersPrint || onDelete != nil {
             Menu {
                 // **Absent for a kind that never prints, never greyed.** The
                 // route answers 415 for an extension outside the server's own
@@ -189,6 +192,13 @@ struct FileRowView: View {
                         files.importRequested(entry)
                     } label: {
                         Label(FileStrings.importInto, systemImage: "tray.and.arrow.down")
+                    }
+                }
+                if let onDelete {
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Label(AdminDeleteWords.filesConfirmLabel(folder: false), systemImage: "trash")
                     }
                 }
             } label: {

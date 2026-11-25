@@ -349,6 +349,8 @@ class SpareDeviceEngine:
         led = getattr(getattr(self, "_leds", None), "state", "idle")
         busy = (
             led in ("listening", "dropin", "recording")
+            # A quiet stream (1.5.0): the LED only fades, the mic still streams.
+            or bool(getattr(getattr(self, "_claims", None), "quiet_active", False))
             or getattr(getattr(self, "wake_recording", None), "is_set", lambda: False)()
             or getattr(getattr(self, "chat_active", None), "is_set", lambda: False)()
             or getattr(getattr(self, "dropin_active", None), "is_set", lambda: False)()
@@ -385,10 +387,16 @@ class SpareDeviceEngine:
             host = sound_sync.http_base_from_ws(url).split("://", 1)[-1].rsplit(":", 1)[0].strip("[]")
         except Exception:  # noqa: BLE001
             host = None
+        # The room's name as the core last said it (1.5.0, `ready.room` and
+        # the `room` frame: it follows a move), else the name it was set up
+        # with. A core that could not read the room sends no name; the id
+        # is shown only when nothing else is known.
+        place = getattr(self, "_room_place", None) or {}
         return {
             "protocol": control.PROTOCOL,
             "board": board_for(self.cfg),
-            "room": {"id": self.cfg.room_id, "name": getattr(self.cfg, "room_name", "") or self.cfg.room_id},
+            "room": {"id": self.cfg.room_id,
+                     "name": place.get("name") or getattr(self.cfg, "room_name", "") or self.cfg.room_id},
             "server": {"url": url, "host": host or None, "fingerprint": fp, "pinned": bool(fp)},
             "dashboard": dashboard_url(url),
             "connection": getattr(self, "_conn_state", "connecting"),

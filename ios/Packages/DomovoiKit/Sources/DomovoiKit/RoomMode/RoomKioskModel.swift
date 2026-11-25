@@ -84,7 +84,26 @@ public final class RoomKioskModel: ObservableObject {
     /// (``RoomDisplaySource``); nil otherwise.
     @Published public private(set) var feed: RoomFeed? = nil
 
-    public let label: String
+    /// The room's name, in household words: the server's
+    /// (``RoomStatus/place``), else the one kept for the same room, else the
+    /// room code's; nil when none is known — never the room's or the phone's
+    /// id (``RoomStatusText/roomName(_:kept:keptFor:label:)``).
+    public var roomName: String? {
+        RoomStatusText.roomName(
+            status, kept: store.roomName, keptFor: store.roomNameRoom, label: store.enrolment?.roomLabel
+        )
+    }
+
+    /// The screen's title: ``roomName``, or "This room". The resume notices
+    /// follow it too, as Android's notification does.
+    public var label: String { RoomStatusText.title(roomName) }
+
+    /// The line under the name: "This phone is in the Kitchen" (", with
+    /// other devices" when shared), or "This phone will join the Kitchen"
+    /// before the first approval (``RoomStatusText/whereLine(_:roomName:approved:)``).
+    public var whereLine: String {
+        RoomStatusText.whereLine(status, roomName: roomName, approved: store.approvedOnce)
+    }
 
     private let store: RoomStore
     private let makeEngine: @MainActor () -> any RoomEngineControl
@@ -131,7 +150,6 @@ public final class RoomKioskModel: ObservableObject {
         self.micGranted = micGranted
         self.now = now
         self.onLeave = onLeave
-        label = store.enrolment?.roomLabel ?? "room"
         guidedTipDismissed = store.guidedAccessTipDismissed
         householdPhone = lock.holdsHouseholdToken
         let t = now()
@@ -369,7 +387,7 @@ public final class RoomKioskModel: ObservableObject {
         objectWillChange.send()
     }
 
-    /// A cover from the room's own server, for the now-playing card.
+    /// A cover or a result's thumbnail from the room's own server, no credential.
     public func art(_ path: String) async -> Data? {
         guard let d = display else { return nil }
         return await d.art(path)

@@ -123,6 +123,7 @@ fun PeopleScreen(embedded: Boolean = false) {
                         modifier = Modifier.fillMaxSize(),
                         onRenamed = { peopleState.refresh() },
                         voiceId = voiceId,
+                        onForgotten = { selectedId = null; peopleState.refresh() },
                     )
                 }
                 else -> {
@@ -170,6 +171,7 @@ fun PeopleScreen(embedded: Boolean = false) {
                             modifier = Modifier.fillMaxSize(),
                             onRenamed = { peopleState.refresh() },
                             voiceId = voiceId,
+                            onForgotten = { selectedId = null; peopleState.refresh() },
                         )
                         else -> DomovoiCard(Modifier.fillMaxSize()) {
                             EmptyState(

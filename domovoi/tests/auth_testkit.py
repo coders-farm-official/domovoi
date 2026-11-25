@@ -153,7 +153,7 @@ def mini_client(**kw) -> AsyncClient:
 
 # ─── DB-backed: fresh auth state + clients for the real apps ──────────────
 
-_AUTH_TABLES = "admin_auth, admin_sessions, household_device_tokens"
+_AUTH_TABLES = "admin_auth, admin_sessions, admin_phone_grants, household_device_tokens"
 
 
 @pytest_asyncio.fixture

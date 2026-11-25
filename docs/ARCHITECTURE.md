@@ -315,6 +315,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 290 | `playlist` | Before music's `^play` catch-all |
 | 295 | `music_alias` | "When I say X I mean Y" names, before music's `^play` |
 | 300 | `music` | Greedy `^play` catch-all; its room paths ("… in the garage") come first within it |
+| 305 | `media_search` | 1.5.0: "show me photos of the beach from last summer", "find the video where we sang happy birthday": an asking verb (show me, find, search, do we have, are there) and a photo or video word right after it; never "play" (music's), "print" (printing's) or "… in my library" (library's). Its tool is offered only when the turn says photo, picture, video or clip |
 | 310 | `library` | "Find X in my library" before a greedier "find X" |
 | 900 | *(media-provider plugin)* | Greedy `^find` catch-all — LAST band |
 
@@ -977,7 +978,9 @@ described here, which every paired device shares.
   process's memory and is deleted when it ends.
 * **Videos (V064).** A home-server chat takes one short video a message
   (`web/backend/api/chat_videos.py`: MP4, MOV or WebM, up to 3 minutes and
-  2 GB). The core's `chat_video` worker (`domovoi/chat_video/`) watches one
+  2 GB). The core's `media_understanding` worker (`domovoi/media_understanding/`,
+  which took over from the 1.4.0 `chat_video` worker in 1.5.0; the job
+  itself is `domovoi/chat_video/`) watches one
   video at a time in the house, at the lowest priority and pausing for any
   voice turn: it transcribes the sound with the server's speech-to-text and
   has the vision model describe a few frames, then writes a summary into
@@ -1057,9 +1060,11 @@ described here, which every paired device shares.
   summaries of the system's own records back "what is wrong?" questions, and
   "Report a problem" builds a summary the person reads and copies: nothing is
   sent or kept. By voice, the `help_desk` handler (band 106) speaks the best
-  passage's first sentences and offers to send the steps to the asker's
-  phone as a "Help: …" chat (`help_deliveries`): only to phones marked as
-  theirs, never to everyone.
+  passage's first sentences and ends "The full answer is in the manual."
+  It asks nothing and sends nothing (the send-to-your-phone offer was
+  removed in 1.5.0). The send path it used (`domovoi/help_desk/delivery.py`,
+  `help_deliveries`) now carries only a voice photo search's results to the
+  asker's own phones.
 
 ### Server identity and the signed file channels (`domovoi/server_identity.py`)
 
@@ -1084,6 +1089,44 @@ V062). The health challenge's `pairing_proof` line, signed with the rest,
 says which exchange the server speaks, so it cannot be stripped on the way.
 Threat model:
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
+
+### Media understanding (1.5.0)
+
+What Domovoi works out about the photos and videos in Pictures and Videos
+(user guide: [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md)). Code in
+`domovoi/media_understanding/`, tables from V078.
+
+* **Catalogue.** The `media_catalog` poll worker walks the libraries by
+  `stat()` alone (hourly, and after a rescan) and keeps one `media_items`
+  row per image or video, with a fingerprint (size plus the first and last
+  1 MB) so a moved file keeps its results. Excluded folders
+  (`media_excluded`) are never entered.
+* **Runner.** `media_understanding` (`runner.py`) is the one background
+  job, built on `VoiceFirst`: chat videos first, then the backlog in the
+  night window, and by day only new arrivals. Each analyser is a registered
+  stage with saved progress (`media_item_stages`), so a restart carries on;
+  an item gets three attempts. `budget.py` times the vision model and sets
+  the frames per video (adaptive, or an admin's manual cap). Switches live
+  in `household_settings` key `media_understanding` (`switches.py`).
+* **Analysers.** Photos: `photo_date` (EXIF date and, with places on, GPS
+  and the town from the offline GeoNames list, `geocode.py`) and
+  `photo_caption` (caption, tags, text by Tesseract). Videos: scan, faces,
+  transcript, frames and summary (`videos.py`). Faces: `faces.py` and
+  `face_engine.py` (YuNet and SFace on ONNX Runtime), fetched once by
+  `face_models.py`.
+* **Tables.** `media_items`, `media_frames`, `media_segments`,
+  `media_summaries` (all deleted with the item), `media_faces`,
+  `face_groups`, `face_denylist` (tied to no person; kept when faces go
+  off), `media_runner_state`.
+* **Search.** Each item's words (tags, captions, text, names, transcript,
+  summary, place) are one `search_doc` tsvector with a GIN index, and file
+  and folder names have a trigram index. `search.py` turns a person, a time
+  and a place out of the question with plain code, not a model.
+  `GET /api/media/search`, the `media_search` voice handler (band 305), the
+  chat step (`ask.py`) and room screens all use it. There is no vector
+  extension; faces are compared in the core.
+
+Routes and fields: [API_REFERENCE.md](API_REFERENCE.md#35c1b-photos-and-videos-media-understanding-150).
 
 ---
 

@@ -111,11 +111,13 @@ class _DeviceSide:
         return item
 
 
-def _bridge(sessions: list):
+def _bridge(sessions: list, *, swap_token: str | None = None, swap_key: str | None = None):
     """A ``connect`` for house_pairing: each call opens a socket to a fresh
     core StreamSession for the room in the URL, which reads the hello and
     runs ``_validate_pairing`` — then says ``ready`` if it accepted, as the
-    real session does."""
+    real session does. ``swap_token``: something in between replaces the
+    hello's pairing token before the core sees it; ``swap_key``: its
+    support key."""
 
     @asynccontextmanager
     async def connect(url: str):
@@ -128,6 +130,10 @@ def _bridge(sessions: list):
 
         async def serve() -> None:
             hello = json.loads(await to_core.get())
+            if swap_token is not None:
+                hello["pairing_token"] = swap_token
+            if swap_key is not None:
+                hello["support_key"] = swap_key
             if await sess._validate_pairing(hello):
                 await core_ws.send_text(json.dumps({"type": "ready", "room_id": room}))
             await to_device.put(None)
@@ -145,19 +151,27 @@ def _bridge(sessions: list):
     return connect
 
 
-def _house() -> House:
+def _house(version: int = 0) -> House:
+    """``version`` 0: built by hand, as a device from before the signed
+    version (it runs version 1); 2: a house that signed ``pairing_proof=2``."""
     return House(url="ws://192.168.1.20:6370", fingerprint=_fingerprint(), proof=True,
-                 name="Domovoi", via="name")
+                 name="Domovoi", via="name", proof_version=version)
 
 
-async def _visit(code: str = CODE, *, budget=None, tmp=None, sessions=None):
-    house = _house()
+async def _visit(code: str = CODE, *, budget=None, tmp=None, sessions=None,
+                 version: int = 0, swap_token: str | None = None,
+                 support_key: str | None = None, swap_key: str | None = None):
+    house = _house(version)
     sessions = [] if sessions is None else sessions
     budget = budget or house_pairing.ProofBudget(tmp / "budget.json")
     token = house_pairing.house_token(MASTER, house.fingerprint)
+    hello = {"type": "hello", "approval_code": code}
+    if support_key is not None:
+        hello["support_key"] = support_key
     result = await house_pairing.visit(
-        house, room_id=ROOM, code=code, hello={"type": "hello", "approval_code": code},
-        token=token, connect=_bridge(sessions), budget=budget,
+        house, room_id=ROOM, code=code, hello=hello,
+        token=token, connect=_bridge(sessions, swap_token=swap_token, swap_key=swap_key),
+        budget=budget,
     )
     return result, token, sessions
 
@@ -170,7 +184,7 @@ async def _type_code(code: str) -> str:
 async def _row(room: str = ROOM):
     async with session_scope() as s:
         return (await s.execute(text(
-            "SELECT * FROM satellite_approvals WHERE room_id = :r"), {"r": room}
+            "SELECT * FROM satellite_approvals WHERE satellite_id = :r"), {"r": room}
         )).mappings().first()
 
 
@@ -211,6 +225,58 @@ async def test_the_right_code_typed_approves_and_the_device_checks_the_proof(tmp
     assert await _row() is None
     kinds = [f.get("type") for f in sessions[0].ws.sent]
     assert kinds.index("approval_challenge") < kinds.index("approval_proof")
+
+
+@pytest.mark.asyncio
+async def test_a_token_bound_device_is_approved_by_this_core(tmp_path) -> None:
+    """L9 (1.5.0): a device that saw ``pairing_proof=2`` signed says so in
+    its hello and binds its token into the exchange; this core runs the
+    same transcript, approves it, and binds that token."""
+    await _visit(tmp=tmp_path, version=2)
+    assert await _type_code(CODE) == "entered"
+    result, token, sessions = await _visit(tmp=tmp_path, version=2)
+    assert result.kind == "approved"
+    pairing = await _pairing()
+    assert pairing is not None and pairing[0] == token_sha256(token)
+
+
+@pytest.mark.asyncio
+async def test_a_version_one_device_is_still_approved(tmp_path) -> None:
+    """An older device (no ``pairing_proof`` in its hello) still runs the
+    version-1 exchange with this core."""
+    await _visit(tmp=tmp_path, version=1)
+    assert await _type_code(CODE) == "entered"
+    result, token, _sessions = await _visit(tmp=tmp_path, version=1)
+    assert result.kind == "approved"
+    pairing = await _pairing()
+    assert pairing is not None and pairing[0] == token_sha256(token)
+
+
+@pytest.mark.asyncio
+async def test_a_swapped_token_fails_the_token_bound_exchange(tmp_path) -> None:
+    """L9: something in between forwards the exchange but puts its own
+    token in the hello. In version 2 the two sides then compute different
+    transcripts: the device's confirmation fails, nothing is bound, and the
+    device gets no proof."""
+    other = "f" * 64
+    await _visit(tmp=tmp_path, version=2, swap_token=other)
+    assert await _type_code(CODE) == "entered"
+    result, _token, sessions = await _visit(tmp=tmp_path, version=2, swap_token=other)
+    assert result.kind == "mismatch"
+    assert await _pairing() is None
+    assert all(f.get("type") != "approval_proof" for f in sessions[0].ws.sent)
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_exchange_version_is_refused() -> None:
+    sess = _sess()
+    dev = pairing_proof.DeviceExchange(CODE)
+    ok = await sess._validate_pairing({
+        "type": "hello", "room_id": ROOM, "pairing_token": MASTER,
+        "approval_pake": dev.message, "pairing_proof": 9,
+    })
+    assert ok is False
+    assert sess.ws.sent[-1]["reason"] == "approval_pake_invalid"
 
 
 @pytest.mark.asyncio
@@ -540,3 +606,108 @@ async def test_withdrawals_are_throttled_per_source() -> None:
         sess = _sess()
         await sess._validate_pairing({"pairing_token": "d" * 64, "approval_withdraw": True})
     assert sess.ws.sent[-1]["reason"] == "approval_throttled"
+
+
+# ─── the support key rides the approval (pairing_proof 3, 1.5.0) ───────────
+
+KEY_A = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+KEY_B = "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="
+
+
+@pytest_asyncio.fixture
+async def _no_satellite_row():
+    async def wipe() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(text("DELETE FROM satellites WHERE satellite_id = :r"), {"r": ROOM})
+    await wipe()
+    yield
+    await wipe()
+
+
+async def _pinned(room: str = ROOM):
+    async with session_scope() as s:
+        row = (await s.execute(text(
+            "SELECT support_key FROM satellites WHERE satellite_id = :r"), {"r": room}
+        )).first()
+    return row.support_key if row is not None else None
+
+
+async def _approve_with_key(tmp_path, key: str | None, **kw):
+    await _visit(tmp=tmp_path, version=3, support_key=key, **kw)
+    assert await _type_code(CODE) == "entered"
+    return await _visit(tmp=tmp_path, version=3, support_key=key, **kw)
+
+
+@pytest.mark.asyncio
+async def test_the_support_key_is_pinned_at_approval(tmp_path, _no_satellite_row) -> None:
+    """A device that saw ``pairing_proof=3`` signed binds its support key
+    into the exchange; the approval pins exactly that key."""
+    result, token, sessions = await _approve_with_key(tmp_path, KEY_A)
+    assert result.kind == "approved"
+    assert sessions[0].ws.sent[-2]["type"] == "approval_proof"
+    assert (await _pairing())[0] == token_sha256(token)
+    assert await _pinned() == KEY_A
+
+
+@pytest.mark.asyncio
+async def test_a_support_key_swapped_in_transit_is_refused(tmp_path, _no_satellite_row) -> None:
+    """Something in between forwards the exchange but puts its own key in
+    the hello: the transcripts differ, the device's confirmation fails,
+    nothing is bound and no key is pinned."""
+    result, _token, sessions = await _approve_with_key(tmp_path, KEY_A, swap_key=KEY_B)
+    assert result.kind == "mismatch"
+    assert await _pairing() is None and await _pinned() is None
+    assert all(f.get("type") != "approval_proof" for f in sessions[0].ws.sent)
+
+
+@pytest.mark.asyncio
+async def test_a_support_key_added_or_stripped_in_transit_is_refused(tmp_path,
+                                                                     _no_satellite_row) -> None:
+    result, _t, _s = await _approve_with_key(tmp_path, None, swap_key=KEY_B)
+    assert result.kind == "mismatch" and await _pinned() is None
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE satellite_approvals CASCADE"))
+    # A fresh device budget: a failed run holds the house back for a while.
+    (tmp_path / "again").mkdir()
+    result, _t, _s = await _approve_with_key(tmp_path / "again", KEY_A, swap_key="")
+    assert result.kind == "mismatch" and await _pairing() is None
+
+
+@pytest.mark.asyncio
+async def test_a_re_pair_re_pins_the_support_key(tmp_path, _no_satellite_row) -> None:
+    result, _t, _s = await _approve_with_key(tmp_path, KEY_A)
+    assert result.kind == "approved" and await _pinned() == KEY_A
+    # Reset the room's pairing (a reflashed card): the next approval pins
+    # the key the device holds now.
+    async with session_scope() as s:
+        await s.execute(text("DELETE FROM satellite_pairings WHERE satellite_id = :r"),
+                        {"r": ROOM})
+    result, _t, _s = await _approve_with_key(tmp_path, KEY_B)
+    assert result.kind == "approved" and await _pinned() == KEY_B
+    # A device approved by an older exchange binds no key: the old pin goes.
+    async with session_scope() as s:
+        await s.execute(text("DELETE FROM satellite_pairings WHERE satellite_id = :r"),
+                        {"r": ROOM})
+    await _visit(tmp=tmp_path, version=2, support_key=KEY_A)
+    assert await _type_code(CODE) == "entered"
+    result, _t, _s = await _visit(tmp=tmp_path, version=2, support_key=KEY_A)
+    assert result.kind == "approved" and await _pinned() is None
+
+
+@pytest.mark.asyncio
+async def test_a_code_approved_request_pins_its_hellos_key(_no_satellite_row) -> None:
+    """The older way (the device's code in its hello, compared in the
+    core): the key in the parked hello is pinned when the code is typed."""
+    await _request(code=CODE, support_key=KEY_A)
+    assert (await _row())["support_key"] == KEY_A
+    await _request(code=CODE, support_key="not a key")      # a refresh: latest hello's
+    assert (await _row())["support_key"] is None
+    await _request(code=CODE, support_key=KEY_A)
+    assert await _type_code(CODE) == "approved"
+    assert await _pinned() == KEY_A
+    # A proof request keeps no key on its row: the run that approves it
+    # passes the one it bound.
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE satellite_approvals CASCADE"))
+    await _request(token_hash="b" * 64, proof=True, support_key=KEY_A)
+    assert (await _row())["support_key"] is None

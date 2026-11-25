@@ -495,6 +495,8 @@ on_exit() {
   if [ -n "$CLONE_TMP_ACTIVE" ]; then rm -rf -- "$CLONE_TMP_ACTIVE"; fi
   # The verified copy this run read the checkout from.
   if [ -n "$COPY_ACTIVE" ]; then rm -rf -- "$COPY_ACTIVE"; fi
+  # What an offline kit's step had copied off the stick.
+  if [ -n "${OFFLINE_KIT:-}" ] && [ -n "${KIT_STAGE:-}" ] && [ -d "$KIT_STAGE" ]; then rm -rf -- "$KIT_STAGE"; fi
   if [ -n "$TMP_DIR" ]; then rm -rf "$TMP_DIR"; fi
   release_lock
   exit "$rc"
@@ -664,6 +666,15 @@ HEALTH_TIMEOUT=900
 ALLOWED_SIGNERS=""
 KEEP_DOWNLOADS=0
 STOP_BEFORE=""
+# --restore-identity FILE: a house identity backup (docs/SECURITY_PRIVACY.md,
+# "Keeping the house identity"), made this install's identity right before
+# the start step, after the backup is checked (format and key pair) by
+# python -m domovoi.server_identity as the service user. A different
+# identity already here is never replaced: the run stops instead.
+RESTORE_IDENTITY=""
+# --offline-kit DIR: install from an offline kit (docs/OFFLINE_KIT.md): the
+# folder of a kit, as scripts/linux/install.sh --kit hands it on. Empty: online.
+OFFLINE_KIT=""
 
 usage() {
   cat <<'EOF'
@@ -779,7 +790,20 @@ feeds.
   --allowed-signers F   install F as /etc/domovoi/allowed_signers first, so
                         HEAD and every later update must verify against it
   --health-timeout SEC  how long the first start may take (default: 900)
+  --restore-identity F  make the house identity backup F (Settings > System >
+                        About & updates > House identity backup) this
+                        server's identity before Domovoi first starts, so the
+                        rooms set up for it trust this install. Checked
+                        first; never replaces a different identity already
+                        here
   --keep-downloads      keep the Ollama tarball in /var/cache/domovoi-provision
+  --offline-kit DIR     install from the offline kit at DIR (a USB stick
+                        made by an online Domovoi server; docs/OFFLINE_KIT.md)
+                        instead of the internet: every step takes its files
+                        from DIR, checked against the same pins as online,
+                        and none reaches the internet. Ubuntu 26.04 only.
+                        scripts/linux/install.sh --kit checks the kit and
+                        passes this; --ref defaults to the kit's commit
   --stop-before STEP    run the steps before STEP (one of the step ids at the
                         top of this file, apt to update-unit) and stop there,
                         exit 0, result "stopped". The Windows installer stops
@@ -825,7 +849,7 @@ while [ $# -gt 0 ]; do
     --*=*) val=${opt#*=}; opt=${opt%%=*}; has_val=1 ;;
   esac
   case $opt in
-    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--ollama-url|--host-stt-url|--host-stt-model|--vm-guard|--vm-guard-dns|--vm-guard-lan|--media|--health-timeout|--allowed-signers|--stop-before)
+    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--ollama-url|--host-stt-url|--host-stt-model|--vm-guard|--vm-guard-dns|--vm-guard-lan|--media|--health-timeout|--allowed-signers|--stop-before|--offline-kit|--restore-identity)
       if [ "$has_val" = 0 ]; then
         [ $# -ge 2 ] || usage_error "$opt needs a value"
         val=$2
@@ -869,6 +893,8 @@ while [ $# -gt 0 ]; do
         --health-timeout) HEALTH_TIMEOUT=$val ;;
         --allowed-signers) ALLOWED_SIGNERS=$val ;;
         --stop-before) STOP_BEFORE=$val ;;
+        --offline-kit) OFFLINE_KIT=$val ;;
+        --restore-identity) RESTORE_IDENTITY=$val ;;
       esac
       ;;
     --wsl|--no-wsl|--skip-models|--no-vision-model|--ai-models|--no-ai-models|--host-stt-shares-gpu|--dry-run|--keep-downloads|-h|--help)
@@ -899,6 +925,17 @@ if [ -n "$STOP_BEFORE" ]; then
     *" $STOP_BEFORE "*) ;;
     *) usage_error "--stop-before takes a step id from apt to update-unit, not: $STOP_BEFORE" ;;
   esac
+fi
+if [ -n "$RESTORE_IDENTITY" ]; then
+  # Checked again, fully, right before it is used; here only that it is
+  # a plain readable file of a backup's size, so a typo stops the run now.
+  [[ $RESTORE_IDENTITY == /* ]] || RESTORE_IDENTITY=$PWD/$RESTORE_IDENTITY
+  if [ -L "$RESTORE_IDENTITY" ] || [ ! -f "$RESTORE_IDENTITY" ] || [ ! -r "$RESTORE_IDENTITY" ]; then
+    usage_error "--restore-identity: $RESTORE_IDENTITY is not a readable file (give the backup file itself, not a link)"
+  fi
+  if [ "$(wc -c <"$RESTORE_IDENTITY")" -gt 16384 ]; then
+    usage_error "--restore-identity: $RESTORE_IDENTITY is far too large to be a house identity backup"
+  fi
 fi
 if [ -n "$VM_GUARD_NET" ] && [ "$OLLAMA_EXTERNAL" != 1 ]; then
   usage_error "--vm-guard goes with --ollama-url (the one service on the host the VM may still reach)"
@@ -967,14 +1004,22 @@ scrub_log() {
 # calls initgroups, so a group added moments ago (docker) is live.
 as_svc() {
   runuser -u "$SVC_USER" -- env HOME="$SVC_HOME" PATH="$SVC_PATH" LANG=C.UTF-8 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 PIP_PROGRESS_BAR=off HF_HUB_DISABLE_TELEMETRY=1 "$@"
+    PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 PIP_PROGRESS_BAR=off HF_HUB_DISABLE_TELEMETRY=1 \
+    ${KIT_ENV[@]+"${KIT_ENV[@]}"} "$@"
 }
 
 # The checkout's python, as the service user, from the checkout (python -m
 # puts the cwd on sys.path; root's own cwd may be closed to that user).
 svc_py() { (cd "$CHECKOUT" && as_svc "$VENV_PY" "$@"); }
 
-apt_get() { apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=600 -q "$@"; }
+# In kit mode with the kit's apt configuration (kit_apt_args), and no other.
+apt_get() {
+  local -a extra=()
+  # The names are checked here, in this shell, where a die stops the run
+  # (kit_apt_args runs in a subshell).
+  if kit; then kit_apt_names; mapfile -t extra < <(kit_apt_args); fi
+  apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=600 -q ${extra[@]+"${extra[@]}"} "$@"
+}
 
 # write_if_changed DEST MODE < CONTENT: put CONTENT in DEST (root-owned,
 # MODE) by rename from a dot-named temp file beside it, which neither sudo
@@ -1182,6 +1227,380 @@ fstab_source() {
   printf '%s' "$p"
 }
 
+# ─── The offline kit ─────────────────────────────────────────────────────
+#
+# --offline-kit DIR (docs/OFFLINE_KIT.md; design: an online server makes a
+# USB stick, a house that is never online installs from it). Every step
+# that downloads online takes its file from DIR instead and checks it
+# against the same pin as online, from the checkout at the kit's commit:
+#   apt          a temporary apt configuration that knows only the kit's
+#                partial mirrors (apt/<arch>/ubuntu, apt/<arch>/docker, the
+#                arch dpkg's: amd64, arm64): Ubuntu's own signed
+#                InRelease, checked with the keyring this system already has,
+#                and Docker's, checked with Docker's key once the docker step
+#                has checked that key's fingerprint against the manifest. apt
+#                checks every Packages file and .deb against them. Nothing is
+#                written to the system's apt sources for it; the lists live in
+#                this run's temp folder and go with it
+#   checkout     cloned from the kit's git bundle (source/domovoi.bundle);
+#                origin is then set to --repo-url (GitHub), so a house that
+#                later gets internet updates as usual; HEAD must be the
+#                kit's commit
+#   docker       Docker's key from apt/<arch>/docker/gpg, the file Docker
+#                serves (fingerprint checked as online), docker-ce from
+#                apt/<arch>/docker
+#   venv         pip install --no-index --find-links (the kit's wheels for
+#                this machine), still --require-hashes from the lock
+#   ollama       the kit's tarball, checked against the LINUX_HOST.md pin
+#                (with --ollama-url, a Mac's VM: none, Ollama runs on the Mac)
+#   models       each manifest checked against the pinned digest before
+#                anything is copied, each blob against its own name; then
+#                Ollama must list the model at the pinned digest. With
+#                --ollama-url (a Mac's VM, mac-installer P4) the Mac's setup
+#                has already copied the kit's models into its own Ollama,
+#                checked the same way; here each must be listed there at
+#                its pinned digest, and nothing is copied or pulled
+#   whisper      the kit's snapshot, model.bin checked against its pin
+#   piper        the voices (PIPER_PINS: .onnx SHA-256 and size, .onnx.json
+#                git blob and size), voice ID's model (MODEL_SHA256), and
+#                Domovoi's wake word (wake_default.PUBLISHED's pin)
+#   phone-app    each APK through domovoi.android_app.accept_upload, as an
+#                admin's upload: size, SHA-256 and the release key's signature;
+#                and the rooms' files (rooms/, wake/'s openWakeWord models)
+#                through domovoi.kit_rooms, each held to its pin
+#   images       docker load, then every image the compose file pins must be
+#                there by its digest; the music player image is loaded
+#                instead of built (the house that made the kit built it)
+#   searxng      not on a kit: stays off (it is off under never anyway)
+#   gpu-runtime  not on a kit yet: skipped, saying so
+# What is copied off the stick is first checked against kit.json (size and
+# SHA-256, split files joined), which only catches a bad copy; trust is the
+# pin each step then checks, from the commit install.sh --kit checked
+# against the release signature.
+#
+# Nothing may reach the internet in kit mode: the steps' own downloads are
+# guarded (no_net stops the run, loudly, if one is ever reached), curl
+# refuses any URL that isn't this machine's or the Ollama it was given, and
+# every program this starts gets a proxy that answers nothing, git only its
+# file transport, and pip no index.
+
+kit() { [ -n "$OFFLINE_KIT" ]; }
+
+# no_net WHAT: WHAT is about to use the internet. Online that is fine; in
+# kit mode it is a fault in this script, and the run stops on it.
+no_net() {
+  kit || return 0
+  die "$1 would use the internet, and this install is from an offline kit: nothing may. This is a fault in provision.sh; please report it (https://github.com/coders-farm-official/domovoi/issues). Nothing was downloaded."
+}
+
+# curl itself, guarded: in kit mode only this machine (the health checks,
+# the local Ollama) and the Ollama --ollama-url names.
+curl() {
+  local a
+  if kit; then
+    for a in "$@"; do
+      case $a in
+        http://127.0.0.1:*|http://127.0.0.1/*|http://localhost:*|http://localhost/*) ;;
+        "$OLLAMA_API"/*) ;;
+        *://*) no_net "curl $a" ;;
+      esac
+    done
+  fi
+  command curl "$@"
+}
+
+# The kit's own helper, run with the system's python3 (Ubuntu 26.04 has
+# it; isolated: -I). It reads kit.json and copies files off the stick
+# checked against it. The release signature is not its job (install.sh
+# --kit checks it with the release key before it runs this script).
+#   info                kit.json's fields, KEY=VALUE lines
+#   has PATH            status 0 when kit.json lists the file PATH
+#   list PREFIX         the files under PREFIX, one path a line
+#   names KIND          the names of the components of KIND, one a line
+#   files KIND NAME     the files of that component, one path a line
+#   copy PATH DEST      PATH (its parts joined) into DEST, checked against
+#                       kit.json's sizes and SHA-256s as it is copied
+KIT_PY=python3
+PY_KIT='#provision:kit
+import hashlib, json, os, sys
+
+def fail(msg):
+    print(msg, file=sys.stderr)
+    sys.exit(1)
+
+def safe(path):
+    if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path:
+        return False
+    return all(p not in ("", ".", "..") for p in path.split("/"))
+
+cmd, root = sys.argv[1], sys.argv[2]
+try:
+    with open(os.path.join(root, "kit.json"), "rb") as f:
+        doc = json.loads(f.read().decode("utf-8"))
+    if not isinstance(doc, dict):
+        raise ValueError("not a JSON object")
+except FileNotFoundError:
+    fail("there is no kit.json in %s, so it is not an offline kit (or the stick is not mounted there)" % root)
+except (OSError, ValueError) as e:
+    fail("kit.json in %s cannot be read (%s): the stick may be damaged; make it again" % (root, e))
+
+comps = [c for c in doc.get("components") or [] if isinstance(c, dict)]
+files = {}
+for c in comps:
+    for e in c.get("files") or []:
+        if isinstance(e, dict) and safe(e.get("path")):
+            files.setdefault(e["path"], e)
+
+def words(v):
+    return " ".join(str(x) for x in v) if isinstance(v, list) else ""
+
+if cmd == "info":
+    for k in ("kit_format", "domovoi_version", "tag", "commit", "android_version_code", "created_at"):
+        v = doc.get(k)
+        print("%s=%s" % (k, "" if v is None else str(v).replace("\n", " ")))
+    print("targets=" + words(doc.get("targets")))
+    print("includes=" + words(doc.get("includes")))
+elif cmd == "has":
+    sys.exit(0 if sys.argv[3] in files else 1)
+elif cmd == "list":
+    for p in sorted(p for p in files if p.startswith(sys.argv[3])):
+        print(p)
+elif cmd == "names":
+    for c in comps:
+        if c.get("kind") == sys.argv[3] and isinstance(c.get("name"), str):
+            print(c["name"])
+elif cmd == "files":
+    for c in comps:
+        if c.get("kind") == sys.argv[3] and c.get("name") == sys.argv[4]:
+            for e in c.get("files") or []:
+                if isinstance(e, dict) and safe(e.get("path")):
+                    print(e["path"])
+elif cmd == "copy":
+    path, dest = sys.argv[3], sys.argv[4]
+    e = files.get(path)
+    if e is None:
+        fail("the kit has no %s (kit.json does not list it)" % path)
+    parts = e.get("parts") or [e]
+    whole = hashlib.sha256()
+    size = 0
+    tmp = dest + ".part"
+    try:
+        with open(tmp, "wb") as out:
+            for p in parts:
+                if not isinstance(p, dict) or not safe(p.get("path")):
+                    fail("kit.json lists %s with a part that has no plain path" % path)
+                h = hashlib.sha256()
+                n = 0
+                try:
+                    with open(os.path.join(root, p["path"]), "rb") as f:
+                        while True:
+                            b = f.read(1 << 20)
+                            if not b:
+                                break
+                            h.update(b)
+                            whole.update(b)
+                            out.write(b)
+                            n += len(b)
+                except FileNotFoundError:
+                    fail("%s is missing from the stick: make it again" % p["path"])
+                if n != p.get("size") or h.hexdigest() != p.get("sha256"):
+                    fail("%s on the stick is damaged (its size or SHA-256 is not what kit.json says): make the stick again" % p["path"])
+                size += n
+        if size != e.get("size") or whole.hexdigest() != e.get("sha256"):
+            fail("%s: its parts do not join into the file kit.json names: make the stick again" % path)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+else:
+    fail("unknown command " + cmd)'
+kit_py() { "$KIT_PY" -I -c "$PY_KIT" "$1" "$OFFLINE_KIT" "${@:2}"; }
+
+KIT_FORMAT="" KIT_VERSION="" KIT_TAG="" KIT_COMMIT="" KIT_TARGETS="" KIT_INCLUDES="" KIT_ANDROID=""
+# The kit format this script reads (domovoi/offline_kit/format.py KIT_FORMAT).
+KIT_FORMAT_READ=1
+kit_field() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -n 1; }
+kit_target() { case $MACHINE_ARCH in x86_64) echo pc-x86_64 ;; aarch64) echo mac-arm64 ;; *) echo "" ;; esac; }
+kit_includes() { [[ " $KIT_INCLUDES " == *" $1 "* ]]; }
+kit_has() { kit_py has "$1"; }
+
+# Where files are put on their way off the stick: root's, readable by the
+# service user (the stick itself is the desktop user's mount, which no one
+# else may read). Emptied after each step that uses it, and at the end.
+KIT_STAGE=$CACHE_DIR/kit-stage
+kit_stage_clear() { if [ -d "$KIT_STAGE" ]; then rm -rf -- "$KIT_STAGE"; fi; }
+# kit_stage PATH: PATH off the stick into KIT_STAGE/PATH, checked against
+# kit.json; prints where it went.
+kit_stage() {
+  local dest=$KIT_STAGE/$1 err
+  install -d -m 0755 "$KIT_STAGE" "$(dirname "$dest")"
+  err=$(kit_py copy "$1" "$dest" 2>&1) || die "offline kit: ${err:-copying $1 off the stick failed}"
+  printf '%s' "$dest"
+}
+
+# The kit's apt configuration, rewritten at each apt call: the kit's
+# Ubuntu mirror always, Docker's once its key is in place. Every other
+# source is out of the picture (SourceList, SourceParts), and so are the
+# system's lists (a lists folder of this run's own).
+KIT_APT=""
+ubuntu_keyring() {
+  local k
+  k=$(sed -n 's/^Signed-By:[[:space:]]*//p' "$ROOT/etc/apt/sources.list.d/ubuntu.sources" 2>/dev/null | head -n 1)
+  [ -n "$k" ] || k=/usr/share/keyrings/ubuntu-archive-keyring.gpg
+  printf '%s' "$k"
+}
+# kit_apt_name NAME: NAME is a plain apt suite or component name (it goes
+# into the source stanza as is). A folder name with a newline, a space or
+# a colon could add a line of its own (Trusted: yes), so anything else, or
+# a link, stops the install: the stick was altered.
+kit_apt_name() {
+  [[ $1 =~ ^[a-z0-9][a-z0-9.+-]{0,63}$ ]] && [ ! -L "${2%/}" ] \
+    || die "the offline kit's package folder ${2@Q} is not one a kit holds (a link, or an odd name): the stick was changed; make it again"
+}
+kit_apt_names() {
+  local d c arch
+  arch=$(deb_arch)
+  for d in "$OFFLINE_KIT/apt/$arch/ubuntu/dists"/*/; do
+    [ -e "$d" ] || continue
+    kit_apt_name "$(basename "$d")" "$d"
+    for c in "$d"*/; do [ -e "$c" ] && kit_apt_name "$(basename "$c")" "$c"; done
+  done
+  return 0
+}
+kit_apt_sources() {
+  local d suite comps c arch
+  arch=$(deb_arch)
+  for d in "$OFFLINE_KIT/apt/$arch/ubuntu/dists"/*/; do
+    [ -f "$d/InRelease" ] || continue
+    suite=$(basename "$d")
+    kit_apt_name "$suite" "$d"
+    comps=""
+    for c in "$d"*/; do [ -d "$c/binary-$arch" ] && kit_apt_name "$(basename "$c")" "$c" && comps+=" $(basename "$c")"; done
+    [ -n "$comps" ] || continue
+    printf 'Types: deb\nURIs: file:%s/apt/%s/ubuntu\nSuites: %s\nComponents:%s\nArchitectures: %s\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n\n' \
+      "$OFFLINE_KIT" "$arch" "$suite" "$comps" "$arch" "$(ubuntu_keyring)"
+  done
+  if [ -n "${MANIFEST_FILE:-}" ] && [ -s "$APT_KEYRING" ] && [ -f "$OFFLINE_KIT/apt/$arch/docker/dists/$(docker_pin docker_suite)/InRelease" ]; then
+    printf 'Types: deb\nURIs: file:%s/apt/%s/docker\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: %s\nCheck-Valid-Until: no\nCheck-Date: no\n' \
+      "$OFFLINE_KIT" "$arch" "$(docker_pin docker_suite)" "$arch" "${APT_KEYRING#"$ROOT"}"
+  fi
+}
+kit_apt_args() {
+  if [ -z "$KIT_APT" ]; then
+    KIT_APT=$TMP_DIR/kit-apt
+    mkdir -p "$KIT_APT/sources.list.d" "$KIT_APT/lists/partial"
+    : >"$KIT_APT/sources.list"
+  fi
+  kit_apt_sources >"$KIT_APT/sources.list.d/offline-kit.sources"
+  printf '%s\n' -o "Dir::Etc::SourceList=$KIT_APT/sources.list" -o "Dir::Etc::SourceParts=$KIT_APT/sources.list.d" \
+    -o "Dir::State::Lists=$KIT_APT/lists" -o Acquire::Languages=none -o APT::Sandbox::User=root     -o Acquire::AllowInsecureRepositories=false -o Acquire::AllowDowngradeToInsecureRepositories=false     -o APT::Get::AllowUnauthenticated=false \
+    -o Acquire::IndexTargets::deb::DEP-11::DefaultEnabled=false -o Acquire::IndexTargets::deb::DEP-11-icons::DefaultEnabled=false \
+    -o Acquire::IndexTargets::deb::DEP-11-icons-small::DefaultEnabled=false -o Acquire::IndexTargets::deb::DEP-11-icons-hidpi::DefaultEnabled=false \
+    -o Acquire::IndexTargets::deb::CNF::DefaultEnabled=false -o Acquire::IndexTargets::deb::Contents-deb::DefaultEnabled=false
+}
+
+# Everything this run starts, in kit mode: a proxy on a port where nothing
+# answers (so anything that tries the internet fails at once, and says
+# so), except for this machine; git only on its file transport; pip with
+# no index; Hugging Face offline. as_svc passes the same.
+KIT_ENV=()
+kit_env() {
+  local p=http://127.0.0.1:9 n=127.0.0.1,localhost,::1
+  case $OLLAMA_API in http://127.0.0.1:*|http://localhost:*) ;; *) n+=",$(url_host "$OLLAMA_API")" ;; esac
+  KIT_ENV=(http_proxy=$p https_proxy=$p ftp_proxy=$p all_proxy=$p HTTP_PROXY=$p HTTPS_PROXY=$p FTP_PROXY=$p ALL_PROXY=$p
+    no_proxy=$n NO_PROXY=$n GIT_ALLOW_PROTOCOL=file PIP_NO_INDEX=1 HF_HUB_OFFLINE=1)
+  export "${KIT_ENV[@]}"
+}
+
+# kit_check: everything about the kit that can be known before anything is
+# changed, so a kit that doesn't fit stops the run at once, in plain words:
+# Ubuntu 26.04 only; a kit at all, of a format this script reads, for this
+# machine; its commit the one --ref names; and the parts this install needs.
+# Ollama is one of them whatever the kit's AI box said: a kit made with "AI
+# chat and questions" unticked has no models, but still Domovoi's Ollama
+# (kit_builder/parts.py puts it in the base group), so AI can be turned on
+# later. Whether AI is on is decide_ai's, after this (a kit without models
+# leaves it out); kit_ai_check then refuses only an explicit ask for it.
+kit_check() {
+  local out id ver name target t missing=()
+  [[ $OFFLINE_KIT == /* ]] || usage_error "--offline-kit takes the kit's folder as an absolute path (the stick, e.g. /media/alex/DOMOVOIKIT), not: $OFFLINE_KIT"
+  OFFLINE_KIT=${OFFLINE_KIT%/}
+  [ -d "$OFFLINE_KIT" ] || refuse 1 failed "--offline-kit: $OFFLINE_KIT is not a folder (is the stick plugged in and mounted?)"
+  id=$(os_field ID) ver=$(os_field VERSION_ID) name=$(os_field PRETTY_NAME)
+  if [ "$id" != ubuntu ] || [ "$ver" != 26.04 ]; then
+    refuse 1 failed "An install from an offline kit needs Ubuntu 26.04; this is ${name:-${id:-an unknown system} $ver}. Install Ubuntu 26.04 first (from its own installer), or install Domovoi with internet (docs/LINUX_HOST.md)."
+  fi
+  command -v "$KIT_PY" >/dev/null 2>&1 || refuse 1 failed "An install from an offline kit needs python3, which Ubuntu 26.04 comes with; it is missing here"
+  out=$(kit_py info 2>&1) || refuse 1 failed "offline kit: $out"
+  KIT_FORMAT=$(kit_field "$out" kit_format) KIT_VERSION=$(kit_field "$out" domovoi_version) KIT_TAG=$(kit_field "$out" tag)
+  KIT_COMMIT=$(kit_field "$out" commit) KIT_TARGETS=$(kit_field "$out" targets) KIT_INCLUDES=$(kit_field "$out" includes)
+  KIT_ANDROID=$(kit_field "$out" android_version_code)
+  [[ $KIT_FORMAT =~ ^[0-9]+$ ]] || refuse 1 failed "offline kit: kit.json has no kit format: the stick may be damaged; make it again"
+  if [ "$KIT_FORMAT" -gt "$KIT_FORMAT_READ" ]; then
+    refuse 1 failed "This kit was made by a newer Domovoi (kit format $KIT_FORMAT; this installer reads $KIT_FORMAT_READ). Install with the linux/install.sh on the stick: sudo bash $OFFLINE_KIT/linux/install.sh --kit"
+  fi
+  [[ $KIT_COMMIT =~ ^[0-9a-f]{40}$ ]] && [ -n "$KIT_VERSION" ] || refuse 1 failed "offline kit: kit.json names no release and commit: the stick may be damaged; make it again"
+  target=$(kit_target)
+  if [[ " $KIT_TARGETS " != *" $target "* ]]; then
+    case $target in
+      pc-x86_64) t="a Windows or Linux PC" ;;
+      mac-arm64) t="a Mac with an Apple chip" ;;
+      *) t="$MACHINE_ARCH" ;;
+    esac
+    local made="" w
+    for w in $KIT_TARGETS; do
+      case $w in pc-x86_64) w="a Windows or Linux PC" ;; mac-arm64) w="a Mac with an Apple chip" ;; esac
+      made+="${made:+ and }$w"
+    done
+    refuse 1 failed "This kit is not for this computer: it was made for ${made:-no computer}, and this one needs a kit with \"$t\" ticked. Make the kit again with it ticked."
+  fi
+  if [ "$REF_GIVEN" = 1 ] && [ "$REF" != "$KIT_COMMIT" ]; then
+    refuse 1 failed "--ref $REF is not the kit's commit ($KIT_COMMIT, Domovoi $KIT_VERSION): an offline kit installs its own release only; leave --ref out"
+  fi
+  REF=$KIT_COMMIT
+  if [ -d "$CHECKOUT/.git" ] && { [ "$EUID" = 0 ] || [ -n "$ROOT" ]; }; then
+    t=$(g rev-parse -q --verify HEAD 2>/dev/null) || t=""
+    if [ -n "$t" ] && [ "$t" != "$KIT_COMMIT" ]; then
+      refuse 1 failed "This computer already runs Domovoi (commit ${t:0:12}); the kit is Domovoi $KIT_VERSION (commit ${KIT_COMMIT:0:12}). A kit sets up a new install; to update from a newer kit, use Settings > About & updates on the dashboard."
+    fi
+  fi
+  # The parts every install needs.
+  kit_has source/domovoi.bundle || missing+=("Domovoi's source (source/domovoi.bundle)")
+  t=$(deb_arch)
+  [ -n "$(kit_py list "apt/$t/ubuntu/dists/")" ] || missing+=("Ubuntu's packages (apt/$t/ubuntu)")
+  [ -n "$(kit_py list "apt/$t/docker/dists/")" ] && kit_has "apt/$t/docker/gpg" || missing+=("Docker's packages and key (apt/$t/docker, with gpg)")
+  [ -n "$(kit_py list "python/cp314-$MACHINE_ARCH/")" ] || missing+=("the Python packages for $MACHINE_ARCH (python/cp314-$MACHINE_ARCH)")
+  [ -n "$(kit_py names container-image)" ] || missing+=("the database images (images/)")
+  # A Mac's VM (--ollama-url): Ollama runs on the Mac, from the kit's mac/.
+  [ "$OLLAMA_EXTERNAL" = 1 ] || [ -n "$(kit_py names ollama-runtime)" ] || missing+=("Ollama (ollama/)")
+  if [ "$SKIP_MODELS" = 0 ]; then
+    [ -n "$(kit_py names whisper-model)" ] || missing+=("the speech recognition model (speech/whisper-...)")
+  fi
+  [ -n "$(kit_py names piper-voice)" ] || missing+=("the voices (speech/piper)")
+  [ -n "$(kit_py names speaker-model)" ] || missing+=("voice ID's model (speech/speaker)")
+  if [ ${#missing[@]} -gt 0 ]; then
+    refuse 1 failed "This kit is missing what every install needs: $(printf '%s; ' "${missing[@]}" | sed 's/; $//'). Make the kit again."
+  fi
+  kit_env
+  # What the installer's window says: nothing is downloaded.
+  STEP_TITLE[models]="Copying the AI models from the offline kit"
+  STEP_TITLE[whisper]="Copying the speech recognition model from the offline kit"
+  STEP_TITLE[piper]="Copying the voices from the offline kit"
+  STEP_TITLE[phone-app]="Copying the phone app and the rooms' files from the offline kit"
+  STEP_TITLE[images]="Loading the container images from the offline kit"
+  log "offline kit: Domovoi $KIT_VERSION ($KIT_TAG, commit ${KIT_COMMIT:0:12}) at $OFFLINE_KIT, for ${KIT_TARGETS// /, }; includes: ${KIT_INCLUDES:-nothing optional}; nothing is downloaded"
+}
+
+# kit_ai_check: after decide_ai. A kit without AI models with AI asked for
+# all the same (--ai-models, or AI_FEATURES=true in an existing
+# domovoi/.env): nothing can be copied, and nothing may be pulled.
+kit_ai_check() {
+  if [ "$AI" = yes ] && [ "$SKIP_MODELS" = 0 ] && ! kit_includes ai; then
+    refuse 1 failed "The kit has no AI models (it was made with \"AI chat and questions\" unticked), and $AI_WHY asks for them. Install with --no-ai-models, or without --ai-models (AI chat and questions can be turned on later, with internet), or make a kit with AI chat ticked."
+  fi
+}
+
 VENV_PY=$CHECKOUT/.venv/bin/python
 SVC_HOME=""
 MEM_MIB=0
@@ -1303,6 +1722,14 @@ resolve_tier() {
       if [ "$MEM_MIB" -ge "${M[tier_standard_min_mem_mib]}" ]; then TIER_EFF=standard; else TIER_EFF=floor; fi ;;
     *) TIER_EFF=$TIER ;;
   esac
+  # An offline kit: the biggest tier the memory allows among the models on
+  # the stick (a kit from a floor-tier house has only the floor's).
+  if kit && [ "$TIER" = auto ] && [ "$TIER_EFF" = standard ]; then
+    if ! kit_has "$(kit_model_manifest "$(tier_tool)")" || ! kit_has "$(kit_model_manifest "$(tier_qa)")"; then
+      TIER_EFF=floor
+      log "the offline kit has the floor tier's models, not the standard tier's: this box uses the floor tier"
+    fi
+  fi
 }
 tier_tool() { printf '%s' "${M[tier_${TIER_EFF}_tool_model]}"; }
 tier_tool_digest() { printf '%s' "${M[tier_${TIER_EFF}_tool_digest]}"; }
@@ -1535,7 +1962,10 @@ do_preflight() {
 # install from before it gets the same package from apply-update.sh
 # (ADDED_PACKAGES, reconcile_added_packages).
 # tesseract-ocr and its English data tesseract-ocr-eng read scanned pages
-# (domovoi/scan_reader, 1.4.0): run as a separate program, never bundled.
+# (domovoi/scan_reader, 1.4.0) and the text in photos (1.5.0,
+# domovoi/media_understanding/photos.py): run as a separate program, never
+# bundled. The Windows host (the WSL2 distro) and the Mac host (the Lima
+# VM) run this same script, so every server has it.
 # Licences as Ubuntu 26.04's packages state them (/usr/share/doc/*/copyright,
 # read 2026-11-16 on tesseract-ocr 5.5.0-1build1 and tesseract-ocr-eng
 # 1:4.1.0-2build1): tesseract-ocr and libtesseract5 Apache-2.0 (a few files
@@ -1543,6 +1973,9 @@ do_preflight() {
 # Apache-2.0; liblept5 under the BSD-style Leptonica licence. Other languages are not
 # installed: Domovoi has no household language setting yet. Boxes installed
 # before 1.4.0 get both from apply-update.sh's ADDED_PACKAGES.
+# dosfstools and mtools (GPL, OS packages run as separate programs, like
+# xorriso) are what the server makes an offline kit's FAT32 image with
+# (domovoi/kit_builder/fatimage.py, 1.5.0).
 # The same names on every system this installs on: each of them is a
 # package of that name in Debian 13 (trixie) and Ubuntu 24.04 (noble) too
 # (checked against both archives on 2026-11-15; Debian's pkg-config is the
@@ -1552,7 +1985,7 @@ do_preflight() {
 # it (/usr/bin/python3: the cache trim, the checkout-owner check), and the
 # list stays one list.
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
-  git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng
+  git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools
   zstd ca-certificates curl gnupg tzdata sudo)
 
 pkgs_installed() {
@@ -1565,8 +1998,14 @@ inputs_apt() { printf '%s\n' "${APT_PACKAGES[@]}"; }
 check_apt() { pkgs_installed "${APT_PACKAGES[@]}"; }
 plan_apt() { echo "apt-get install ${APT_PACKAGES[*]}"; }
 do_apt() {
-  apt_get update
-  apt_get install -y "${APT_PACKAGES[@]}"
+  if kit; then
+    apt_get update || die "apt can't read the offline kit's Ubuntu packages (the lines above say why): the stick may be damaged; make it again"
+    apt_get install -y "${APT_PACKAGES[@]}" \
+      || die "installing the system packages from the offline kit failed (the lines above say why): the kit lacks a package this computer needs; make the kit again, from a server with a newer Domovoi if this keeps happening"
+  else
+    apt_get update
+    apt_get install -y "${APT_PACKAGES[@]}"
+  fi
   pkgs_installed "${APT_PACKAGES[@]}" || die "apt-get reported success but not every package is installed: ${APT_PACKAGES[*]}"
   STEP_DONE_MSG="System packages installed"
 }
@@ -2647,7 +3086,10 @@ inputs_checkout() {
   if [ -n "$ALLOWED_SIGNERS" ]; then file_sig "$ALLOWED_SIGNERS"; fi
 }
 check_checkout() { [ -d "$CHECKOUT/.git" ] && [ "$(g remote get-url origin 2>/dev/null)" = "$REPO_URL" ]; }
-plan_checkout() { echo "git clone $REPO_URL at $REF into $(clone_tmp), as $SVC_USER; renamed to $CHECKOUT once checked out"; }
+plan_checkout() {
+  if kit; then echo "git clone of the offline kit's source/domovoi.bundle at $REF (Domovoi $KIT_VERSION) into $(clone_tmp), as $SVC_USER; origin set to $REPO_URL; renamed to $CHECKOUT once checked out"
+  else echo "git clone $REPO_URL at $REF into $(clone_tmp), as $SVC_USER; renamed to $CHECKOUT once checked out"; fi
+}
 
 # verify_head DIR: HEAD against the allowed-signers file, as root, with
 # every program git could be told to run pinned on the command line (the
@@ -2798,9 +3240,36 @@ do_checkout() {
     fi
     install -d -m 0755 -o "$SVC_USER" -g "$SVC_USER" "$tmp"
     CLONE_TMP_ACTIVE=$tmp
-    log "cloning $REPO_URL (into $tmp until it is checked out)"
-    (cd / && as_svc git clone --quiet --no-checkout "$REPO_URL" "$tmp") || die "git clone of $REPO_URL failed"
-    checkout_ref "$tmp"
+    if kit; then
+      # The kit's bundle, copied off the stick (checked against kit.json)
+      # where the service user can read it. git checks every object's
+      # hash as it clones; HEAD is then held to the kit's commit
+      # (checkout_ref, --ref). origin becomes --repo-url, so a house that
+      # later has internet updates from GitHub as usual.
+      local bundle
+      bundle=$(kit_stage source/domovoi.bundle)
+      log "cloning Domovoi $KIT_VERSION from the offline kit's source/domovoi.bundle (into $tmp until it is checked out)"
+      (cd / && as_svc git -c transfer.fsckObjects=true -c init.defaultBranch=main clone --quiet --no-checkout "$bundle" "$tmp") \
+        || die "git clone of the offline kit's source/domovoi.bundle failed: the stick may be damaged; make it again"
+      gd "$tmp" remote set-url origin "$REPO_URL" || die "can't point origin at $REPO_URL"
+      # The bundle carries the release's tag and HEAD; updates follow
+      # TRACK_BRANCH (stable), which a release commit is on by definition.
+      # Without it in the bundle, origin's TRACK_BRANCH starts at the
+      # kit's commit, until the first update with internet fetches it.
+      if ! gd "$tmp" rev-parse -q --verify "refs/remotes/origin/$TRACK_BRANCH" >/dev/null; then
+        gd "$tmp" cat-file -e "$KIT_COMMIT^{commit}" 2>/dev/null \
+          || die "the offline kit's source/domovoi.bundle doesn't hold the kit's commit $KIT_COMMIT: make the stick again"
+        gd "$tmp" update-ref "refs/remotes/origin/$TRACK_BRANCH" "$KIT_COMMIT" || die "can't set origin/$TRACK_BRANCH"
+        log "origin/$TRACK_BRANCH starts at the kit's commit (the bundle carries the release tag, not the branch)"
+      fi
+      checkout_ref "$tmp"
+      kit_stage_clear
+    else
+      no_net "git clone of $REPO_URL"
+      log "cloning $REPO_URL (into $tmp until it is checked out)"
+      (cd / && as_svc git clone --quiet --no-checkout "$REPO_URL" "$tmp") || die "git clone of $REPO_URL failed"
+      checkout_ref "$tmp"
+    fi
     dir=$tmp
   fi
   HEAD_SHA=$(gd "$dir" rev-parse HEAD)
@@ -2863,7 +3332,9 @@ docker_missing() {
     printf '%s\n' "$have" | grep -qxF -- "$p" || printf '%s=%s\n' "$p" "$(docker_pin "${p//[-.]/_}")"
   done
 }
-in_group() { id -nG "$SVC_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$1"; }
+# The groups are read whole first: under pipefail, grep -q quitting at the
+# first match would fail the writer (SIGPIPE) once there is more than one.
+in_group() { local g; g=$(id -nG "$SVC_USER" 2>/dev/null) || return 1; [[ " $g " == *" $1 "* ]]; }
 
 # This machine's Debian architecture (amd64, arm64): dpkg's own answer, or,
 # should dpkg not give one, the kernel's name for it translated.
@@ -2936,7 +3407,13 @@ do_docker() {
   # "Install using the apt repository" (deb822 docker.sources), with the
   # key checked against the manifest before apt trusts it.
   key=$TMP_DIR/docker-download.asc
-  curl -fsSL --retry 3 -o "$key" "$(docker_pin docker_key_url)" || die "could not download Docker's apt key from $(docker_pin docker_key_url)"
+  if kit; then
+    # The file Docker serves at docker_key_url, as the kit carries it:
+    # held to the manifest's fingerprint exactly as a download is.
+    kit_py copy "apt/$(deb_arch)/docker/gpg" "$key" || die "offline kit: Docker's apt key (apt/$(deb_arch)/docker/gpg) can't be copied off the stick"
+  else
+    curl -fsSL --retry 3 -o "$key" "$(docker_pin docker_key_url)" || die "could not download Docker's apt key from $(docker_pin docker_key_url)"
+  fi
   docker_key_export "$key" "$TMP_DIR/docker.asc"
   write_if_changed "$APT_KEYRING" 0644 <"$TMP_DIR/docker.asc" || true
   write_if_changed "$APT_SOURCE" 0644 < <(docker_sources_text) || true
@@ -2947,7 +3424,12 @@ do_docker() {
     # the Beelink docker-ce moves with apt upgrade like any package, and so
     # it does here.
     # shellcheck disable=SC2086
-    apt_get install -y $missing
+    if kit; then
+      apt_get install -y $missing \
+        || die "installing Docker $(docker_pin docker_ce) from the offline kit failed (the lines above say why): the kit lacks a package; make the kit again"
+    else
+      apt_get install -y $missing
+    fi
     [ -z "$(docker_missing)" ] || die "docker packages missing after the install: $(docker_missing | tr '\n' ' ')"
   fi
   log "docker packages: $(docker_installed | tr '\n' ' ')"
@@ -3206,6 +3688,10 @@ skip_gpu_runtime() {
   case ${v,,} in
     0|false|no|off) echo "DOMOVOI_MANAGE_GPU_RUNTIME=$v in /etc/default/domovoi-update: Docker's GPU runtime is left to the administrator"; return 0 ;;
   esac
+  # NVIDIA's packages are not on an offline kit yet (they come from
+  # NVIDIA's own repository): wake-word training runs on the CPU until an
+  # update with internet sets the runtime up.
+  if kit; then echo "an offline kit carries no GPU runtime for containers yet: wake-word training uses the CPU (an update with internet adds it)"; return 0; fi
   if ! gpu_runtime_helper >/dev/null; then
     # A dry run before the clone with no copy beside this script: planned.
     if dry; then return 1; fi
@@ -3409,6 +3895,7 @@ do_venv() {
     # lock's Python as its own python3 (Ubuntu 26.04, as a Mac's VM runs).
     [ "$MACHINE_ARCH" = x86_64 ]       || die "$LOCK_NAME is for Python $want and this box's python3 is ${have:-missing}; the CPython provision-manifest.conf pins is x86_64's, so on $MACHINE_ARCH install on Ubuntu 26.04 (its python3 is $want)"
     [ -f "$(python_runtime_script)" ] || die "the checkout has no scripts/linux/python-runtime.sh"
+    no_net "the CPython download for the venv (scripts/linux/python-runtime.sh)"
     log "$LOCK_NAME is for Python $want and this box's python3 is ${have:-missing}: the venv runs on CPython ${M[python_version]} (python-build-standalone ${M[python_build]}), installed by scripts/linux/python-runtime.sh"
     emit_frac 20 "Installing Python ${M[python_version]}"
     local -a keep=()
@@ -3432,6 +3919,22 @@ do_venv() {
   # from a constraints file, so "-c <lock> setuptools wheel" is refused
   # there. The file is root's, in root's cache directory, readable by the
   # service user (who can't open a root pipe as /dev/stdin).
+  # Kit mode: the kit's wheels (and the few sdists the lock has no wheel
+  # for), copied off the stick where the service user can read them; pip
+  # takes nothing from an index, and every file still has to match the
+  # lock's hashes.
+  local -a from=()
+  if kit; then
+    emit_frac 30 "Copying the Python packages off the offline kit"
+    local wheels p
+    wheels=$KIT_STAGE/python/cp314-$MACHINE_ARCH
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      kit_stage "$p" >/dev/null
+    done < <(kit_py list "python/cp314-$MACHINE_ARCH/")
+    [ -d "$wheels" ] || die "offline kit: no Python packages for $MACHINE_ARCH (python/cp314-$MACHINE_ARCH): make the kit again"
+    from=(--no-index --find-links "$wheels")
+  fi
   emit_frac 50 "Installing build tools"
   tools=$(lock_stanzas setuptools wheel) || tools=""
   printf '%s\n' "$tools" | grep -q '^setuptools==' && printf '%s\n' "$tools" | grep -q '^wheel==' \
@@ -3442,19 +3945,20 @@ do_venv() {
   reqs=$(mktemp "$CACHE_DIR/build-tools.XXXXXX")
   printf '%s\n' "$tools" >"$reqs"
   chmod 0644 "$reqs"
-  if ! pip_svc install --require-hashes -r "$reqs"; then
+  if ! pip_svc install ${from[@]+"${from[@]}"} --require-hashes -r "$reqs"; then
     rm -f "$reqs"
     die "pip install of the build tools from $LOCK_NAME failed"
   fi
   rm -f "$reqs"
   emit_frac 100 "Installing the locked packages (Whisper, ONNX Runtime, ...)"
-  pip_svc install --require-hashes --no-build-isolation -r "$LOCK_NAME" || die "pip install -r $LOCK_NAME failed"
+  pip_svc install ${from[@]+"${from[@]}"} --require-hashes --no-build-isolation -r "$LOCK_NAME" || die "pip install -r $LOCK_NAME failed"
   # faster-whisper, pinned and hashed, without what it declares (PyAV:
   # requirements-no-deps.in).
   [ -f "$CHECKOUT/$NODEPS_LOCK_NAME" ] || die "the checkout has no $NODEPS_LOCK_NAME"
-  pip_svc install --require-hashes --no-deps -r "$NODEPS_LOCK_NAME" || die "pip install --no-deps -r $NODEPS_LOCK_NAME failed"
+  pip_svc install ${from[@]+"${from[@]}"} --require-hashes --no-deps -r "$NODEPS_LOCK_NAME" || die "pip install --no-deps -r $NODEPS_LOCK_NAME failed"
   emit_frac 900 "Installing Domovoi"
-  pip_svc install --no-deps --no-build-isolation -e . || die "pip install -e . failed"
+  pip_svc install ${from[@]+"${from[@]}"} --no-deps --no-build-isolation -e . || die "pip install -e . failed"
+  kit_stage_clear
   svc_py -c "$PY_IMPORT_CHECK" || die "the venv does not import what the services need"
   STEP_DONE_MSG="Python packages installed"
 }
@@ -4047,6 +4551,7 @@ fetch_pinned() {
   local url=$1 dest=$2 sha=$3 label=$4 part=$2.part total attempt got
   install -d -m 0755 "$(dirname "$dest")"
   if sha_ok "$dest" "$sha"; then log "using the cached $dest"; return 0; fi
+  no_net "the download of $label ($url)"
   rm -f "$dest"
   total=$(curl -fsSLI --max-time 30 "$url" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="content-length:" {n=$2} END {print n+0}') || total=0
   for attempt in 1 2; do
@@ -4083,9 +4588,26 @@ inputs_ollama() {
   echo "$OLLAMA_VERSION $OLLAMA_SHA256"
   ollama_unit_text
 }
+# The core's account reads Ollama's models folder (the server's offline
+# kit builder copies the models this server has instead of downloading
+# them again, domovoi/kit_builder/ollama_store.py): the service user joins
+# the ollama group, and the ollama account's home (0750 from useradd on
+# Ubuntu) lets that group in. Ollama writes its models 0755/0644 itself.
+# Nothing is opened to other accounts; ollama's own key (~/.ollama/id_*,
+# 0600) stays its own.
+ollama_home() { getent passwd ollama 2>/dev/null | cut -d: -f6; }
+ollama_models_readable() {
+  local h
+  if ! in_group ollama; then
+    usermod -aG ollama "$SVC_USER" || die "usermod -aG ollama $SVC_USER failed"
+    log "added $SVC_USER to the ollama group: the core reads Ollama's models folder (for the offline kit)"
+  fi
+  h=$(ollama_home)
+  if [ -n "$h" ] && [ -d "$ROOT$h" ]; then chmod g+rx "$ROOT$h" || warn "can't let the ollama group into $h"; fi
+}
 check_ollama() {
   load_ollama_pin
-  [ -x "$OLLAMA_BIN" ] && [ "$(cat "$OLLAMA_STAMP" 2>/dev/null)" = "$OLLAMA_VERSION $OLLAMA_SHA256" ] \
+  in_group ollama && [ -x "$OLLAMA_BIN" ] && [ "$(cat "$OLLAMA_STAMP" 2>/dev/null)" = "$OLLAMA_VERSION $OLLAMA_SHA256" ] \
     && ollama_unit_text | cmp -s - "$UNIT_DIR/ollama.service" \
     && systemctl is-active --quiet ollama.service \
     && [ "$(ollama_served_version)" = "$OLLAMA_VERSION" ]
@@ -4100,7 +4622,19 @@ do_ollama() {
   if [ ! -x "$OLLAMA_BIN" ] || [ "$(cat "$OLLAMA_STAMP" 2>/dev/null)" != "$OLLAMA_VERSION $OLLAMA_SHA256" ]; then
     url=https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/$OLLAMA_ASSET
     tarball=$CACHE_DIR/${OLLAMA_ASSET%.tar.zst}-v$OLLAMA_VERSION.tar.zst
-    fetch_pinned "$url" "$tarball" "$OLLAMA_SHA256" "Ollama $OLLAMA_VERSION"
+    if kit; then
+      # The kit's copy of the same release asset, held to the same pin.
+      install -d -m 0755 "$CACHE_DIR"
+      kit_has "ollama/$OLLAMA_ASSET" || die "The offline kit has no Ollama $OLLAMA_VERSION (ollama/$OLLAMA_ASSET), the one this release pins: the kit is not right; make it again"
+      emit_frac 100 "Copying Ollama $OLLAMA_VERSION off the offline kit"
+      kit_py copy "ollama/$OLLAMA_ASSET" "$tarball" || die "offline kit: ollama/$OLLAMA_ASSET can't be copied off the stick"
+      if ! sha_ok "$tarball" "$OLLAMA_SHA256"; then
+        rm -f "$tarball"
+        die "the offline kit's ollama/$OLLAMA_ASSET is not the Ollama $OLLAMA_VERSION docs/LINUX_HOST.md pins (SHA-256 $OLLAMA_SHA256); nothing was installed"
+      fi
+    else
+      fetch_pinned "$url" "$tarball" "$OLLAMA_SHA256" "Ollama $OLLAMA_VERSION"
+    fi
     systemctl stop ollama.service >/dev/null 2>&1 || true
     # docs/LINUX_HOST.md: replace lib/ollama whole, then unpack bin/ and lib/.
     rm -rf "$OLLAMA_PREFIX/lib/ollama"
@@ -4113,6 +4647,7 @@ do_ollama() {
   if ! id -u ollama >/dev/null 2>&1; then
     useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
   fi
+  ollama_models_readable
   if write_if_changed "$UNIT_DIR/ollama.service" 0644 < <(ollama_unit_text); then changed=1; fi
   systemctl daemon-reload
   systemctl enable --quiet ollama.service
@@ -4222,6 +4757,7 @@ pull_model() {
   local tag=$1 i=$2 n=$3 line status="" last_status="" ok=0 now last=0 d sum_t sum_c f
   local re_err='"error":"([^"]*)"' re_st='"status":"([^"]*)"' re_dg='"digest":"([^"]*)"' re_t='"total":([0-9]+)' re_c='"completed":([0-9]+)'
   local -A tot=() com=()
+  no_net "ollama pull $tag"
   while IFS= read -r line; do
     if [[ $line =~ $re_err ]]; then echo "ollama: ${BASH_REMATCH[1]}" >&2; return 1; fi
     status=""
@@ -4327,6 +4863,57 @@ remove_model() {
   [ -z "$left" ]
 }
 
+# Kit mode: where the kit keeps a model's manifest (Ollama's own layout,
+# ollama/models/manifests/registry.ollama.ai/<namespace>/<model>/<tag>),
+# and the models folder of this machine's Ollama (the ollama user's home,
+# as the unit runs it).
+kit_model_manifest() {
+  local tag=$1 name ver
+  name=${tag%%:*} ver=${tag#*:}
+  [[ $name == */* ]] || name=library/$name
+  printf 'ollama/models/manifests/registry.ollama.ai/%s/%s' "$name" "$ver"
+}
+ollama_models_dir() {
+  local h
+  h=$(getent passwd ollama 2>/dev/null | cut -d: -f6) || h=""
+  printf '%s%s/.ollama/models' "$ROOT" "${h:-/usr/share/ollama}"
+}
+as_ollama() { runuser -u ollama -- "$@"; }
+# kit_install_model TAG DIGEST I N: TAG from the kit into Ollama's models
+# folder. Status 1 when the kit doesn't have it. Its manifest must be the
+# pinned build (the digest Ollama reports is the manifest's SHA-256) before
+# anything is copied; each blob it names must be the blob of that name;
+# then Ollama must list TAG at DIGEST. Written as the ollama user, blobs
+# first, the manifest last (until then Ollama doesn't know the model).
+kit_install_model() {
+  local tag=$1 want=$2 i=$3 n=$4 mpath man dir d blob name k=0 nblobs
+  mpath=$(kit_model_manifest "$tag")
+  kit_has "$mpath" || return 1
+  emit_frac $(( i * 1000 / n )) "Copying $tag off the offline kit"
+  man=$(kit_stage "$mpath")
+  [ "$(sha256_of "$man")" = "$want" ] \
+    || die "the offline kit's $tag is not the build this release pins (its manifest's SHA-256 is $(sha256_of "$man"), the pin is $want); nothing of it was installed"
+  dir=$(ollama_models_dir)
+  name=${mpath#ollama/models/manifests/}
+  as_ollama mkdir -p "$dir/blobs" "$dir/manifests/$(dirname "$name")" || die "can't create Ollama's models folder $dir as the ollama user"
+  nblobs=$(grep -o 'sha256:[0-9a-f]\{64\}' "$man" | sort -u | grep -c .) || nblobs=0
+  [ "$nblobs" -gt 0 ] || die "the offline kit's manifest of $tag names no blobs"
+  for d in $(grep -o 'sha256:[0-9a-f]\{64\}' "$man" | sort -u | cut -d: -f2); do
+    k=$((k + 1))
+    if [ -f "$dir/blobs/sha256-$d" ] && [ "$(sha256_of "$dir/blobs/sha256-$d")" = "$d" ]; then continue; fi
+    emit_frac $(( (i * 1000 + k * 1000 / (nblobs + 1)) / n )) "Copying $tag off the offline kit ($k of $nblobs)"
+    blob=$(kit_stage "ollama/models/blobs/sha256-$d")
+    [ "$(sha256_of "$blob")" = "$d" ] || die "the offline kit's blob sha256-$d of $tag is not the blob of that name; nothing more was installed"
+    as_ollama cp "$blob" "$dir/blobs/.sha256-$d.part" && as_ollama mv -f "$dir/blobs/.sha256-$d.part" "$dir/blobs/sha256-$d" \
+      || die "can't write $dir/blobs/sha256-$d as the ollama user (is the disk full?)"
+    rm -f -- "$blob"
+  done
+  as_ollama cp "$man" "$dir/manifests/$name.part" && as_ollama mv -f "$dir/manifests/$name.part" "$dir/manifests/$name" \
+    || die "can't write $tag's manifest into $dir as the ollama user"
+  kit_stage_clear
+  log "$tag copied from the offline kit (manifest ${want:0:12}, $nblobs blobs, each checked)"
+}
+
 # The tier's QA model and router are the voice assistant itself, so a pull
 # that brings anything but the pinned build stops the run. The vision model
 # is optional (--no-vision-model): when the registry serves another build
@@ -4350,11 +4937,36 @@ do_models() {
     if [ "$got" = "$want" ]; then
       log "$tag is present (digest ${want:0:12})"
     else
-      [ -z "$got" ] || warn "$tag is present with digest ${got:0:12}, not the pinned ${want:0:12}: pulling it again"
-      log "pulling $tag"
-      pull_model "$tag" "$i" "$n" || die "ollama pull $tag failed"
-      got=$(model_digest "$tag") || die "Ollama did not list its models (GET $OLLAMA_API/api/tags) after pulling $tag"
-      [ -n "$got" ] || die "$tag is not among Ollama's models after the pull"
+      [ -z "$got" ] || warn "$tag is present with digest ${got:0:12}, not the pinned ${want:0:12}: $(kit && echo "copying it from the offline kit" || echo "pulling it again")"
+      if kit; then
+        local copied=1
+        if [ "$OLLAMA_EXTERNAL" = 1 ]; then
+          # A Mac's VM: the Mac's setup copies the kit's models into its own
+          # Ollama before this runs. One on the kit and not there is a fault.
+          if kit_has "$(kit_model_manifest "$tag")"; then
+            die "$tag is on the offline kit but not in the Ollama at $OLLAMA_API at the pinned build (${want:0:12}): the Mac's setup copies the kit's models into its Ollama before this runs. Run Setup again (Repair) with the stick plugged in."
+          fi
+          copied=0
+        elif ! kit_install_model "$tag" "$want" "$i" "$n"; then
+          copied=0
+        fi
+        if [ "$copied" = 0 ]; then
+          # Not on the kit. Only the vision model may be missing (pictures
+          # in chat unticked): the install goes on without it, as online
+          # when the registry serves another build.
+          [ "$PULL_VISION" = 1 ] && [ "$tag" = "$(tier_vision)" ] \
+            || die "The offline kit has no $tag, the model this tier needs. Install with --no-ai-models, or make a kit with AI chat ticked."
+          warn "the offline kit has no $tag (pictures in chat were not ticked when it was made): Domovoi is installed without the vision model, so chat can't read pictures. An admin can add it later in the dashboard, Settings, Models, with internet."
+          vision_off=$tag
+          i=$((i + 1))
+          continue
+        fi
+      else
+        log "pulling $tag"
+        pull_model "$tag" "$i" "$n" || die "ollama pull $tag failed"
+      fi
+      got=$(model_digest "$tag") || die "Ollama did not list its models (GET $OLLAMA_API/api/tags) after $(kit && echo "copying" || echo "pulling") $tag"
+      [ -n "$got" ] || die "$tag is not among Ollama's models after the $(kit && echo "copy from the offline kit" || echo "pull")"
       if [ "$got" != "$want" ] && [ "$PULL_VISION" = 1 ] && [ "$tag" = "$(tier_vision)" ]; then
         remove_model "$tag" || die "$tag has digest $got after the pull, the manifest pins $want, and removing it from Ollama failed"
         warn "$tag has digest ${got:0:12} after the pull, the manifest pins ${want:0:12}: the registry now serves another build under that tag, so it was removed. Domovoi is installed without the vision model: chat can't read pictures. An admin can add it in the dashboard, Settings, Models (that pull is not checked against the pin)."
@@ -4388,6 +5000,41 @@ import_faster_whisper()
 from faster_whisper.utils import download_model
 print(download_model(sys.argv[1], revision=sys.argv[2]))'
 
+# kit_whisper DIR: the pinned snapshot from the kit (speech/whisper-MODEL/:
+# model.bin and the small files beside it, as the online download brings
+# them from the pinned revision) into DIR/snapshots/<revision>, laid out as
+# that download lays it out (one snapshot, no refs/main: the core loads it
+# by path). model.bin is held to its pin before anything is put there.
+kit_whisper() {
+  local dir=$1 prefix p staged snap
+  prefix=speech/whisper-${M[whisper_model]}/
+  kit_has "${prefix}model.bin" || die "The offline kit has no speech recognition model (${prefix}model.bin): the kit is not right; make it again"
+  emit_frac 100 "Copying Whisper ${M[whisper_model]} off the offline kit"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [[ ${p#"$prefix"} != */* ]] || continue
+    # Only the files a Whisper model folder holds (L39): whatever else a
+    # stick carries there is never put beside the model.
+    case ${p#"$prefix"} in
+      model.bin|config.json|tokenizer.json|preprocessor_config.json|vocabulary.json|vocabulary.txt) ;;
+      *) continue ;;
+    esac
+    kit_stage "$p" >/dev/null
+  done < <(kit_py list "$prefix")
+  staged=$KIT_STAGE/$prefix
+  if [ "$(sha256_of "${staged}model.bin")" != "${M[whisper_model_bin_sha256]}" ]; then
+    kit_stage_clear
+    die "the offline kit's Whisper model.bin is not the one this release pins (SHA-256 ${M[whisper_model_bin_sha256]}); nothing was installed"
+  fi
+  snap=$dir/snapshots/${M[whisper_revision]}
+  as_svc mkdir -p "$snap" || die "can't create $snap as $SVC_USER"
+  for p in "$staged"*; do
+    [ -f "$p" ] || continue
+    as_svc cp "$p" "$snap/.$(basename "$p").part" && as_svc mv -f "$snap/.$(basename "$p").part" "$snap/$(basename "$p")" \
+      || die "can't write $snap/$(basename "$p") as $SVC_USER"
+  done
+  kit_stage_clear
+}
 skip_whisper() { if [ "$SKIP_MODELS" = 1 ]; then echo "--skip-models: the Whisper model is not downloaded"; return 0; fi; return 1; }
 inputs_whisper() {
   local k
@@ -4400,9 +5047,14 @@ do_whisper() {
   local dir bin got snaps
   dir=$(hf_repo_dir)
   bin=$(whisper_bin)
-  start_watch "$dir" "${M[whisper_model_bin_bytes]}" "Downloading Whisper ${M[whisper_model]}"
-  svc_py -c "$PY_WHISPER" "${M[whisper_model]}" "${M[whisper_revision]}" >/dev/null || { stop_watch; die "the Whisper download failed"; }
-  stop_watch
+  if kit; then
+    kit_whisper "$dir"
+  else
+    no_net "the Whisper download"
+    start_watch "$dir" "${M[whisper_model_bin_bytes]}" "Downloading Whisper ${M[whisper_model]}"
+    svc_py -c "$PY_WHISPER" "${M[whisper_model]}" "${M[whisper_revision]}" >/dev/null || { stop_watch; die "the Whisper download failed"; }
+    stop_watch
+  fi
   [ -f "$bin" ] || die "no model.bin at $bin after the download"
   got=$(sha256_of "$bin")
   if [ "$got" != "${M[whisper_model_bin_sha256]}" ]; then
@@ -4459,6 +5111,88 @@ from domovoi import egress
 from domovoi.clients import speaker_encoder as se
 with egress.override_policy("always"):
     print(se.download_model(Path(sys.argv[1])))'
+# Kit mode (see The offline kit): the same files from the stick, copied off
+# it into root's stage first, then checked here, as the service user,
+# against the same pins as a download, and moved into place the same way:
+# nothing unchecked where the core looks. Each takes the staged file(s).
+PY_PIPER_FROM_KIT='#provision:piper-from-kit
+import hashlib, os, shutil, sys
+from pathlib import Path
+from domovoi.clients import tts
+voice, onnx_src, json_src, d = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4])
+onnx_sha, onnx_size, json_blob, json_size = tts.PIPER_PINS[voice]
+data = Path(json_src).read_bytes()
+if len(data) != json_size or tts._git_blob_sha1(data) != json_blob:
+    sys.exit("%s.onnx.json on the offline kit does not match its pin" % voice)
+h = hashlib.sha256()
+n = 0
+with open(onnx_src, "rb") as f:
+    for b in iter(lambda: f.read(1 << 20), b""):
+        h.update(b)
+        n += len(b)
+if n != onnx_size or h.hexdigest() != onnx_sha:
+    sys.exit("%s.onnx on the offline kit does not match its pin %s" % (voice, onnx_sha))
+d.mkdir(parents=True, exist_ok=True)
+po, pj = d / (".%s.onnx.part" % voice), d / (".%s.onnx.json.part" % voice)
+try:
+    shutil.copyfile(onnx_src, po)
+    pj.write_bytes(data)
+    os.replace(po, d / (voice + ".onnx"))
+    os.replace(pj, d / (voice + ".onnx.json"))
+finally:
+    po.unlink(missing_ok=True)
+    pj.unlink(missing_ok=True)
+print(d / (voice + ".onnx"))'
+PY_SPEAKER_FROM_KIT='#provision:speaker-from-kit
+import hashlib, os, shutil, sys
+from pathlib import Path
+from domovoi.clients import speaker_encoder as se
+src, d = sys.argv[1], Path(sys.argv[2])
+h = hashlib.sha256()
+n = 0
+with open(src, "rb") as f:
+    for b in iter(lambda: f.read(1 << 20), b""):
+        h.update(b)
+        n += len(b)
+if n != se.MODEL_BYTES or h.hexdigest() != se.MODEL_SHA256:
+    sys.exit("%s on the offline kit does not match its pin %s" % (se.MODEL_FILE, se.MODEL_SHA256))
+d.mkdir(parents=True, exist_ok=True)
+part = d / ("." + se.MODEL_FILE + ".part")
+try:
+    shutil.copyfile(src, part)
+    os.replace(part, d / se.MODEL_FILE)
+finally:
+    part.unlink(missing_ok=True)
+print(d / se.MODEL_FILE)'
+# Domovoi's wake word, the household default a new install starts with
+# (domovoi/wake_default.py): online the core downloads it itself, through
+# the internet gate; from a kit it is put where that download puts it, held
+# to the same pin. "check" says whether it is there (status 0), "install
+# SRC" puts SRC there.
+PY_WAKE_FROM_KIT='#provision:wake-from-kit
+import hashlib, os, shutil, sys
+from domovoi import wake_default as wd
+w = wd.PUBLISHED[wd.NEW_INSTALL_WORD]
+if sys.argv[1] == "check":
+    sys.exit(0 if wd.published_ready(w.slug) else 1)
+src = sys.argv[2]
+h = hashlib.sha256()
+n = 0
+with open(src, "rb") as f:
+    for b in iter(lambda: f.read(1 << 20), b""):
+        h.update(b)
+        n += len(b)
+if not w.pinned or n != w.size or h.hexdigest() != w.sha256:
+    sys.exit("%s on the offline kit does not match its pin %s" % (w.file, w.sha256))
+dest = wd.published_path(w)
+dest.parent.mkdir(parents=True, exist_ok=True)
+part = dest.with_name("." + dest.name + ".part")
+try:
+    shutil.copyfile(src, part)
+    os.replace(part, dest)
+finally:
+    part.unlink(missing_ok=True)
+print(dest)'
 SPEAKER_FILE="" SPEAKER_SHA="" SPEAKER_SIZE=0
 speaker_info() {
   local -a lines
@@ -4506,7 +5240,23 @@ check_piper() {
     [ "${PIPER_SHAS[$i]}" = - ] && continue
     piper_voice_ok "$i" || return 1
   done
-  speaker_info && speaker_ok
+  speaker_info && speaker_ok || return 1
+  # Kit mode: the wake word too, when the kit has it.
+  ! kit || ! kit_has "wake/$WAKE_WORD_FILE" || svc_py -c "$PY_WAKE_FROM_KIT" check >/dev/null 2>&1
+}
+# The wake word a new install starts with (wake_default.NEW_INSTALL_WORD),
+# as the kit names its file.
+WAKE_WORD_FILE=domovoi_v1.onnx
+kit_wake_word() {
+  if svc_py -c "$PY_WAKE_FROM_KIT" check >/dev/null 2>&1; then return 0; fi
+  if ! kit_has "wake/$WAKE_WORD_FILE"; then
+    warn "the offline kit has no Domovoi wake word (wake/$WAKE_WORD_FILE): new rooms wake on \"Hey Jarvis\" until it is here (the dashboard says so; an admin can add it later)"
+    return 0
+  fi
+  svc_py -c "$PY_WAKE_FROM_KIT" install "$(kit_stage "wake/$WAKE_WORD_FILE")" >/dev/null \
+    || die "the Domovoi wake word on the offline kit failed its check; nothing of it was installed"
+  kit_stage_clear
+  log "the Domovoi wake word from the offline kit (checked against its pin)"
 }
 do_piper() {
   local i v total=0 done_bytes=0 got=()
@@ -4521,9 +5271,18 @@ do_piper() {
       continue
     fi
     if ! piper_voice_ok "$i"; then
-      start_watch "$ROOT$PIPER_DIR/.$v.onnx.part" "${PIPER_SIZES[$i]}" "Downloading the voice $v"
-      svc_py -c "$PY_PIPER_DOWNLOAD" "$v" "$PIPER_DIR" >/dev/null || { stop_watch; die "the Piper voice download failed ($v)"; }
-      stop_watch
+      if kit; then
+        kit_has "speech/piper/$v.onnx" && kit_has "speech/piper/$v.onnx.json" \
+          || die "The offline kit has no voice $v (speech/piper/$v.onnx and .onnx.json): the kit is not right; make it again"
+        svc_py -c "$PY_PIPER_FROM_KIT" "$v" "$(kit_stage "speech/piper/$v.onnx")" "$(kit_stage "speech/piper/$v.onnx.json")" "$PIPER_DIR" >/dev/null \
+          || die "the voice $v on the offline kit failed its check; nothing of it was installed"
+        kit_stage_clear
+      else
+        no_net "the Piper voice download ($v)"
+        start_watch "$ROOT$PIPER_DIR/.$v.onnx.part" "${PIPER_SIZES[$i]}" "Downloading the voice $v"
+        svc_py -c "$PY_PIPER_DOWNLOAD" "$v" "$PIPER_DIR" >/dev/null || { stop_watch; die "the Piper voice download failed ($v)"; }
+        stop_watch
+      fi
     fi
     sha_ok "$ROOT$PIPER_DIR/$v.onnx" "${PIPER_SHAS[$i]}" || die "$v.onnx does not match its pin ${PIPER_SHAS[$i]}"
     done_bytes=$((done_bytes + PIPER_SIZES[i]))
@@ -4531,12 +5290,23 @@ do_piper() {
     got+=("$v")
   done
   if ! speaker_ok; then
-    start_watch "$ROOT$PIPER_DIR/.$SPEAKER_FILE.part" "$SPEAKER_SIZE" "Downloading the voice ID model"
-    svc_py -c "$PY_SPEAKER_DOWNLOAD" "$PIPER_DIR" >/dev/null || { stop_watch; die "the voice ID model download failed"; }
-    stop_watch
+    if kit; then
+      kit_has "speech/speaker/$SPEAKER_FILE" || die "The offline kit has no voice ID model (speech/speaker/$SPEAKER_FILE): the kit is not right; make it again"
+      svc_py -c "$PY_SPEAKER_FROM_KIT" "$(kit_stage "speech/speaker/$SPEAKER_FILE")" "$PIPER_DIR" >/dev/null \
+        || die "voice ID's model on the offline kit failed its check; nothing of it was installed"
+      kit_stage_clear
+    else
+      no_net "the voice ID model download"
+      start_watch "$ROOT$PIPER_DIR/.$SPEAKER_FILE.part" "$SPEAKER_SIZE" "Downloading the voice ID model"
+      svc_py -c "$PY_SPEAKER_DOWNLOAD" "$PIPER_DIR" >/dev/null || { stop_watch; die "the voice ID model download failed"; }
+      stop_watch
+    fi
   fi
   speaker_ok || die "$SPEAKER_FILE does not match its pin $SPEAKER_SHA"
   emit_bytes "$((done_bytes + SPEAKER_SIZE))" "$total" "Downloaded the voice ID model"
+  # From a kit also the wake word: online the core downloads it itself on
+  # first need, which an offline house never could.
+  if kit; then kit_wake_word; fi
   if [ ${#got[@]} -eq 0 ]; then
     STEP_DONE_MSG="Voice ${PIPER_VOICES[0]} left to the core"
   else
@@ -4571,6 +5341,28 @@ else:
     print(rel["version_name"])
     print(sum(int(a["size"]) for a in rel["apks"]))
     print(aa._bucket_path(m))'
+# Kit mode: each APK on the stick (staged by root) as an admin's upload,
+# through accept_upload: kept only if it is one of the release's files
+# (size, SHA-256) and signed with the release key (check_apk). The upload
+# is a copy in the cache, which accept_upload removes either way.
+PY_PHONE_APP_FROM_KIT='#provision:phone-app-from-kit
+import shutil, sys, tempfile
+from pathlib import Path
+from domovoi import android_app as aa
+m = aa.load_manifest()
+ok = bad = 0
+for src in sys.argv[1:]:
+    tmp = tempfile.NamedTemporaryFile(dir=aa._bucket(m), prefix=".kit-", suffix=".apk", delete=False)
+    tmp.close()
+    shutil.copyfile(src, tmp.name)
+    try:
+        aa.accept_upload(m, Path(tmp.name))
+        ok += 1
+    except aa.ApkRefused as e:
+        bad += 1
+        print("refused %s: %s" % (src.rsplit("/", 1)[-1], e))
+print("%d app files from the offline kit kept, %d refused" % (ok, bad))
+raise SystemExit(0 if aa._complete(m) else 1)'
 PY_PHONE_APP_DOWNLOAD='#provision:phone-app-download
 import logging
 from domovoi import egress
@@ -4604,6 +5396,8 @@ inputs_phone_app() { file_sig "$CHECKOUT/android/release.json"; echo "$SVC_HOME"
 # Already here (a re-run, or an install over an earlier one), or no release
 # to fetch: skipped. Missing: fetched again, every run, until it is here.
 check_phone_app() {
+  # Kit mode: the rooms' files from the kit too (kit_rooms), once per kit.
+  if kit && ! kit_rooms_done; then return 1; fi
   phone_app_info || return 1
   case $PHONE_APP_STATE in
     here) PHONE_APP=yes; return 0 ;;
@@ -4624,8 +5418,62 @@ plan_phone_app() {
     echo "each APK checked against its pinned size, SHA-256 and the release key; whatever the internet answer; never fatal"
   fi
 }
+# kit_phone_app OUT: the kit's APKs (phone/*.apk) through accept_upload.
+# Status 0 when the release is complete here afterwards; OUT gets what the
+# snippet said.
+kit_phone_app() {
+  local out=$1 p
+  local -a apks=()
+  while IFS= read -r p; do
+    case $p in phone/*.apk) apks+=("$(kit_stage "$p")") ;; esac
+  done < <(kit_py list phone/)
+  if [ ${#apks[@]} -eq 0 ]; then
+    echo "the offline kit has no phone app (phone/)" >"$out"
+    return 1
+  fi
+  emit_frac 300 "Putting the phone app from the offline kit on this server"
+  if svc_py -c "$PY_PHONE_APP_FROM_KIT" "${apks[@]}" >"$out" 2>&1 && phone_app_info && [ "$PHONE_APP_STATE" = here ]; then
+    kit_stage_clear
+    PHONE_APP=yes
+    STEP_DONE_MSG="Phone app Domovoi $PHONE_APP_VERSION, from the offline kit"
+    log "phone app: $(tail -n 1 "$out")"
+    return 0
+  fi
+  kit_stage_clear
+  return 1
+}
+# ─── rooms from the kit (offline kit P6) ─────────────────────────────────
+# What an offline server needs to add rooms (docs/OFFLINE_KIT.md, "Adding
+# rooms with no internet"): every file the kit has under rooms/ and the
+# openWakeWord models in wake/, staged off the stick by root (checked
+# against kit.json), handed to the service user, then put where the core
+# serves them by domovoi.kit_rooms, each held to its pin in this checkout
+# (a file that isn't is refused and named). Never fatal: a kit made without
+# Rooms ticked installs a server that can't add rooms until it is updated
+# from one that has them, or gets internet; the dashboard says so.
+kit_rooms_done() { svc_py -m domovoi.kit_rooms done "$KIT_VERSION" >/dev/null 2>&1; }
+kit_rooms() {
+  local p out=$TMP_DIR/kit-rooms.out
+  kit_stage_clear
+  while IFS= read -r p; do
+    case $p in
+      rooms/*|release/SHA256SUMS|wake/embedding_model.onnx|wake/melspectrogram.onnx|wake/silero_vad.onnx|wake/hey_jarvis_v0.1.onnx)
+        kit_stage "$p" >/dev/null ;;
+    esac
+  done < <(kit_py list "")
+  install -d -m 0755 "$KIT_STAGE"
+  chown -R "$SVC_USER" "$KIT_STAGE"
+  if svc_py -m domovoi.kit_rooms install "$KIT_STAGE" --version "$KIT_VERSION" --includes "$KIT_INCLUDES" >"$out" 2>&1; then
+    log "rooms: $(tail -n 1 "$out" | scrub_log | cut -c1-400)"
+    kit_includes rooms || warn "the offline kit was made without Rooms ticked: this server can't add rooms (Raspberry Pis, spare computers) until it is updated from a kit with Rooms, or has internet for a while"
+  else
+    warn "the rooms' files from the offline kit couldn't be put on this server ($(grep -v '^[[:space:]]*$' "$out" 2>/dev/null | tail -n 1 | scrub_log | cut -c1-300)); adding a room needs internet until it is updated from a kit"
+  fi
+  kit_stage_clear
+}
 do_phone_app() {
   local out=$TMP_DIR/phone-app.out why
+  if kit; then kit_rooms; fi
   if ! phone_app_info; then
     PHONE_APP=no
     warn "$PHONE_APP_MISSING_MSG (android/release.json could not be read)"
@@ -4636,6 +5484,15 @@ do_phone_app() {
     none) PHONE_APP=""; STEP_DONE_MSG="No phone app release yet"; return 0 ;;
     here) PHONE_APP=yes; STEP_DONE_MSG="Phone app Domovoi $PHONE_APP_VERSION already here"; return 0 ;;
   esac
+  if kit; then
+    kit_phone_app "$out" && return 0
+    why=$(grep -v '^[[:space:]]*$' "$out" 2>/dev/null | tail -n 1 | scrub_log | cut -c1-300) || why=""
+    PHONE_APP=no
+    warn "The phone app couldn't be put on this server from the offline kit${why:+ ($why)}; an admin can upload it later (Settings, Phones & browsers)"
+    STEP_DONE_MSG="The phone app isn't on this server: the offline kit's copy couldn't be used"
+    return 0
+  fi
+  no_net "the phone app download"
   start_watch "$ROOT$PHONE_APP_DIR" "$PHONE_APP_BYTES" "Downloading the phone app (Domovoi $PHONE_APP_VERSION)"
   if svc_py -c "$PY_PHONE_APP_DOWNLOAD" >"$out" 2>&1 && phone_app_info && [ "$PHONE_APP_STATE" = here ]; then
     stop_watch
@@ -4780,15 +5637,96 @@ check_images() {
   as_svc docker image inspect "$(mpd_tag)" >/dev/null 2>&1
 }
 plan_images() {
+  if kit; then
+    echo "docker load of the offline kit's images; each one domovoi/docker-compose.yml pins for ${DB_SERVICES[*]} must then be there by its digest"
+    echo "the music player image ($(mpd_tag)) loaded from the kit when it is missing (a box with no internet can't build it)"
+    return 0
+  fi
   echo "docker compose pull ${DB_SERVICES[*]} (the digests domovoi/docker-compose.yml pins)"
   echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi (only when $(mpd_tag) is missing, or Dockerfile.mpd changed since this script built it)"
+}
+# Kit mode. The kit's images (images/, `docker save` files) are loaded,
+# each copied off the stick first and checked against kit.json; then every
+# image the compose file pins for the database must be there by its digest
+# (`docker image inspect NAME:TAG@sha256:...` answers only for that image),
+# as after a pull. The kit's component names say which is which: the
+# compose reference for a pinned image; the music player is the one that
+# isn't one (its MPD_IMAGE_TAG on the server that made it, saved under it).
+# Digests survive `docker save` / `docker load` only on Docker's containerd
+# image store (the default of the Docker 29 this installs; not of a Docker
+# upgraded from an older one): kit_image_store checks before loading.
+kit_image_store() {
+  local st
+  st=$(as_svc docker info -f '{{json .DriverStatus}}' 2>/dev/null) || st=""
+  [[ $st == *io.containerd.snapshotter* ]] && return 0
+  die "Docker on this computer keeps images in its older image store, where the offline kit's images lose the digests this release pins (they are checked by digest). Turn on Docker's containerd image store (\"features\": {\"containerd-snapshotter\": true} in /etc/docker/daemon.json, then sudo systemctl restart docker), then run this again. A new Docker 29 uses it already."
+}
+kit_mpd_name() {
+  local refs=$1 name
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    printf '%s\n' "$refs" | grep -qxF -- "$name" || { printf '%s' "$name"; return 0; }
+  done < <(kit_py names container-image)
+  return 1
+}
+kit_load_image() {
+  local name=$1 p f out
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    f=$(kit_stage "$p")
+    out=$(as_svc docker load -i "$f" 2>&1) || die "docker load of the offline kit's $p failed: $(printf '%s' "$out" | tail -n 1)"
+    log "docker load $p: $(printf '%s' "$out" | tr '\n' ' ')"
+    rm -f -- "$f"
+  done < <(kit_py files container-image "$name")
+}
+kit_images() {
+  local name ref refs
+  emit_frac 50 "Loading the database images from the offline kit"
+  refs=$(compose_refs "${DB_SERVICES[@]}") && [ -n "$refs" ] || die "docker compose config --images named no database images"
+  kit_image_store
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    # Only what this release pins: anything else on the kit stays there.
+    if printf '%s\n' "$refs" | grep -qxF -- "$name"; then kit_load_image "$name"; fi
+  done < <(kit_py names container-image)
+  for ref in $refs; do
+    as_svc docker image inspect "$ref" >/dev/null 2>&1 \
+      || die "The offline kit has no $ref (or it is not that image: its digest is not the one domovoi/docker-compose.yml pins): the kit is not right; make it again"
+    log "$ref is here, at the digest the compose file pins"
+  done
+  kit_stage_clear
+}
+# kit_mpd_image: the music player image the house that made the kit built
+# (pinned by nothing but its Dockerfile.mpd, the same release's), loaded
+# and tagged as this box names it. Prints its image ID.
+kit_mpd_image() {
+  local tag loaded name comp
+  tag=$(mpd_tag)
+  comp=$(kit_mpd_name "$(compose_refs "${DB_SERVICES[@]}")") \
+    || die "The offline kit has no music player image (images/), and without internet it can't be built here: make the kit again"
+  name=$comp
+  [[ $name == *:* ]] || name=$name:latest
+  kit_load_image "$comp" >&2
+  loaded=$(as_svc docker image inspect -f '{{.Id}}' "$name" 2>/dev/null | tr -d '[:space:]') \
+    || die "the offline kit's music player image loaded, but there is no $name"
+  [ -n "$loaded" ] || die "the offline kit's music player image loaded, but there is no $name"
+  if [ "$tag" != "$name" ]; then
+    as_svc docker tag "$name" "$tag" || die "docker tag $name $tag failed"
+  fi
+  kit_stage_clear
+  printf '%s' "$loaded"
 }
 do_images() {
   local tag cur new why built iiddir
   # Pulled here rather than at domovoi-db's first start, where the download
   # would have no progress and the start step would wait on it.
-  emit_frac 50 "Downloading the database images"
-  (cd "$CHECKOUT/domovoi" && as_svc docker compose pull "${DB_SERVICES[@]}") || die "docker compose pull ${DB_SERVICES[*]} failed"
+  if kit; then
+    kit_images
+  else
+    no_net "docker compose pull ${DB_SERVICES[*]}"
+    emit_frac 50 "Downloading the database images"
+    (cd "$CHECKOUT/domovoi" && as_svc docker compose pull "${DB_SERVICES[@]}") || die "docker compose pull ${DB_SERVICES[*]} failed"
+  fi
   tag=$(mpd_tag)
   cur=$(mpd_image_id)
   if ! why=$(mpd_build_reason "$cur"); then
@@ -4797,6 +5735,23 @@ do_images() {
     STEP_DONE_MSG="Images ready ($tag kept)"
     return 0
   fi
+  if kit; then
+    log "loading $tag from the offline kit: $why"
+    emit_frac 500 "Loading the music player from the offline kit"
+    built=$(kit_mpd_image)
+    check_images || die "the database images or $tag are not there after loading them from the offline kit"
+    if new=$(built_image_id "$built"); then
+      write_mpd_record "$new"
+    else
+      rm -f "$MPD_RECORD"
+      new=$(mpd_image_id)
+      warn "the music player image loaded from the offline kit is $built and root's docker says $tag names ${new:-no image}; not recorded for the container guard, which will report the image"
+    fi
+    if [ -n "$new" ] && [ "$new" != "$cur" ]; then mpd_move_rooms "$new"; fi
+    STEP_DONE_MSG="Images ready (loaded from the offline kit)"
+    return 0
+  fi
+  no_net "docker build of $tag"
   log "building $tag: $why"
   # Exactly what domovoi/mpd_provisioner.py _build_image runs, ahead of the
   # core's first boot (which would build it with no progress, and not at
@@ -4858,6 +5813,7 @@ SEARXNG_READONLY_OVERRIDE='services:
 
 inputs_searxng() { internet_policy || echo unknown; file_sig "$CHECKOUT/domovoi/docker-compose.yml"; }
 check_searxng() {
+  if kit; then ! searxng_running; return; fi
   case $(internet_policy) in
     always|sometimes) searxng_running && [ "$(searxng_mount_rw)" != true ] ;;
     never) ! searxng_running ;;
@@ -4868,8 +5824,15 @@ plan_searxng() { echo "started for always and sometimes (the compose file's pinn
 do_searxng() {
   local policy
   policy=$(internet_policy) || policy=""
+  if kit && [ "$policy" != never ]; then
+    # Not on an offline kit (AGPL, and of no use without internet).
+    log "the search helper is not on the offline kit, so it stays off; Domovoi's web answers need it (an update with internet brings it)"
+    STEP_DONE_MSG="Search helper not installed (not on the offline kit)"
+    return 0
+  fi
   case $policy in
     always|sometimes)
+      no_net "the search helper's image (docker compose up searxng)"
       # The compose file's own digest-pinned image; restart: unless-stopped
       # keeps it up across reboots (LINUX_HOST.md, Internet or not).
       if searxng_entry_fixed; then
@@ -5496,6 +6459,39 @@ do_start() {
   STEP_DONE_MSG="Domovoi is running"
 }
 
+# ─── --restore-identity ──────────────────────────────────────────────────
+
+# Make the backup this server's identity before the core first starts
+# (load_or_create would otherwise make a new one). Root reads the file and
+# hands its bytes to the checkout's python as the service user on stdin, so
+# root never writes into that user's home and never runs its code: the
+# service user's own python checks the backup (format, the key pair, a
+# signature that verifies) and writes ~/.domovoi/server-identity.json, 0600,
+# itself. Exactly this key already there: nothing to do. A different one:
+# the run stops, nothing replaced (python -m domovoi.server_identity
+# --restore-identity FILE --replace-existing does that by hand). The key is
+# never printed or logged; its fingerprint is.
+restore_identity() {
+  local out rc
+  if dry; then
+    log "would make the house identity backup $RESTORE_IDENTITY this server's identity (checked first)"
+    return 0
+  fi
+  [ -x "$VENV_PY" ] || die "--restore-identity: the checkout's python ($VENV_PY) is missing, so the backup can't be checked"
+  set +e
+  out=$(svc_py -m domovoi.server_identity --restore-identity - <"$RESTORE_IDENTITY" 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" != 0 ]; then
+    die "--restore-identity: the backup was not used: $(printf '%s' "$out" | tail -n 1 | cut -c1-400)"
+  fi
+  log "house identity: $(printf '%s' "$out" | head -n 1)"
+  if printf '%s' "$out" | grep -q '^restored' && systemctl is-active --quiet domovoi-core.service; then
+    log "restarting the core so it signs with the restored identity"
+    systemctl restart domovoi-core.service --no-block
+  fi
+}
+
 # ─── update-unit ─────────────────────────────────────────────────────────
 
 # This box was installed from the hash-pinned lock (the venv step), so its
@@ -5718,8 +6714,9 @@ ask_ai() {
 
 # decide_ai: settle AI and AI_WHY. The option given; else the answer a box
 # set up before has in its domovoi/.env (as the household left it: Settings
-# may have changed it), never asked again; else the question, when it can
-# be asked; else yes.
+# may have changed it), never asked again; else, from an offline kit made
+# without AI models, no (not asked: there is nothing to install); else the
+# question, when it can be asked; else yes.
 decide_ai() {
   local prev=""
   if [ -n "$AI_FLAG" ]; then
@@ -5734,6 +6731,11 @@ decide_ai() {
     true|1|yes|on) AI=yes; AI_WHY="AI_FEATURES=true in domovoi/.env"; AI_FROM_ENV=1; return 0 ;;
     false|0|no|off) AI=no; AI_WHY="AI_FEATURES=false in domovoi/.env"; AI_FROM_ENV=1; return 0 ;;
   esac
+  if kit && ! kit_includes ai; then
+    AI=no
+    AI_WHY="the offline kit has no AI models"
+    return 0
+  fi
   if ! dry && stdin_is_tty; then
     if ask_ai; then AI=yes; AI_WHY="answered yes"; else AI=no; AI_WHY="answered no"; fi
     return 0
@@ -5781,9 +6783,13 @@ fi
 
 SVC_HOME=$(svc_home) || SVC_HOME=""
 [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER
+# An offline kit that doesn't fit stops here, before anything is changed
+# (and before the AI question: a kit without AI models answers it).
+if kit; then kit_check; fi
 # Before the run lock: a run waiting at the question keeps no other one
 # waiting, and one stopped there (Ctrl-C) leaves result.json as it was.
 decide_ai
+if kit; then kit_ai_check; fi
 
 TMP_DIR=$(mktemp -d)
 
@@ -5837,6 +6843,7 @@ for step in "${STEP_IDS[@]:1}"; do
     final_line stopped 0 "Stopped before: ${STEP_TITLE[$step]} (--stop-before $step)"
     exit 0
   fi
+  if [ "$step" = start ] && [ -n "$RESTORE_IDENTITY" ]; then restore_identity; fi
   run_step "$step"
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;

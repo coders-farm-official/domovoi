@@ -102,6 +102,15 @@ struct FilesView: View {
     /// two sheet cases, and ``FilesModel`` is shared with the editors and
     /// knows nothing about printers.
     @State private var printingFile: FileEntry?
+
+    /// Delete on the server (admin on this phone): the row asked about, and
+    /// the model that deletes.
+    @State private var deleting: FileEntry?
+    @State private var deletes: AdminDeletesModel?
+
+    private var adminDeletes: Bool {
+        deletesAdminHeld(model.admin.state, sharedScreen: model.visibility.sharedScreen)
+    }
     @State private var scanning = false
 
     /// The saved scan "What does it say?" was asked about. Set as the Scan
@@ -134,7 +143,18 @@ struct FilesView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .alert(
+            Text(verbatim: AdminDeleteWords.filesTitle(1)),
+            isPresented: Binding(get: { deleting != nil }, set: { shown in if !shown { deleting = nil } }),
+            presenting: deleting
+        ) { entry in
+            Button(AdminDeleteWords.filesConfirmLabel(folder: entry.isDir), role: .destructive) { deleteNow(entry) }
+            Button(AdminDeleteWords.cancel, role: .cancel) {}
+        } message: { entry in
+            Text(verbatim: AdminDeleteWords.filesBody(folders: entry.isDir ? 1 : 0, paths: [entry.rel]))
+        }
         .task {
+            if deletes == nil { deletes = AdminDeletesModel(admin: model.container.admin) }
             // Built here and not in `init`, for ``HomeView``'s reason: the
             // model needs the container and a `@State` initialiser runs
             // before the view has one.
@@ -562,6 +582,7 @@ struct FilesView: View {
                 // holds: ``PrintingOffer/print``, the server's "save it as
                 // PDF first" sentence, or nothing at all.
                 printOffer: printing?.offer(for: entry) ?? .none,
+                onDelete: adminDeletes && files.currentLibrary?.editable == true ? { deleting = entry } : nil,
                 onPrint: { printingFile = entry }
             )
                 .onAppear {
@@ -593,12 +614,24 @@ struct FilesView: View {
     /// library that takes changes at all — and not under a read-only one.
     @ViewBuilder
     private func whereDeletingLives(_ files: FilesModel) -> some View {
-        if files.currentLibrary?.editable == true, !files.entries.state.items.isEmpty {
-            Text(FileStrings.deleteIsAnAdminJob)
+        if files.currentLibrary?.editable == true, !files.entries.state.items.isEmpty,
+           let line = filesDeleteLine(model.admin.state, sharedScreen: model.visibility.sharedScreen) {
+            Text(line)
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 8)
+        }
+    }
+
+    /// The confirmed delete, through the session; the list is read again.
+    private func deleteNow(_ entry: FileEntry) {
+        deleting = nil
+        guard let files, let deletes, let library = files.selectedID else { return }
+        Task { @MainActor in
+            let out = await deletes.deleteFile(libraryID: library, entry)
+            files.setToast(out.said)
+            if out.ok { files.entries.reload() }
         }
     }
 

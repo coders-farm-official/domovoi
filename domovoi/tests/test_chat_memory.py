@@ -1,6 +1,8 @@
 """Memory commands in typed chat (web/backend/api/chat_memory.py): done and
 said by the code, for the person the asking device belongs to, never by
-the model."""
+the model. Since 1.5.0 the device proves itself (its device key, or an
+older app's claim key: design-notes PRIVATE-CHATS.md, "Scope addition"); a
+self-asserted device id alone names nobody."""
 
 from __future__ import annotations
 
@@ -167,23 +169,41 @@ def model(monkeypatch):
     domovoi_client.set_cached_snapshot(before)
 
 
+#: device id -> its device key, for the devices the ``house`` fixture keyed.
+_KEYS: dict[str, str] = {}
+
+
 @pytest.fixture
 def house():
     """Two people (Ana, Ben), Ana's phone, Ben's phone, an unlinked
-    browser and a shared screen; removed afterwards."""
+    browser and a shared screen, each holding a device key (V086); and
+    Ana's old phone (``ana_old``): an app from before 1.5.0, no device key,
+    a claim key from its "this is me". Removed afterwards."""
+    from domovoi import chat_access
+    from web.backend.api import devices as devices_api
+
     tag = uuid.uuid4().hex[:8]
     ana = _run(_sql("INSERT INTO people (name) VALUES (:n) RETURNING id", {"n": f"Ana {tag}"}))[0][0]
     ben = _run(_sql("INSERT INTO people (name) VALUES (:n) RETURNING id", {"n": f"Ben {tag}"}))[0][0]
     dev = {
         "ana": f"android-ana{tag}", "ben": f"android-ben{tag}",
         "nobody": f"browser-none{tag}", "shared": f"browser-shared{tag}",
+        "ana_old": f"android-anaold{tag}",
     }
     for key, owner, shared in (("ana", ana, False), ("ben", ben, False), ("nobody", None, False),
                                ("shared", None, True)):
-        _run(_sql("INSERT INTO devices (device_id, name, platform, owner_person_id, shared_screen) "
-                  "VALUES (:d, :n, 'android', :o, :s)",
-                  {"d": dev[key], "n": key, "o": owner, "s": shared}))
-    yield {"ana": ana, "ben": ben, "dev": dev}
+        _KEYS[dev[key]] = f"test-device-key-{key}-{tag}"
+        _run(_sql("INSERT INTO devices (device_id, name, platform, owner_person_id, shared_screen, "
+                  "device_key_hash, device_key_at) VALUES (:d, :n, 'android', :o, :s, :h, now())",
+                  {"d": dev[key], "n": key, "o": owner, "s": shared,
+                   "h": chat_access.device_key_hash(_KEYS[dev[key]])}))
+    claim = f"test-claim-key-{tag}"
+    _run(_sql("INSERT INTO devices (device_id, name, platform, owner_person_id, owner_claimed_at, claim_key_hash) "
+              "VALUES (:d, 'ana old', 'android', :o, now(), :h)",
+              {"d": dev["ana_old"], "o": ana, "h": devices_api.claim_key_hash(claim)}))
+    yield {"ana": ana, "ben": ben, "dev": dev, "claim": claim}
+    for d in dev.values():
+        _KEYS.pop(d, None)
     _run(_sql("DELETE FROM devices WHERE device_id = ANY(:ids)", {"ids": list(dev.values())}))
     _run(_sql("DELETE FROM people WHERE id IN (:a, :b)", {"a": ana, "b": ben}))
 
@@ -193,13 +213,22 @@ def _memories(person_id: int) -> list[str]:
         "SELECT body FROM memories WHERE person_id = :p AND status = 'active' ORDER BY id", {"p": person_id}))]
 
 
-def _send(c, thread_id: int, content: str, device: str | None = None, header: bool = False) -> tuple[str, dict]:
+def _send(c, thread_id: int, content: str, device: str | None = None, how: str = "key",
+          claim: str | None = None) -> tuple[str, dict]:
+    """Send as ``device``: by its device KEY (``how="key"``, for a device
+    the fixture keyed; any other id is named in the body), or by a
+    self-asserted id alone: the body's ``device_id`` (``"body"``) or the
+    dashboard's header (``"header"``). ``claim``: an X-Domovoi-Claim-Key."""
     body: dict[str, Any] = {"content": content}
     headers = {}
-    if device and header:
+    if device and how == "key" and device in _KEYS:
+        headers["X-Domovoi-Device-Key"] = _KEYS[device]
+    elif device and how == "header":
         headers["X-Domovoi-Device-Id"] = device
     elif device:
         body["device_id"] = device
+    if claim:
+        headers["X-Domovoi-Claim-Key"] = claim
     r = c.post(f"/api/chat/threads/{thread_id}/messages", json=body, headers=headers)
     assert r.status_code == 200, r.text
     ev = _events(r.text)
@@ -227,11 +256,71 @@ def test_save_from_a_linked_device(house, model) -> None:
 
 
 @requires_db
-def test_the_device_can_name_itself_by_header(house, model) -> None:
+@pytest.mark.parametrize("how", ["body", "header"])
+@pytest.mark.parametrize("who", ["ben", "ana_old"])
+def test_a_self_asserted_id_alone_acts_for_nobody(house, model, how, who) -> None:
+    """1.5.0: an id the caller names itself by proves nothing. A keyed
+    device named without its key, and an old app's row named without its
+    claim key, are answered as an unknown device is: nothing saved, read
+    or forgotten."""
+    _run(_sql("INSERT INTO memories (person_id, body, source, status) VALUES (:p, 'my locker is 40', 'explicit', "
+              "'active')", {"p": house["ben"]}))
+    device = house["dev"][who]
     with _client() as c:
-        said, _ = _send(c, _thread(c), "remember that I like jazz", house["dev"]["ben"], header=True)
-    assert said == SAVED and _memories(house["ben"]) == ["I like jazz"]
+        t = _thread(c)
+        said, done = _send(c, t, "remember that I like jazz", device, how=how)
+        listed, _ = _send(c, t, "what do you remember about me?", device, how=how)
+        forgot, _ = _send(c, t, "forget that my locker is 40", device, how=how)
+    assert said == cm.unlinked_text("save that")
+    assert listed == cm.unlinked_text("read your memories")
+    assert forgot == cm.unlinked_text("forget that")
+    assert done["stats"]["memory"] == {"action": "refused_unlinked"}
+    assert _memories(house["ben"]) == ["my locker is 40"] and _memories(house["ana"]) == []
     assert model == []
+
+
+@requires_db
+def test_an_old_app_proves_itself_with_its_claim_key(house, model) -> None:
+    """The compatibility window: an app from before 1.5.0 has no device
+    key, but its claim key (from "this is me") proves it is Ana's phone."""
+    old = house["dev"]["ana_old"]
+    with _client() as c:
+        t = _thread(c)
+        said, done = _send(c, t, "remember that I like tea", old, how="body", claim=house["claim"])
+        listed, _ = _send(c, t, "what do you remember about me?", old, how="header", claim=house["claim"])
+        forgot, _ = _send(c, t, "forget that I like tea", old, how="body", claim=house["claim"])
+        wrong, _ = _send(c, t, "remember that I like coffee", old, how="body", claim="not-the-claim-key")
+    assert said == SAVED and done["stats"]["memory"]["person_id"] == house["ana"]
+    assert listed.startswith("Here's what I remember: I like tea.")
+    assert forgot == "OK, forgotten: I like tea."
+    assert wrong == cm.unlinked_text("save that")
+    assert _memories(house["ana"]) == []
+    assert model == []
+
+
+@requires_db
+def test_a_keyed_device_proving_its_claim_key_acts_for_its_person(house, model) -> None:
+    """A keyed row whose app never kept the key (a 1.4.x app the server
+    minted one for) still proves itself with its claim key."""
+    from web.backend.api import devices as devices_api
+
+    claim = "test-claim-key-ben-" + uuid.uuid4().hex[:8]
+    _run(_sql("UPDATE devices SET claim_key_hash = :h, owner_claimed_at = now() WHERE device_id = :d",
+              {"h": devices_api.claim_key_hash(claim), "d": house["dev"]["ben"]}))
+    with _client() as c:
+        said, _ = _send(c, _thread(c), "remember that I like jazz", house["dev"]["ben"], how="body", claim=claim)
+    assert said == SAVED and _memories(house["ben"]) == ["I like jazz"]
+
+
+@requires_db
+def test_a_device_key_beats_the_id_the_caller_names(house, model) -> None:
+    """Ana's key with Ben's id in the body: Ana's memory, never Ben's."""
+    with _client() as c:
+        r = c.post(f"/api/chat/threads/{_thread(c)}/messages",
+                   json={"content": "remember that I like jazz", "device_id": house["dev"]["ben"]},
+                   headers={"X-Domovoi-Device-Key": _KEYS[house["dev"]["ana"]]})
+    assert r.status_code == 200, r.text
+    assert _memories(house["ana"]) == ["I like jazz"] and _memories(house["ben"]) == []
 
 
 @requires_db
@@ -390,7 +479,7 @@ def test_try_again_on_a_model_reply_to_a_memory_command_does_it(house, model) ->
         old = _run(_sql("INSERT INTO chat_messages (thread_id, role, content, model, stats) "
                         "VALUES (:t, 'assistant', 'Sure, I''ll remember that!', 'm', '{\"model_role\": \"chat\"}') "
                         "RETURNING id", {"t": t}))[0][0]
-        r = c.post(f"/api/chat/threads/{t}/retry", headers={"X-Domovoi-Device-Id": house["dev"]["ana"]})
+        r = c.post(f"/api/chat/threads/{t}/retry", headers={"X-Domovoi-Device-Key": _KEYS[house["dev"]["ana"]]})
         assert r.status_code == 200, r.text
         ev = _events(r.text)
         msgs = c.get(f"/api/chat/threads/{t}/messages").json()["messages"]
@@ -409,7 +498,7 @@ def test_try_again_from_an_unlinked_device_replaces_the_claim_with_the_linking_l
         _run(_sql("INSERT INTO chat_messages (thread_id, role, content) VALUES (:t, 'user', 'forget that')", {"t": t}))
         _run(_sql("INSERT INTO chat_messages (thread_id, role, content, model, stats) "
                   "VALUES (:t, 'assistant', 'Forgotten!', 'm', '{\"model_role\": \"chat\"}')", {"t": t}))
-        r = c.post(f"/api/chat/threads/{t}/retry", headers={"X-Domovoi-Device-Id": house["dev"]["nobody"]})
+        r = c.post(f"/api/chat/threads/{t}/retry", headers={"X-Domovoi-Device-Key": _KEYS[house["dev"]["nobody"]]})
     assert "".join(d["text"] for e, d in _events(r.text) if e == "delta") == cm.unlinked_text("forget that")
     assert model == []
 

@@ -51,11 +51,18 @@ CHAT_FILES = [COMPONENTS, "web/static/chat_markdown.js", "web/static/chat_detail
 SATELLITE_FILES = [COMPONENTS, "web/static/satellite_media.jsx", "web/static/satellites.jsx"]
 
 
+def _caller_headers(src: str) -> str:
+    """data.js's callerDeviceHeaders: the chat's reads send X-Device-Id (1.5.0 L39)."""
+    c = re.search(r"^const callerDeviceHeaders = .*?^};$", src, re.M | re.S)
+    assert c, "callerDeviceHeaders is gone from web/static/data.js"
+    return "\n" + c.group(0) + "\n"
+
+
 def _helper_source() -> str:
     src = DATA_JS.read_text(encoding="utf-8")
     m = re.search(r"^const useRetryAfterCredential = .*?^};$", src, re.M | re.S)
     assert m, "useRetryAfterCredential is gone from web/static/data.js"
-    return m.group(0)
+    return m.group(0) + _caller_headers(src)
 
 
 # An Auth the scenario drives: not signed in, not paired, and two levers —

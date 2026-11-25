@@ -38,12 +38,15 @@ from sqlalchemy import text  # noqa: E402
 
 from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
+from domovoi import update_notice  # noqa: E402
 from domovoi import self_restart  # noqa: E402
 from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
+from domovoi import chat_access  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
 from domovoi import room_ids  # noqa: E402
+from domovoi.room_devices import require_id_paths  # noqa: E402
 from domovoi import crypto_backend  # noqa: E402
 try:  # noqa: E402 — the satellite tree ships beside the core (it serves it to rooms)
     from satellite.pairing_proof import VERSION as PAIRING_PROOF_VERSION
@@ -67,13 +70,14 @@ from domovoi.admin_auth import (  # noqa: E402
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
 from domovoi.canned_sounds import regenerate_if_needed as regenerate_canned_sounds  # noqa: E402
 from domovoi.canned_sounds import voice_dir  # noqa: E402
-from domovoi.db.repositories import SatelliteApprovalRepository
+from domovoi.db.repositories import RoomsRepository, SatelliteApprovalRepository, SatellitesRepository  # noqa: E402
 from domovoi.db.repositories import (  # noqa: E402
     SatelliteHealthRepository,
     SatelliteOutageRepository,
 )
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
 from domovoi import satellite_abilities, satellite_health  # noqa: E402
+from domovoi import satellite_diagnostics  # noqa: E402
 from domovoi import satellite_upgrades  # noqa: E402
 from domovoi.guest_queue import (  # noqa: E402
     GUEST_ADD_MAX_TRACKS,
@@ -549,6 +553,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await home_location.load(_s)
     except Exception as e:  # noqa: BLE001 — never blocks startup
         log.warning("home location carry-over failed: %s", e)
+    # The offline kit's job state is in memory: a kit a restart cut short
+    # leaves its half-made image and maybe its package container, removed
+    # here (domovoi/kit_builder/jobs.py). In the background, off the loop.
+    if not settings.use_stubs:
+        from domovoi.kit_builder import jobs as kit_jobs
+
+        app.state.offline_kit_tidy_task = asyncio.create_task(
+            asyncio.to_thread(kit_jobs.tidy_at_start), name="offline-kit-tidy")
+        # An update from an offline kit that the update unit just applied:
+        # the kit's phone app goes in and the uploaded copy goes
+        # (domovoi/kit_update.py settle).
+        from domovoi import kit_update
+
+        app.state.offline_kit_update_settle_task = asyncio.create_task(
+            asyncio.to_thread(kit_update.settle_at_start), name="offline-kit-update-settle")
 
     # Re-render the satellite-side canned MP3s (network_issues.mp3 today)
     # if the configured TTS voice has changed since the last render.
@@ -602,10 +621,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Under INTERNET_ACCESS=never: a room's MPD resumes whatever its
         # state file holds after a container restart, internet stations
         # included. Take those out of every queue, in the background
-        # (a no-op for any other answer; domovoi/mpd_internet.py).
-        from domovoi import mpd_internet
+        # (a no-op for any other answer; domovoi/mpd_internet.py). Then,
+        # under every answer, an internet entry that isn't relayed is
+        # rewritten to a relay URL or removed (L20; domovoi/relay_queue.py,
+        # which runs the purge first, room by room).
+        from domovoi import relay_queue
 
-        mpd_internet.schedule_boot_purge()
+        relay_queue.schedule_boot_scan()
         # The same answer, by hand in .env: stop the search helper that
         # `restart: unless-stopped` brought back (background, cheap).
         from domovoi import searxng_service
@@ -679,6 +701,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.sdk import speech as _sdk_speech
 
     _sdk_speech.bind_active_sessions(lambda: app.state.active_sessions)
+    # 1.5.0: every live device by its own id, and the room registry over
+    # both maps plus where each known device is (domovoi/room_devices.py).
+    app.state.active_satellites = {}
+    from domovoi import room_devices as _room_devices
+
+    try:
+        await _room_devices.registry(app).refresh()
+    except Exception as e:  # noqa: BLE001 — filled in as devices say hello
+        log.warning("rooms: could not load the satellites' rooms: %s", e)
     # sdk.speech.render reads each room's voice from here (SDK 1.9).
     _sdk_speech.bind_room_voices(lambda: app.state.satellite_voice)
 
@@ -820,11 +851,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   up_next_extender → music_listens_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
+    #   podcast_feed_poller → calendar_feed_refresher → plugin_update_check →
+    #   audiobook_indexer →
     #   room_book_positions →
-    #   command_capture_pruner → acquisition_budget_sweeper → guests_seen_pruner →
+    #   command_capture_pruner → support_session_pruner →
+    #   acquisition_budget_sweeper → guests_seen_pruner →
     #   printer_status → print_jobs →
-    #   print_history → voice_history_pruner → container_guard → chat_video → scan_reader →
+    #   print_history → voice_history_pruner → container_guard →
+    #   media_catalog → media_understanding → scan_reader →
     #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
     #   library_tag_backfill → library_year_fetch → library_cover_art.
@@ -874,6 +908,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.calendar_feed_refresher import CalendarFeedRefresher
 
     WORKERS.add_worker(CalendarFeedRefresher(), owner="core")
+    # Plugin update checks: a GitHub-installed plugin's repo, once a day,
+    # api.github.com only, never under "never" (workers/plugin_update_check.py).
+    from domovoi.workers.plugin_update_check import PluginUpdateChecker
+
+    WORKERS.add_worker(PluginUpdateChecker(), owner="core")
+    # Update notices (1.5.0): a new signed Domovoi release, looked for once
+    # a day and at start, only under the internet answer Yes and with
+    # "Check for updates by itself" ticked (workers/update_notice_check.py).
+    # Its own settings source: the first wait is the 2-minute start delay.
+    from domovoi.workers.update_notice_check import UpdateNoticeChecker
+
+    _update_notice_worker = UpdateNoticeChecker()
+    WORKERS.add_worker(_update_notice_worker, owner="core", settings_source=_update_notice_worker)
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
     # The place in the book of a room playing one, every 30 s
     # (domovoi/workers/room_book_positions.py).
@@ -883,6 +930,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")
+    # Support sessions (1.5.0): a row left open by the last run ends as
+    # "server restarted"; transcripts kept 30 days and 200 MB in all
+    # (domovoi/support_sessions.py).
+    from domovoi import support_sessions as _support_sessions
+    from domovoi.workers.support_session_pruner import SupportSessionPruner
+
+    try:
+        await _support_sessions.mark_left_open()
+    except Exception as e:  # noqa: BLE001
+        log.warning("support sessions: startup cleanup failed: %s", e)
+    WORKERS.add_worker(SupportSessionPruner(), owner="core")
     # The acquisition time budget: a claimed acquisition past
     # acquisition_max_seconds fails for good (domovoi/acquisitions.py).
     from domovoi.workers.acquisition_budget import AcquisitionBudgetSweeper
@@ -909,11 +967,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.container_guard import ContainerGuardWorker
 
     WORKERS.add_worker(ContainerGuardWorker(), owner="core")
-    # Videos attached in chat (V064): watched one at a time, holding off
-    # while any voice turn is under way (domovoi/chat_video/runner.py).
-    from domovoi.workers.chat_video import ChatVideoWorker
+    # Media understanding (V078): the stat()-only catalogue of Pictures and
+    # Videos, and one runner for all understanding work, voice first. It
+    # runs the videos attached in chat (V064) first, then library work in
+    # the night window and the daytime trickle
+    # (domovoi/media_understanding/; it replaced the chat_video worker).
+    from domovoi.workers.media_understanding import MediaCatalogWorker
+    from domovoi.workers.media_understanding import MediaUnderstandingWorker
 
-    WORKERS.add_worker(ChatVideoWorker(), owner="core")
+    WORKERS.add_worker(MediaCatalogWorker(), owner="core")
+    WORKERS.add_worker(MediaUnderstandingWorker(), owner="core")
     # Reading scans (V065): Tesseract OCR first, the vision model for a page
     # OCR can't read, one read at a time, holding off for voice the same way
     # (domovoi/scan_reader/runner.py). Registered as the scan reader the
@@ -1042,12 +1105,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await LOADER.discover_and_load_all()
     except Exception as e:
         log.error("plugin discovery failed: %s", e)
+    if not settings.use_stubs:
+        # Friend Houses plugin mail (1.5.0): a fresh restore marker (M1),
+        # then mail found mid-work from an unclean stop is charged (H1)
+        # before the dispatcher runs. Background; never blocks startup.
+        from domovoi.friend_houses import plugin_mail as _fh_plugin_mail
+        from domovoi.friend_houses import service as _fh_service
+
+        async def _fh_plugin_mail_start() -> None:
+            await _fh_service.refresh_marker()
+            await _fh_plugin_mail.start()
+
+        app.state.fh_plugin_mail_task = asyncio.create_task(_fh_plugin_mail_start())
 
     # Chat-tool milestone (§12): boot performs no eager Letta resync —
     # the install/enable/disable pipeline resyncs on change and
     # /v1/admin/chat/resync is the manual trigger — so the milestone
     # fires once plugin loading has settled the handler registry.
     WORKERS.mark_core_hook_done("core.letta_sync")
+
+    # Tell the plugins just loaded about voice history deleted while the
+    # core was down (People -> delete person in the web process): SDK 1.18,
+    # core.voice_history_deleted. In the background; the hourly
+    # voice-history tick retries (domovoi/voice_history.py).
+    from domovoi import voice_history as _voice_history
+
+    _voice_history.schedule_announce()
 
     # Load the voice models into Ollama in the background, now that plugin
     # handlers are registered and the router's tool list is final — so the
@@ -1175,6 +1258,12 @@ from domovoi.plugins_runtime.installer import plugins_admin_router  # noqa: E402
 
 app.include_router(plugins_admin_router)
 
+# Plugin update checks (domovoi/plugins_runtime/update_check.py): the open
+# read of each GitHub-sourced plugin's answer, and the admin's "check now".
+from domovoi.plugins_runtime.update_check import update_check_router  # noqa: E402
+
+app.include_router(update_check_router)
+
 # Printers, printing and scanning (domovoi/printing/routes.py): device-read,
 # device and admin tiers on their own routes.
 from domovoi.printing.routes import router as printing_router  # noqa: E402
@@ -1191,6 +1280,24 @@ app.include_router(scan_reader_router)
 from domovoi.music_groups_routes import router as music_groups_router  # noqa: E402
 
 app.include_router(music_groups_router)
+
+# A room's player fetching a remote stream or file through the core (SDK
+# 1.17, domovoi/player_relay.py): open, the one-use token is the credential.
+from domovoi.player_relay import router as player_relay_router  # noqa: E402
+from domovoi.player_relay import redact as redact_relay  # noqa: E402
+
+app.include_router(player_relay_router)
+
+# Satellite support sessions (1.5.0): an admin's shell on one satellite
+# (domovoi/support_sessions.py, domovoi/support_routes.py).
+from domovoi.support_routes import router as support_router  # noqa: E402
+
+app.include_router(support_router)
+
+# The house identity backup (1.5.0, S3-4; domovoi/identity_backup_routes.py).
+from domovoi.identity_backup_routes import router as identity_backup_router  # noqa: E402
+
+app.include_router(identity_backup_router)
 
 
 @app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
@@ -1281,6 +1388,7 @@ async def phone_voice_turn(
     # False: the phone speaks the reply itself (its own voice pick), so no
     # audio is rendered for it. Default true, as before.
     speak: bool = Form(True),
+    viewer: Any = chat_access.VIEWER,
 ) -> Any:
     """One push-to-talk turn from the app's chat mic: speech-to-text, voice
     identification, the router satellites use, text-to-speech (unless
@@ -1298,6 +1406,7 @@ async def phone_voice_turn(
             audio=data,
             player=phone_voice.parse_player(player),
             speak=speak,
+            viewer=viewer,
         )
     except phone_voice.PhoneTurnRefused as e:
         return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})
@@ -1699,6 +1808,38 @@ async def music_cover(track_id: int, request: Request) -> Any:
     return await track_cover(track_id, request, size=None)
 
 
+@app.get("/v1/room-media/{token}")
+async def room_media_thumb(token: str) -> Any:
+    """A photo or video result's thumbnail for a room's screen (1.5.0,
+    domovoi/room_media.py: the ``room_display`` frame's ``media.items[].thumb``).
+
+    Open, as ``/v1/music/cover`` is: a room phone holds only its room key,
+    which no HTTP route takes, so the token IS the credential. It is random,
+    names one item of results shown in one room, lives in this process only
+    and works for 10 minutes. The bytes are the dashboard's own thumbnail
+    (a photo) or poster frame (a video). ``404`` for anything else."""
+    from domovoi import room_media
+
+    return await room_media.serve(token)
+
+
+@app.get(
+    "/v1/admin/room-media/{room_id}",
+    dependencies=[Depends(require_device_read), Depends(room_ids.require_room_id_path)],
+)
+async def admin_room_media(room_id: str) -> dict[str, Any]:
+    """Photo and video results on a room's screen now (1.5.0,
+    domovoi/room_media.py :func:`web_media`): ``{"media": null | {id, said,
+    count, more, expires_in_ms, items}}`` for the dashboard's
+    ``GET /api/satellites/{room}/media`` (the video satellite's kiosk).
+
+    Device read tier: what was said, captions, dates and file paths. The
+    open snapshot carries only ``{room: results id}``."""
+    from domovoi import room_media
+
+    return {"media": room_media.web_media(room_id)}
+
+
 @app.get(
     "/v1/stats/latency",
     # Device READ tier (2026-10-08, REV-11): counts per room and window say
@@ -2077,9 +2218,11 @@ async def satellite_windows_file(name: str) -> FileResponse:
 @app.get("/v1/admin/satellite-windows", dependencies=[Depends(require_admin_read)])
 async def admin_satellite_windows() -> dict[str, Any]:
     """Whether this server holds every Windows runtime file, and the fetch's state."""
-    from domovoi import satellite_windows
+    from domovoi import kit_rooms, satellite_windows
 
-    return await asyncio.to_thread(satellite_windows.status, _windows_lock())
+    st = await asyncio.to_thread(satellite_windows.status, _windows_lock())
+    st["kit_note"] = kit_rooms.note("the Windows room's Python and packages", ready=st.get("ready", False))
+    return st
 
 
 @app.post("/v1/admin/satellite-windows/fetch", dependencies=[Depends(require_admin_mutation)])
@@ -2436,12 +2579,46 @@ async def satellite_linux_file(name: str) -> FileResponse:
     return FileResponse(path, media_type="application/octet-stream")
 
 
-@app.get("/v1/admin/satellite-linux", dependencies=[Depends(require_admin_read)])
-async def admin_satellite_linux() -> dict[str, Any]:
-    """Whether this server holds the Linux satellite's Python, and the fetch's state."""
+@app.get("/v1/satellite-linux/wheels/{lock}/")
+async def satellite_linux_wheel_index(lock: str) -> FastAPIResponse:
+    """A Linux room's Python packages from this server (offline kit, P6):
+    pip's ``--find-links`` page for ``satellite/locks/<lock>.txt``, only
+    when this server holds a wheel the lock allows for every package; 404
+    otherwise (install-pc.sh then uses PyPI). Open on the LAN like the
+    Python itself: public files pip checks against the lock's hashes."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
     from domovoi import satellite_linux
 
-    return await asyncio.to_thread(satellite_linux.status, _linux_lock())
+    parsed = satellite_linux.pc_lock(SATELLITE_CODE_DIR / "locks", lock)
+    page = None if parsed is None else await asyncio.to_thread(satellite_linux.wheel_index, parsed)
+    if page is None:
+        raise HTTPException(status_code=404, detail="this server holds no packages for that lock")
+    return FastAPIResponse(content=page, media_type="text/html")
+
+
+@app.get("/v1/satellite-linux/wheels/{lock}/{name}")
+async def satellite_linux_wheel(lock: str, name: str) -> FileResponse:
+    """One wheel of that page: only a file the lock allows for its package."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_linux
+
+    parsed = satellite_linux.pc_lock(SATELLITE_CODE_DIR / "locks", lock)
+    path = None if parsed is None else await asyncio.to_thread(satellite_linux.cached_wheel, parsed, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="not cached on this server")
+    return FileResponse(path, media_type="application/octet-stream")
+
+
+@app.get("/v1/admin/satellite-linux", dependencies=[Depends(require_admin_read)])
+async def admin_satellite_linux() -> dict[str, Any]:
+    """Whether this server holds the Linux satellite's Python (and, from an
+    offline kit, its packages for each lock), and the fetch's state."""
+    from domovoi import kit_rooms, satellite_linux
+
+    st = await asyncio.to_thread(satellite_linux.status, _linux_lock())
+    st["wheels"] = await asyncio.to_thread(satellite_linux.wheels_status, SATELLITE_CODE_DIR / "locks")
+    st["kit_note"] = kit_rooms.note("a Linux room's Python", ready=st.get("ready", False))
+    return st
 
 
 @app.post("/v1/admin/satellite-linux/fetch", dependencies=[Depends(require_admin_mutation)])
@@ -2626,6 +2803,235 @@ async def usb_stick_manifest(build_id: str) -> FastAPIResponse:
     )
 
 
+# ─── The offline kit (release 1.5.0) ──────────────────────────────────────
+# Settings → System → Offline kit (admins): the server makes a FAT32 image
+# of everything an install would download (domovoi/kit_builder/, format in
+# domovoi/offline_kit/), and serves it with a Raspberry Pi Imager list at
+# /v1/offline-kit/<id>/… without a login, like the room stick: Imager and a
+# browser download can't send one, and a plain kit holds a public release
+# and public models (no household data, design section 7). A kit with
+# household items ticked (the house's own models, trained wake words) is
+# served only to the admin's Bearer, or to a single-use download ticket the
+# Bearer mints (5 minutes, one kit), so the card's download goes straight to
+# disk through the dashboard (web/backend/api/offline_kit.py).
+
+
+class _OfflineKitBody(BaseModel):
+    targets: list[str] = Field(default_factory=lambda: ["pc-x86_64"], max_length=4)
+    includes: list[str] = Field(default_factory=lambda: ["ai", "vision", "rooms"], max_length=8)
+    household: list[str] = Field(default_factory=list, max_length=64)
+    stick_gb: int | None = None
+    force: bool = False
+    core: str | None = Field(default=None, max_length=256)
+
+
+def _kit_core(core: str | None) -> str:
+    """The server's address as phones and Imager reach it (the dashboard
+    sends it), checked to be a plain http(s) origin."""
+    import re as _re
+
+    if core and _re.fullmatch(r"https?://[A-Za-z0-9.\-\[\]:]{1,200}", core.rstrip("/")):
+        return core.rstrip("/")
+    return ""
+
+
+@app.get("/v1/admin/offline-kit", dependencies=[Depends(require_admin_read)])
+async def admin_offline_kit(
+    targets: str | None = Query(default=None, max_length=200),
+    includes: str | None = Query(default=None, max_length=200),
+    household: str | None = Query(default=None, max_length=4000),
+    stick_gb: int | None = Query(default=None),
+) -> dict[str, Any]:
+    """The card for the boxes ticked (comma-separated ``targets``,
+    ``includes``, ``household`` ids; the defaults: PC ticked, Mac not, AI,
+    pictures and rooms ticked, no household items): the release, the
+    sizes, the fit check for ``stick_gb``, the first refusal, the
+    behind-the-latest warning, the job and the finished kit. Reads only."""
+    from domovoi.kit_builder import service
+
+    body: dict[str, Any] = {"stick_gb": stick_gb}
+    for key, raw in (("targets", targets), ("includes", includes), ("household", household)):
+        if raw is not None:
+            body[key] = [x for x in raw.split(",") if x]
+    return await asyncio.to_thread(service.status, body)
+
+
+@app.post("/v1/admin/offline-kit/build", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_build(body: _OfflineKitBody) -> dict[str, Any]:
+    """Start making the kit in the background. 409 ``{reason, message}``
+    when it can't (the card says why; ``behind`` needs ``force``). Answers
+    at once; poll the status."""
+    await container_freeze.require_unfrozen("offline_kit")
+    from domovoi.kit_builder import service
+
+    started, view = await asyncio.to_thread(service.start, body.model_dump(), _kit_core(body.core))
+    if not started:
+        raise HTTPException(status_code=409, detail=view.get("refusal") or {"reason": "failed",
+                                                                            "message": "not started"})
+    return {"started": True, **view}
+
+
+@app.post("/v1/admin/offline-kit/cancel", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_cancel() -> dict[str, Any]:
+    """Stop the kit being made; nothing it made is kept."""
+    from domovoi.kit_builder import jobs as kit_jobs
+
+    return {"cancelling": await asyncio.to_thread(kit_jobs.cancel), "job": kit_jobs.job_state()}
+
+
+@app.delete("/v1/admin/offline-kit/builds/{build_id}", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_delete(build_id: str) -> dict[str, Any]:
+    """Remove a finished kit image from this server (it frees its size)."""
+    from domovoi.kit_builder import jobs as kit_jobs
+    from domovoi.kit_builder import service
+
+    if not await asyncio.to_thread(kit_jobs.delete_build, build_id):
+        raise HTTPException(status_code=404, detail="no such kit")
+    return await asyncio.to_thread(service.status, None)
+
+
+@app.post("/v1/admin/offline-kit/builds/{build_id}/ticket", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_ticket(build_id: str) -> dict[str, Any]:
+    """A single-use download ticket for this kit's image (5 minutes):
+    ``GET /v1/offline-kit/{build_id}/<image>?ticket=…`` then needs no
+    Bearer, so a browser can download it straight to disk."""
+    from domovoi.kit_builder import jobs as kit_jobs
+
+    doc = await asyncio.to_thread(_offline_kit_or_404, build_id)
+    ticket, expires = kit_jobs.mint_ticket(build_id)
+    return {"ticket": ticket, "expires": expires, "image_name": kit_jobs.image_name(doc["domovoi_version"])}
+
+
+def _offline_kit_or_404(build_id: str) -> dict[str, Any]:
+    from domovoi.kit_builder import jobs as kit_jobs
+
+    doc = kit_jobs.build_info(build_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return doc
+
+
+@app.get("/v1/offline-kit/{build_id}/{name}")
+async def offline_kit_file(
+    build_id: str, name: str, request: Request,
+    ticket: str | None = Query(default=None, max_length=128),
+) -> FastAPIResponse:
+    """One kit's image, its Imager list (``os-list.json``) or its Imager
+    manifest. Public by its random id (see above), but a kit carrying
+    household items needs the admin's Bearer, or for the image a live
+    ``ticket`` minted for this kit (used up here); 401 without. 423 while
+    the container guard's freeze is on."""
+    await container_freeze.require_unfrozen("offline_kit", public=True)
+    from domovoi.kit_builder import jobs as kit_jobs
+
+    doc = await asyncio.to_thread(_offline_kit_or_404, build_id)
+    allowed = not kit_jobs.needs_admin(doc) or (
+        name == kit_jobs.image_name(doc["domovoi_version"]) and kit_jobs.use_ticket(ticket, build_id)
+    ) or await check_admin_request(request) in ("ok", "pre-setup")
+    if not allowed:
+        raise HTTPException(status_code=401, detail=(
+            "This kit carries items this house added, so it downloads only with the admin "
+            "sign-in, from the Offline kit card."))
+    if name == kit_jobs.OS_LIST:
+        return JSONResponse(kit_jobs.os_list(doc), headers={"Cache-Control": "no-store"})
+    if name == kit_jobs.MANIFEST:
+        return FastAPIResponse(
+            content=json.dumps(kit_jobs.os_list(doc), indent=2).encode("utf-8"),
+            media_type="application/vnd.raspberrypi.imager-manifest+json",
+            headers={"Content-Disposition": f'attachment; filename="{kit_jobs.MANIFEST}"',
+                     "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+    if name == kit_jobs.image_name(doc["domovoi_version"]):
+        path = await asyncio.to_thread(kit_jobs.image_file, build_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(path, media_type="application/octet-stream", filename=name,
+                            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+    raise HTTPException(status_code=404, detail="not found")
+
+
+# ─── Updating from a newer offline kit (release 1.5.0, P5) ────────────────
+# About & updates → Update from an offline kit (admins): the dashboard sends
+# the newer kit's kit.json, then each file the server lacks in resumable
+# chunks, then asks to apply: the release signature, the bundle's commit and
+# the checkout move here, then the update unit runs with the uploaded folder
+# as its offline source (domovoi/kit_update.py; scripts/linux/apply-update.sh).
+# Nothing reaches the internet, so it works under INTERNET_ACCESS=never.
+
+
+def _kit_refusal(e: Any) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail())
+
+
+@app.get("/v1/admin/offline-kit/update", dependencies=[Depends(require_admin_read)])
+async def admin_offline_kit_update_status() -> dict[str, Any]:
+    """The update from a kit: what was sent, its state, the last error."""
+    from domovoi import kit_update
+
+    return await asyncio.to_thread(kit_update.status)
+
+
+@app.post("/v1/admin/offline-kit/update", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_update_begin(request: Request) -> dict[str, Any]:
+    """The body is the newer kit's kit.json, as on the stick. 409/422
+    ``{reason, message}`` when the kit can't update this server (older or
+    the same release, another machine, no room on the disk, ...); else the
+    files to send, with what the server already holds of each."""
+    from domovoi import kit_update
+
+    raw = await request.body()
+    try:
+        return await asyncio.to_thread(kit_update.begin, raw)
+    except kit_update.Refusal as e:
+        raise _kit_refusal(e) from None
+
+
+@app.put("/v1/admin/offline-kit/update/{sid}/file", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_update_file(
+    sid: str, request: Request,
+    path: str = Query(..., max_length=1024),
+    offset: int = Query(..., ge=0),
+) -> dict[str, Any]:
+    """One chunk (the raw body, at most 16 MiB) of one kit file at
+    ``offset``. 409 ``offset`` with ``received`` when the server holds
+    another amount (send from there); 422 ``pin`` when the finished file
+    isn't the one kit.json names (it is thrown away)."""
+    from domovoi import kit_update
+
+    body = await request.body()
+    try:
+        return await asyncio.to_thread(kit_update.receive, sid, path, offset, body)
+    except kit_update.Refusal as e:
+        raise _kit_refusal(e) from None
+
+
+@app.post("/v1/admin/offline-kit/update/{sid}/apply", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_update_apply(sid: str) -> dict[str, Any]:
+    """Every file is here: check the release, move the checkout to the
+    kit's release and start the update unit with the kit as its source."""
+    await container_freeze.require_unfrozen("offline_kit")
+    from domovoi import kit_update, self_restart
+
+    try:
+        view = await asyncio.to_thread(kit_update.prepare_apply, sid)
+    except kit_update.Refusal as e:
+        raise _kit_refusal(e) from None
+    restart = await self_restart.restart()
+    if not restart.get("ok"):
+        await asyncio.to_thread(kit_update.restart_failed, sid, str(restart.get("error") or "not started"))
+    return {**view, "restart": restart}
+
+
+@app.delete("/v1/admin/offline-kit/update", dependencies=[Depends(require_admin_mutation)])
+async def admin_offline_kit_update_cancel() -> dict[str, Any]:
+    """Stop the update from a kit and remove what was uploaded."""
+    from domovoi import kit_update
+
+    try:
+        return await asyncio.to_thread(kit_update.cancel)
+    except kit_update.Refusal as e:
+        raise _kit_refusal(e) from None
+
+
 # ─── Satellite plugin-payload channel ──────────────────────────────────────
 # A fourth file channel, parallel to /v1/sounds, /v1/satellite-code, and
 # /v1/wake-models — but for ENABLED plugins' [satellite] payloads (files a
@@ -2804,6 +3210,12 @@ class _AdminPlayBody(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
 
 
+def _room_media_snapshot() -> dict[str, Any]:
+    from domovoi import room_media
+
+    return room_media.snapshot()
+
+
 @app.get("/v1/admin/snapshot")
 async def admin_snapshot() -> dict[str, Any]:
     """Process-state snapshot for the web UI's poll loop.
@@ -2843,6 +3255,10 @@ async def admin_snapshot() -> dict[str, Any]:
 
     return {
         "active_rooms": list(app.state.active_sessions.keys()),
+        # Every connected satellite by its own id (1.5.0): a room may hold
+        # several, and the room drawer picks one of them for its
+        # per-device checks. A device from before 1.5.0 has its room's id.
+        "active_satellites": sorted(getattr(app.state, "active_satellites", None) or {}),
         "resumable_music": dict(app.state.resumable_music),
         "wifi_status": dict(app.state.wifi_status),
         # A DIGEST of the health state per room — when the latest sample
@@ -2882,6 +3298,30 @@ async def admin_snapshot() -> dict[str, Any]:
             for room, sess in app.state.active_sessions.items()
             if (declared := satellite_abilities.session_abilities(sess).declared_list()) is not None
         },
+        # Connected satellites that declared `diagnostics` (1.5.0), by
+        # SATELLITE id: each device of a shared room is checked on its own
+        # (the drawer's device picker). A device from before 1.5.0 has its
+        # room's id, so an older reader looking a room up still finds it.
+        "satellite_diagnostics": sorted(
+            sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
+            if satellite_abilities.session_abilities(sess).allows("diagnostics")
+        ),
+        # Rooms whose connected device declared `support_shell` (1.5.0),
+        # and the support sessions open now (the banner every dashboard
+        # shows; domovoi/support_sessions.py). Ids and times only.
+        # Keyed by satellite id (a device connects by its own id since the
+        # rooms work); the room's speaker by room id too, for older readers.
+        "satellite_support_shell": sorted(
+            {sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
+             if satellite_abilities.session_abilities(sess).allows("support_shell")}
+            | {room for room, sess in app.state.active_sessions.items()
+               if satellite_abilities.session_abilities(sess).allows("support_shell")}
+        ),
+        # Connected satellites presenting a support key other than the one
+        # pinned at their approval: the room drawer says to re-pair them
+        # (support sessions only; voice use is unaffected).
+        "satellite_support_key_changed": _support_key_changed(),
+        "support_sessions": _support_active(),
         "satellite_board": {
             room: board
             for room, sess in app.state.active_sessions.items()
@@ -2898,12 +3338,20 @@ async def admin_snapshot() -> dict[str, Any]:
         # idle_mode}) video satellites report via display_status — drives
         # the dashboard's Display block and dead-kiosk warning.
         "satellite_display": dict(app.state.satellite_display),
-        # Rooms whose connected satellite declared mic_dsp (an XVF3800 with
-        # xvf_host). Only these get the Settings tab's Microphone DSP block.
-        # The preset state itself is read on the admin tier
-        # (GET /v1/admin/satellite/{room}/mic_dsp), not here.
+        # Which rooms show photo and video results now (1.5.0,
+        # domovoi/room_media.py): {room: results id} only. This route is
+        # open; the results themselves are device-read
+        # (GET /v1/admin/room-media/{room_id}).
+        "room_media": _room_media_snapshot(),
+        # Connected satellites that declared mic_dsp (an XVF3800 with
+        # xvf_host), by SATELLITE id (1.5.0): each one in a shared room gets
+        # its own Microphone DSP block, not just the room's speaker. Every
+        # device from before 1.5.0 has its room's id, so older readers that
+        # look a room up here still find it. The preset state itself is read
+        # on the admin tier (GET /v1/admin/satellite/{satellite}/mic_dsp),
+        # not here.
         "satellite_mic_dsp": sorted(
-            room for room, sess in app.state.active_sessions.items()
+            sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
             if "mic_dsp" in satellite_abilities.session_abilities(sess).names
         ),
         # Per-room active TTS voice (what each Pi reported via voice_status),
@@ -3110,6 +3558,47 @@ async def admin_dropin_end(body: _AdminDropInEndBody) -> dict[str, Any]:
     return {"ended": True, "peer": peer_room}
 
 
+def _live_device(any_id: str) -> Any | None:
+    """The live session of a satellite by its id, else the speaker of the
+    room by that id (1.5.0, domovoi/room_devices.py). The device routes
+    take a satellite id; every device from before 1.5.0 has its room's."""
+    from domovoi import room_devices
+
+    return room_devices.registry(app).session_for(any_id)
+
+
+def _live_devices() -> list[Any]:
+    """Every live satellite session once (a fan-out to devices, not rooms)."""
+    from domovoi import room_devices
+
+    reg = room_devices.registry(app)
+    seen: dict[int, Any] = {}
+    for sess in [*reg.satellites.values(), *reg.sessions.values()]:
+        seen.setdefault(id(sess), sess)
+    return list(seen.values())
+
+
+def _support_key_changed() -> list[str]:
+    """Connected satellites (and their rooms' speakers, by room id) whose
+    support key is not the pinned one (domovoi/support_sessions.py
+    ``note_key_changed``)."""
+    def changed(sess: Any) -> bool:
+        return getattr(sess, "support_key_changed", False) is True
+
+    return sorted(
+        {sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
+         if changed(sess)}
+        | {room for room, sess in (getattr(app.state, "active_sessions", None) or {}).items()
+           if changed(sess)}
+    )
+
+
+def _support_active() -> list[dict[str, Any]]:
+    from domovoi import support_sessions
+
+    return support_sessions.get_manager(app).active()
+
+
 def _require_declared(target: Any, ability: str, what: str) -> None:
     """409 when the connected device's hello declared `supports` without
     ``ability`` (domovoi/satellite_abilities.py): the action is a frame it
@@ -3147,7 +3636,7 @@ async def admin_satellite_restart(body: _AdminSatelliteRestartBody) -> dict[str,
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no rooms connected")
-    target = sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -3197,7 +3686,7 @@ async def admin_satellite_set_volume(body: _AdminSetVolumeBody) -> dict[str, Any
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no rooms connected")
-    target = sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -3247,7 +3736,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no rooms connected")
-    target = sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -3299,7 +3788,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
     # service user.
     dependencies=[Depends(require_device_read)],
 )
-async def admin_version() -> dict[str, Any]:
+async def admin_version(request: Request = None) -> dict[str, Any]:  # type: ignore[assignment]
     """What this process is RUNNING, and what's checked out on disk.
 
     ``sha``/``running_sha`` is captured at boot, so it reflects the code
@@ -3340,7 +3829,35 @@ async def admin_version() -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — the version card must still render
         log.warning("windows side unreadable: %s", e)
         state["windows_side"] = {"present": False}
+    # Update notices (1.5.0, domovoi/update_notice.py): the automatic check,
+    # the latest signed release and its highlights, how this code relates
+    # to it, and the notice Home shows. No fetch here.
+    try:
+        state["updates"] = await update_notice.updates_state()
+    except Exception as e:  # noqa: BLE001 — the version card must still render
+        log.warning("update notice state unreadable: %s", e)
+        state["updates"] = None
+    # "Database schema: V086" (1.5.0, owner 2026-11-25): for an admin only
+    # (a live sign-in, or the dashboard cookie that renders), never for a
+    # member's device; absent when flyway_schema_history can't be read.
+    if await _admin_reads(request):
+        from domovoi import schema_version
+
+        found = schema_version.label(await schema_version.read())
+        if found is not None:
+            state["schema_version"] = found
     return state
+
+
+async def _admin_reads(request: Request) -> bool:
+    """An admin's read: a live Bearer, or the admin cookie (renders only).
+    Not "no admin set up yet". False when the check can't run."""
+    if request is None:  # a direct call from code (no HTTP request): never an admin read
+        return False
+    try:
+        return await admin_auth_mod.check_admin_request(request) in ("ok", "cookie-only")
+    except Exception:  # noqa: BLE001 — can't tell: not an admin
+        return False
 
 
 @app.post(
@@ -3352,8 +3869,30 @@ async def admin_version() -> dict[str, Any]:
 async def admin_version_check() -> dict[str, Any]:
     """Fetch the upstream and report how far behind/ahead HEAD is. Best-effort
     — offline / no tracking branch comes back with upstream=False and an error
-    string rather than a 500. Read-only: never mutates the tree."""
-    return await git_version.commits_behind()
+    string rather than a 500. Read-only: never mutates the tree.
+
+    Since 1.5.0 it is the update notice's check too
+    (``update_notice.run_check``): after the fetch, the latest release's
+    signed manifest, and the answer carries ``updates`` (as the version
+    read does), freshly computed. A press during the automatic check waits
+    for it and answers its result."""
+    return await update_notice.run_check("manual")
+
+
+@app.get(
+    "/v1/updates/notice",
+    # The device tier's read half: every paired phone and browser, and an
+    # admin (the dashboard cookie after a reload too), never an unpaired
+    # guest: an open read would tell any device on the network that this
+    # house runs an older release (owner decision 2026-11-25).
+    dependencies=[Depends(require_device_read)],
+)
+async def updates_notice() -> dict[str, Any]:
+    """Home's "Domovoi 1.5.0 is available": ``{available, version,
+    highlights, found_by, found_at, updating}``, or ``{available: false,
+    updating: false}``. Only a signed release makes one; hidden under the
+    internet answer No. No SHA, no channel, no error text."""
+    return await update_notice.notice()
 
 
 @app.post(
@@ -3886,7 +4425,7 @@ async def admin_satellite_upgrade(
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no rooms connected")
-    target = sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -4243,6 +4782,82 @@ async def admin_friend_houses_unfriend(friend_id: str) -> dict[str, Any]:
     return {"removed": True}
 
 
+# ─── Apps with friends (SDK 1.19, plugin mail): the security tier ─────────
+# "Apps with this friend" (design FRIEND-HOUSES-PLUGINS §6.11): an admin's
+# toggle per friend, then each plugin holding the permission allowed or not.
+# Reads and writes alike wear the security tier, here and at the dashboard.
+
+
+class _FhAppsBody(BaseModel):
+    on: bool
+    apps: list[str] | None = None
+
+
+class _FhAppBody(BaseModel):
+    allowed: bool
+
+
+@app.get("/v1/admin/friend-houses/apps/notices", dependencies=_FH_READ)
+async def admin_friend_houses_app_notices() -> dict[str, Any]:
+    """Every notice about apps with friends, for the Friend Houses page and
+    Home: paused (friend, app) pairs with their cause, apps waiting for an
+    admin to allow them with a friend, an app failing with several friends,
+    and a Docker problem. Logged, never spoken."""
+    from domovoi.friend_houses import plugin_mail
+
+    return {"notices": await plugin_mail.notices()}
+
+
+@app.get("/v1/admin/friend-houses/friends/{friend_id}/apps", dependencies=_FH_READ)
+async def admin_friend_houses_apps(friend_id: str) -> dict[str, Any]:
+    """The toggle, each plugin with the permission (allowed, whether both
+    houses have it, paused and why), and the notices for this friend."""
+    from domovoi.friend_houses import plugin_mail
+
+    view = await plugin_mail.apps_view(friend_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return view
+
+
+@app.put("/v1/admin/friend-houses/friends/{friend_id}/apps", dependencies=_FH_WRITE)
+async def admin_friend_houses_set_apps(friend_id: str, body: _FhAppsBody) -> dict[str, Any]:
+    """Turn "Apps with this friend" on (with the plugins the admin ticked;
+    the friend's house will see which of them this house has) or off (its
+    queued and stored app mail is deleted)."""
+    from domovoi.friend_houses import plugin_mail
+
+    view = await plugin_mail.set_apps(friend_id, body.on, body.apps, by="admin")
+    if view is None:
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return view
+
+
+@app.put("/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}", dependencies=_FH_WRITE)
+async def admin_friend_houses_set_app(friend_id: str, slug: str, body: _FhAppBody) -> dict[str, Any]:
+    """Allow (or confirm, after a new install) or revoke one plugin with one friend."""
+    from domovoi.friend_houses import plugin_mail
+
+    try:
+        view = await plugin_mail.set_pair(friend_id, slug, body.allowed, by="admin")
+    except ValueError as e:
+        raise _fh_error(e) from e
+    if view is None:
+        raise HTTPException(status_code=404, detail="No such friend house or app.")
+    return view
+
+
+@app.post("/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}/resume", dependencies=_FH_WRITE)
+async def admin_friend_houses_resume_app(friend_id: str, slug: str) -> dict[str, Any]:
+    """Resume mail from this friend to this plugin after a pause."""
+    from domovoi.friend_houses import plugin_mail
+
+    view = await plugin_mail.resume(friend_id, slug) if len(slug) <= 32 else None
+    if view is None:
+        raise HTTPException(status_code=404, detail="No such friend house or app.")
+    return view
+
+
 class _FhMessageBody(BaseModel):
     friend_id: str
     text: str
@@ -4572,7 +5187,7 @@ async def admin_wake_record_start(
     on a send failure."""
     from domovoi.db.repositories import WakeWordsRepository
 
-    target = app.state.active_sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -4711,7 +5326,7 @@ async def admin_wake_record_stop(
             if rec is not None and rec.wake_word_id == body.wake_word_id:
                 targets[rid] = sess
     if not targets:
-        target = app.state.active_sessions.get(body.room_id)
+        target = _live_device(body.room_id)
         if target is None:
             raise HTTPException(
                 status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -4743,7 +5358,7 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
     502 on a send failure."""
     from domovoi.db.repositories import WakeWordsRepository
 
-    target = app.state.active_sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
@@ -4851,7 +5466,7 @@ async def admin_wake_room(body: _AdminWakeRoomBody) -> dict[str, Any]:
         slugs = wake_default.check_word_list(body.slugs)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    target = app.state.active_sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {body.room_id!r} not connected")
     _require_declared(target, "wake_models", "a wake-word model")
@@ -4943,7 +5558,7 @@ async def admin_wake_use(body: _AdminWakeUseBody) -> dict[str, Any]:
     slug = body.slug.strip()
     if slug not in wake_default.BUILTIN_WORDS and slug not in wake_default.PUBLISHED:
         raise HTTPException(status_code=404, detail=f"no built-in or published word {slug!r}")
-    target = app.state.active_sessions.get(body.room_id)
+    target = _live_device(body.room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {body.room_id!r} not connected")
     _require_declared(target, "wake_models", "a wake-word model")
@@ -5359,7 +5974,7 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     from domovoi.config_schema import widget_payload
     from domovoi.satellite_config_schema import EDITABLE_FIELDS
 
-    target = app.state.active_sessions.get(room_id)
+    target = _live_device(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
     # A device that declared `supports` (S0) is shown only the settings it
@@ -5397,7 +6012,7 @@ class _AdminMicDspMarkBody(BaseModel):
 
 
 def _mic_dsp_target(room_id: str) -> Any:
-    target = app.state.active_sessions.get(room_id)
+    target = _live_device(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
     # Declared only: an older satellite, a 2-Mic HAT or a spare computer
@@ -5543,7 +6158,7 @@ async def admin_update_satellite_config(
         spec_for_board,
     )
 
-    target = app.state.active_sessions.get(room_id)
+    target = _live_device(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
     _require_declared(target, "config", "remote settings")
@@ -5657,7 +6272,7 @@ async def admin_get_satellite_logs(
         except Exception as e:  # noqa: BLE001 — V022 missing or DB down
             log.debug("last outage for %s unavailable: %s", room_id, e)
 
-    target = app.state.active_sessions.get(room_id)
+    target = _live_device(room_id)
     # A connected device whose hello declared `supports` without "logs"
     # (S0) has no ring to pull: it is answered like an offline room, with
     # what the core retains, and `live_supported: false` says why.
@@ -5733,6 +6348,74 @@ async def admin_get_satellite_logs(
     }
 
 
+# Read-only diagnostics (owner decision 2026-11-22): one named probe or all
+# of them, from the allowlist in domovoi/satellite_diagnostics.py. Admin
+# tier: the recent-logs probe carries the satellite's log lines, which
+# hold what the room heard.
+DIAG_LIMITER = satellite_diagnostics.RateLimiter()
+
+
+def _diag_target(room_id: str, runs: int) -> Any:
+    # A satellite by its own id first, else the speaker of the room by
+    # that id (an older dashboard addresses the room).
+    target = _live_device(room_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+    _require_declared(target, "diagnostics", "diagnostics")
+    wait = DIAG_LIMITER.take(room_id, runs)
+    if wait:
+        raise HTTPException(
+            status_code=429,
+            detail=f"too many diagnostics runs for {room_id}; try again in {int(wait) + 1} s",
+            headers={"Retry-After": str(int(wait) + 1)},
+        )
+    return target
+
+
+async def _run_diag(target: Any, probe: str) -> dict[str, Any]:
+    try:
+        return await target.request_diagnostic(probe)
+    except (TimeoutError, asyncio.TimeoutError):
+        return satellite_diagnostics.failed_result(probe, "the satellite didn't answer in time")
+    except ConnectionError:
+        return satellite_diagnostics.failed_result(probe, "the satellite disconnected")
+
+
+@app.post(
+    "/v1/admin/satellite/{room_id}/diagnostics",
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
+)
+async def admin_run_satellite_diagnostics(room_id: str) -> dict[str, Any]:
+    """Run every probe on a connected satellite that declared
+    ``diagnostics``. 404 offline, 409 not declared, 429 over the
+    per-satellite rate limit. A probe that gets no answer is in the list
+    with ``ok: false``. ``room_id`` is a satellite id (1.5.0), or a room
+    id for the room's speaker."""
+    target = _live_device(room_id)
+    probes = satellite_diagnostics.probes_for(satellite_abilities.session_abilities(target))
+    target = _diag_target(room_id, len(probes))
+    results = await asyncio.gather(*(_run_diag(target, p) for p in probes))
+    return {"room_id": room_id, "probes": probes, "results": list(results)}
+
+
+@app.post(
+    "/v1/admin/satellite/{room_id}/diagnostics/{probe}",
+    dependencies=[Depends(require_admin_mutation), Depends(room_ids.require_room_id_path)],
+)
+async def admin_run_satellite_diagnostic(room_id: str, probe: str) -> dict[str, Any]:
+    """Run one probe by name. 404 for a name not in the allowlist (nothing
+    is sent), otherwise as the run-all route."""
+    if probe not in satellite_diagnostics.PROBES:
+        raise HTTPException(status_code=404, detail="unknown probe")
+    target = _diag_target(room_id, 1)
+    needed = satellite_diagnostics.PROBE_ABILITY.get(probe)
+    if needed:
+        _require_declared(target, needed, f"the {probe} probe")
+    result = await _run_diag(target, probe)
+    probes = satellite_diagnostics.probes_for(satellite_abilities.session_abilities(target))
+    return {"room_id": room_id, "probes": probes, "results": [result]}
+
+
 @app.get(
     "/v1/admin/satellite/{room_id}/health",
     # Device READ tier (the READ half of the device tier, like the room's
@@ -5768,7 +6451,7 @@ async def admin_get_satellite_health(room_id: str) -> dict[str, Any]:
         log.debug("satellite health history for %s unavailable: %s", room_id, e)
     return {
         "room_id": room_id,
-        "connected": room_id in app.state.active_sessions,
+        "connected": _live_device(room_id) is not None,
         "latest": latest,
         "last_outage": last_outage,
         "outages": outages,
@@ -5798,6 +6481,49 @@ async def admin_satellite_approvals() -> list[dict[str, Any]]:
 
 class _ApproveSatelliteBody(BaseModel):
     code: str = Field(default="", max_length=64)
+    # 1.5.0, "Which room is it in?": an existing room's id, or a name for a
+    # new room. Neither: the room the device asked for when that room
+    # exists, else a room of its own named by its id (as before 1.5.0).
+    room_id: str | None = Field(default=None, max_length=120)
+    new_room_name: str | None = Field(default=None, max_length=120)
+
+
+class _RoomChoiceRefused(Exception):
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+
+async def _room_choice(
+    s: Any, room_id: str | None, new_room_name: str | None
+) -> tuple[str | None, bool]:
+    """``(room id, created)`` for a room picker's answer: an existing room
+    (404 when it isn't one), or a new room made from the name. ``(None,
+    False)`` when neither was given."""
+    from domovoi import room_devices
+    from domovoi.db.repositories import RoomsRepository
+
+    if room_id is not None and new_room_name is not None:
+        raise _RoomChoiceRefused(422, "send room_id or new_room_name, not both")
+    rooms = RoomsRepository(s)
+    if room_id is not None:
+        if not room_ids.is_room_id(room_id):
+            raise _RoomChoiceRefused(422, "not a room id")
+        if await rooms.get(room_id) is None:
+            raise _RoomChoiceRefused(404, f"no room {room_id!r}")
+        return room_id, False
+    if new_room_name is not None:
+        name = new_room_name.strip()
+        if not name:
+            raise _RoomChoiceRefused(422, "a new room needs a name")
+        rid = await room_devices.new_room_id(s, name)
+        await rooms.create(rid, name)
+        return rid, True
+    return None, False
+
+
+class _ApprovalNotTaken(Exception):
+    """Rolls the room choice back when the approval did not go through."""
 
 
 # Five tries per room per five minutes. Six digits is a million
@@ -5888,14 +6614,48 @@ async def admin_satellite_approve(
             status_code=400,
             detail="send the numeric code the room device is showing",
         )
+    if body.room_id is not None and body.new_room_name is not None:
+        raise HTTPException(status_code=422, detail="send room_id or new_room_name, not both")
     if not APPROVAL_CODE_LIMITER.allow(f"approve:{room_id}"):
         log.warning("pairing: room=%s approval attempts throttled", room_id)
         # The sentence, and why it says what it says, live on
         # approval_throttled_detail() — one definition the dashboard's
         # tests can send through the real rendering path.
         raise HTTPException(status_code=429, detail=approval_throttled_detail())
-    async with session_scope() as s:
-        result = await SatelliteApprovalRepository(s).approve(room_id, code)
+    from domovoi import room_devices
+
+    into: str | None = None
+    try:
+        async with session_scope() as s:
+            try:
+                into, _created = await _room_choice(s, body.room_id, body.new_room_name)
+            except _RoomChoiceRefused as e:
+                raise HTTPException(status_code=e.status, detail=e.detail) from None
+            if into is None:
+                pending = await SatelliteApprovalRepository(s).get(room_id)
+                asked = (pending or {}).get("requested_room")
+                if asked and await RoomsRepository(s).get(asked) is not None:
+                    into = asked
+            if into is not None:
+                why = await room_devices.tokenless_refusal(
+                    s, into, [room_id], paired={room_id})
+                if why is not None:
+                    raise HTTPException(status_code=409, detail=why)
+            result = await SatelliteApprovalRepository(s).approve(room_id, code, into=into)
+            if result not in ("approved", "entered"):
+                # Nothing bound: a room made for it and the choice go too.
+                raise _ApprovalNotTaken(result)
+    except _ApprovalNotTaken as e:
+        result = str(e)
+    where = into
+    if result == "approved":
+        try:
+            async with session_scope() as s:
+                where = await SatellitesRepository(s).room_of(room_id) or into
+        except Exception as e:  # noqa: BLE001 — the device's hello says it again
+            log.debug("rooms: could not read %s's room after approval: %s", room_id, e)
+        if where is not None:
+            room_devices.registry(app).note(room_id, where)
     if result == "not_pending":
         raise HTTPException(status_code=409, detail="nothing pending for that room")
     if result == "no_code":
@@ -5916,7 +6676,8 @@ async def admin_satellite_approve(
             "pairing: room=%s code typed; waiting for the device to confirm it",
             room_id,
         )
-        return {"approved": False, "waiting_for_device": True, "room_id": room_id}
+        return {"approved": False, "waiting_for_device": True, "room_id": room_id,
+                "satellite_id": room_id, "into_room_id": into}
     if result == "malformed":
         raise HTTPException(
             status_code=422,
@@ -5935,8 +6696,9 @@ async def admin_satellite_approve(
                 "room device is showing and saying, and try again"
             ),
         )
-    log.info("pairing: room=%s APPROVED by an operator", room_id)
-    return {"approved": True, "room_id": room_id}
+    log.info("pairing: room=%s APPROVED by an operator (into %s)", room_id, where)
+    return {"approved": True, "room_id": room_id, "satellite_id": room_id,
+            "into_room_id": where}
 
 
 @app.get(
@@ -5984,12 +6746,14 @@ async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
 
 
 async def _close_room_session(room_id: str) -> bool:
-    """Close the room's live satellite socket, if one is open: a device
-    whose pairing or room was just removed must not keep the room's audio
-    and announcements until its socket happens to drop. Its own teardown
-    unregisters it; a device that is still wanted reconnects and is checked
-    like any other."""
-    sess = (getattr(app.state, "active_sessions", None) or {}).get(room_id)
+    """Close the satellite's live socket, if one is open: a device whose
+    pairing or record was just removed must not keep its room's audio and
+    announcements until its socket happens to drop. ``room_id`` is the
+    satellite id (the path segment of these routes since 1.5.0), so the
+    device is looked up in ``active_satellites``, not the room's speaker
+    slot. Its own teardown unregisters it; a device that is still wanted
+    reconnects and is checked like any other."""
+    sess = (getattr(app.state, "active_satellites", None) or {}).get(room_id)
     if sess is None:
         return False
     try:
@@ -6025,6 +6789,10 @@ async def admin_reset_satellite_pairing(room_id: str) -> dict[str, Any]:
         "pairing: admin reset room=%s (row_existed=%s, closed_live=%s)",
         room_id, removed, closed,
     )
+    # An unpaired satellite's support session ends with its pairing.
+    from domovoi import support_sessions
+
+    await support_sessions.get_manager(app).end_for_satellite(room_id, "unpaired")
     return {"room_id": room_id, "reset": removed}
 
 
@@ -6187,6 +6955,14 @@ async def admin_delete_satellite(
             removed_approval = await SatelliteApprovalRepository(s).reject(room_id)
 
     await _close_room_session(room_id)
+    if removed_meta:
+        from domovoi import room_devices
+
+        room_devices.registry(app).note(room_id, None)
+    # A removed satellite's support session ends with it.
+    from domovoi import support_sessions
+
+    await support_sessions.get_manager(app).end_for_satellite(room_id, "removed")
     removed_mpd = {}
     if purge and provisioned is not None:
         from domovoi import mpd_provisioner
@@ -6242,6 +7018,421 @@ async def admin_set_satellite_label(
     return {"room_id": room_id, "room_label": label or None}
 
 
+# ─── Rooms and their satellites (1.5.0) ─────────────────────────────────────
+#
+# A room is the place, a satellite a device in one room (V073,
+# domovoi/room_devices.py). The read is the household's (the Rooms screens
+# on the phones and the web); changing which device is in which room, and
+# naming or removing rooms, is the admin's. Spec: docs/API_REFERENCE.md,
+# "Rooms and satellites".
+
+
+# The drawer's writes: the admin tier, and ids in the path that follow the
+# one id rule (domovoi/room_ids.py), answered 422 before anything is read.
+_ROOM_ADMIN = [Depends(require_admin_mutation), Depends(require_id_paths)]
+
+
+class _RoomNameBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+
+
+class _SatelliteNameBody(BaseModel):
+    # null or blank clears the display name.
+    name: str | None = Field(default=None, max_length=120)
+
+
+class _MoveSatelliteBody(BaseModel):
+    room_id: str | None = Field(default=None, max_length=120)
+    new_room_name: str | None = Field(default=None, max_length=120)
+
+
+class _MergeRoomsBody(BaseModel):
+    rooms: list[str] = Field(..., min_length=1, max_length=50)
+
+
+def _satellite_view(row: dict[str, Any]) -> dict[str, Any]:
+    from domovoi import room_devices
+
+    reg = room_devices.registry(app)
+    sid = row["satellite_id"]
+    live = reg.satellites.get(sid)
+    if live is None:
+        speaker = reg.sessions.get(row["room_id"])
+        live = speaker if getattr(speaker, "satellite_id", None) == sid else None
+    return {
+        "satellite_id": sid,
+        "name": row.get("name"),
+        "sat_type": row.get("sat_type"),
+        "board": row.get("board"),
+        "paired": bool(row.get("paired")),
+        "connected": live is not None,
+        "speaks_for_room": live is not None and reg.sessions.get(row["room_id"]) is live,
+        "output_latency_us": row.get("output_latency_us"),
+        "calibrated_at": (row["calibrated_at"].isoformat()
+                          if row.get("calibrated_at") is not None else None),
+        # A live listener in a room that takes one turn per wake word, on
+        # software that can't claim (an older phone app or image): it still
+        # works, its duplicate turns are dropped, and the drawer nudges
+        # "Update the app on this phone." (owner answer Q6).
+        "needs_update": _cannot_claim(live, row["room_id"]),
+    }
+
+
+def _cannot_claim(live: Any, room_id: str) -> bool:
+    from domovoi import wake_claims
+
+    if live is None or not getattr(live, "mic_enabled", True):
+        return False
+    abilities = getattr(live, "abilities", None)
+    if abilities is None or abilities.allows(wake_claims.ABILITY):
+        return False
+    try:
+        return wake_claims.arbiter(app).claim_flag(room_id)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _rooms_payload(s: Any) -> dict[str, Any]:
+    from domovoi import room_devices
+
+    reg = room_devices.registry(app)
+    repo = RoomsRepository(s)
+    rooms = await repo.list()
+    devices = (await s.execute(text(
+        "SELECT s.satellite_id, s.room_id, s.name, s.sat_type, s.board, "
+        "s.output_latency_us, s.calibrated_at, "
+        "(p.satellite_id IS NOT NULL) AS paired FROM satellites s "
+        "LEFT JOIN satellite_pairings p USING (satellite_id) ORDER BY s.satellite_id"
+    ))).mappings().all()
+    by_room: dict[str, list[dict[str, Any]]] = {}
+    for d in devices:
+        reg.note(d["satellite_id"], d["room_id"])
+        by_room.setdefault(d["room_id"], []).append(_satellite_view(dict(d)))
+    out = []
+    names: dict[str, list[dict[str, Any]]] = {}
+    from domovoi.room_calibration import get_calibration
+
+    cal = get_calibration(app)
+    for r in rooms:
+        sats = by_room.get(r["room_id"], [])
+        out.append({
+            "room_id": r["room_id"],
+            "name": r["name"],
+            "satellites": sats,
+            "shared": len(sats) > 1,
+            "linked_rooms": await repo.linked(r["room_id"]),
+            # Speaker tuning: how many live speakers can take part, and
+            # the last run's outcome (kept until the core restarts).
+            "tunable_speakers": len(cal.participants(r["room_id"])),
+            "calibration": cal.last.get(r["room_id"]),
+        })
+        names.setdefault(r["name"].strip().casefold(), []).append(r)
+    # Rooms that share a name (label-grouped before 1.5.0): offered as a
+    # merge, never merged on their own (owner answer Q11).
+    offers = [{"name": rs[0]["name"], "rooms": [r["room_id"] for r in rs]}
+              for rs in names.values() if len(rs) > 1]
+    # Rooms whose satellites keep waking on the same "hey Domovoi": offered
+    # as "can hear each other" until linked or dismissed (owner answer Q3).
+    from domovoi import room_hear_suggestions
+
+    try:
+        suggest = await room_hear_suggestions.suggestions(s)
+    except Exception as e:  # noqa: BLE001 — the list never fails on this
+        log.warning("rooms: link suggestions unreadable: %s", e)
+        suggest = []
+    return {"rooms": out, "merge_offers": offers, "link_suggestions": suggest}
+
+
+@app.get("/v1/admin/rooms", dependencies=[Depends(require_device_read)])
+async def admin_list_rooms() -> dict[str, Any]:
+    """Every room with its satellites, and the merges on offer."""
+    async with session_scope() as s:
+        return await _rooms_payload(s)
+
+
+@app.post("/v1/admin/rooms", dependencies=[Depends(require_admin_mutation)])
+async def admin_create_room(body: _RoomNameBody) -> dict[str, Any]:
+    """Add an empty room ("Add a room"); its id comes from the name."""
+    from domovoi import room_devices
+
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="a room needs a name")
+    async with session_scope() as s:
+        rid = await room_devices.new_room_id(s, name)
+        await RoomsRepository(s).create(rid, name)
+    return {"room_id": rid, "name": name}
+
+
+@app.patch("/v1/admin/rooms/{room_id}", dependencies=_ROOM_ADMIN)
+async def admin_rename_room(room_id: str, body: _RoomNameBody) -> dict[str, Any]:
+    """Rename a room. Its id never changes."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="a room needs a name")
+    async with session_scope() as s:
+        if not await RoomsRepository(s).rename(room_id, name):
+            raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
+    return {"room_id": room_id, "name": name}
+
+
+@app.delete("/v1/admin/rooms/{room_id}", dependencies=_ROOM_ADMIN)
+async def admin_delete_room(room_id: str) -> dict[str, Any]:
+    """Delete an EMPTY room (409 while it has satellites: move them
+    first). Its history keeps the id.
+
+    An older id from before the one id rule (domovoi/room_ids.py) passes
+    the path check here only (so a room re-keyed from such a satellite can
+    still be removed) and is refused 422 when it names no room."""
+    async with session_scope() as s:
+        repo = RoomsRepository(s)
+        if not room_ids.is_room_id(room_id) and await repo.get(room_id) is None:
+            raise HTTPException(status_code=422, detail="not a room id")
+        result = await repo.delete(room_id)
+    if result == "missing":
+        raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
+    if result == "has_satellites":
+        raise HTTPException(
+            status_code=409, detail="the room still has satellites — move them first")
+    return {"room_id": room_id, "deleted": True}
+
+
+async def _after_moves(moves: list[tuple[str, str]]) -> list[str]:
+    """Tell the registry (and through it room playout) and each moved live
+    device; returns the ids that were live."""
+    from domovoi import room_devices
+
+    reg = room_devices.registry(app)
+    live: list[str] = []
+    for sid, room in moves:
+        sess = reg.moved(sid, room)
+        if sess is not None:
+            live.append(sid)
+            try:
+                await sess.moved_to(room)
+            except Exception as e:  # noqa: BLE001 — it reconnects into the new room
+                log.warning("rooms: telling %s about its move failed: %s", sid, e)
+    return live
+
+
+@app.post("/v1/admin/rooms/{room_id}/merge", dependencies=_ROOM_ADMIN)
+async def admin_merge_rooms(room_id: str, body: _MergeRoomsBody) -> dict[str, Any]:
+    """Move every satellite of ``rooms`` into this room and delete those
+    rooms. Only ever on an admin's request (the list offers merges). The
+    moved devices drop their learned voice samples, like any move."""
+    from domovoi import room_devices
+    from domovoi.db.repositories import VoiceProfilesRepository
+
+    others = [r for r in dict.fromkeys(body.rooms) if r != room_id]
+    if not all(room_ids.is_room_id(r) for r in others):
+        raise HTTPException(status_code=422, detail="not a room id")
+    if not others:
+        raise HTTPException(status_code=422, detail="name at least one other room")
+    async with session_scope() as s:
+        rooms = RoomsRepository(s)
+        for r in (room_id, *others):
+            if await rooms.get(r) is None:
+                raise HTTPException(status_code=404, detail=f"no room {r!r}")
+        joining = [
+            d["satellite_id"] for r in others
+            for d in await SatellitesRepository(s).in_room(r)
+        ]
+        why = await room_devices.tokenless_refusal(s, room_id, joining)
+        if why is not None:
+            raise HTTPException(status_code=409, detail=why)
+        moved = await rooms.merge(room_id, others)
+        dropped = 0
+        for sid in moved:
+            dropped += await VoiceProfilesRepository(s).drop_learned_by(sid)
+            # Calibration belongs to the room around the device.
+            await s.execute(text(
+                "UPDATE satellites SET output_latency_us = NULL, calibrated_at = NULL "
+                "WHERE satellite_id = :s"), {"s": sid})
+    await _after_moves([(sid, room_id) for sid in moved])
+    log.info("rooms: merged %s into %s (moved %s)", others, room_id, moved)
+    return {"room_id": room_id, "merged": others, "moved_satellites": moved,
+            "learned_samples_dropped": dropped}
+
+
+class _LinkRoomBody(BaseModel):
+    room_id: str = Field(..., min_length=1, max_length=120)
+
+
+async def _after_link_change() -> None:
+    """The wake groups changed: the arbiter reads the links again, and
+    every live 1.5.0 device whose ``room.claim`` flag changed hears its
+    ``room`` frame again."""
+    from domovoi import room_devices, wake_claims
+
+    claims = wake_claims.arbiter(app)
+    try:
+        await claims.refresh_links()
+    except Exception as e:  # noqa: BLE001 — read again on the next hello
+        log.warning("rooms: re-reading hear-links failed: %s", e)
+        return
+    for sess in list(room_devices.registry(app).satellites.values()):
+        if not getattr(sess, "knows_rooms", False):
+            continue
+        told = getattr(sess, "_claim_flag_sent", None)
+        if told is None or told == claims.claim_flag(sess.room_id):
+            continue
+        try:
+            await sess._safe_send_text({"type": "room", "room": await sess._room_info()})
+        except Exception as e:  # noqa: BLE001
+            log.warning("rooms: telling %s its claim flag failed: %s", sess.satellite_id, e)
+
+
+async def _two_rooms(s: Any, room_id: str, other: str) -> None:
+    if other == room_id:
+        raise HTTPException(status_code=422, detail="a room always hears itself")
+    if not room_ids.is_room_id(other):
+        raise HTTPException(status_code=422, detail="not a room id")
+    rooms = RoomsRepository(s)
+    for r in (room_id, other):
+        if await rooms.get(r) is None:
+            raise HTTPException(status_code=404, detail=f"no room {r!r}")
+
+
+@app.post("/v1/admin/rooms/{room_id}/links", dependencies=_ROOM_ADMIN)
+async def admin_link_rooms(room_id: str, body: _LinkRoomBody) -> dict[str, Any]:
+    """"Rooms that can hear this one": mark two rooms as hearing each other.
+    One "hey Domovoi" heard in both is then one turn (domovoi/wake_claims.py)."""
+    from domovoi import room_hear_suggestions
+
+    other = body.room_id
+    async with session_scope() as s:
+        await _two_rooms(s, room_id, other)
+        added = await RoomsRepository(s).link(room_id, other)
+        await room_hear_suggestions.forget(s, room_id, other)
+        linked = await RoomsRepository(s).linked(room_id)
+    await _after_link_change()
+    log.info("rooms: %s and %s hear each other (%s)", room_id, other,
+             "new" if added else "already")
+    return {"room_id": room_id, "linked_rooms": linked, "added": added}
+
+
+@app.delete("/v1/admin/rooms/{room_id}/links/{other_room_id}", dependencies=_ROOM_ADMIN)
+async def admin_unlink_rooms(room_id: str, other_room_id: str) -> dict[str, Any]:
+    """Two rooms no longer count as hearing each other."""
+    async with session_scope() as s:
+        await _two_rooms(s, room_id, other_room_id)
+        removed = await RoomsRepository(s).unlink(room_id, other_room_id)
+        linked = await RoomsRepository(s).linked(room_id)
+    await _after_link_change()
+    return {"room_id": room_id, "linked_rooms": linked, "removed": removed}
+
+
+@app.post("/v1/admin/rooms/{room_id}/links/{other_room_id}/dismiss",
+          dependencies=_ROOM_ADMIN)
+async def admin_dismiss_link_suggestion(room_id: str, other_room_id: str) -> dict[str, Any]:
+    """"Not now" on a link suggestion: that pair is never suggested again
+    (linking it by hand still works)."""
+    from domovoi import room_hear_suggestions
+
+    async with session_scope() as s:
+        await _two_rooms(s, room_id, other_room_id)
+        await room_hear_suggestions.dismiss(s, room_id, other_room_id)
+    return {"rooms": sorted((room_id, other_room_id)), "dismissed": True}
+
+
+class _InviteBody(BaseModel):
+    # The name a code made before used (asking again for the same code).
+    name: str | None = Field(default=None, max_length=64)
+
+
+@app.post("/v1/admin/rooms/{room_id}/invite", dependencies=_ROOM_ADMIN)
+async def admin_invite_satellite(room_id: str, body: _InviteBody) -> dict[str, Any]:
+    """"Add a satellite to the Kitchen": a unique device name for the
+    enrolment payload's ``room=`` ("Kitchen 2") and the id a device makes
+    of it, remembered so the approval card pre-selects this room even for
+    a device that never reads ``in=`` (domovoi/room_invites.py)."""
+    from domovoi import room_invites
+
+    async with session_scope() as s:
+        room = await RoomsRepository(s).get(room_id)
+        if room is None:
+            raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
+        made = await room_invites.invite(s, room_id, room["name"], name=body.name)
+    return {"room_id": room_id, "room_name": room["name"], **made}
+
+
+@app.post("/v1/admin/rooms/{room_id}/calibrate", dependencies=_ROOM_ADMIN)
+async def admin_calibrate_room(room_id: str) -> dict[str, Any]:
+    """"Tune the speakers": every speaker of the room plays a chirp in turn
+    while the others listen, and each one's output latency is measured
+    (domovoi/room_calibration.py). Takes a few seconds per speaker.
+    ``409`` with a sentence when it cannot run (one speaker, the room
+    playing, a run already going)."""
+    from domovoi.room_calibration import CalibrationRefused, get_calibration
+
+    async with session_scope() as s:
+        room = await RoomsRepository(s).get(room_id)
+        if room is None:
+            raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
+        names = {d["satellite_id"]: d.get("name")
+                 for d in await SatellitesRepository(s).in_room(room_id)}
+    try:
+        return await get_calibration(app).calibrate(room_id, names=names)
+    except CalibrationRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.message) from None
+
+
+@app.post(
+    "/v1/admin/satellites/{satellite_id}/room",
+    dependencies=_ROOM_ADMIN,
+)
+async def admin_move_satellite(satellite_id: str, body: _MoveSatelliteBody) -> dict[str, Any]:
+    """Move a satellite to another room (an existing one, or a new one by
+    name). Its id never changes and its history stays where it happened;
+    its learned voice samples are dropped (enrolled ones kept, owner
+    answer Q7) and its speaker calibration cleared. A connected 1.5.0
+    device gets a ``room`` frame; an older one is closed 1001 and comes
+    back into the new room."""
+    from domovoi import room_devices
+    from domovoi.db.repositories import VoiceProfilesRepository
+
+    if (body.room_id is None) == (body.new_room_name is None):
+        raise HTTPException(status_code=422, detail="send room_id or new_room_name")
+    if body.room_id is not None and not room_ids.is_room_id(body.room_id):
+        raise HTTPException(status_code=422, detail="not a room id")
+    async with session_scope() as s:
+        sats = SatellitesRepository(s)
+        before = await sats.room_of(satellite_id)
+        if before is None:
+            raise HTTPException(status_code=404, detail=f"no satellite {satellite_id!r}")
+        try:
+            target, _created = await _room_choice(s, body.room_id, body.new_room_name)
+        except _RoomChoiceRefused as e:
+            raise HTTPException(status_code=e.status, detail=e.detail) from None
+        if target is None or target == before:
+            return {"satellite_id": satellite_id, "room_id": before,
+                    "from_room_id": before, "moved": False,
+                    "learned_samples_dropped": 0, "connected": False}
+        why = await room_devices.tokenless_refusal(s, target, [satellite_id])
+        if why is not None:
+            raise HTTPException(status_code=409, detail=why)
+        await sats.move(satellite_id, target)
+        dropped = await VoiceProfilesRepository(s).drop_learned_by(satellite_id)
+    live = await _after_moves([(satellite_id, target)])
+    log.info("rooms: moved %s from %s to %s (%d learned samples dropped)",
+             satellite_id, before, target, dropped)
+    return {"satellite_id": satellite_id, "room_id": target, "from_room_id": before,
+            "moved": True, "learned_samples_dropped": dropped, "connected": bool(live)}
+
+
+@app.patch(
+    "/v1/admin/satellites/{satellite_id}/name",
+    dependencies=_ROOM_ADMIN,
+)
+async def admin_name_satellite(satellite_id: str, body: _SatelliteNameBody) -> dict[str, Any]:
+    """Give a satellite a display name ("Kitchen phone"); null clears it."""
+    name = (body.name or "").strip() or None
+    async with session_scope() as s:
+        if not await SatellitesRepository(s).set_name(satellite_id, name):
+            raise HTTPException(status_code=404, detail=f"no satellite {satellite_id!r}")
+    return {"satellite_id": satellite_id, "name": name}
+
+
 async def _run_sounds_regenerate() -> None:
     """Render all registered voices' clips, refresh greeting phrases, and tell
     connected satellites to re-sync. Serialized by a lock so overlapping
@@ -6254,7 +7445,7 @@ async def _run_sounds_regenerate() -> None:
         # to strip a bled-in greeting from transcripts.
         app.state.greeting_phrases, app.state.greeting_clips = await load_greeting_bank()
         notified: list[str] = []
-        for sess in list(app.state.active_sessions.values()):
+        for sess in _live_devices():
             try:
                 await sess.notify_sounds_changed()
                 notified.append(sess.room_id)
@@ -7025,7 +8216,9 @@ def _queue_entry_dict(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "song_id": int(entry["id"]),
         "pos": int(entry.get("pos") or 0),
-        "file": str(entry.get("file", "")),
+        # A relay entry's token never leaves the core (L23): the queue is
+        # read by guests too.
+        "file": redact_relay(str(entry.get("file", ""))),
         "title": entry.get("Title") or entry.get("title"),
         "artist": entry.get("Artist") or entry.get("artist"),
         "album": entry.get("Album") or entry.get("album"),
@@ -8364,6 +9557,25 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
     return {"job": job}
 
 
+@app.post(
+    "/v1/admin/voice-history/announce-forgets",
+    # The People delete's own tier, forwarded by the web hop. It takes no
+    # input and only tells plugins about deletions already committed.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_voice_history_announce_forgets() -> dict[str, Any]:
+    """Tell plugins now about voice history deleted outside this process
+    (SDK 1.18): the web's People -> delete person records the forget in
+    its own transaction (``voice_history_forgets``, V079) and calls this
+    after the commit. Emits ``core.voice_history_deleted`` once per
+    recorded forget and drops it. Unreachable, the forget waits for the
+    core's next start or its hourly voice-history tick. ``{announced}``:
+    how many were emitted."""
+    from domovoi import voice_history
+
+    return {"announced": len(await voice_history.announce_forgets())}
+
+
 # ─── Settings → Privacy → Internet ──────────────────────────────────────────────────
 
 
@@ -9305,6 +10517,24 @@ async def stream(ws: WebSocket, room_id: str) -> None:
             join_problems.stream_closed(source)
 
 
+@app.websocket("/v1/room-audio/{satellite_id}")
+async def room_audio(ws: WebSocket, satellite_id: str) -> None:
+    """Timed room audio for one speaker (1.5.0): the room's sound, stamped
+    with when each sample plays, plus the clock service. Wire protocol:
+    docs/ROOM_AUDIO_PROTOCOL.md. Auth: the device's pairing token in its
+    hello, checked as on ``/v1/stream`` (never pairs or parks here)."""
+    if not origin_allowed(ws.headers.get("origin")):
+        await _refuse_ws(
+            ws, "cross_origin",
+            f"/v1/room-audio/{satellite_id} from Origin {ws.headers.get('origin')!r}",
+        )
+        return
+    from domovoi.room_playout.service import get_playout
+    from domovoi.room_playout.session import RoomAudioSession
+
+    await RoomAudioSession(ws, satellite_id, get_playout(app)).run()
+
+
 @app.websocket("/v1/dropin/{room_id}")
 async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     """Drop-in-only stream for phones — joins the existing intercom bridge
@@ -9402,6 +10632,7 @@ def _reset_admin_cli() -> None:
         print(f"new setup code: {code}")
         print(f"(also written to {admin_auth_mod.setup_code_path()})")
         print("open the dashboard to choose a new admin password.")
+        admin_auth_mod._print_setup_qr(code)
     else:
         print("a new setup code was written (not shown: stdout is not a terminal).")
         print(admin_auth_mod.setup_code_whereabouts() + ".")

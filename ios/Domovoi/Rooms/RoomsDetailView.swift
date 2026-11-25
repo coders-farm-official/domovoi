@@ -122,7 +122,7 @@ struct RoomsDetailView: View {
             case .timers:
                 RoomsTimersView(model: model, reads: reads, room: room)
             case .settings:
-                RoomsSettingsTabView(model: model, reads: reads, room: room)
+                RoomsSettingsTabView(shell: shell, model: model, reads: reads, room: room)
             }
         }
     }

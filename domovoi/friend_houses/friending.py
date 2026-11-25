@@ -12,7 +12,8 @@ limits. In plain steps, with house A inviting and house B asking:
 2. **An admin at B imports it** (:func:`preview`, then :func:`send_request`).
    B makes a Tor client key for A, authorizes it on its own onion, and asks
    on A's pairing onion (:mod:`domovoi.friend_houses.pairing`). Both houses
-   now hold the same 4-digit code. If A can't be reached, B tries again
+   now hold the same 6-digit code (4 digits for friends made before
+   1.5.0, whose pairing was v1). If A can't be reached, B tries again
    every few minutes until the file expires.
 3. **A's listener reports the request**; core uses the invite up (once,
    atomically) and lists the request for an admin (:func:`on_request`).
@@ -280,7 +281,17 @@ async def deliver_request(row: dict[str, Any]) -> bool:
     hello = await _service().my_hello()
     if keys is None or hello is None:
         return False
-    f = ff.parse(row["friend_file"])
+    try:
+        f = ff.parse(row["friend_file"])
+    except ff.BadFriendFile as e:
+        # Imported before this house updated: a v1 file, whose pairing this
+        # house no longer speaks (pairing.py, "Versions"). Not retried as
+        # a connection; the request shows why until it expires.
+        reason = str(e)[:200]
+        if row["last_error"] != reason:
+            async with _db() as s:
+                await store.update_request(s, row["id"], last_error=reason)
+        return False
     try:
         r, w = await fc.open_stream(_service().socks_path(), onion=f.pairing_address)
         code = await fp.ask(r, w, file=f, keys=keys, statement=hello.statement,
@@ -330,7 +341,7 @@ async def on_request(event: dict[str, Any]) -> None:
     except (KeyError, ValueError, TypeError):
         log.warning("Friend Houses: a malformed request event was dropped")
         return
-    if statement is None or len(reach_private) != 32 or not (len(code) == 4 and code.isdigit()):
+    if statement is None or len(reach_private) != 32 or not fp.is_code(code):
         log.warning("Friend Houses: a request event failed its checks and was dropped")
         return
     from domovoi.friend_houses import blocking
@@ -619,11 +630,14 @@ async def announce_held() -> int:
 
 async def recent_changes(days: int = 7) -> list[dict[str, Any]]:
     """Trust changes of the last week, newest first, for the dashboard's
-    and the phones' notice: new friends and lists shared with a friend."""
+    and the phones' notice: new friends, lists shared with a friend, and
+    friends an admin turned "Apps with this friend" on for (§6.11)."""
     async with _db() as s:
         rows = (await s.execute(text(
             "SELECT 'friend' AS kind, local_name, NULL AS list, added_at FROM friend_houses_friends "
             "WHERE added_at > now() - make_interval(days => :d) "
+            "UNION ALL SELECT 'apps', local_name, NULL, apps_on_at FROM friend_houses_friends "
+            "WHERE apps_on AND state = 'active' AND apps_on_at > now() - make_interval(days => :d) "
             "UNION ALL SELECT 'shared_list', f.local_name, sp.title, sp.created_at "
             "FROM friend_houses_spaces sp JOIN friend_houses_friends f ON f.id = sp.friend_id "
             "WHERE sp.origin = 'us' AND sp.state = 'active' "
@@ -648,7 +662,8 @@ async def list_requests() -> list[dict[str, Any]]:
              "their_name": r["their_name"], "name": r["local_name"],
              "fingerprint": fid.fingerprint(r["house_key"]), "code": r["code"],
              "created_at": r["created_at"].isoformat(), "expires_at": r["expires_at"].isoformat(),
-             "trying": r["direction"] == "out" and r["state"] == "unsent" and bool(r["friend_file"]),
+             "trying": r["direction"] == "out" and r["state"] == "unsent"
+             and bool(r["friend_file"]) and r["last_error"] != ff.OLD_FILE,
              "last_error": r["last_error"]} for r in rows]
 
 
@@ -665,14 +680,23 @@ async def rename(friend_id: str, local_name: str) -> bool:
 async def unfriend(friend_id: str) -> bool:
     """Remove a friend. The listener refuses it from the next connection;
     Tor's key is withdrawn at the next (batched) reload."""
+    from domovoi.friend_houses import plugin_mail
+
     async with _db() as s:
+        # The row is deleted below: lock it FOR UPDATE first, so the delete
+        # is never an upgrade (plugin_mail's lock order).
+        await plugin_mail.lock_friend_for_delete(s, friend_id)
         row = await store.friend(s, friend_id)
+        # Apps with friends (§6.9): the closure in the same transaction; the
+        # friend row's delete then cascades to its pairs, mail and sender.
+        pairs = await plugin_mail.close_pairs(s, friend_id=friend_id) if row is not None else []
         done = await store.delete_friend(s, friend_id)
         if done and row is not None:
             # An accept still waiting to be delivered goes too (R6 FH-11).
             await store.delete_requests_for(s, row.house_key)
     if done:
         log.warning("Friend Houses: a friend house was removed")
+        await plugin_mail.after_close(pairs)
         await _service().reconcile()
     return done
 

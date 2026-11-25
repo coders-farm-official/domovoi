@@ -793,6 +793,26 @@ static partial class Tests
             }
             True(QrReference.Cases.Length >= 3, "cases");
         });
+        Run("setup-code qr: the code in the fragment only, on a LAN address only", delegate
+        {
+            const string code = "amber-anchor-aspen-aster-bank-barn-bay-bell";
+            string url = Domovoi.Windows.Helper.SetupQr.ClaimUrl("192.168.1.30", code);
+            Eq("http://192.168.1.30:6369/#setup-code=" + code, url, "the payload");
+            var u = new Uri(url);
+            True(u.AbsolutePath == "/" && u.Query == "", "nothing in the path or the query");
+            Eq("#setup-code=" + code, u.Fragment, "the fragment");
+            Eq(null, Domovoi.Windows.Helper.SetupQr.ClaimUrl("127.0.0.1", code), "not loopback");
+            Eq(null, Domovoi.Windows.Helper.SetupQr.ClaimUrl("0.0.0.0", code), "not any");
+            Eq(null, Domovoi.Windows.Helper.SetupQr.ClaimUrl("fe80::1", code), "IPv4 only");
+            Eq(null, Domovoi.Windows.Helper.SetupQr.ClaimUrl("", code), "no address");
+            Eq(null, Domovoi.Windows.Helper.SetupQr.ClaimUrl("auto", code), "not a word");
+            Eq(null, Domovoi.Windows.Helper.SetupQr.ClaimUrl("192.168.1.30", "amber-anchor#x"), "not a code");
+            QrCode q = Domovoi.Windows.Helper.SetupQr.Encode(url);
+            string bits = Domovoi.Windows.Helper.SetupQr.Bits(q);
+            Eq(q.Size * q.Size, bits.Length, "one character a module");
+            Eq(q.Text().Replace("\n", "").Replace('#', '1').Replace('.', '0'), bits, "row by row, 1 dark");
+            True(q.Size <= 45, "small enough for Setup's page");
+        });
     }
 
     // -- the rest ----------------------------------------------------------

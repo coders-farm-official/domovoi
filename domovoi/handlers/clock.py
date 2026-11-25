@@ -146,6 +146,8 @@ class ClockHandler(Handler):
     name = "clock"
     # band rationale: utility cluster; no known collisions.
     priority_band = 170
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Clock", tone="info")
     example_phrases = (
         "what time is it",

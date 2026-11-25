@@ -66,8 +66,26 @@ from __future__ import annotations
 #         answer, read raw with no total cap (a live stream).
 # 1.14.0: "needs AI": Handler.needs_ai / FastPath.needs_ai and the
 #         manifest's [[handlers]] needs_ai and [ai] table (does, routes):
-#         off with the household's AI switch, answered by core.
-API_VERSION = "1.14.0"
+#         off with the household's AI switch, answered by core. (Released
+#         with Domovoi 1.4.1; next's 1.14-1.18 moved up one at the merge.)
+# 1.15.0: [[web.home_cards]]: a plugin card on the dashboard's Home page
+#         (window.DomovoiPlugins.<slug>.homeCards.<Component>).
+# 1.16.0: playback.player_route(room_id): how a room's music player reaches
+#         the core and the address it calls from (the radio relay).
+# 1.17.0: playback.relay_url(room_id, remote_url, kind="file"|"radio") and
+#         playback.relay_target(url): a room's player plays a remote URL
+#         through the core's checked relay (GET /v1/player-relay/<token>).
+# 1.18.0: the event core.voice_history_deleted {person_id} (None = all of
+#         it), after a person's voice history or all of it is deleted, and
+#         core_config.voice_history_keep: the hook any plugin keeping
+#         person-linked data must honour (security review M8).
+# 1.19.0: sdk.friend_houses (apps with friends, [permissions] friend_houses):
+#         friends(), send_mail(), on_mail(handler, schema),
+#         on_friends_changed(); FriendText, friend_sentence, friend_reply and
+#         per-plugin friend ids; send_image() and FriendImage (a friend's
+#         picture as the core's own PNG); every reply of a friend_houses
+#         plugin's handlers filtered for speech, a stand-in in the history.
+API_VERSION = "1.19.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -103,11 +121,20 @@ from domovoi.sdk.facade import (  # noqa: E402,F401
     PluginSDK,
     build_sdk,
 )
+from domovoi.sdk.friend_houses import (  # noqa: E402,F401
+    FriendHouse,
+    FriendHousesAPI,
+    FriendImage,
+    FriendText,
+    friend_reply,
+    friend_sentence,
+)
 from domovoi.sdk.household import HouseholdAPI, PlacesAPI  # noqa: E402,F401
 from domovoi.sdk.http import HttpFactory  # noqa: E402,F401
 from domovoi.sdk.library import LibraryAPI, LibraryTrack  # noqa: E402,F401
 from domovoi.sdk.observability import get_logger  # noqa: E402,F401
 from domovoi.sdk.playback import PlaybackAPI  # noqa: E402,F401
+from domovoi.player_relay import RelayUnavailable  # noqa: E402,F401
 from domovoi.sdk.realtime import RealtimeAPI  # noqa: E402,F401
 from domovoi.sdk.sessions import SessionAPI  # noqa: E402,F401
 from domovoi.plugin_http import device_endpoint, open_endpoint  # noqa: E402,F401
@@ -159,6 +186,12 @@ __all__ = [
     "CoreConfigView",
     "EventsView",
     "FastPath",
+    "FriendHouse",
+    "FriendHousesAPI",
+    "FriendImage",
+    "FriendText",
+    "friend_reply",
+    "friend_sentence",
     "Handler",
     "HandlerDisplay",
     "HouseholdAPI",

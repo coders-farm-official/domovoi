@@ -160,6 +160,19 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ),
     ("web", "DELETE", "/api/auth/sessions/{token_hash}"): "checks the Bearer inside the handler",
     ("web", "POST", "/api/auth/password"): "checks the Bearer inside the handler",
+    ("web", "POST", "/api/auth/phone-grant"): (
+        "checks the household token, an admin Bearer and a password sign-in in the "
+        "last 5 minutes inside the handler (test_phone_grants.py)"
+    ),
+    ("web", "POST", "/api/auth/phone-grant/exchange"): (
+        "IS the auth surface — household token + the grant, behind the login backoff "
+        "(test_phone_grants.py)"
+    ),
+    ("web", "POST", "/api/auth/phone-grant/revoke"): (
+        "holding the grant IS the credential; it can only delete that grant, and the "
+        "answer is the same whether or not it existed (test_phone_grants.py)"
+    ),
+    ("web", "DELETE", "/api/auth/phone-grants/{grant_id}"): "checks the Bearer inside the handler",
     # ── web: proxies whose gate is applied by the core (auth forwarded) ─
     ("web", "POST", "/api/plugins/install"): "proxy — core require_admin (fail-closed) gates it",
     ("web", "POST", "/api/plugins/install/{staged_id}/confirm"): "proxy — core require_admin gates it",
@@ -167,6 +180,7 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "POST", "/api/plugins/{slug}/disable"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/plugins/{slug}/uninstall"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/plugins/{slug}/upgrade"): "proxy — core require_admin gates it",
+    ("web", "POST", "/api/plugins/updates/check"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/music/add-by-url"): "proxy — core check_outbound_fetch gates it",
     # The document editor's "Download → Word" (editors v1, 2026-10-27):
     # a POST only because the editor's content is the body; nothing is
@@ -339,6 +353,22 @@ SECURITY_TIER_ROUTES = [
     # "Delete all listening history" (V051, Up next P1, 2026-11-12):
     # everyone's songs, the household's too, like "Delete all voice history".
     ("web", "POST", "/api/music/listens/delete-all"),
+    # Satellite support sessions (1.5.0): opening a shell and turning the
+    # per-satellite switch ON (each also needs a password sign-in within
+    # 5 minutes, checked inside), and deleting transcripts.
+    ("core", "POST", "/v1/admin/satellites/{satellite_id}/support/allow"),
+    ("core", "POST", "/v1/admin/satellites/{satellite_id}/support/open"),
+    ("core", "DELETE", "/v1/admin/support-sessions/{session_id}"),
+    ("core", "DELETE", "/v1/admin/support-sessions"),
+    ("web", "POST", "/api/satellites/{satellite_id}/support/allow"),
+    ("web", "POST", "/api/satellites/{satellite_id}/support/open"),
+    ("web", "DELETE", "/api/support-sessions/{session_id}"),
+    ("web", "DELETE", "/api/support-sessions"),
+    # The house identity backup (1.5.0, S3-4): this server's private key.
+    # Each hop also needs a password sign-in within 5 minutes, and the core
+    # the password typed again (checked inside).
+    ("core", "POST", "/v1/admin/server-identity/backup"),
+    ("web", "POST", "/api/config/server-identity/backup"),
 ]
 
 
@@ -540,7 +570,54 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
         "a device's Up next: the songs it will play next and the person whose "
         "taste the mix follows"
     ),
+    # Faces and people (1.5.0, owner 2026-11-22): who is in which photo is
+    # the most sensitive thing the house keeps; guests get nothing (and
+    # shared screens are refused inside, test_media_faces.py).
+    ("web", "/api/faces/status"): "whether faces are on, and how many faces and people",
+    ("web", "/api/faces/people"): "the people with faces, and the unnamed groups",
+    ("web", "/api/faces/hidden"): "the hidden (strangers') groups; admin inside",
+    ("web", "/api/faces/groups/{group_id}"): "one group's faces: which photos, where in them",
+    ("web", "/api/faces/people/{person_id}/items"): "every photo and video a person is in",
+    ("web", "/api/faces/denylist"): "the forgotten faces' ids and dates; admin inside",
 }
+
+# Faces training (1.5.0): every write is the device tier at the gate, with
+# the admin-only cases (named people's merge and split, unhide, forget for
+# anyone but yourself) checked inside; guests never get past the gate.
+FACES_DEVICE_WRITES = [
+    ("POST", "/api/faces/groups/{group_id}/name"),
+    ("POST", "/api/faces/groups/{group_id}/hide"),
+    ("POST", "/api/faces/face/{face_id}/confirm"),
+    ("POST", "/api/faces/face/{face_id}/not-this-person"),
+    ("POST", "/api/faces/merge"),
+    ("POST", "/api/faces/split"),
+    ("POST", "/api/faces/people/{person_id}/forget"),
+    ("DELETE", "/api/faces/denylist/{entry_id}"),           # admin inside
+]
+
+
+@pytest.mark.parametrize(("method", "path"), FACES_DEVICE_WRITES,
+                         ids=[f"web {m} {p}" for m, p in FACES_DEVICE_WRITES])
+def test_faces_writes_are_the_device_tier_and_refuse_shared_screens(method, path) -> None:
+    from web.backend.api import faces as faces_api
+
+    by_key = {(a, m, p): d for a, m, p, d in ROUTES}
+    assert ("web", method, path) in by_key, f"web {method} {path} is missing"
+    calls = list(_dependency_calls(by_key[("web", method, path)]))
+    assert admin_auth.require_device in calls, f"web {method} {path} must wear require_device"
+    assert faces_api.refuse_shared_screen in calls
+
+
+def test_every_faces_route_is_on_a_faces_list() -> None:
+    from web.backend.api import faces as faces_api
+
+    reads = {p for (a, p) in HOUSEHOLD_STATE_READS if p.startswith("/api/faces")}
+    writes = {p for _m, p in FACES_DEVICE_WRITES}
+    for app_label, method, path, dep in ROUTES:
+        if app_label != "web" or not path.startswith("/api/faces"):
+            continue
+        assert path in (reads if method == "GET" else writes), f"{method} {path} is on no faces list"
+        assert faces_api.refuse_shared_screen in list(_dependency_calls(dep)), path
 
 # Up next's writes (V053, phase P3): the household device tier, never the
 # guest gate (a guest has no Up next) nor an admin-only one.
@@ -892,3 +969,76 @@ def test_radio_opens_nothing_to_the_whole_lan() -> None:
 
     opened = [k for k, fn in _radio_mutations().items() if is_open_endpoint(fn)]
     assert opened == []
+
+
+# ─── Satellite support sessions (1.5.0) ───────────────────────────────────
+# Opening and turning the switch on are security tier (above). Turning it
+# OFF only removes power: any admin. Ending one only removes power too:
+# any paired household device (owner answer 6, 22 Nov). The banner's read
+# is the household tier (owner answer 8); the audit list and transcripts
+# are security-tier reads, Bearer only, like the command recordings.
+
+SUPPORT_ADMIN_WRITES = [
+    ("core", "POST", "/v1/admin/satellites/{satellite_id}/support/disallow"),
+    ("web", "POST", "/api/satellites/{satellite_id}/support/disallow"),
+]
+SUPPORT_DEVICE_WRITES = [
+    ("core", "POST", "/v1/admin/support-sessions/{session_id}/end"),
+    ("web", "POST", "/api/support-sessions/{session_id}/end"),
+]
+SUPPORT_SECURITY_READS = [
+    ("core", "/v1/admin/support-sessions"),
+    ("core", "/v1/admin/support-sessions/{session_id}/transcript"),
+    ("web", "/api/support-sessions"),
+    ("web", "/api/support-sessions/{session_id}/transcript"),
+    ("web", "/api/support-sessions/{session_id}/transcript.cast"),
+]
+SUPPORT_HOUSEHOLD_READS = [
+    ("core", "/v1/admin/support-sessions/active"),
+    ("web", "/api/support-sessions/active"),
+]
+
+
+@pytest.mark.parametrize(("label", "method", "path"), SUPPORT_ADMIN_WRITES)
+def test_turning_support_sessions_off_takes_any_admin(label, method, path) -> None:
+    by_key = {(a, m, p): d for a, m, p, d in ROUTES}
+    calls = list(_dependency_calls(by_key[(label, method, path)]))
+    assert admin_auth.require_admin_mutation in calls
+    assert admin_auth.require_device not in calls
+
+
+@pytest.mark.parametrize(("label", "method", "path"), SUPPORT_DEVICE_WRITES)
+def test_any_household_device_may_end_a_support_session(label, method, path) -> None:
+    by_key = {(a, m, p): d for a, m, p, d in ROUTES}
+    calls = list(_dependency_calls(by_key[(label, method, path)]))
+    assert admin_auth.require_device in calls
+
+
+@pytest.mark.parametrize(("label", "path"), SUPPORT_SECURITY_READS)
+def test_support_transcripts_are_security_tier_reads(label, path) -> None:
+    calls = _get_gates((label, path))
+    assert admin_auth.require_admin_security_read in calls
+    for weaker in (admin_auth.require_device_read, admin_auth.require_device,
+                   admin_auth.require_admin_read):
+        assert weaker not in calls
+
+
+@pytest.mark.parametrize(("label", "path"), SUPPORT_HOUSEHOLD_READS)
+def test_the_support_banner_is_a_household_read(label, path) -> None:
+    assert admin_auth.require_device_read in _get_gates((label, path))
+
+
+# ─── Media understanding search (1.5.0, slice 2) ──────────────────────────
+# What is in the family's photos and videos (captions, the words on a
+# letter in a picture) is household content: paired devices only, like
+# the history, never an open page.
+
+MEDIA_HOUSEHOLD_READS = [
+    ("web", "/api/media/search"),
+    ("web", "/api/media-understanding"),
+]
+
+
+@pytest.mark.parametrize(("label", "path"), MEDIA_HOUSEHOLD_READS)
+def test_media_understanding_reads_are_household_reads(label, path) -> None:
+    assert admin_auth.require_device_read in _get_gates((label, path))

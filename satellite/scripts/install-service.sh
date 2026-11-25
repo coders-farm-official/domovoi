@@ -2,7 +2,8 @@
 # Render + install the Domovoi satellite systemd units for the CURRENT user
 # (replaces the PROVISIONING.md §8 heredoc). Installs:
 #   domovoi-satellite.service       (always)
-#   domovoi-provisioning.service    (--with-provisioning: USB adoption mode)
+#   domovoi-provisioning.service    (--with-provisioning: USB adoption mode,
+#                                    run from root's own copy of the code)
 #   domovoi-kiosk.service           (--with-kiosk: video satellites)
 #
 # Usage:  sudo -E sh satellite/scripts/install-service.sh [--with-provisioning] [--with-kiosk]
@@ -27,7 +28,10 @@ UNITS="domovoi-satellite"
 for arg in "$@"; do
   case "$arg" in
     --with-provisioning)
-      render "$HERE/scripts/domovoi-provisioning.service" domovoi-provisioning.service
+      # Root runs its OWN copy of the code (satellite/root_code.py): this
+      # installs it, the XVF3800 wrapper and the unit, all root's, with the
+      # system Python from the checkout's root.
+      (cd "$HERE/.." && /usr/bin/python3 -E -s -m satellite.root_code switch "$USER_NAME")
       UNITS="$UNITS domovoi-provisioning"
       ;;
     --with-kiosk)

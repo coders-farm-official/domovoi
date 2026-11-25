@@ -66,8 +66,11 @@ SECRET = "remind me to call the pharmacy about my prescription"
 
 # asyncio schedules sleeps on time.monotonic(), which ticks every ~15.6 ms
 # on Windows before Python 3.13; a stage measured on perf_counter may come
-# in just under the sleep that drove it.
-SLACK_MS = 20
+# in just under the sleep that drove it. By up to TWO ticks: the deadline is
+# taken from a reading up to one tick stale, and the loop runs a timer one
+# clock resolution early (BaseEventLoop._clock_resolution). Seen: a 40 ms
+# sleep measured at 17 ms, a 30 ms one at 3 ms.
+SLACK_MS = max(20, int(2 * time.get_clock_info("monotonic").resolution * 1000) + 5)
 
 
 def _wav(pcm: bytes, sample_rate: int = 16_000) -> bytes:

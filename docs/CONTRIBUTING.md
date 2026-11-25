@@ -858,6 +858,17 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    commit raises `pyproject.toml`'s version and leaves
    `android/release.json` alone, and that GitHub has no tag
    `v<version>` yet.
+   Write the three **Highlights** (one line each, plain words, at most 80
+   characters, no Markdown) in `docs/release/v<version>.md` (`## Highlights`,
+   right above `## At a glance`) and under `### Highlights` in the release's
+   dated section of `docs/RELEASE_NOTES.md`, right after its first
+   paragraph. The owner approves them before the release workflow runs.
+   Houses show them in About & updates before they update (they read them
+   from git at the release's commit, with the parser the release script
+   uses, `domovoi/release_highlights.py`). From 1.5.0 the plan job and
+   finish-release refuse a release without them, or whose two copies
+   differ. **1.5.0 checklist:** 1.5.0 is the first release that ships
+   them: its three Highlights bullets, owner approves at release.
    Refresh the public status pages in the same commit: the README's
    "Status and roadmap" (**This release**, **Coming in**)
    and `docs/ROADMAP.md` (move what shipped out of **Now**, **Next** and
@@ -1085,7 +1096,9 @@ the story after. finish-release writes the page in this order:
    manual's page for a Raspberry Pi room; and for a house that has
    Domovoi already, Settings → System → About & updates → **Update
    Domovoi**.
-2. **What's new since <the previous release>** (finish-release writes the
+2. **Highlights** (from 1.5.0): the release's three, as `## Highlights`
+   with the three bullets of `docs/release/v<version>.md`.
+3. **What's new since <the previous release>** (finish-release writes the
    heading), then a **More detail** line linking the release's full notes
    (`docs/release/v<version>.md` at the tag) and its dated section of
    `docs/RELEASE_NOTES.md` at the tag (`## 2026-11-16 — 1.3.0`, anchor
@@ -1093,7 +1106,7 @@ the story after. finish-release writes the page in this order:
    `docs/release/v<version>.md` (yours), its `###` headings shown as `##`;
    or, without that file, a summary of the `docs/RELEASE_NOTES.md` entries
    since the previous tag.
-3. **Files and checksums** (finish-release writes it): how to check a
+4. **Files and checksums** (finish-release writes it): how to check a
    download (and its build provenance, from the release workflow), then,
    collapsed, every file with its SHA-256 and where the files come from.
 
@@ -1103,7 +1116,11 @@ detail link. Only its one `## At a glance` section goes on the page, so
 whatever else is in the file, Download stays first. That section starts
 with the highlights (a list), and its own headings are `###` and none of
 finish-release's (`Download`, `What's new…`, `Files`, `Files and
-checksums`, `Install or update`). The plan job and finish-release both
+checksums`, `Install or update`). From 1.5.0 it also has exactly one
+`## Highlights` right above `## At a glance`: exactly three `- ` items,
+8 to 80 characters each (Unicode code points: an emoji counts once), plain words (no `` ` * _ [ ] < > | # \ ``), the
+same three as the `### Highlights` of its dated section of
+`docs/RELEASE_NOTES.md`. The plan job and finish-release both
 refuse a file that isn't so (`release_doc_problems` in
 `scripts/release/finish_release.py`). The template:
 
@@ -1111,6 +1128,12 @@ refuse a file that isn't so (`release_doc_problems` in
 # Domovoi 1.4.0
 
 The intro: what this release is, in a paragraph.
+
+## Highlights
+
+- Three lines a household reads before it updates, one each.
+- Plain words, at most 80 characters, no Markdown or links.
+- The owner approves them before the release runs.
 
 ## At a glance
 

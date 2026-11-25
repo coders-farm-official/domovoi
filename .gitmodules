@@ -1,0 +1,27 @@
+[submodule "android/native/sherpa-onnx/src"]
+	path = android/native/sherpa-onnx/src
+	url = https://github.com/k2-fsa/sherpa-onnx
+[submodule "android/native/sherpa-onnx/deps/eigen"]
+	path = android/native/sherpa-onnx/deps/eigen
+	url = https://gitlab.com/libeigen/eigen.git
+[submodule "android/native/sherpa-onnx/deps/json"]
+	path = android/native/sherpa-onnx/deps/json
+	url = https://github.com/nlohmann/json
+[submodule "android/native/sherpa-onnx/deps/kaldi_decoder"]
+	path = android/native/sherpa-onnx/deps/kaldi_decoder
+	url = https://github.com/k2-fsa/kaldi-decoder
+[submodule "android/native/sherpa-onnx/deps/kaldi_native_fbank"]
+	path = android/native/sherpa-onnx/deps/kaldi_native_fbank
+	url = https://github.com/csukuangfj/kaldi-native-fbank
+[submodule "android/native/sherpa-onnx/deps/kaldifst"]
+	path = android/native/sherpa-onnx/deps/kaldifst
+	url = https://github.com/k2-fsa/kaldifst
+[submodule "android/native/sherpa-onnx/deps/kissfft"]
+	path = android/native/sherpa-onnx/deps/kissfft
+	url = https://github.com/mborgerding/kissfft
+[submodule "android/native/sherpa-onnx/deps/openfst"]
+	path = android/native/sherpa-onnx/deps/openfst
+	url = https://github.com/csukuangfj/openfst
+[submodule "android/native/sherpa-onnx/deps/simple-sentencepiece"]
+	path = android/native/sherpa-onnx/deps/simple-sentencepiece
+	url = https://github.com/pkufool/simple-sentencepiece

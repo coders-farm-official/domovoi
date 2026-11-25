@@ -17,6 +17,20 @@ code for a phone. Both carry the same **enrolment payload**, a URI:
   (``SHA256:`` + 43 characters of unpadded standard base64).
 * ``room`` — the room name as the admin typed it (at most 64 characters).
   The device derives the room id it connects as with :func:`room_id_for`.
+* ``in`` (optional, 1.5.0) — the id of an existing room the device joins
+  as one more satellite ("Add a satellite to the Kitchen": ``room=Kitchen
+  2&in=kitchen``). ``room`` then names the device, and its id is the
+  device's id. The device sends it in its hello as ``requested_room``; the
+  approval card pre-selects that room. Optional and backward compatible:
+  a parser that predates it ignores it (unknown keys are ignored) and the
+  device joins as the room ``kitchen_2``, which the server still files
+  under the Kitchen on approval. A value that is not a room id the core
+  accepts from outside (:data:`IN_ROOM_RE`, ``domovoi/room_ids.py``
+  ``is_room_id``: lowercase letters, digits, ``_`` and ``-``, starting with
+  a letter or digit, at most 32 characters) is ignored the same way. That
+  rule, not :data:`ROOM_ID_RE`: a room the Wi-Fi setup portal named
+  (``living-room``, ``2nd-bedroom``) is a room like any other and can be
+  joined.
 
 Every value is percent-encoded UTF-8. **The payload carries no secret**: a
 device enrolled with it still has to be approved through the strict
@@ -80,6 +94,11 @@ _FP_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}\Z")
 #: The core's own room-id rule (domovoi/main.py ``_ROOM_ID_RE``, the USB
 #: adoption form's): every id this module makes matches it.
 ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
+#: ``in=``: the id of an EXISTING room, which may be older than the rule
+#: above (the Wi-Fi setup portal's slugs start with a digit or carry dashes).
+#: The core's rule for a room id from outside (domovoi/room_ids.py
+#: ``ACCEPTED_RE``), mirrored here because a Pi doesn't carry ``domovoi/``.
+IN_ROOM_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}\Z")
 #: Put in front of an id that would start with a digit ("2nd Bedroom").
 ROOM_ID_DIGIT_PREFIX = "room_"
 #: The home network, for the core address (``is_home_network_host``):
@@ -130,12 +149,23 @@ class Enrolment:
     fp: str
     room: str
     room_id: str
+    #: ``in=``: the existing room this device joins (None: a room of its own).
+    in_room: str | None = None
 
     def to_json(self) -> dict[str, str]:
-        return asdict(self)
+        d = asdict(self)
+        if d.get("in_room") is None:
+            d.pop("in_room", None)   # the shared fixture's shape, unchanged
+        return d
 
 
 # ─── the room id ──────────────────────────────────────────────────────────
+
+def is_in_room(value: object) -> bool:
+    """Whether ``value`` may name the room a device joins (``in=``, the
+    hello's ``requested_room``): :data:`IN_ROOM_RE`."""
+    return isinstance(value, str) and IN_ROOM_RE.fullmatch(value) is not None
+
 
 def room_id_for(name: str) -> str:
     """The room id a device enrolled as ``name`` connects as — always one
@@ -424,10 +454,14 @@ def _parse_payload(text: str) -> Enrolment:
             "bad_fp", "the fingerprint must be SHA256: and 43 base64 characters"
         )
     room = check_room_name(fields["room"])
-    return Enrolment(core=core, ws_url=ws_url, fp=fp, room=room, room_id=room_id_for(room))
+    in_room = fields.get("in")
+    if not is_in_room(in_room):
+        in_room = None
+    return Enrolment(core=core, ws_url=ws_url, fp=fp, room=room, room_id=room_id_for(room),
+                     in_room=in_room)
 
 
-def build(core: str, fp: str, room: str) -> str:
+def build(core: str, fp: str, room: str, in_room: str | None = None) -> str:
     """The payload for these values, every value percent-encoded (RFC 3986
     unreserved characters only left as they are). Trims what a person
     typed (the room name, the address), then validates exactly what
@@ -437,9 +471,14 @@ def build(core: str, fp: str, room: str) -> str:
     if not _FP_RE.match(fp):
         raise EnrolmentError("bad_fp", "the fingerprint must be SHA256: and 43 base64 characters")
     name = check_room_name(room.strip())
+    tail = ""
+    if in_room is not None:
+        if not is_in_room(in_room):
+            raise EnrolmentError("bad_room", f"{in_room!r} is not a room id")
+        tail = f"&in={in_room}"
     return (
         f"{SCHEME}:{VERSION}?core={_encode(core_norm)}"
-        f"&fp={_encode(fp)}&room={_encode(name)}"
+        f"&fp={_encode(fp)}&room={_encode(name)}{tail}"
     )
 
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Settings' groups and sections, as pure data: the five group labels and the
-/// seventeen sections with their keys, labels, one-line descriptions, search
+/// eighteen sections with their keys, labels, one-line descriptions, search
 /// words, old keys and dashboard addresses.
 ///
 /// A port of `SettingsSection` and `SettingsGroup` in
@@ -96,7 +96,7 @@ public struct SettingsSection: Equatable, Sendable {
 
 public extension SettingsSection {
 
-    /// The seventeen sections, in the Kotlin's declaration order — which is
+    /// The eighteen sections, in the Kotlin's declaration order — which is
     /// the order they are listed in, so it is not incidental.
     static let all: [SettingsSection] = [
         SettingsSection(
@@ -134,6 +134,14 @@ public extension SettingsSection {
             sub: "Show this phone's calendars on the household calendar, read-only. Off until you turn it on.",
             words: "calendar calendars share sharing events google microsoft outlook samsung agenda"
         ),
+        // 1.5.0: admin on this phone (``AdminSession``), the Kotlin's words —
+        // "fingerprint or face" is Touch ID or Face ID here. Hidden on a
+        // shared screen, which never holds admin.
+        SettingsSection(
+            key: "admin-on-phone", label: "Admin on this phone", group: .household,
+            sub: "Sign in as the admin here, for an hour or for the rest of the day behind your fingerprint or face.",
+            words: "admin administrator sign in signin password fingerprint face biometric approve approvals day"
+        ),
         SettingsSection(
             key: "wake-words", label: "Wake words", group: .voice,
             sub: "The words that wake Domovoi: train your own, record clips in a room.",
@@ -169,10 +177,24 @@ public extension SettingsSection {
             words: "internet online offline network web",
             dashboard: "internet"
         ),
+        // How long the house keeps what was said (1.5.0), read-only: an
+        // admin changes it on the dashboard (``KeepVoiceHistory``).
         SettingsSection(
-            key: "voice-history", label: "Voice history", group: .privacy,
+            key: "keep-voice-history", label: "Keep voice history", group: .privacy,
+            sub: "How long what people say to Domovoi, and what it answered, is kept.",
+            words: "voice history keep kept retention how long days year forever conversations sessions said transcript privacy delete"
+        ),
+        // "Voice history" until 1.5.0: it is the opt-in command recordings
+        // (the dashboard's Settings → Privacy → Command recordings). Its old
+        // keys still land here (`SettingsScreen.kt` CommandRecordings). The
+        // dashboard is opened at `recordings`, the address every dashboard
+        // version understands: a 1.4.x dashboard has no `command-recordings`,
+        // and a 1.5.0 one redirects `recordings` to it.
+        SettingsSection(
+            key: "command-recordings", label: "Command recordings", group: .privacy,
             sub: "Commands kept from the rooms an admin opted in — reviewed on the dashboard.",
-            words: "recordings voice history captures commands kept privacy",
+            words: "command commands recordings recording captures kept audio privacy tuning",
+            aliases: ["voice-history", "recordings"],
             dashboard: "recordings"
         ),
         SettingsSection(
@@ -211,7 +233,7 @@ public extension SettingsSection {
     /// things, as ``sharedScreenHidden`` leaves People off every launcher
     /// (`SharedScreenHiddenSections`, `SettingsScreen.kt:176-181`).
     /// Presentational, like the rest of the shared view.
-    static let sharedScreenHiddenKeys: Set<String> = ["people", "phone-calendars"]
+    static let sharedScreenHiddenKeys: Set<String> = ["people", "phone-calendars", "admin-on-phone"]
 
     /// Whether this section is listed on a phone that is (or is not) a shared
     /// screen (`shownOn`).

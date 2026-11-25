@@ -1,6 +1,7 @@
 import AppKit
 import DomovoiMacKit
 import Foundation
+import UniformTypeIdentifiers
 
 /// The setup pages' state (mac-installer PLAN 5): the check, the list of
 /// changes, the questions, then the work, which the root helper does after
@@ -37,6 +38,11 @@ final class SetupModel: ObservableObject {
     /// The finished page's word when provision.sh couldn't download the
     /// phone app (its final line's "phone_app" false); nil otherwise.
     @Published var phoneAppNote: String?
+    /// "Restore from a backup" (the media page; S3-4): the house identity
+    /// backup's bytes, read once when chosen, and what it says of itself.
+    @Published var identityData: Data?
+    @Published var identitySummary: IdentityBackup.Summary?
+    @Published var identityError: String?
     @Published var busy = false
     @Published var workTitle = "Installing Domovoi"
     @Published var uninstallMessage = ""
@@ -87,6 +93,9 @@ final class SetupModel: ObservableObject {
                 self.report = rep
                 if rep.installState == "installed" { self.page = .installed; self.startMenuBarIcon(); return }
                 self.page = .check
+                // From a kit Domovoi runs its own Ollama (the models come off
+                // the stick into it), so the household's is never used then.
+                if rep.kit?.ok == true { self.ollama = "own" }
                 self.conflictQueue = rep.conflicts.filter { !(self.ollama == "existing" && $0.ollamaVersion != nil) }
                 self.nextConflict()
             }
@@ -116,6 +125,12 @@ final class SetupModel: ObservableObject {
 
     var canContinue: Bool { report?.ok == true }
 
+    /// The offline kit this install or repair uses (the check found it and
+    /// it can be used), or nil: an install with internet. A kit that can't
+    /// be used stops a first install at the check page (its row is red); a
+    /// repair goes on without it, and the installed page says why.
+    var kit: KitReport? { report?.kit?.ok == true ? report?.kit : nil }
+
     /// The consent page's power-failure option: behind its feature gate, and
     /// never on a laptop (Preflight: a built-in battery counts as one).
     var offerPowerFailure: Bool { SetupOffers.powerFailure(gate: FeatureGates.startAfterPowerFailure, report: report) }
@@ -132,13 +147,24 @@ final class SetupModel: ObservableObject {
             let dir = try makeWorkDir()
             var answersFile: String?
             if !repair {
+                // The backup goes to the helper as a file of this account's,
+                // 0600 in its private work folder (IdentityBackup.read).
+                var restore: String?
+                if let id = identityData, report?.installState != "kept" {
+                    let f = dir.appendingPathComponent("identity.json")
+                    guard FileManager.default.createFile(atPath: f.path, contents: id, attributes: [.posixPermissions: 0o600]) else {
+                        throw HelperError("Setup couldn't hand the house identity backup over")
+                    }
+                    restore = f.path
+                }
                 let answers = SetupAnswers(internet: internet ?? "never", mediaRoot: mediaRoot, ollama: ollama, keepAwake: keepAwake,
-                                           startAfterPowerFailure: offerPowerFailure ? startAfterPowerFailure : nil)
+                                           startAfterPowerFailure: offerPowerFailure ? startAfterPowerFailure : nil, restoreIdentity: restore)
                 let f = dir.appendingPathComponent("answers.json")
                 try JSONEncoder().encode(answers).write(to: f)
                 answersFile = f.path
             }
-            let args = SetupCommands.install(forUID: getuid(), codeTo: dir.appendingPathComponent("code").path, answersFile: answersFile)
+            let args = SetupCommands.install(forUID: getuid(), codeTo: dir.appendingPathComponent("code").path, answersFile: answersFile,
+                                             kit: kit?.root)
             steps = InstallSteps.rows(speech: packageHasSpeechService).map { StepRow(id: $0.id, label: $0.label, state: "waiting") }
             detail = "Waiting for an administrator's password..."
             page = .working
@@ -363,6 +389,43 @@ final class SetupModel: ObservableObject {
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Picks the house identity backup the dashboard downloaded (Settings >
+    /// About & updates). Checked for shape here, so a wrong file is caught
+    /// now and not after a long install; the core checks the key itself.
+    func chooseIdentityBackup() {
+        let p = NSOpenPanel()
+        p.canChooseFiles = true
+        p.canChooseDirectories = false
+        p.allowsMultipleSelection = false
+        p.allowedContentTypes = [.json]
+        p.message = "Choose the house identity backup (domovoi-house-identity.json)"
+        p.prompt = "Restore This Backup"
+        guard p.runModal() == .OK, let u = p.url else { return }
+        identityError = nil
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: u.path)
+            if let n = attrs[.size] as? Int, n > IdentityBackup.maxBytes { throw HelperError("this file is far too large to be a house identity backup") }
+            let data = try Data(contentsOf: u)
+            switch IdentityBackup.check(data) {
+            case .success(let sum):
+                identityData = data
+                identitySummary = sum
+            case .failure(let e):
+                throw e
+            }
+        } catch {
+            identityData = nil
+            identitySummary = nil
+            identityError = "\(error is HelperError ? "\(error)" : error.localizedDescription)"
+        }
+    }
+
+    func forgetIdentityBackup() {
+        identityData = nil
+        identitySummary = nil
+        identityError = nil
     }
 
     func chooseMediaFolder() {

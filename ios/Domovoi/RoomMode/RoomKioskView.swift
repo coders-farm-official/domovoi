@@ -257,7 +257,7 @@ struct RoomKioskView<Footer: View>: View {
 
     private func topRow(_ s: RoomDisplayModel.State, _ c: RoomPalette) -> some View {
         RoomTopRow(
-            label: model.label, compact: s.compact, palette: c,
+            label: model.label, whereLine: model.whereLine, compact: s.compact, palette: c,
             micOpen: model.micOpen, micLive: model.micLive, muted: model.muted
         )
     }
@@ -281,6 +281,10 @@ struct RoomKioskView<Footer: View>: View {
         let hasTimers = !s.timers.isEmpty || s.nextAlarm != nil
         return VStack(spacing: gap) {
             if withRinging, let r = s.ringing { ringingCard(r, s, c) }
+            // Results someone just asked for come first after a ringing timer.
+            if let media = s.media {
+                RoomMediaCard(media: media, compact: s.compact, palette: c, loadImage: { path in await model.art(path) })
+            }
             if s.timersFirst && hasTimers { RoomTimersCard(state: s, palette: c) }
             if let np = s.nowPlaying {
                 RoomNowPlayingCard(

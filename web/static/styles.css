@@ -225,6 +225,9 @@ a.nav-item, a.nav-item:hover { text-decoration: none; }
 .guard-banner-warn { background: linear-gradient(var(--warn-soft), var(--warn-soft)), var(--surface); border-bottom-color: var(--warn); }
 .guard-banner-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .guard-banner-actions { display: flex; align-items: center; gap: 12px; flex: none; }
+/* A satellite support session is open (support_session.jsx): the magenta
+   of the room's light (#FF00C8), so the banner and the room agree. */
+.support-banner { background: linear-gradient(color-mix(in oklab, #FF00C8 14%, transparent), color-mix(in oklab, #FF00C8 14%, transparent)), var(--surface); border-bottom-color: #FF00C8; }
 .guard-banner-link { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
 .guard-banner-ack { padding: 2px 8px; font-size: 12px; }
 /* What a page scrolls into view lands below the sticky banner, not under
@@ -1770,6 +1773,9 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 .home-pair { display: flex; gap: 20px; align-items: flex-start; }
 .home-pair > .home-sec { flex: 1 1 0; min-width: 0; }
 .home-sec { min-width: 0; }
+/* Plugin cards (SDK 1.13): quiet, so a slot whose cards all render nothing is gone. */
+.home-plugin-cards { display: flex; flex-direction: column; gap: 20px; }
+.home-plugin-cards:empty { display: none; }
 /* The everything grid is the phone's "more" menu; the desktop sidebar
    already lists every page. */
 .home-sec-everything { display: none; }
@@ -1829,6 +1835,18 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .home-att-acts { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .home-att-quiet { padding: 8px 16px; font-size: 12px; color: var(--fg-muted); }
 .home-att-foot { padding: 8px 16px 4px; border-top: 1px solid var(--border-soft); }
+/* A new release (update notices): the words wrap anywhere (a version
+   never splits from its line's start only because it can't fit), the muted
+   line under them, and an admin's Update, which never shrinks. Below 420 px
+   the button takes its own line, at the right. */
+.home-att-update .txt { overflow-wrap: anywhere; }
+.home-att-update-title { display: block; }
+.home-att-update-sub { display: block; font-size: 12px; color: var(--fg-muted); }
+.home-att-update .home-att-acts { flex: none; }
+.home-att-update .home-att-acts .btn { flex: none; }
+@media (max-width: 420px) {
+  .home-att-update .home-att-acts { flex-basis: 100%; justify-content: flex-end; }
+}
 
 /* timers */
 .home-timer {
@@ -1887,6 +1905,10 @@ a.home-att-row:hover { background: var(--brand-soft); }
   font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums;
 }
 .home-room-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+/* The photos-and-videos backlog chip (home.jsx HomeMediaChip): a link, so
+   it wraps on a phone rather than running off the edge. */
+.home-media-chip { height: auto; min-height: 22px; padding: 3px 10px; max-width: 100%; text-decoration: none; overflow-wrap: anywhere; }
+.home-media-chip:hover { color: var(--fg); border-color: var(--border-strong, var(--border)); }
 
 /* A chip is one line, always ("no room" used to break in two). */
 .home .room-chip { white-space: nowrap; }
@@ -1938,6 +1960,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .home-sec-rooms { order: 3; }
   .home-sec-announce { order: 4; }
   .home-sec-today { order: 5; }
+  .home-plugin-cards { order: 5; }
   .home-sec-everything { order: 6; }
 }
 @media (max-width: 760px) {
@@ -2011,6 +2034,18 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .chat-head-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-head-model { font-size: 11px; color: var(--fg-faint); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Private chats (1.5.0): who can see the open chat, and the share switch. */
+.chat-privacy { display: inline-flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
+.chat-privacy-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-muted);
+  background: var(--sunken); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px;
+  min-width: 0; max-width: 340px; }
+.chat-privacy-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-privacy-switch { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.chat-page.narrow .chat-privacy-text { display: none; }
+.chat-rail-scope { display: flex; gap: 4px; }
+.chat-rail-scope button { flex: 1; font-size: 11px; padding: 4px 6px; border: 1px solid var(--border);
+  border-radius: var(--r-sm); background: transparent; color: var(--fg-muted); cursor: pointer; }
+.chat-rail-scope button.on { background: var(--brand-soft); color: var(--fg); font-weight: 600; }
 /* The thread: overscroll stays in it (no pull-to-refresh mid-reply). */
 .chat-thread { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 14px; padding: 4px 2px; }
 .chat-composer {
@@ -2264,6 +2299,25 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-doc-job-line { flex: 1; min-width: 0; font-size: 11px; color: var(--fg-muted); }
 .chat-doc-job-bar { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .chat-doc-job-bar > span { display: block; height: 100%; background: var(--brand); transition: width .4s ease; }
+/* Photo and video results in chat (chat_media.jsx): a thumbnail grid that
+   fits a phone (no sideways scroll); captions are text, two lines at most. */
+.chat-media { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; min-width: 0; max-width: 100%; }
+.chat-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(132px, 42%), 1fr)); gap: 8px; min-width: 0; }
+.chat-media-card { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 0; margin: 0; text-align: left;
+  font: inherit; color: inherit; background: none; border: 0; cursor: pointer; border-radius: var(--r-sm); }
+.chat-media-card:focus-visible { outline: 2px solid var(--brand-ring); outline-offset: 2px; }
+.chat-media-frame { position: relative; display: block; }
+.chat-media-thumb { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--r-sm);
+  border: 1px solid var(--border); background: var(--sunken); }
+.chat-media-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--fg-faint); }
+.chat-media-card:hover .chat-media-thumb { box-shadow: var(--shadow-xs); }
+.chat-media-badge { position: absolute; right: 4px; bottom: 4px; font-size: 11px; line-height: 1; padding: 3px 6px;
+  border-radius: var(--r-sm); background: var(--overlay); color: var(--fg); border: 1px solid var(--border); }
+.chat-media-caption { font-size: 12px; line-height: 1.4; color: var(--fg-muted); overflow-wrap: anywhere; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.chat-media-date { font-size: 11px; color: var(--fg-faint); }
+.chat-media-more { font-size: 12px; color: var(--fg-faint); }
+
 /* Videos in chat (chat_videos.jsx): the attachment's progress, and what was kept. */
 .chat-video-chip { gap: 6px; min-width: min(300px, 100%); }
 .chat-video-kept { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; padding-top: 4px; border-top: 1px solid var(--border); }
@@ -2731,9 +2785,70 @@ table.qh-tbl td.mono, table.qh-tbl .qh-nowrap { white-space: nowrap; }
   table.qh-tbl .qh-clip { min-width: 140px; max-width: 180px; }
 }
 
+/* Media ▸ Photos and Faces (photos.jsx, 1.5.0). The grid's columns never
+   ask for more than the screen has (min(150px, 100%)), every name and
+   caption wraps (they are the household's files and a model's words), and
+   flex children may shrink: no horizontal scroll at a phone's 375px. */
+.photos-page { min-width: 0; }
+.photos-muted { color: var(--fg-muted); font-size: 12px; }
+.photos-wrap { overflow-wrap: anywhere; min-width: 0; }
+.photos-search { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.photos-search input { flex: 1 1 200px; min-width: 0; max-width: 100%; }
+.photos-kinds { display: flex; gap: 8px; flex-wrap: wrap; }
+.photos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 12px; }
+.photos-tile { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 0; text-align: left;
+  background: none; border: 0; color: var(--fg); font: inherit; cursor: pointer; }
+.photos-tile:focus-visible { outline: 2px solid var(--brand-ring); outline-offset: 2px; border-radius: var(--r-sm); }
+.photos-tile-img { position: relative; display: block; aspect-ratio: 1 / 1; border-radius: var(--r-sm);
+  border: 1px solid var(--border); background: var(--sunken); overflow: hidden; }
+.photos-tile-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.photos-tile-badge { position: absolute; left: 6px; bottom: 6px; display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 6px; border-radius: var(--r-sm); background: var(--card); color: var(--fg); font-size: 11px; }
+.photos-tile-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; }
+.photos-tile-cap { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.photos-people-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.photos-person-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 36px; padding: 4px 10px 4px 4px;
+  border: 1px solid var(--border); border-radius: 9999px; color: var(--fg); text-decoration: none; font-size: 13px; }
+.photos-person-chip .faces-crop { border-radius: 9999px; }
+.photos-scrim { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; padding: 16px; }
+.photos-details { width: min(640px, 100%); max-height: 100%; overflow-y: auto; background: var(--card);
+  border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-md), var(--inner-highlight); }
+.photos-details-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 12px 16px;
+  border-bottom: 1px solid var(--border-soft); }
+.photos-details-img { display: block; max-width: 100%; max-height: 60vh; margin: 0 auto; }
+.photos-details-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; font-size: 13px; min-width: 0; }
+.photos-found-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.faces-crop { display: inline-block; flex: 0 0 auto; border-radius: var(--r-sm); border: 1px solid var(--border);
+  background-color: var(--sunken); background-repeat: no-repeat; overflow: hidden; }
+.faces-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(130px, 100%), 1fr)); gap: 12px; }
+.faces-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; color: var(--fg); text-decoration: none; }
+.faces-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 12px; }
+.faces-face { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.faces-face-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.faces-face-label { display: block; }
+.faces-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.faces-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.faces-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.faces-name-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.faces-name-form input, .faces-name-form select { flex: 1 1 180px; min-width: 0; max-width: 100%; }
+.faces-person-head { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.faces-person-name { font-size: 18px; }
+@media (max-width: 760px) {
+  .photos-grid, .faces-grid { gap: 8px; }
+  .photos-search .btn, .photos-kinds .btn, .faces-face-acts .btn, .faces-row .btn, .faces-name-form .btn { min-height: 44px; }
+  .photos-search input, .faces-name-form input, .faces-name-form select { height: 44px; font-size: 16px; }
+  .photos-person-chip { min-height: 44px; }
+}
 /* A spinning icon (the Files page's "Preparing download…"). */
 @keyframes dv-spin { to { transform: rotate(360deg); } }
 .dv-spin { animation: dv-spin 1s linear infinite; }
 @media (prefers-reduced-motion: reduce) {
   .dv-spin { animation: none; }
 }
+
+/* Update notices (About & updates): a release's three highlights, as text. */
+.version-highlights { margin-top: 6px; }
+.version-highlights-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.version-highlights ul { margin: 4px 0 0; padding-left: 18px; color: var(--fg); }
+.version-highlights li { overflow-wrap: anywhere; line-height: 1.4; }

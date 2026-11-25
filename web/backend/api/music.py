@@ -38,6 +38,7 @@ from domovoi.room_ids import require_room_id_path
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
 from domovoi.cover_art_writer import cover_cache_file
 from domovoi.library_cover_version import cover_url
+from domovoi.player_relay import redact as redact_relay
 from web.backend.api import music_search, paging
 from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 from web.backend.api.paging import SortKey
@@ -2278,7 +2279,8 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
         except (TypeError, ValueError):
             duration_sec = None
         song_model = NowPlayingSong(
-            file=str(song_dict.get("file", "")),
+            # A relay entry's token is never in this open read (L23).
+            file=redact_relay(str(song_dict.get("file", ""))),
             title=song_dict.get("Title") or song_dict.get("title"),
             artist=song_dict.get("Artist") or song_dict.get("artist"),
             album=song_dict.get("Album") or song_dict.get("album"),

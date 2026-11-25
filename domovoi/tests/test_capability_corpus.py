@@ -214,7 +214,11 @@ def test_secrets_never_appear() -> None:
 def test_settings_tree_comes_from_the_dashboard() -> None:
     assert "Household" in TREE.groups and "Home location" in TREE.groups["Household"]
     assert "Advanced" in TREE.groups["System"]
-    assert "Settings → Privacy → Voice history" in TREE.all_paths()
+    # 1.5.0: Privacy holds Keep voice history and Command recordings (the
+    # old Voice history page), and About & updates the offline-kit update.
+    assert "Settings → Privacy → Keep voice history" in TREE.all_paths()
+    assert "Settings → Privacy → Command recordings" in TREE.all_paths()
+    assert "Settings → System → About & updates → Update from an offline kit" in TREE.all_paths()
 
 
 @pytest.mark.parametrize(

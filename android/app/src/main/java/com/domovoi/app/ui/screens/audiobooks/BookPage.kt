@@ -77,6 +77,10 @@ internal fun BookPage(
     val toast = LocalToast.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Admin held on this phone (not a shared screen): "remove from server"
+    // uses the session rather than asking for the password.
+    val adminState by app.admin.state.collectAsState()
+    val adminHeld = com.domovoi.app.ui.screens.settings.deletesAdminHeld(adminState, com.domovoi.app.net.LocalSharedScreen.current)
     val serverName = LocalServerChoice.current.title()
     val detail = rememberApi("audiobook", bookId) { BookModels.parse(it.api.get("/api/audiobooks/$bookId")) }
     val book = detail.data
@@ -230,7 +234,9 @@ internal fun BookPage(
                             onClick = {
                                 removeError = null
                                 removeServer = true
-                                scope.launch {
+                                // Admin held here: the session, no password.
+                                if (adminHeld) removeNeedsPassword = false
+                                else scope.launch {
                                     removeNeedsPassword = runCatching { ServerRemove(app.api, IdentityAdmission.of(app.identity)).needsPassword() }.getOrDefault(true)
                                 }
                             },
@@ -295,7 +301,25 @@ internal fun BookPage(
             if (path == null) return@RemoveFromServerDialog
             removeBusy = true
             scope.launch {
-                when (val r = ServerRemove(app.api, IdentityAdmission.of(app.identity)).remove(path, book.is_folder, password)) {
+                val outcome = if (adminHeld) {
+                    // As admin on this phone: the same delete through the session.
+                    try {
+                        app.admin.act { h, srv ->
+                            app.api.post("/api/files/delete", ServerRemove.deleteBody(path, book.is_folder), h, onlyTo = srv)
+                        }
+                        RemoveOutcome.Removed(reindexed = false)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        RemoveOutcome.Refused(
+                            if (e is com.domovoi.app.net.AdminSession.AdminUnavailable) e.message ?: "admin isn't available"
+                            else com.domovoi.app.net.failureText("remove", e),
+                        )
+                    }
+                } else {
+                    ServerRemove(app.api, IdentityAdmission.of(app.identity)).remove(path, book.is_folder, password)
+                }
+                when (val r = outcome) {
                     is RemoveOutcome.Removed -> {
                         removeServer = false
                         toast("removed \"${book.displayTitle}\" from the server")

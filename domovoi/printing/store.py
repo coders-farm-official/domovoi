@@ -166,7 +166,7 @@ async def delete_printer(printer_id: int) -> bool:
 async def known_rooms() -> list[dict[str, str]]:
     async with session_scope() as s:
         rows = (await s.execute(text(
-            "SELECT room_id, room_label FROM satellites ORDER BY room_id"))).all()
+            "SELECT room_id, NULLIF(name, room_id) FROM rooms ORDER BY room_id"))).all()
     return [{"id": r[0], "label": (r[1] or r[0].replace("_", " ").replace("-", " ").title())} for r in rows]
 
 

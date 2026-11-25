@@ -339,6 +339,7 @@ class PluginLoader:
             slug,
             version=manifest.version,
             data_dir=Path.home() / ".domovoi" / "plugins" / "data" / slug,
+            permissions=dict(manifest.permissions),
         )
         ctx = PluginContext(slug, sdk)
         try:
@@ -416,6 +417,16 @@ class PluginLoader:
             degraded_reasons=degraded,
         )
         self.loaded[slug] = lp
+        if getattr(manifest, "isolated", None) is not None:
+            # Its decode-only containers (core 1.5.0): the pool is registered
+            # here; the image is built and a friend's container started on
+            # first use, through the build gate. Never fails the load.
+            from domovoi.plugins_runtime import isolated
+
+            isolated.start_for(slug, install_dir, manifest)
+            if sdk.friend_houses.schema is not None:
+                # SDK 1.19: on_mail's schema checks the decoder's answers.
+                isolated.set_schema(slug, sdk.friend_houses.schema)
         status = "degraded" if degraded else "ok"
         # A slow import rides along as a soft note (the plugin stays
         # enabled and loaded); the card shows it without an error pill.
@@ -461,6 +472,10 @@ class PluginLoader:
                 log.warning("plugin %s on_disable callback failed: %s", slug, e)
         await WORKERS.stop_owner(slug, timeout=worker_timeout)
         WORKERS.remove_owner(slug)
+        if getattr(lp.manifest, "isolated", None) is not None:
+            from domovoi.plugins_runtime import isolated
+
+            await isolated.stop_for(slug)
         for handler in lp.context.handlers:
             unregister_handler(handler)
         lp.sdk.teardown()

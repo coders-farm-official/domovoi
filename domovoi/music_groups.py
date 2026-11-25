@@ -646,9 +646,19 @@ async def _hand_off(app: Any, old: str, new: str) -> _HandOff:
     paused = _paused_rooms(app)
     if any(uris) and state in ("play", "pause"):
         pos = snap.get("pos") or 0
+        # A relay token is bound to the room whose player fetches it: each
+        # relay entry gets a fresh one for ``new``, and an internet URL
+        # that isn't relayed is refused (L20, domovoi/relay_queue.py).
+        from domovoi import relay_queue
+
+        uris, start_ok = await relay_queue.carry_over(old, new, uris, int(pos))
+        if not any(uris):
+            log.warning("groups: hand-off %s -> %s: nothing in the queue may move", old, new)
+            return _HandOff(ok=False)
         try:
             taken = await dst.prepare_files(
-                uris, start_sec=float(snap.get("elapsed") or 0.0), start_index=int(pos),
+                uris, start_sec=float(snap.get("elapsed") or 0.0) if start_ok else 0.0,
+                start_index=int(pos),
             )
         except Exception as e:  # noqa: BLE001
             log.warning("groups: hand-off %s -> %s failed: %s", old, new, e)

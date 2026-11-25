@@ -218,6 +218,12 @@ Notes on the shape:
   routing model reads every word there, and example text pulls other turns
   towards the tool. (A handler without the field still gets the quoted
   phrases of a trailing `Example: '…'` in its description.)
+* `read_only = True` (1.5.0) says nothing the handler's fast paths do
+  changes the house: it only reads or says something. In a loud room a
+  command cut off at the recording cap is then answered at once; without
+  it Domovoi first asks "It's loud in here. Should I …?" and runs the
+  command only on a yes (a command phrased as a question is never asked
+  about). Leave it unset for anything that acts.
 * `requires_network = "no"` means this handler must work fully offline. If
   you declare `"yes"` or `"degraded"`, you must override
   `fallback_offline()` — also contract-checked.
@@ -375,13 +381,13 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 
 | Field | Rules |
 |---|---|
-| `slug` | `^[a-z][a-z0-9_]{1,31}$`. Reserved: `core`, `domovoi`, `admin`, `test`, `public`, and the path segments the plugin HTTP surfaces already own — `install`, `manifest`, `status`, `static`, `api`. The slug names your package (`domovoi_plugin_<slug>`), schema (`plugin_<slug>`), routes, env prefix, log file — everything. |
+| `slug` | `^[a-z][a-z0-9_]{1,31}$`. Reserved: `core`, `domovoi`, `admin`, `test`, `public`, and the path segments the plugin HTTP surfaces already own — `install`, `manifest`, `status`, `static`, `api`, `updates`. The slug names your package (`domovoi_plugin_<slug>`), schema (`plugin_<slug>`), routes, env prefix, log file — everything. |
 | `name` | Display name, ≤ 64 chars. |
 | `version` | **Strict semver `X.Y.Z`** (no pre-release/build tags). Upgrades must be version-monotonic; downgrading requires `force` and is refused outright across an applied migration. |
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.14.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.19.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -575,10 +581,15 @@ warnings = [
 ]
 ```
 
-Five booleans (`network`, `subprocess`, `hardware`,
-`filesystem_outside_data` and `satellite_root`, all default `false`) plus
-free-text `warnings`. `satellite_root` is for a `[satellite]` payload that
-installs packages or runs a script as root (see `[satellite]` below).
+Six booleans (`network`, `subprocess`, `hardware`,
+`filesystem_outside_data`, `satellite_root` and `friend_houses`, all
+default `false`) plus free-text `warnings`. `satellite_root` is for a
+`[satellite]` payload that installs packages or runs a script as root (see
+`[satellite]` below). `friend_houses` (core 1.5.0) is for a plugin that
+exchanges data with friend houses: it requires an `[isolated]` decoder and
+at least one `warnings` entry, and the install is refused without them
+(see `[isolated]` below). The SDK surface that uses it is SDK 1.19's
+`sdk.friend_houses` (§4.22).
 These are **not** a sandbox — an installed plugin runs with full access to
 the server (the install preview says exactly that). They are the trust
 screen: write them as if the user's trust depends on them, because it does.
@@ -604,6 +615,13 @@ badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
 kind = "radio"
 stream_url_template = "/api/plugins/radio/stations/{id}/stream"
 room_play_template = "/api/plugins/radio/stations/{id}/play-in-room"   # SDK 1.10, optional
+
+[[web.home_cards]]                              # SDK 1.15: a card on Home
+id = "today"
+title = "Today's weather"
+component = "WeatherTodayCard"
+default_on = true
+order = 50
 ```
 
 * `scripts` — zero-build JSX files, Babel-compiled by the dashboard shell and
@@ -672,6 +690,42 @@ room_play_template = "/api/plugins/radio/stations/{id}/play-in-room"   # SDK 1.1
   `@device_endpoint` and play with `sdk.playback.ensure_room`, `play_url`
   and `dispatch` on the core side (§4.5). The radio plugin's
   `/stations/{id}/play-in-room` is the example.
+
+* `[[web.home_cards]]` (SDK 1.15) — a card on the dashboard's Home page.
+  `id` is lowercase letters, digits, `_` and `-` (1-40 characters, unique in
+  the plugin), `title` is at most 60 characters, `component` names a key of
+  `window.DomovoiPlugins.<slug>.homeCards` (a plain JavaScript name), and
+  the optional `default_on` (default `true`) and `order` (an integer,
+  default 50; lower comes first) say whether it shows and where. Register
+  the component from a `scripts` bundle next to your pages:
+
+  ```js
+  window.DomovoiPlugins.weather.homeCards = Object.assign(
+    {}, window.DomovoiPlugins.weather.homeCards, { WeatherTodayCard });
+  ```
+
+  Home renders `<WeatherTodayCard quiet title guest />` and draws nothing
+  around it: the component returns its own `<Card>`, or `null` when it has
+  nothing to say. Home is the page a **household** member (and a guest)
+  lands on, so the card must read **household-tier** data: a
+  `@device_endpoint` route (a `GET`, or a `POST` marked `@device_endpoint`),
+  called with `apiFetch(path, { method, body, noPrompt: true })` so an
+  unpaired browser is refused silently instead of prompted. The slot is
+  quiet by contract: a card that is not registered, throws, renders `null`
+  or whose data fails shows **nothing** on Home — no error box, no empty
+  frame, no "needs attention" row — so catch your own errors and return
+  `null`. A disabled or uninstalled plugin shows no cards. Home has no
+  per-household card settings yet, so a card with `default_on = false` is
+  not shown. A core before SDK 1.15 ignores the table: ask for `">=1.15"` to be sure.
+
+  "Household-tier data only" is a rule for you to follow, not something
+  the dashboard enforces. A card is your plugin's script running in the
+  dashboard's own page, like your pages: it runs for every viewer of Home,
+  guests and shared screens included, and while an admin is signed in on
+  that browser it can reach what the admin can (the dashboard's admin
+  Bearer, the household token, the session cookie). That is the plugin
+  trust statement the trust screen shows at install, nothing new; a card
+  just puts it on the landing page.
 
 #### The frame and your accent
 
@@ -890,7 +944,7 @@ label = "the Jellyfin server"       # plain words for the banner
 | Key | Rules |
 |---|---|
 | `id` | `^[a-z][a-z0-9_]{0,31}$`, unique in the plugin. |
-| `name` | A Docker container name, unique in the plugin; never one of the core's own (`domovoi-postgres`, `domovoi-flyway`, `domovoi-flyway-test`, `domovoi-searxng`, `domovoi-letta`, anything starting `domovoi-mpd-`), and never one another enabled plugin declares (contract check 8). |
+| `name` | A Docker container name, unique in the plugin; never one of the core's own (`domovoi-postgres`, `domovoi-flyway`, `domovoi-flyway-test`, `domovoi-searxng`, `domovoi-letta`, `domovoi-tor`, `domovoi-fh-listener`, anything starting `domovoi-mpd-` or `domovoi-plugin-dec-`), and never one another enabled plugin declares (contract check 8). |
 | `image` | An image reference. **Pin by digest** (`@sha256:` + 64 hex) and the guard checks the container runs exactly that image. A **tag only** gets a weaker check: the container must have been created from that repository and tag; a different image retagged under the same name isn't detected. Either way, another image of the same repository pulled from a registry is reported as **outdated** (a failure: recreate it), another repository as tampering. While the plugin is disabled (or failed to load) a running container is checked against the repository only, any tag. |
 | `required` | Default `true`. |
 | `label` | Up to 80 characters; default `the <plugin name> container`. |
@@ -901,6 +955,139 @@ containers still installs and runs; it simply isn't watched, and its card
 on the Plugins page says "containers not watched". A core older than SDK
 1.5 ignores the table.
 
+### `[isolated]` — the decode-only containers (core 1.5.0)
+
+A decoder that runs **outside the core's process**, in containers the core
+builds and runs. Use it for any input you don't trust: everything a friend
+house sends (a `friend_houses` plugin must declare one), or a feed or file
+format whose parser you'd rather not run next to the database and the
+house keys.
+
+```toml
+[isolated]
+decoder = "domovoi_isolated_games.decode:main"   # domovoi_isolated_<slug>.<module>:<function>
+debian = ["python3-pil"]                          # optional, from the list below
+```
+
+| Key | Rules |
+|---|---|
+| `decoder` | A function in the decoder's **own top-level package**, `domovoi_isolated_<slug>`, beside your `domovoi_plugin_<slug>` package: `domovoi_isolated_<slug>.<module>[.<module>...]:<function>`. Only that package goes into the container, so none of your in-process code (its `__init__` included) ever runs there. |
+| `debian` | Extra Debian packages, only from the core's allowlist: `python3-pil` (Pillow), `python3-msgpack`, `python3-cbor2`. No pip, no other package. `python3-pil` is what the core's image requests need. |
+
+**What the container holds.** The core writes the build context itself
+(you supply no Dockerfile): its own Dockerfile on the same digest-pinned
+Debian base as the core's other images, Python 3 and the listed packages
+from Debian (installed before any of your files are in the image), the
+core's runner and image helper, and the `.py` files of your decoder
+package (at most 200 files and 2 MB). The package is Python only: any other
+file in it, or a symlink, fails validation. Your files are copied and
+byte-compiled; none of your code runs at build. The decoder may import
+only the standard library, its own package (relative imports included,
+never above it) and the modules of the Debian packages it lists; directory
+validation (`domovoi plugin pack`, install) refuses anything else.
+
+**One container per friend.** The core starts a container for a friend's
+first item and stops it after 2 minutes idle, so one friend's bytes never
+pass through a container that another friend's bytes have been in. At
+most 4 run per plugin and 8 in all; the least recently used idle one makes
+room, and when every one is busy the item waits. The friend is never named
+to the container: your decoder gets the bytes and the `meta` only.
+
+**What it can do.** Nothing but decode. Each container has no network, a
+read-only root with no writable `/tmp`, no mounts, no capabilities, no new
+privileges, runs as a fixed unprivileged user (`65534`), has 128 MB of
+memory (no swap beyond it), 16 processes, a quarter of a CPU, 64 open
+files, no environment and no logs. Its stderr goes nowhere. It talks to
+the core over stdin and stdout only.
+
+**The contract.** `main(payload: bytes, meta: dict) -> value`. The core
+sends one item at a time (payload up to 256 KiB, `meta` a small JSON object
+that may not name the friend). Return a JSON value; raise to refuse the
+item (the core keeps a short, cleaned copy of the message). `print()` is
+safe (it goes to stderr, which nobody reads). The core checks every answer
+before your in-process code sees it: at most 64 KiB, UTF-8, nesting at
+most 16 deep, at most 4,096 values, 256 keys per object, keys up to 128
+and strings up to 2,048 characters, integers within ±(2⁵³ − 1), no NaN or
+infinity, no duplicate keys, no NUL, control characters or lone
+surrogates. It then re-serializes the answer and checks it, **in the
+core's process**, against the schema your plugin registered
+(`isolated.set_schema(slug, schema)`; SDK 1.19 takes it with `on_mail`).
+Without a schema nothing is accepted. The schema language is a strict
+subset of JSON Schema: `type` (`object`, `array`, `string`, `integer`,
+`number`, `boolean`, `null`), `properties`, `required`,
+`additionalProperties` (default `false`), `items`, `minItems`, `maxItems`,
+`minLength`, `maxLength`, `minimum`, `maximum`, `enum`, `anyOf` and
+`description`; any other keyword is refused when you register it, so
+nothing you write is silently unenforced. Your in-process code only ever
+handles the core's own parsed copy.
+
+**When it goes wrong.** A decoder that hangs (5 s; 10 s for an image),
+crashes, writes anything unasked or breaks the frame format is killed; the
+item is a *fault*. That friend's next container waits a backoff (1 s,
+doubling to 60 s); other friends are not affected. The runner the core
+ships writes one "ready" byte once your decoder is imported, and the
+5-second timer (10 for images) starts only after it: a slow first start
+is never held against the friend, and neither is a container that dies
+while idle or dies together with others (Docker restarting). An item that
+faulted twice is dropped for good. Each friend has a breaker counted in
+hundredths: a fault on that friend's own request, or an answer that fails
+the core's re-check, weighs 1; three in an hour pause that friend's items
+for this plugin for an hour (twice as long each time it happens again, up
+to a day). A refusal (your decoder raised, or the schema said no) is final
+and weighs 0.02: 150 in an hour pause the friend for a fixed hour, since
+two houses on different versions of your plugin refuse each other's new
+messages. With no schema registered yet, items wait rather than being
+refused. An item that takes more than 80% of its deadline weighs 0.1, and
+a friend has at most two items decoding at once across all plugins. The
+admin sees each pause on the Friend Houses page; every other friend
+carries on.
+
+**Images.** Your decoder never handles image bytes. The core puts an
+image's pieces back together itself, as opaque bytes, and sends the whole
+image to the friend's container as an image request, which the core's
+helper answers, not your code: it opens the bytes with the core's own
+`open_image`, trying only PNG, JPEG and WebP, refuses anything over 4
+megapixels by its header (a decompression bomb is refused before a pixel
+is decoded), takes the first frame of an animation, applies the EXIF
+orientation, scales to at most 768 pixels a side and answers **raw RGB or
+RGBA pixels**, never a file. The core checks that the pixel count matches
+the size and writes the PNG itself (a header, the pixels, the end: no
+metadata, colour profile or text can exist in it), at most 2.5 MB, and
+serves it as `image/png` with `nosniff` and a sandboxing
+`Content-Security-Policy`. The browser never gets a byte the container
+produced in a file format.
+
+**The SDK rule for friend data.** Nothing a friend supplied is forwarded
+opaquely: every payload you send on is rebuilt in process from the
+validated canonical values; images leave only as the core's PNGs; no
+bytes or base64 fields in your canonical JSON beyond the pinned string
+size. Never unpickle anything; decompress with a `max_length`.
+
+**Lifecycle.** The core registers the decoder when the plugin loads
+(install, enable, boot), after an admin confirmed the install. The image
+is built on first use, and only when the internet answer isn't "never"
+and, for a `friend_houses` plugin, Friend Houses is on and a friend has
+"Apps with this friend" on. The core tells the container guard the image
+ID before any container runs it, and rebuilds (never runs) an image the
+guard has no record of. The image is rebuilt whenever your decoder's
+files change (an upgrade) and when it is 30 days old, with `--pull
+--no-cache`, so Debian's fixes get in. The build is capped at 1 GB of
+memory and a low CPU weight; Docker's BuildKit ignores those caps, so the
+core builds this image with Docker's classic builder, and refuses to build
+it at all on a Docker that no longer has one. Until it is up, items are
+*unavailable* (tried again later, not counted). Disabling, upgrading or
+uninstalling the plugin stops its containers; uninstalling removes the
+image. The containers are named `domovoi-plugin-dec-<slug>-<n>`
+(`n` 0 to 3), names the container guard watches: they must run exactly
+the image the core built, and any other container under that prefix is
+reported as tampering.
+
+**Without Docker** the decoder is inert: nothing is decoded, and a
+`friend_houses` plugin exchanges nothing with friends (Friend Houses
+itself needs Docker on the server's Linux side). There is no in-process
+fallback, and no setting reaches the test kit's stand-ins.
+
+A core older than 1.5.0 ignores the table (and the `friend_houses` key).
 ### `[ai]` — work that is a model's (SDK 1.14)
 
 The household can turn AI off (Settings → Chat & AI → Models). Your
@@ -975,6 +1162,10 @@ screen never appears for a server nobody confirmed.
 * The declared lockfile must exist with hashes (see above).
 * A declared `help` file must exist inside the plugin, be UTF-8 and at most
   32 KB (SDK 1.8).
+* An `[isolated]` decoder's package (`domovoi_isolated_<slug>`) must exist
+  with its module, hold only `.py` files (no symlinks), stay within 200
+  files and 2 MB, and import only what the container has (core 1.5.0, see
+  `[isolated]`).
 
 ---
 
@@ -992,7 +1183,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.14.0"`) is the semver your
+`domovoi.sdk.API_VERSION` (currently `"1.19.0"`) is the semver your
 `domovoi_api` range is checked against. What each minor version added:
 
 | SDK | Added |
@@ -1009,6 +1200,11 @@ from domovoi.sdk import (
 | 1.12 | `core_config.news_location` (the household's place); a plugin registering the `"weather"` capability takes weather questions over from core (since 1.4.1, when its handler raises or answers nothing on a weather question, core's own lookup stands in if the internet answer allows; "check that online" asks the plugin first too) |
 | 1.13 | `sdk.household.home_location()` (async: the Home location `{name, lat, lon, country}` or `None`; `lat`/`lon`/`country` are `None` for a name that matched no town) and `sdk.places.suggest(text, limit=8)` (the bundled GeoNames town list, offline, biggest first; same shape); `core_config.news_location` is now the Home location's name (§4.13). 1.13.1: `net_safety.open_raw_stream` / `iter_raw` and their `_sync` twins (a stream read as it came, never decoded) |
 | 1.14 | "needs AI": `Handler.needs_ai`, `FastPath.needs_ai`, the manifest's `[[handlers]] needs_ai` and the `[ai]` table — work that IS a model's goes off with the household's AI switch (§3, "`[ai]`") |
+| 1.15 | `[[web.home_cards]]`: a plugin card on the dashboard Home page (§3) |
+| 1.16 | `playback.player_route(room_id)`: the host and port a room's music player dials to reach the core, and the address the core sees it call from (`.url(path)`, `.admits(address)`), for a plugin that hands the player a URL on the core, such as a stream relay |
+| 1.17 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
+| 1.18 | the event `core.voice_history_deleted` `{person_id}` and `core_config.voice_history_keep`: **the hook every plugin that stores person-linked data must honour** (§4.21) |
+| 1.19 | `sdk.friend_houses` (apps with friends: `friends()`, `send_mail`, `send_image`, `on_mail`, `on_friends_changed`), `FriendText`, `FriendImage`, `friend_sentence`, `friend_reply` and per-plugin friend ids (§4.22). A plugin holding the `friend_houses` permission has every handler reply filtered for speech, with a stand-in in the history |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only
@@ -1233,6 +1429,60 @@ failure. A LAN stream (an SDR tuner, a NAS) still plays. Also: `stop(room_id)`, 
 per-room MPD has its own database and Docker Desktop drops host inotify —
 after writing files you must tell every daemon to rescan).
 
+**A remote URL for a room's player** (SDK 1.17). A room's music player is
+a container that fetches whatever URL it is given, with its own DNS lookup
+and its own redirect following, where no check in the core can see it: a
+remote server that answers your look with audio can answer the player's
+request with a redirect into the house. So never hand `play_url` a remote
+`http(s)` URL. Ask the core for a relay URL and hand the player that:
+
+```python
+from domovoi.sdk import RelayUnavailable   # 1.17; guard the import on older cores
+
+relay_url = getattr(sdk.playback, "relay_url", None)     # None on a core before SDK 1.17
+if relay_url is None:
+    play = remote_url                                     # older core: the old, direct play
+else:
+    try:
+        play = await relay_url(room_id, remote_url, kind="file")   # or kind="radio"
+    except RelayUnavailable:
+        return Response(text="I couldn't reach the music player in there.")
+resp = await sdk.playback.play_url(room_id, play, title=t, source="mine")
+```
+
+The core then fetches `remote_url` itself (`GET /v1/player-relay/<token>`)
+through the outbound-URL check, every redirect hop checked and pinned,
+passes audio or other media only (never a playlist, a page or a script),
+and cuts it off when the internet answer turns to No (`play_url` already
+refuses a relay URL whose remote URL is off the house network under
+`never`). The URL is fixed when you mint it; the player can't choose
+another. Pick the kind by what you play:
+
+* `kind="radio"`: a live stream. One connection, opened within 30 s; ICY
+  titles pass through so "now playing" still names the song. A player
+  that resumes its queue after a restart gets nothing (play it again).
+* `kind="file"`: a finite media file (a song, an episode). Any number of
+  byte-range requests for 6 hours after minting (the player seeks, or
+  resumes after a pause), the first within 30 s. No ICY.
+
+Either way the token is bound to the room, the remote URL and the address
+the room's player calls from (a request from anywhere else ends it), and
+the room's next relay or `stop(room_id)` ends it. Each connection reads at
+most 512 KiB/s after an 8 MiB start and lasts at most 24 hours.
+`sdk.playback.relay_target(player_url)` gives back the remote URL a relay
+URL stands for while it is good (a now-playing matcher reading the
+player's file), else `None`. `RelayUnavailable` (a `RuntimeError`): the
+room's player can't be reached (no player yet, Docker didn't answer);
+`ValueError`: an unknown kind or a URL that isn't `http(s)`.
+
+**On a core before SDK 1.17** there is no `relay_url`: feature-test it as
+above (and import `RelayUnavailable` inside a `try`) and fall back to the
+direct play, which those cores still take, or declare
+`domovoi_api = ">=1.17,<2.0"` to load only where the relay exists (the
+bundled radio plugin does). `domovoi.sdk.testing`'s recording playback
+mints real relay tokens on loopback, so a test can open them against
+`domovoi.player_relay.router`.
+
 **Playing or stopping outside a voice turn** — your page's "play in the
 bedroom" route, a worker whose timer runs out — has no turn to carry the
 Response to the room, so nothing would tell the room's satellite: MPD sits
@@ -1385,7 +1635,13 @@ core.library_track_deleted   core.now_playing_stamped     core.plugin_enabled
 core.entity_deleted          core.now_playing_cleared     core.plugin_disabled
 core.playlist_deleted        core.connectivity_changed    core.plugin_uninstalled
 core.timer_fired             core.timer_fire_settled      core.plugin_upgraded
+core.voice_history_deleted
 ```
+
+`core.voice_history_deleted` (SDK 1.18) is emitted after a person's voice
+history, or all of it, is deleted and committed: `{person_id: int}` or
+`{person_id: None}`. Plugins storing person-linked data must honour it;
+see [§4.21](#421-forgetting-people--corevoice_history_deleted-sdk-117).
 
 `core.timer_fired` is emitted once when a timer or reminder goes off
 (after it is recorded): `{fire_id, timer_id, kind: "timer"|"reminder",
@@ -1489,7 +1745,9 @@ live: false means nothing may ask a language model), and since SDK 1.9
 answers come from; send requests through `sdk.http` so the AI switch
 still applies), and since SDK 1.12 `news_location` (the household's
 place, which core's weather and local news use; since SDK 1.13 the name
-of the Home location, Settings → Household → Home location). For the whole
+of the Home location, Settings → Household → Home location), and since
+SDK 1.18 `voice_history_keep` ("Keep voice history", live: `"30"`,
+`"90"`, `"365"` or `"forever"`; see §4.21). For the whole
 place, coordinates included, `await sdk.household.home_location()` returns
 `{"name": "Denver, Colorado, US", "lat": 39.7392, "lon": -104.9847,
 "country": "US"}` or `None`, and `sdk.places.suggest("denv")` searches the
@@ -1991,6 +2249,246 @@ question that offered `n` things, the way the core's music question does:
 `"pass"` (not an answer: return None from `handle_choice_reply`). See §4.2,
 "Choices".
 
+### 4.21 Forgetting people — `core.voice_history_deleted` (SDK 1.18)
+
+**This is THE hook any plugin that stores person-linked data must honour.**
+Person-linked means anything you keep because of what someone said or who
+said it: a lookup history, a per-person setting, a transcript, a log line
+with a `person_id` or a quote of what was asked. When a household member
+says "forget me", an admin deletes them on People, or an admin presses
+"Delete all voice history", the core deletes its own copy of what they said.
+A copy in your schema is not reached by that delete, and the household was
+told everything was forgotten. So:
+
+1. **Delete on the event.** Subscribe to `core.voice_history_deleted`. Its
+   payload is `{"person_id": 7}` (that person's history was deleted; their
+   `people` row is gone too) or `{"person_id": None}` (an admin deleted ALL
+   voice history: delete everything person-linked, whoever it was about).
+   It is emitted only after the deletion has committed, in the core process,
+   whichever process the deletion ran in. A deletion made while the core
+   was down (People runs in the dashboard's process) is announced at the
+   core's next start, and delivery is at least once: deleting twice must
+   be harmless.
+2. **Keep nothing longer than `voice_history_keep`.** The daily "Keep
+   voice history" trim sends no event. Read
+   `sdk.core_config.voice_history_keep` (`"30"`, `"90"`, `"365"` or
+   `"forever"`) in a worker and delete what is older yourself.
+
+```python
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import text
+
+async def _on_voice_history_deleted(event) -> None:
+    pid = event.payload["person_id"]
+    async with sdk.db.session_scope() as s:
+        if pid is None:      # "Delete all voice history"
+            await s.execute(text("DELETE FROM lookups"))
+        else:                # one person forgotten
+            await s.execute(text("DELETE FROM lookups WHERE person_id = :p"), {"p": pid})
+
+async def _trim(ctx) -> None:   # a [[workers]] tick, hourly is plenty
+    keep = sdk.core_config.voice_history_keep
+    if keep == "forever":
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(keep))
+    async with sdk.db.session_scope() as s:
+        await s.execute(text("DELETE FROM lookups WHERE at < :c"), {"c": cutoff})
+
+def register(ctx):
+    ctx.sdk.events.subscribe("core.voice_history_deleted", _on_voice_history_deleted)
+    ...
+```
+
+The bus keeps nothing, so the event is the fast path (§6.4): a person
+deleted while your plugin was disabled or not yet installed sends you
+nothing. If you keep a `person_id`, store it without a foreign key (plugins
+never reference core tables) and have the same trim worker drop rows for
+people who are gone. On a core before SDK 1.18 the event name is unknown
+and subscribing raises: guard with `domovoi_api = ">=1.18,<2.0"`, or wrap
+the subscribe in `try`/`except ValueError` and rely on the trim.
+
+### 4.22 Apps with friends — `sdk.friend_houses` (SDK 1.19)
+
+A plugin with `[permissions] friend_houses = true` (which needs an
+`[isolated]` decoder and a `warnings` entry, §3) exchanges mail with **the
+same plugin** in friend houses: turn-based and event-based apps such as
+cards, a garden or a monster to raise. There is no live channel; one move
+reaches the other house in about a second. It works only with friends an
+admin turned **"Apps with this friend"** on for, and only once an admin
+allowed your plugin for them. Every other plugin gets the same
+`sdk.friend_houses`, and its calls raise `NotAllowed`.
+
+```toml
+[plugin]
+domovoi_api = ">=1.19,<2.0"
+
+[permissions]
+friend_houses = true
+warnings = ["Exchanges card moves with friend houses an admin turns this on for"]
+
+[isolated]
+decoder = "domovoi_isolated_games.decode:main"
+```
+
+```python
+from fastapi import APIRouter, HTTPException
+
+from domovoi.sdk import FriendText, device_endpoint, friend_reply, friend_sentence
+from domovoi.sdk.friend_houses import NotAllowed, MailFull, TooLarge, RateLimited
+
+router = APIRouter()   # your plugin's core router
+
+MOVE = {"type": "object", "properties": {"card": {"type": "string", "maxLength": 3},
+                                         "player": {"type": "string", "maxLength": 40}},
+        "required": ["card"]}
+
+def register(ctx):
+    fh = ctx.sdk.friend_houses
+
+    async def on_move(house_id, mail_id, seq, value):
+        # value is the core's own parsed copy, already checked against MOVE.
+        await apply_move(house_id, mail_id, value)       # idempotent by mail_id
+
+    fh.on_mail(on_move, MOVE)
+    fh.on_friends_changed(refresh_invite_list)
+
+@router.post("/invite")
+@device_endpoint                     # never an @open_endpoint (Tiers, below)
+async def invite(body: Invite):
+    fh = SDK.friend_houses          # the ctx.sdk your register() kept
+    friend = next((f for f in await fh.friends() if f.house_id == body.house_id), None)
+    if friend is None or not friend.has_plugin:
+        raise HTTPException(404, "not a friend you can play with")
+    await fh.send_mail(friend.house_id, encode_invite(body), ttl_s=600, replace_key="invite")
+```
+
+| Call | What it does |
+|---|---|
+| `await friends()` | `[FriendHouse(house_id, name, online, has_plugin)]`: friends with "Apps with this friend" on and your plugin allowed. `name` is a `FriendText`. `has_plugin` is true while their house's last word (within 6 hours) said it has your plugin too. Empty while Friend Houses is off or dark (nothing could reach them): hide your "play with a friend" control then, and say why. |
+| `await send_mail(house_id, payload, *, ttl_s=259200, replace_key=None)` | Queues `payload` (bytes, 1 to 16,384) for that friend; returns the mail's id. `ttl_s` 30 to 259,200 (3 days); time-sensitive mail (a move, a view) should use 600 or less. `replace_key` (up to 64 of `a-z 0-9 _ . : -`) replaces a mail with the same key that hasn't left yet (a newer view of the table); the new one gets a new id. Raises `NotAllowed`, `MailFull`, `TooLarge` or `RateLimited`. |
+| `await send_image(house_id, image, *, tag, ttl_s=259200, replace_key=None)` | Queues a picture: a `FriendImage` a friend sent you (passed on as the core's PNG) or your plugin's own PNG, JPEG or WebP bytes (any size up to 8 MiB and 4 megapixels). `tag` (up to 64 of `a-z 0-9 _ . : -`) tells the friend's copy what it is ("monster:7"). The tag and image are at most 16,384 bytes together, so the core rewrites the picture to fit (see **Picture sizes** below); one that doesn't fit even at 128 px raises `TooLarge`, bytes that aren't a picture `ValueError`. Raises like `send_mail`. |
+| `on_mail(handler, schema, *, images=False)` | The one handler for your plugin's mail and the schema your decoder's answers must match (the core's strict subset, §3 `[isolated]`; until you register one, mail waits). Every string in `value` arrives as a `FriendText`. With `images=True` the handler also gets friends' pictures: `value` is then a `FriendImage`; without it a friend's image is refused like a mail the schema refuses. |
+| `on_friends_changed(handler)` | `async handler()` runs shortly after `friends()` may answer differently: "Apps with this friend" or your plugin turned on or off for a friend, a friend removed or blocked, a friend's house saying which apps it has (`has_plugin`). Several changes together call it once; it gets 10 seconds. `online` changes don't call it: read `friends()` when you need it. |
+
+**The ids.** `house_id` is your plugin's own id for a friend house: the
+core derives it from this house's secret, your slug and the friend's key,
+so two plugins get different ids for the same friend and can't compare
+notes. It is derived with a key of its own (from the house's secret, never
+the secret itself). It is never sent to the friend or shown to your
+decoder. Store it; it doesn't change while the friendship lasts.
+
+**The delivery contract.** Per friend, your mail arrives in `seq` order
+and is never duplicated on the wire. Gaps are possible (a replaced,
+expired, quarantined or refused mail) and `seq` shows them. Your handler
+is called **at least once** per decoded mail, and **again** after it
+raised, ran past 10 seconds, or the core stopped while it ran, until the
+mail's second fault, when it is deleted. Make it idempotent by `mail_id`.
+Every string in `value` is a `FriendText`, on every call, retries
+included. Handlers are `async`, must return within 10 seconds and **must
+never block the event loop**: after 10 seconds the core stops waiting
+(your late result is ignored), but it can't stop code that never awaits.
+Such a handler takes the whole core down, and when the core comes back
+that friend's mail to your plugin is paused at once and the mail is
+deleted the second time. A handler that raises or overruns counts against
+that friend (weight 1, like a decoder crash): after three in an hour, that
+friend's mail to your plugin is paused (an hour, doubling each time, up to
+a day) and the admin is told. Other friends carry on. If your handler
+fails on valid mail, friends pause one by one, and the notice points at
+your plugin; an upgrade of your plugin ends those pauses.
+
+**Images: `FriendImage`.** Your decoder never sees a friend's picture.
+The core's image helper opens it in that friend's decode-only container
+(PNG, JPEG or WebP, at most 4 megapixels, the first frame), scales it to at
+most 768 pixels a side and answers raw pixels; the core checks them and
+writes the PNG itself. Your handler gets `FriendImage(png, width, height,
+tag)`: `png` is that PNG (no metadata, colour profile or text can be in
+it), `tag` a `FriendText`. Serve it from your route with
+`return image.response()` (`image/png`, `nosniff`, a sandboxing
+Content-Security-Policy, never cached); store `image.png` in your own
+schema if you keep it. To show it to another friend, `send_image` the
+`FriendImage` itself.
+
+**Picture sizes.** An image mail holds 16,384 bytes with its tag, so
+`send_image` never sends your bytes as they are: the core opens them (as
+the friend's container would: PNG, JPEG or WebP, first frame, oriented,
+at most 768 px a side) and writes its own compact PNG, without metadata.
+Your call doesn't change. It takes the first of these that fits:
+
+1. the picture at its size, lossless: a picture of 256 colours or fewer
+   (most drawings: strokes on a plain background) as a palette of exactly
+   those colours, anything else as filtered truecolour, zlib level 9;
+2. the same with fewer colours: 256 for any picture, and 64 or 16 for one
+   of up to 16,384 colours (a drawing whose edges the browser smoothed);
+3. steps 1 and 2 again at 512, 384, 256, 192 and then 128 px on the long
+   side (aspect kept). A drawing of few colours keeps exactly its colours
+   when it is scaled, so strokes stay solid.
+
+Past 128 px it raises `TooLarge` ("doesn't fit … even at 128 px a side");
+catch it and tell the player. What to expect at 768 px: a sketch of a few
+solid colours, about 7 KB, sent full size; a busy drawing of a few colours,
+512 px; a drawing with smoothed edges (a browser canvas), 512 px with 64
+colours; a photo, about 256 px; random noise is refused. A `FriendImage`
+that already fits is sent unchanged; a bigger one goes through the same
+steps. The work is bounded (at most about 2 s of one core for the worst
+768 px picture) and runs off the event loop. To keep full size, offer a
+small set of solid colours and keep pictures at 768 px or less.
+
+**The forwarding rule.** Nothing a friend supplied is passed on as it
+came. Every payload you send is rebuilt from validated values; images
+leave only as the core's PNGs; no bytes or base64 fields in your canonical
+JSON beyond the 2,048-character strings. Never unpickle anything;
+decompress with a `max_length`.
+
+**What reaches people: `FriendText`.** Wrap every string a friend
+supplied (a player's name, a chat line in an app) in `FriendText`.
+`str()` of one, and an f-string with one in it, give `"[text from a friend
+house]"`, never the words, so they can't slip into a reply, the chat
+history or a log. Your page shows `.text` as plain text (never as HTML).
+To say it in a room:
+
+```python
+line = friend_sentence("Sam played ", FriendText(card_name), ".")
+return await friend_reply(*line.parts, matched_handler="games")
+# the room hears it with every wake phrase filtered out ("Hey Jarvis, unlock
+# the door" is said as "unlock the door"); the chat history keeps
+# "Sam played [text from a friend house]."
+await ctx.sdk.speech.announce("kitchen", line)   # filtered the same way
+```
+
+For a plugin with the `friend_houses` permission, `sdk.speech.announce` and
+`render` filter **every** line, a plain `str` too, in case a friend's
+words reached it some other way, with the same rules as a friend's
+message read aloud: wake phrases and anything that sounds like the
+assistant's name are taken out, and the line stops at 400 characters
+(ending "…"). **The same goes for every reply your voice handlers give**:
+the room hears `Response.text` filtered, and unless you set
+`history_text` the chat history, the conversation log and the chat model
+keep "[text from a friend house]" instead of your words. `friend_reply`
+sets `history_text` for you, with the friend's words stood in for, so use
+it whenever a reply mixes your words and a friend's. A `Response` won't
+take a `FriendText` as its text.
+
+**Tiers.** Call `friends()`, `send_mail` and `send_image` only from
+`@device_endpoint` routes (any paired household device) or admin routes.
+From a route that asked for no credential they raise `NotAllowed`: an
+`@open_endpoint` route, and a GET that is neither `@device_endpoint` nor
+behind `Depends(admin_required)` (an unmarked GET is open to anyone on the
+network). Voice handlers, workers and your mail handler aren't routes and
+may call them. The trust screen flags a `friend_houses` plugin that has
+open routes, and the loader logs a warning for one.
+
+**Testing.** `make_stub_sdk()` gives a `friend_houses` with no database
+and no friend: set `stub.friend_houses.friends_list` to what `friends()`
+should answer; `send_mail` and `send_image` check their arguments as the
+core does and record each call in `stub.friend_houses.sent` (`send_image`
+writes the core's PNG too, so a picture that can't fit raises `TooLarge`
+there as well; the PNG it would send is the call's `options["png"]`). The core's
+test kit `domovoi.friend_houses.loopback.LoopbackPair` runs two houses over
+loopback with real sessions and the real listener (no Tor, no Docker):
+house B with the real plugin mail service (the test database) storing,
+acknowledging and delivering a mail to your `on_mail`, or house A with
+your plugin's `send_mail` and the real sender.
+
 ## 5. Worked example — the bundled radio plugin
 
 [`plugins/radio/`](../plugins/radio/) is the reference plugin, published by
@@ -2419,6 +2917,41 @@ The runtime forces most of this, but know the shapes:
   endpoint refuses a bundled plugin (`422 bundled_plugin`), and no install,
   upgrade or uninstall moves or deletes files under `plugins/`.
 
+#### Publishing so updates are found (1.5.0)
+
+The Plugins page tells a household when a plugin it installed from GitHub
+has a newer release, and offers **Update to X.Y.Z**. To be found:
+
+* **Tag every version `vX.Y.Z`**, the manifest's `version` with a `v`
+  (plain `X.Y.Z` is read too). Tags with build metadata (`+…`) are
+  ignored.
+* **Publish a GitHub release for the tag**, with notes. The notes are
+  shown as plain text (markdown is not rendered, HTML never), up to 8000
+  characters. A repo with no releases is read from its tags, without
+  notes.
+* **Mark pre-releases** (GitHub's pre-release flag, or a `-rc.1` style
+  tag). They are offered only to a household already running a
+  pre-release; drafts are never offered.
+* **Keep the repo public.** The check sends no credentials: a private
+  repo answers 404 and the page says "can't check for updates (private
+  or unreachable)".
+* **Attach `<slug>-X.Y.Z.zip` and `SHA256SUMS`** (the `domovoi plugin
+  pack` zip and `sha256sum` output naming it) to the release. **Update to
+  X.Y.Z** installs that zip after checking its SHA-256 against the file,
+  and refuses it on a mismatch. A release without both files is installed
+  from the tag's source archive (`codeload.github.com`) instead, and the
+  page says so, so `domovoi-plugin.toml` should be at the repo root at the
+  tag either way.
+* **Zip installs:** set `[plugin] homepage = "https://github.com/<owner>/<repo>"`
+  and the page offers **check GitHub for updates** for a zip-installed
+  copy (checked only when asked). Updating from there switches the
+  plugin to the GitHub source.
+
+The core checks once a day per plugin (and on **check for updates**),
+only `api.github.com`, honouring `ETag` and GitHub's rate-limit headers,
+and never under `INTERNET_ACCESS=never`. Bundled and dev-mode plugins are
+not checked. Nothing updates by itself.
+
 ### 6.8 Trust and permissions honesty
 
 There is no sandbox. The install preview states it plainly: an installed
@@ -2446,7 +2979,9 @@ in place with `domovoi plugin dev` removes its registry row and leaves your
 working copy untouched, and installing a release over such a registration
 is refused (`dev_registration`) — uninstall the registration first.
 Design your tables so *keep* is meaningful — user-created data (favorites,
-history) is why the default is keep.
+history) is why the default is keep. Person-linked rows still follow
+§4.21 while you are installed: deleted on `core.voice_history_deleted`,
+and kept no longer than `voice_history_keep`.
 
 ### 6.10 Assorted sharp edges
 

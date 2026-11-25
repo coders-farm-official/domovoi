@@ -275,6 +275,7 @@ async def chat_stream(
     num_ctx: int | None = None,
     num_predict: int | None = None,
     temperature: float | None = None,
+    format: dict[str, Any] | str | None = None,
 ) -> AsyncIterator[str]:
     """Stream one multi-turn chat completion via ``POST /api/chat``, yielding
     assistant-content deltas as they arrive.
@@ -305,7 +306,9 @@ async def chat_stream(
     ``num_predict`` caps the reply's length in tokens (unset or 0: no cap);
     a reply stopped by it ends with ``done_reason`` ``"length"`` in
     ``stats``. ``temperature`` (None: the model's own) goes out as that
-    option: 0 for a call that copies (a letter's transcription)."""
+    option: 0 for a call that copies (a letter's transcription).
+    ``format`` (None: not sent) is Ollama's structured output: ``"json"``
+    or a JSON schema the reply must follow (the photo captions, 1.5.0)."""
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/chat"
@@ -323,6 +326,8 @@ async def chat_stream(
         body["options"] = options
     if think is not None:
         body["think"] = think
+    if format is not None:
+        body["format"] = format
     # And the same keep_alive when this is one of the voice models.
     keep_alive = _keep_alive_for_model(model)
     if keep_alive is not None:

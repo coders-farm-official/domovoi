@@ -1185,18 +1185,22 @@ async def _after_start(room_id: str | None, control_port: int) -> None:
     came from: the mixer pinned to the startup volume (which waits for
     MPD's greeting), then, under ``INTERNET_ACCESS=never``, internet
     streams taken out of the room's queue (MPD resumes whatever its state
-    file holds; mpd_internet.purge_room), asked a few times while the
-    daemon comes up. Never raises."""
+    file holds; mpd_internet.purge_room), and under every answer an
+    internet entry that isn't relayed rewritten or removed
+    (relay_queue.check_room), asked a few times while the daemon comes up.
+    Never raises."""
     await _pin_startup_volume(control_port)
-    if room_id is None or not egress.internet_turned_off():
+    if room_id is None:
         return
-    from domovoi import mpd_internet
+    from domovoi import relay_queue
     from domovoi.clients.mpd import RealMPDClient
 
     client = RealMPDClient(settings.mpd_host, control_port)
     for attempt in range(1, PURGE_TRIES + 1):
         try:
-            await mpd_internet.purge_room(room_id, client)
+            # The never-purge, then (every answer) internet entries that
+            # aren't relayed rewritten or removed (L20).
+            await relay_queue.check_room(room_id, client)
             return
         except Exception as e:  # noqa: BLE001 — a daemon still starting
             if attempt == PURGE_TRIES:

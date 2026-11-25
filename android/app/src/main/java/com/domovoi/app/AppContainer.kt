@@ -96,6 +96,19 @@ class AppContainer(context: Context) {
      *  anything carrying the token goes to it. */
     val tokenHealth = TokenHealth(prefs, clock = SystemClock::elapsedRealtime, log = { Log.i("TokenHealth", it) })
     val api: ApiClient = ApiClient(prefs, identity, tokenHealth)
+
+    /** Admin on this phone (net/AdminSession.kt): the password signs in, the
+     *  Bearer is held in memory only, and today's grant may be kept sealed
+     *  under the phone's biometrics (net/AdminGrant.kt). One for the app,
+     *  so a sign-in holds across screens. */
+    val adminLocker = com.domovoi.app.data.BiometricGrantLocker(context.applicationContext)
+    val admin = com.domovoi.app.net.AdminSession(
+        api,
+        com.domovoi.app.audiobooks.IdentityAdmission.fingerprintOf(identity),
+        grants = prefs,
+        locker = adminLocker,
+        deviceId = { prefs.deviceId },
+    )
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
 

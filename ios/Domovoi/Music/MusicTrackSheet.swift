@@ -50,7 +50,14 @@ struct MusicTrackSheet: View {
     /// songs): `play in <room>` then plays on through that list.
     var listContext: UpNextContext?
 
+    /// The shell, for admin on this phone (delete track); nil draws none.
+    var shell: ShellModel?
+
     @Environment(\.queueTools) private var tools
+
+    @State private var deletes: AdminDeletesModel?
+    @State private var alsoFile = false
+    @State private var askingDelete = false
 
     /// The picked room; nil means the first the server reported.
     @State private var picked: String?
@@ -253,19 +260,65 @@ struct MusicTrackSheet: View {
         }
     }
 
-    // MARK: - where its upkeep is
+    // MARK: - where its upkeep is, and delete (admin on this phone)
 
-    /// Where Android's `delete track` and its "also delete the file" switch
-    /// were, and where this sheet's own were until 22 Nov 2026: deleting a
-    /// track is admin (`DELETE /api/music/library/{id}`,
-    /// `require_admin_mutation`), as are the library's rescan and tag
-    /// fixer, and this app has no admin session, so all three 401'd from
-    /// every phone. One line says where they are (the phone admin audit).
+    private var adminHeld: Bool {
+        guard let shell else { return false }
+        return deletesAdminHeld(shell.admin.state, sharedScreen: shell.visibility.sharedScreen)
+    }
+
+    /// Deleting a track is admin (`DELETE /api/music/library/{id}`): with
+    /// admin held here, "also delete file on disk" and "delete track",
+    /// which asks first (``AdminDeleteWords``). The rescan and the tag fixer
+    /// stay on the dashboard, and one line says so.
+    @ViewBuilder
     private var danger: some View {
-        Text(MusicStrings.upkeepOnDashboard)
+        if adminHeld {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(AdminDeleteWords.alsoFile, isOn: $alsoFile)
+                    .tint(Color.brand)
+                    .font(.subheadline)
+                Button(AdminDeleteWords.deleteTrack) { askingDelete = true }
+                    .buttonStyle(InkOutlineButtonStyle(ink: .errInk))
+                    .font(.subheadline)
+                    .disabled(deletes?.busy == true)
+            }
+            .task {
+                if deletes == nil, let shell { deletes = AdminDeletesModel(admin: shell.container.admin) }
+            }
+            .alert(
+                Text(verbatim: deleteQuestion.title),
+                isPresented: $askingDelete
+            ) {
+                Button(AdminDeleteWords.delete, role: .destructive) { deleteNow() }
+                Button(AdminDeleteWords.cancel, role: .cancel) {}
+            } message: {
+                Text(verbatim: deleteQuestion.body)
+            }
+        }
+        Text(shell.map { musicUpkeepLine($0.admin.state, sharedScreen: $0.visibility.sharedScreen) } ?? MusicStrings.upkeepOnDashboard)
             .font(.footnote)
             .foregroundStyle(Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var deleteQuestion: (title: String, body: String) {
+        let text = AdminDeleteWords.trackConfirm(track.title, filePath: track.filePath, alsoFile: alsoFile)
+        guard let q = text.firstIndex(of: "?") else { return (text, "") }
+        return (String(text[...q]), String(text[text.index(after: q)...]).trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func deleteNow() {
+        guard let deletes else { return }
+        let file = alsoFile
+        Task { @MainActor in
+            let out = await deletes.deleteTrack(track, alsoFile: file)
+            music.setToast(out.said)
+            if out.ok {
+                music.trackDeleted(track.id)
+                dismiss()
+            }
+        }
     }
 }
 

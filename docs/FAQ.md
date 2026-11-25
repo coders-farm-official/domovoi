@@ -17,6 +17,7 @@ Short answers to common questions. For a term you don't recognize, see the [Glos
 - [Is AI optional?](#is-ai-optional)
 - [Linux or Windows for the server?](#linux-or-windows-for-the-server)
 - [How do I add rooms?](#how-do-i-add-rooms)
+- [Can a room have more than one satellite?](#can-a-room-have-more-than-one-satellite)
 - [Can an old laptop or phone be a satellite?](#can-an-old-laptop-or-phone-be-a-satellite)
 - [Why does Windows or my antivirus warn about the Windows satellite?](#why-does-windows-or-my-antivirus-warn-about-the-windows-satellite)
 - [Can the PC that runs Domovoi also be a satellite?](#can-the-pc-that-runs-domovoi-also-be-a-satellite)
@@ -71,7 +72,7 @@ One answer turns them all off: **No, keep everything in the house** in Settings 
 - An NVIDIA GPU is **not required**. The installers (the Linux script and the Windows installer) set the server up for its processor: Whisper `small.en` on the CPU, Qwen3 8B for routing (Qwen3 4B on a server with less than 24 GB of memory), Llama 3.2 3B for answers and Qwen3-VL 2B for pictures; Ollama uses a GPU by itself when there is one. A server set up by hand starts from defaults that want an NVIDIA GPU (Whisper `large-v3` on CUDA, a 14B tool-routing model); on a CPU-only or non-NVIDIA box, four settings get you a system that's instant for everyday commands and slower only for open-ended questions — see [CPU_HOST.md](CPU_HOST.md).
 - **~20 GB of free disk** for the software and all default models (the two Ollama models alone are ~11 GB), **plus** room for your own media library on top (the Windows installer asks for 40 GB free on the system drive). The full breakdown and ways to shrink it are in the README's [Disk footprint](../README.md#disk-footprint) section.
 
-**Satellites** — one small box per room you want to talk to (a room has exactly one today):
+**Satellites** — one small box for each place you want to talk to (a room can have several satellites, one is enough):
 
 - Raspberry Pi Zero 2 W (or a Pi 4) with either:
   - **ReSpeaker 2-Mics Pi HAT** (V1 or V2.0 — they use different codecs, check yours), or
@@ -121,8 +122,8 @@ The dashboard's header shows the easiest of these that works on your network; cl
 
 ## How do I add rooms?
 
-A room *is* a satellite, and every room is added from the dashboard, as
-admin, in **Settings → Household → Rooms**:
+A room is a place and a satellite is the device in it. A satellite is added
+from the dashboard, as admin, in **Settings → Household → Rooms**:
 
 1. **A Raspberry Pi:** put Raspberry Pi OS Lite (64-bit) on a microSD card,
    put the card in the server's card reader, and use **prepare a room's
@@ -136,10 +137,33 @@ admin, in **Settings → Household → Rooms**:
    approval** and press **approve**.
 3. That's it — on first connection, the server provisions that room's own
    music daemon (an MPD container with its own queue and volume) and the
-   room appears in Settings → Household → Rooms. Today a room has exactly
-   one satellite; a second device needs a room of its own.
+   room appears in Settings → Household → Rooms. To put a second
+   satellite in the same room, set it up the same way and, when you approve
+   it, answer **Which room is it in?** with that room (see
+   [Several satellites in one room](#can-a-room-have-more-than-one-satellite)).
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by the name you gave. The by-hand route (installing the satellite client and pointing it at `ws://<server>:6370` yourself) is in the [Satellite hardware guide](SATELLITE_HARDWARE.md) and `satellite/PROVISIONING.md`.
+
+## Can a room have more than one satellite?
+
+Yes, since 1.5.0 (a Pi on the counter and a phone on the shelf, say). The
+room stays one place with one name, queue, voice and set of wake words;
+each satellite is a device in it. Approve the second one into the existing
+room (**Which room is it in?**), or move a satellite later from the room's
+drawer in **Settings → Rooms**.
+
+- **One wake word, one answer.** The first satellite to hear it takes the
+  turn; the others stay quiet, and Domovoi transcribes the microphone that
+  heard you best.
+- **Every speaker plays.** Music, answers, timers, alarms, announcements
+  and plugins' speech come out of every speaker in the room at the same
+  moment. If they sound a little apart, use **Tune the speakers** in the
+  room's drawer.
+- **Older satellites** (before 1.5.0) can't join in; they play only when
+  they are the room's only satellite.
+
+More in [Satellites on spare devices](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites)
+and [Troubleshooting](TROUBLESHOOTING.md#rooms-with-several-satellites).
 
 ## Can an old laptop or phone be a satellite?
 
@@ -411,6 +435,38 @@ The vision model isn't installed by default (a server set up by `scripts/linux/p
 
 The default vision model is the pick for a box without a GPU: a 1.9 GB download, about 3 GB of memory while it is loaded. With an NVIDIA GPU, `qwen2.5vl:7b` is the pick for the Vision row instead: quick on the GPU, but minutes per picture on a processor alone. A change in the Vision row reaches the dashboard's chat when the dashboard restarts.
 
+## Does Domovoi send my photos anywhere?
+
+**No.** When an admin turns on **Understand photos and videos** (Settings →
+Chat & AI → Photos and videos), the server looks at the photos in Pictures
+and the videos in Videos with the models on your own hardware, at night and
+never while someone is talking to it. Nothing is uploaded, and nothing is
+written into your files. The only downloads are two small face models, if an
+admin turns on faces, and a list of towns, if an admin turns on photo
+locations: both only on request, and neither sends anything about your
+photos. Details: [Photos and videos](PHOTOS_AND_VIDEOS.md).
+
+## Why does a description say "Might show"?
+
+Because it is a small computer model's guess. It is usually right about
+plain scenes (a dog, a beach, a birthday cake) and sometimes wrong: it can
+misname a breed or an object, or see something that isn't there. So
+descriptions and tags are labelled "Might show" and are there to help you
+search, not to be taken as fact. Writing found in a picture is read by a
+different program and is exact when it is clear.
+
+## How do I make Domovoi forget my face?
+
+Faces are off unless an admin turned on **Recognize faces**. If they are on,
+open **Faces** on the dashboard from the phone or browser that is yours
+(press **this is me** if you haven't), open your page and press **Forget my
+face**; an admin can do it for anyone. Every saved face of yours is deleted
+and a pattern tied to nobody is kept, so new photos of you aren't grouped
+again. Your photos, your voice and your memories stay. That kept pattern
+survives even if faces are turned off and on again, which is what makes
+forgetting permanent. Turning faces off deletes everything else about faces.
+See [Photos and videos](PHOTOS_AND_VIDEOS.md#faces).
+
 ## Can I ask a chat about a document?
 
 Yes. The paperclip in Chat takes a PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to 100 MB, in a chat with the home server (on the dashboard and in the app) and in a chat on the phone. Ask what it says: the answer names the pages or sections it came from, a press on one shows the passage, and when the document doesn't say, the answer is "I couldn't find that in the document" rather than a guess. Files → Documents has **Ask about this document**. "Summarize" works on long documents too: Domovoi reads them in parts ("reading part 3 of 8"), **stop** keeps what was read, and every point in the summary cites a page.
@@ -433,19 +489,25 @@ Everything stays on your network, and printing and scanning keep working when th
 
 ## How do I ask Domovoi for help?
 
-Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, Domovoi can offer to send the steps to the phone marked as yours (the app's Settings → Household → Phones & browsers → "This phone belongs to"). With AI chat and questions turned off, help is a plain search of the manual and the docs.
+Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, it says the short answer and that the full answer is in the manual. With AI chat and questions turned off, help is a plain search of the manual and the docs.
 
 ## How long is what we say kept, and can we delete it?
 
 **90 days by default, and yes.** Domovoi writes down what people say to it
 and what it answered, so the Conversations and Sessions tabs can show it
-(to paired devices only). On the dashboard, **Settings → Household → People → Voice history** has:
+(to paired devices only). On the dashboard:
 
-- **Keep voice history**: 30 days, 90 days (the default), 1 year, or
-  Forever. Anything older is deleted once a day, and right away when you
-  pick a shorter time. It's also in Settings → System → Advanced → Privacy.
-- **Delete all voice history**: deletes everything said until now, in every
-  room and on every phone, after a confirmation that lists what goes.
+- **Settings → Privacy → Keep voice history**: 30 days, 90 days (the
+  default), 1 year, or Forever. Anything older is deleted once a day, and
+  right away when you pick a shorter time. An admin changes it; everyone
+  else can see what it is set to. Settings → Household → People → Voice
+  history and Settings → System → Advanced → Privacy show it and link there.
+- **Delete all voice history** (Settings → Household → People → Voice
+  history, an admin): deletes everything said until now, in every room and
+  on every phone, after a confirmation that lists what goes.
+
+The opt-in command recordings (off unless an admin turns them on for a
+room, 14 days at most) are on **Settings → Privacy → Command recordings**.
 
 Forgetting one person ("forget me" in their own voice, then "yes" when
 Domovoi asks, or **forget person** on their Profile tab) deletes what *they*
@@ -517,7 +579,7 @@ There's no one-button backup tool yet — but it's three pieces, all standard:
 2. **`~/.domovoi/`** on the server — copy the folder. Trained wake-word models and recorded training clips live here and are genuinely hard to recreate; the rest (rendered sounds, caches) regenerates itself.
 3. **Your media** — `MUSIC_DIR` and friends, which you're presumably backing up anyway.
 
-**On the Windows installer** there is no backup tool yet, and no shell in its private Linux to dump the database from. Uninstalling it deletes the database, the history, the voice profiles and the server's identity (satellites must be paired again after a reinstall); keep-data uninstall comes later ([Not in this build](WINDOWS_HOST.md#not-in-this-build)). Your media is in an ordinary Windows folder: back that up like any other.
+**On the Windows installer** there is no backup tool yet, and no shell in its private Linux to dump the database from. Since 1.5.0 uninstalling keeps them by default (the database, the history, the voice profiles and the house's identity, in an administrators-only `C:\ProgramData\Domovoi-kept-<time>`), and the next Setup offers to use them, so the rooms reconnect ([Reinstalling without losing your rooms](WINDOWS_HOST.md#reinstalling-without-losing-your-rooms)). The house identity backup (Settings → System → About & updates) keeps the rooms working on a new PC too. Your media is in an ordinary Windows folder: back that up like any other.
 
 On Linux with the update unit, the box keeps its own copies too: a dump of the database before every update in `/var/lib/domovoi-update/backups/` (newest 5, root only) and, after a rollback, the replaced database as `domovoi_failed_<time>` (newest one). They hold everything the database holds, so count them when you move, sell or wipe the machine ([SECURITY_PRIVACY.md → Data at rest](SECURITY_PRIVACY.md#data-at-rest)).
 
@@ -527,7 +589,7 @@ Restore on a new machine: install Domovoi, start Postgres, restore the dump (`do
 
 **Either. Pick by what the box is.** There are three ways in, and the README's [First install](../README.md#first-install) has all of them.
 
-**Windows 11, the installer.** One download, `DomovoiSetup.exe`, sets up the same server as a Linux box, inside a private Linux (WSL2) that Windows runs for it. It is the easy way onto the household PC, which for many homes already has the best GPU in the house. It is unsigned for now (Windows asks first), and it has no backup tool or keep-data uninstall yet. Setup and what it changes: [WINDOWS_HOST.md](WINDOWS_HOST.md).
+**Windows 11, the installer.** One download, `DomovoiSetup.exe`, sets up the same server as a Linux box, inside a private Linux (WSL2) that Windows runs for it. It is the easy way onto the household PC, which for many homes already has the best GPU in the house. It is unsigned for now (Windows asks first), and it has no backup tool yet (its uninstaller keeps your data unless you ask it not to). Setup and what it changes: [WINDOWS_HOST.md](WINDOWS_HOST.md).
 
 **Linux** is the better host for a dedicated always-on machine. A headless install leaves several GB more RAM for models, speech recognition can use an NVIDIA GPU, wake-word training runs on the box's own Docker Engine (turned on from the dashboard, the GPU runtime set up by the install), and autostart is a systemd unit. On Ubuntu 26.04, Debian 13, Linux Mint 22 or Pop!_OS 24.04, one command installs it all. Setup: [LINUX_HOST.md](LINUX_HOST.md).
 

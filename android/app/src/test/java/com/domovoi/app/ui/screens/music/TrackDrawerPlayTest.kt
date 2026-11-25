@@ -82,7 +82,8 @@ class TrackDrawerPlayTest {
             CoverArt.noteFailure(api.absolute(CoverArt.libraryPath(track.id)), 404)
             val prefs = allocateWithoutConstructor(Prefs::class.java)
             setField(prefs, "serverUrl", MutableStateFlow(base))
-            setField(prefs, "deviceId", "android-test")
+            setField(prefs, "baseDeviceId", "android-test")
+            setField(prefs, "deviceIds", emptyMap<String, String>())
             // "Listening as" a person on this server: the room's mix follows them (P4).
             setField(prefs, "_listenerPicks", MutableStateFlow(mapOf(base to "3")))
             setField(prefs, "_sharedScreens", MutableStateFlow(emptyMap<String, Boolean>()))
@@ -94,6 +95,10 @@ class TrackDrawerPlayTest {
             setField(app, "prefs", prefs)
             setField(app, "api", api)
             setField(app, "bus", bus)
+            // The drawer reads whether admin is held here (its delete): not.
+            val admin = allocateWithoutConstructor(com.domovoi.app.net.AdminSession::class.java)
+            setField(admin, "state", MutableStateFlow<com.domovoi.app.net.AdminSession.State>(com.domovoi.app.net.AdminSession.State.SignedOut))
+            setField(app, "admin", admin)
 
             val tree = NodeTree()
             withHeadlessWindow {

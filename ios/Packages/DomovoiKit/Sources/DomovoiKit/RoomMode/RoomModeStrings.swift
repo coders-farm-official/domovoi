@@ -16,16 +16,18 @@ public enum RoomModeStrings {
 
     // MARK: - the entry card (`RoomModeEntryCard.kt`)
 
-    public static let entrySection = "this device"
-    public static let entryTitle = "Use this device as a room"
+    // Household words (1.5.0): a room is a place and this phone one device
+    // in it; room mode never says "satellite" (``RoomStatusText/entryTitle``).
+    public static let entrySection = "this phone"
+    public static let entryTitle = RoomStatusText.entryTitle
     public static let entryBody =
-        "A spare phone or tablet on its charger can be a room: it listens for the wake word and speaks, "
-            + "like any other room device. The normal app is locked while it is one."
-    public static let entryButton = "Use this device as a room"
+        "A spare phone or tablet on its charger can listen and speak in a room, on its own or beside the room's "
+            + "other devices. The normal app is locked while it does."
+    public static let entryButton = RoomStatusText.entryTitle
 
     // MARK: - the explainer (`RoomSetupActivity.kt:209-240`)
 
-    public static let explainerTitle = "Use this device as a room"
+    public static let explainerTitle = RoomStatusText.entryTitle
 
     /// Android's `CHARGER_TIP`, verbatim.
     public static let chargerTip = "Keep the phone on its charger: rooms are always on."
@@ -131,6 +133,8 @@ public enum RoomModeStrings {
     public static func serverKey(_ fingerprint: String) -> String { "Server key: \(fingerprint.prefix(20))…" }
     public static let compareKey = "Compare it with the dashboard's Settings → About & updates."
     public static let roomName = "room name"
+    /// With `in=` the name in the code is this phone's own (1.5.0).
+    public static let phoneName = "this phone's name"
     public static let becomeThisRoom = "Become this room"
     public static func micHeld(_ refusal: String) -> String { "\(refusal) Finish that first." }
     /// iOS-only: the Keychain would not take the room's key.

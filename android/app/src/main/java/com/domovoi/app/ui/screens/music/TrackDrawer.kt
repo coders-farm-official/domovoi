@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,11 +49,10 @@ import com.domovoi.app.ui.components.launchAction
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
 
-/** Where the library's upkeep is: rescanning, the tag fixer and deleting a
- *  track are admin on the server (reindex, enrich, DELETE
- *  /api/music/library/{id}), and a phone has no admin session, so the app
- *  offers none of them (the phone admin audit, 22 Nov 2026). The web keeps
- *  them on its admin-only Tools tab. */
+/** Where the library's upkeep is, on a shared screen: rescanning, the tag
+ *  fixer and deleting a track are admin on the server (reindex, enrich,
+ *  DELETE /api/music/library/{id}). With admin held here a track can be
+ *  deleted from the drawer (TrackAdminDelete.kt); see musicUpkeepLine. */
 internal const val MUSIC_UPKEEP_ON_DASHBOARD =
     "rescanning the library, fixing tags and deleting tracks are done on the dashboard"
 
@@ -69,8 +69,12 @@ internal fun TrackDrawer(
     /** The list the track was opened from, when there is one (a genre's
      *  songs): "play in <room>" then plays on through that list. */
     listContext: UpNextContext? = null,
+    /** The track was deleted (admin on this phone): close, read the list again. */
+    onDeleted: () -> Unit = onClose,
 ) {
     val app = LocalApp.current
+    val adminState by app.admin.state.collectAsState()
+    val sharedScreen = com.domovoi.app.net.LocalSharedScreen.current
     val toast = LocalToast.current
     val context = LocalContext.current
     // The app's scope, not this drawer's: "play in room" closes the drawer
@@ -276,8 +280,11 @@ internal fun TrackDrawer(
         }
 
         HorizontalDivider(color = Domovoi.colors.border)
+        if (com.domovoi.app.ui.screens.settings.deletesAdminHeld(adminState, sharedScreen)) {
+            TrackAdminDelete(track, onDeleted)
+        }
         Text(
-            MUSIC_UPKEEP_ON_DASHBOARD,
+            com.domovoi.app.ui.screens.settings.musicUpkeepLine(adminState, sharedScreen, MUSIC_UPKEEP_ON_DASHBOARD),
             style = MaterialTheme.typography.labelSmall,
             color = Domovoi.colors.fgMuted,
             modifier = Modifier

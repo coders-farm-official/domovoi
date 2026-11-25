@@ -138,6 +138,19 @@ _CANNED: list[tuple[str, str, str]] = [
             "Please try again in a moment."
         ),
     ),
+    # Played by a satellite whose server proved a DIFFERENT identity at its
+    # address (1.5.0, S3-4: the house was reinstalled without keeping its
+    # identity). The room keeps refusing it, so the advice is the only way
+    # forward: set it up again. Synced while the old server still served
+    # this room, which is why it ships before anyone needs it.
+    (
+        "server_changed.mp3",
+        "server_changed.voice",
+        (
+            "My Domovoi server has changed, so I can't connect to it. "
+            "Please set me up again from the Domovoi dashboard, in Settings, Rooms."
+        ),
+    ),
 ]
 
 

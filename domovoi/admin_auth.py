@@ -400,6 +400,21 @@ def setup_code_whereabouts() -> str:
     )
 
 
+def _print_setup_qr(code: str) -> None:
+    """Under a banner that already shows ``code`` on a terminal: the same
+    code as a QR a phone opens the dashboard with (:mod:`domovoi.setup_qr`,
+    the code in the URL fragment only). Best effort: a failure here never
+    stops the boot, and says nothing about the code."""
+    try:
+        from domovoi import setup_qr
+
+        block = setup_qr.terminal_block(code)
+        if block:
+            print(block, flush=True)
+    except Exception as e:  # pragma: no cover — never fatal
+        log.info("setup-code QR not shown: %s", type(e).__name__)
+
+
 async def ensure_setup_code_if_unclaimed() -> str | None:
     """Core-boot hook (§7.2): when no admin credential exists yet, make
     sure a setup code file exists so the operator can complete first-run
@@ -439,6 +454,7 @@ async def ensure_setup_code_if_unclaimed() -> str | None:
             "============================================================\n"
         )
         print(banner, flush=True)
+        _print_setup_qr(code)
     # Never the code: this line reaches the journal either way.
     log.warning("admin setup pending - %s", setup_code_whereabouts())
     return code
@@ -528,15 +544,18 @@ _sha256 = token_sha256  # internal alias
 
 # When the session last acted (or, never having acted, was minted).
 _LAST_ACTIVE_SQL = "COALESCE(last_used_at, created_at)"
-# When it stops: an hour after that, or at the 90-day cap if sooner.
+# When it stops: an hour after that, or at the 90-day cap if sooner, or at
+# its hard end (``hard_expires_at``, V074: a session minted from a phone
+# grant ends when the grant does; NULL for a password sign-in, and LEAST
+# ignores a NULL).
 _IDLE_DEADLINE_SQL = (
     f"LEAST({_LAST_ACTIVE_SQL} + make_interval(mins => :idle_min), "
-    "created_at + make_interval(days => :max_age_days))"
+    "created_at + make_interval(days => :max_age_days), hard_expires_at)"
 )
 # The deadline an admin action RIGHT NOW sets: what ``expires_at`` holds.
 _DEADLINE_FROM_NOW_SQL = (
     "LEAST(now() + make_interval(mins => :idle_min), "
-    "created_at + make_interval(days => :max_age_days))"
+    "created_at + make_interval(days => :max_age_days), hard_expires_at)"
 )
 # A live session by its row's own rules. ``expires_at`` is the idle
 # deadline for every session this code wrote; for one from before it is the
@@ -545,6 +564,7 @@ _DEADLINE_FROM_NOW_SQL = (
 # is refused, never trusted to stretch the hour.
 _SESSION_LIVE_SQL = (
     "expires_at > now() "
+    "AND (hard_expires_at IS NULL OR hard_expires_at > now()) "
     "AND created_at > now() - make_interval(days => :max_age_days) "
     f"AND {_LAST_ACTIVE_SQL} > now() - make_interval(mins => :idle_min) "
     f"AND {_LAST_ACTIVE_SQL} <= now() + make_interval(secs => :slack_sec)"
@@ -670,7 +690,10 @@ class AdminActivityMiddleware:
 async def prune_dead_sessions(session: AsyncSession) -> int:
     """Delete sessions that have been over (idle, expired or past the cap)
     for :data:`SESSION_PRUNE_AFTER_DAYS`. Run at each sign-in, so the table
-    holds the live sessions and the recently ended ones and nothing else."""
+    holds the live sessions and the recently ended ones and nothing else.
+    Phone grants past their end go at the same time (with any session they
+    minted, which ended with them: ``hard_expires_at``)."""
+    await session.execute(text("DELETE FROM admin_phone_grants WHERE expires_at <= now()"))
     result = await session.execute(
         text(
             "DELETE FROM admin_sessions WHERE "
@@ -682,23 +705,46 @@ async def prune_dead_sessions(session: AsyncSession) -> int:
     return len(result.all())
 
 
-async def create_session(session: AsyncSession, label: str | None = None) -> str:
+async def create_session(
+    session: AsyncSession,
+    label: str | None = None,
+    *,
+    phone_grant_id: int | None = None,
+    hard_expires_at: datetime | None = None,
+) -> str:
     """Mint a 256-bit bearer token; store only its sha256. Returns the
     raw token — the ONLY time it exists outside the caller's memory.
 
-    Called only once the password (login) or the setup code plus a new
+    Called once the password (login) or the setup code plus a new
     password (first-run setup) has been proved, so the row is stamped
     ``signed_in_at = now()`` and ``last_used_at = now()``: signing in is
-    the first admin action, and the idle hour counts from it."""
+    the first admin action, and the idle hour counts from it.
+
+    With ``phone_grant_id`` the session was minted from a phone grant
+    (:func:`exchange_phone_grant`), not the password: ``signed_in_at``
+    stays NULL, so it is never "freshly signed in" and can never mint a
+    grant of its own (:func:`signed_in_recently`). ``hard_expires_at``
+    is the grant's own end: the session is refused after it whatever its
+    idle hour says."""
     await prune_dead_sessions(session)
     token = secrets.token_hex(32)  # 256 bits
+    signed_in = "NULL" if phone_grant_id is not None else "now()"
     await session.execute(
         text(
             "INSERT INTO admin_sessions "
-            "(token_hash, label, expires_at, signed_in_at, last_used_at) "
-            "VALUES (:h, :label, now() + make_interval(mins => :idle_min), now(), now())"
+            "(token_hash, label, expires_at, signed_in_at, last_used_at, "
+            "phone_grant_id, hard_expires_at) "
+            "VALUES (:h, :label, LEAST(now() + make_interval(mins => :idle_min), "
+            "CAST(:hard AS timestamptz)), "
+            f"{signed_in}, now(), :grant, :hard)"
         ),
-        {"h": _sha256(token), "label": label, "idle_min": int(SESSION_IDLE_TIMEOUT_MIN)},
+        {
+            "h": _sha256(token),
+            "label": label,
+            "idle_min": int(SESSION_IDLE_TIMEOUT_MIN),
+            "grant": phone_grant_id,
+            "hard": hard_expires_at,
+        },
     )
     return token
 
@@ -977,7 +1023,7 @@ def clamp_reload_window(value: Any) -> int:
 # up) are at least 1.
 _RESUME_DEADLINE_SQL = (
     f"LEAST({_LAST_ACTIVE_SQL} + make_interval(mins => :w), "
-    "created_at + make_interval(days => :max_age_days))"
+    "created_at + make_interval(days => :max_age_days), hard_expires_at)"
 )
 # The session is live (its idle hour, its cap, and no last-activity stamp
 # from the future past the slack — review finding 3's rule, now on the
@@ -1473,6 +1519,244 @@ async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
     ]
 
 
+# ─── Phone grants: admin on a phone for the rest of the day (V074) ────────
+#
+# Owner-approved 2026-11-22; docs/SECURITY_PRIVACY.md, "Admin on a phone:
+# the day's grant". After a PASSWORD sign-in on a phone (signed_in_at
+# inside PHONE_GRANT_FRESH_SIGNIN_SEC), the phone may ask for a grant: 256
+# random bits, bound to its device id, ending PHONE_GRANT_TTL_HOURS after
+# issue whatever happens. The phone keeps it behind its biometrics and
+# swaps it (with the household token and the same device id) for a fresh
+# admin session when it needs a Bearer again. Only the sha256 is stored.
+# The session a grant mints has no signed_in_at, so it can never mint a
+# grant: a day of access needs the password, every day; and it ends when
+# the grant does (hard_expires_at), whatever its idle hour says. Deleting a grant
+# row (revoke, replace, password change, --reset-admin) ends the sessions
+# it minted too (admin_sessions.phone_grant_id, ON DELETE CASCADE).
+
+PHONE_GRANT_TTL_HOURS = 24
+# How recently the minting session must have proved the password.
+PHONE_GRANT_FRESH_SIGNIN_SEC = 300
+# Grants that ended this long ago are deleted when a new one is issued
+# (the table holds one row per device, so this only tidies the list).
+PHONE_GRANT_PRUNE_AFTER_DAYS = 1
+PHONE_GRANT_LABEL_MAX = 60
+PHONE_GRANT_DEVICE_ID_MIN = 3
+PHONE_GRANT_DEVICE_ID_MAX = 64
+
+# Compared against when a device id has no grant, so the answer takes the
+# same path (a constant-time compare) whether or not the id is known.
+_NO_GRANT_HASH = _sha256("\x00no-phone-grant\x00" + secrets.token_hex(32))
+
+
+async def signed_in_recently(session: AsyncSession, token: str | None) -> bool:
+    """Whether the live session ``token`` names proved the PASSWORD within
+    :data:`PHONE_GRANT_FRESH_SIGNIN_SEC`. ``signed_in_at`` is stamped only
+    by a password sign-in (login, setup, a password change); an admin
+    action, a resume or a grant exchange never moves it, so a kept-alive
+    or stolen Bearer is stale five minutes after its sign-in. A stamp from
+    the future past the clock slack is not trusted."""
+    if not token:
+        return False
+    row = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM admin_sessions WHERE token_hash = :h "
+                f"AND {_SESSION_LIVE_SQL} AND signed_in_at IS NOT NULL "
+                "AND signed_in_at > now() - make_interval(secs => :fresh) "
+                "AND signed_in_at <= now() + make_interval(secs => :slack_sec)"
+            ),
+            {
+                "h": _sha256(token),
+                "fresh": float(PHONE_GRANT_FRESH_SIGNIN_SEC),
+                **_clock_params(),
+            },
+        )
+    ).first()
+    return row is not None
+
+
+async def session_live_by_hash(session: AsyncSession, token_hash: str) -> bool:
+    """Whether the session stored as ``token_hash`` is still live (its idle
+    hour, the 90-day cap, its grant's end). Read-only. For a long-lived
+    socket that keeps only the hash of the Bearer that opened it (the
+    support session, domovoi/support_sessions.py)."""
+    row = (
+        await session.execute(
+            text(f"SELECT 1 FROM admin_sessions WHERE token_hash = :h AND {_SESSION_LIVE_SQL}"),
+            {"h": token_hash, **_clock_params()},
+        )
+    ).first()
+    return row is not None
+
+
+async def stamp_admin_activity_by_hash(token_hash: str) -> bool:
+    """:func:`stamp_admin_activity` for a caller that holds only the hash:
+    restart the idle hour of the live session ``token_hash`` names."""
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                text(
+                    "UPDATE admin_sessions SET last_used_at = now(), "
+                    f"expires_at = {_DEADLINE_FROM_NOW_SQL} "
+                    f"WHERE token_hash = :h AND {_SESSION_LIVE_SQL} RETURNING 1"
+                ),
+                {"h": token_hash, **_clock_params()},
+            )
+        ).first()
+    return row is not None
+
+
+async def session_label(session: AsyncSession, token_hash: str) -> str | None:
+    """The label of the session stored as ``token_hash`` (None if gone)."""
+    row = (
+        await session.execute(
+            text("SELECT label FROM admin_sessions WHERE token_hash = :h"), {"h": token_hash}
+        )
+    ).first()
+    return row.label if row is not None else None
+
+
+async def issue_phone_grant(
+    session: AsyncSession, device_id: str, label: str
+) -> tuple[str, datetime]:
+    """Mint a grant for ``device_id``, replacing any it had (and with it
+    the sessions the old one minted). Returns ``(grant, expires_at)``; the
+    raw grant exists nowhere else. The caller has checked the admin
+    Bearer, its freshness and the household token."""
+    await session.execute(
+        text(
+            "DELETE FROM admin_phone_grants WHERE device_id = :d "
+            "OR expires_at < now() - make_interval(days => :prune)"
+        ),
+        {"d": device_id, "prune": int(PHONE_GRANT_PRUNE_AFTER_DAYS)},
+    )
+    grant = secrets.token_hex(32)  # 256 bits
+    row = (
+        await session.execute(
+            text(
+                "INSERT INTO admin_phone_grants (grant_hash, device_id, label, expires_at) "
+                "VALUES (:h, :d, :label, now() + make_interval(hours => :ttl)) "
+                "RETURNING expires_at"
+            ),
+            {
+                "h": _sha256(grant),
+                "d": device_id,
+                "label": label,
+                "ttl": int(PHONE_GRANT_TTL_HOURS),
+            },
+        )
+    ).one()
+    return grant, row.expires_at
+
+
+PhoneGrantRefusal = Literal["invalid", "expired"]
+
+
+async def exchange_phone_grant(
+    session: AsyncSession, grant: str, device_id: str
+) -> tuple[str, datetime] | PhoneGrantRefusal:
+    """Swap a grant for a fresh admin session labelled ``phone: <label>``.
+
+    The row is found by ``device_id`` and its hash compared in constant
+    time, so a grant presented with another device's id is refused exactly
+    like a wrong grant (``"invalid"``). A matching grant past its end is
+    deleted and answers ``"expired"``. On success the grant's
+    ``last_used_at`` is stamped and ``(token, grant_expires_at)`` returned.
+    The row is locked for the swap, so a revoke racing it either lands
+    first (refused) or after (and ends the new session with the grant)."""
+    row = (
+        await session.execute(
+            text(
+                "SELECT id, grant_hash, label, expires_at, (expires_at > now()) AS live "
+                "FROM admin_phone_grants WHERE device_id = :d FOR UPDATE"
+            ),
+            {"d": device_id},
+        )
+    ).first()
+    stored = row.grant_hash if row is not None else _NO_GRANT_HASH
+    if not hmac.compare_digest(_sha256(grant), stored) or row is None:
+        return "invalid"
+    if not row.live:
+        await session.execute(
+            text("DELETE FROM admin_phone_grants WHERE id = :id"), {"id": row.id}
+        )
+        return "expired"
+    await session.execute(
+        text("UPDATE admin_phone_grants SET last_used_at = now() WHERE id = :id"),
+        {"id": row.id},
+    )
+    token = await create_session(
+        session, label=f"phone: {row.label}", phone_grant_id=row.id,
+        hard_expires_at=row.expires_at,
+    )
+    return token, row.expires_at
+
+
+async def revoke_phone_grant_by_secret(session: AsyncSession, grant: str) -> bool:
+    """The phone's own sign-out: delete the grant it holds (and the
+    sessions it minted). Whether one existed is for the log only."""
+    row = (
+        await session.execute(
+            text("DELETE FROM admin_phone_grants WHERE grant_hash = :h RETURNING 1"),
+            {"h": _sha256(grant)},
+        )
+    ).first()
+    return row is not None
+
+
+async def revoke_phone_grant(session: AsyncSession, grant_id: int) -> bool:
+    """An admin's revoke from the dashboard list."""
+    row = (
+        await session.execute(
+            text("DELETE FROM admin_phone_grants WHERE id = :id RETURNING 1"),
+            {"id": grant_id},
+        )
+    ).first()
+    return row is not None
+
+
+async def revoke_all_phone_grants(
+    session: AsyncSession, keep_token_hash: str | None = None
+) -> int:
+    """Delete every grant (an admin password change). The session making
+    the change is kept even when a grant minted it: it is detached first,
+    so the cascade does not end the session that just proved the
+    password."""
+    if keep_token_hash is not None:
+        await session.execute(
+            text("UPDATE admin_sessions SET phone_grant_id = NULL WHERE token_hash = :h"),
+            {"h": keep_token_hash},
+        )
+    result = await session.execute(text("DELETE FROM admin_phone_grants RETURNING 1"))
+    return len(result.all())
+
+
+async def list_phone_grants(session: AsyncSession) -> list[dict[str, Any]]:
+    """Every grant, newest first: never the hash, never the secret."""
+    rows = (
+        await session.execute(
+            text(
+                "SELECT id, device_id, label, created_at, expires_at, last_used_at, "
+                "(expires_at > now()) AS live FROM admin_phone_grants "
+                "ORDER BY created_at DESC, id DESC"
+            )
+        )
+    ).all()
+    return [
+        {
+            "id": int(r.id),
+            "device_id": r.device_id,
+            "label": r.label,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+            "live": bool(r.live),
+        }
+        for r in rows
+    ]
+
+
 async def reset_admin() -> str:
     """``--reset-admin`` (§7.2 password recovery): drop the credential
     and every session, regenerate + persist a fresh setup code. Returns
@@ -1482,6 +1766,7 @@ async def reset_admin() -> str:
     setup completes again."""
     async with session_scope() as s:
         await s.execute(text("DELETE FROM admin_sessions"))
+        await s.execute(text("DELETE FROM admin_phone_grants"))
         await s.execute(text("DELETE FROM admin_auth"))
     code = generate_setup_code()
     write_setup_code(code)
@@ -2210,6 +2495,9 @@ class LoginBackoff:
         self._global: list[float] = []
         # source -> the global timestamp of its outstanding reservation
         self._reserved: dict[str, float] = {}
+        # source -> the last-failure time before its reservation, so a
+        # released attempt leaves the wait where it was
+        self._prior_last: dict[str, float] = {}
 
     def _prune_global(self, now: float) -> None:
         cutoff = now - GLOBAL_LOGIN_WINDOW_SEC
@@ -2251,6 +2539,7 @@ class LoginBackoff:
     def record_failure(self, source: str) -> None:
         """A confirmed failure. If the attempt was :meth:`reserve`d this
         is a no-op on the counters — the reservation already counted it."""
+        self._prior_last.pop(source, None)
         if self._reserved.pop(source, None) is None:
             self._count(source)
 
@@ -2261,14 +2550,17 @@ class LoginBackoff:
         source could all pass the check before any of them was recorded.
         Reserving up front closes that window: the attempt is a failure
         until :meth:`record_success` says otherwise."""
+        self._prior_last[source] = self._failures.get(source, (0, 0.0))[1]
         self._reserved[source] = self._count(source)
 
     def release(self, source: str) -> None:
         """Hand back an outstanding reservation WITHOUT a verdict: the check
         could not run (the database did not answer), so the attempt was
-        neither a failure nor a success. Undoes what :meth:`reserve` counted;
-        the streak before it is left as it was."""
+        neither a failure nor a success; or the attempt said nothing about
+        the password (a good phone-grant exchange). Undoes what :meth:`reserve` counted,
+        and the streak and its wait are left as they were."""
         reserved = self._reserved.pop(source, None)
+        prior_last = self._prior_last.pop(source, None)
         if reserved is None:
             return
         try:
@@ -2281,7 +2573,9 @@ class LoginBackoff:
             if failures <= 1:
                 self._failures.pop(source, None)
             else:
-                self._failures[source] = (failures - 1, last)
+                self._failures[source] = (
+                    failures - 1, last if prior_last is None else prior_last
+                )
 
     def record_success(self, source: str) -> None:
         # Clears the source's OWN streak. A reservation this attempt made
@@ -2290,6 +2584,7 @@ class LoginBackoff:
         # ceiling is an aggregate-abuse backstop and drains only on its
         # own clock, so a single success can't reset it.
         self._failures.pop(source, None)
+        self._prior_last.pop(source, None)
         reserved = self._reserved.pop(source, None)
         if reserved is not None:
             try:
@@ -2301,6 +2596,7 @@ class LoginBackoff:
         self._failures.clear()
         self._global.clear()
         self._reserved.clear()
+        self._prior_last.clear()
 
 
 LOGIN_BACKOFF = LoginBackoff()

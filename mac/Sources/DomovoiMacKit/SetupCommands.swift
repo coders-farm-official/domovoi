@@ -6,10 +6,14 @@ import Foundation
 /// `--repair` met a parser that wanted a value for it, and no test saw it).
 public enum SetupCommands {
     /// `install --system`: with the answers file (a first install), or nil
-    /// for a repair from the saved answers.
-    public static func install(forUID uid: uid_t, codeTo: String, answersFile: String?) -> [String] {
+    /// for a repair from the saved answers. `kit`: the offline kit the setup
+    /// pages checked and showed (`--kit DIR`), or nil, `--no-kit`: the
+    /// helper then never takes a stick plugged in since, so what it does is
+    /// what the pages said.
+    public static func install(forUID uid: uid_t, codeTo: String, answersFile: String?, kit: String? = nil) -> [String] {
         var a = ["install", "--system", "--for-uid", String(uid), "--code-to", codeTo]
         if let f = answersFile { a += ["--answers", f] } else { a.append("--repair") }
+        if let k = kit { a += ["--kit", k] } else { a.append("--no-kit") }
         return a
     }
 
@@ -168,7 +172,8 @@ public enum SetupCommands {
             } catch { throw HelperError("can't read the answers in \(f): \(error)") }
         }
         var media = MediaMount.defaultNames
-        if a.flag("repair") {
+        let repair = a.flag("repair")
+        if repair {
             guard let rec = try RecordStore.load(layout.installRecord) else { throw HelperError("--repair: Domovoi isn't installed (no install record)") }
             answers = SetupAnswers(internet: rec.answers.internet, mediaRoot: rec.answers.mediaRoot,
                                    ollama: rec.answers.ollama.hasPrefix("existing") ? "existing" : "own", keepAwake: rec.answers.keepAwake,
@@ -192,12 +197,49 @@ public enum SetupCommands {
         let seed = share.appendingPathComponent("seed", isDirectory: true)
         if FileManager.default.fileExists(atPath: seed.path) { o.seedCache = [seed] }
         _ = a.value("code-to")   // read after the install (handOverSetupCode)
-        if let uid = try a.int("for-uid") {
+        let forUID = try a.int("for-uid")
+        if let uid = forUID {
             guard uid >= 500, let pw = getpwuid(uid_t(uid)) else { throw HelperError("--for-uid \(uid) is no person's account on this Mac") }
             o.mediaOwner = String(cString: pw.pointee.pw_name)
         }
+        // Read now, once, into memory (IdentityBackup.read: the account's
+        // own regular file, no link): the step later hands these bytes on.
+        // A repair's answers come from the record, which never holds it.
+        if let f = answers?.restoreIdentity {
+            guard let uid = forUID else { throw HelperError("restoring a house identity needs --for-uid (the account that chose the file)") }
+            o.restoreIdentity = try IdentityBackup.read(path: f, owner: uid_t(uid))
+        }
         o.stopAfter = a.value("stop-after")
         if let s = o.stopAfter, !Installer.steps.contains(s) { throw HelperError("--stop-after: no step \(s)") }
+        o.isRepair = repair
+        if repair, let rec = try RecordStore.load(layout.installRecord) { o.tier = rec.answers.tier }
+        o.kitRequest = try kitRequest(&a)
         return o
+    }
+
+    /// --kit DIR, --no-kit, or neither (the helper looks in /Volumes).
+    public static func kitRequest(_ a: inout Args) throws -> KitSetup.Request {
+        let given = a.value("kit"), off = a.flag("no-kit")
+        if given != nil && off { throw HelperError("--kit or --no-kit, not both") }
+        if let g = given {
+            guard g.hasPrefix("/") else { throw HelperError("--kit takes the kit's folder as an absolute path (the stick, e.g. /Volumes/DOMOVOIKIT)") }
+            return .path(g)
+        }
+        return off ? .off : .auto
+    }
+
+    /// The system install's offline kit, checked as root before anything
+    /// runs (the setup pages checked it as the person too): `o.kit`, and the
+    /// tier its models give. Throws, with the reasons, when a kit that must
+    /// be used can't be.
+    public static func resolveKit(_ o: inout InstallOptions, volumes: URL = KitNames.volumes, trust: (URL) -> Bool = PinnedRelease.rootOnly,
+                                  log: (String) -> Void) throws {
+        guard o.kitRequest != .off else { return }
+        var want = try KitSetup.expectation(share: o.share, tier: o.tier, trust: trust)
+        want.repair = o.isRepair
+        if case .existing = o.ollama { want.ownOllama = false }
+        guard let kit = try KitSetup.resolve(o.kitRequest, want: want, volumes: volumes, log: log) else { return }
+        o.kit = kit
+        o.tier = kit.tier
     }
 }

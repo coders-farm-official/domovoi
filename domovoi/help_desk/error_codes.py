@@ -56,6 +56,15 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "that would go online is refused. An admin can change the answer to Yes or Sometimes.",
         "internet",
     ),
+    # ── "this is me": a device acting as its person ─────────────────────
+    "claim_key_required": _e(
+        "This phone or browser can't prove whose it is",
+        "Changing a person's own settings (their music mix) from a phone or browser needs the "
+        "key it was handed when it said \"this is me\" on that person's People page. This one "
+        "has no key, or an out-of-date one: say \"this is me\" again on the person's People page "
+        "(Settings → Household → People), or ask an admin to make the change.",
+        "people",
+    ),
     # ── chat replies (stats.error_code) ──────────────────────────────────
     "model_missing": _e(
         "The chat model isn't installed",
@@ -319,6 +328,13 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "won't do it.", "plugins"),
     "downgrade_requires_force": _e("That version is older",
                                    "Installing an older version needs the admin to confirm it.", "plugins"),
+    "checksum_mismatch": _e("The update didn't match its checksum",
+                            "The downloaded plugin file isn't the one its release lists, so nothing was "
+                            "installed. Try the update again later; if it keeps happening, tell the "
+                            "plugin's author.", "plugins"),
+    "checksum_missing": _e("The release has no checksum for this file",
+                           "The plugin's release lists no checksum for its zip, so Domovoi didn't install "
+                           "it." + _PLUGIN_AUTHOR, "plugins"),
     "endpoint_tier_conflict": _e("The plugin's routes disagree",
                                  "The plugin declares a route on two access levels." + _PLUGIN_AUTHOR, "plugins"),
     "github_download_failed": _e("The download from GitHub failed",
@@ -365,7 +381,10 @@ ERROR_CODES: dict[str, ErrorHelp] = {
                              "build here)." + _PLUGIN_RETRY, "plugins"),
     "plugin_file_too_large": _e("A file in the plugin is too large", "One of its files is over the limit." + _PLUGIN_ZIP,
                                 "plugins"),
-    "requirements_conflict": _e("The plugin needs other versions of Domovoi's packages",
+    "repo_changed": _e("The plugin's repository moved or changed owner",
+                       "Its GitHub repository isn't the one it was installed from, so no update is installed "
+                       "from it. Reinstall the plugin from its new address if you trust it.", "plugins"),
+    "requirements_conflict":_e("The plugin needs other versions of Domovoi's packages",
                                 "Its requirements clash with what Domovoi uses." + _PLUGIN_AUTHOR, "plugins"),
     "requirements_sdist": _e("The plugin needs a package that would be built here",
                              "Domovoi installs only prebuilt packages." + _PLUGIN_AUTHOR, "plugins"),

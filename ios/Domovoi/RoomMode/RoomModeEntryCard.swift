@@ -1,7 +1,7 @@
 import DomovoiKit
 import SwiftUI
 
-/// Settings → Rooms: "Use this device as a room" — opens room mode's setup
+/// Settings → Rooms: "Use this phone in a room" — opens room mode's setup
 /// (`roommode/RoomModeEntryCard.kt`). Also on the no-server shell
 /// (ROOMMODE-MAP D11), where Android's own "Domovoi Room" launcher icon is
 /// the way in on a phone that was never paired; an iPhone has one icon.

@@ -12,9 +12,11 @@ import java.text.Normalizer
  * server identity to hold it to, and the room it is for. The shared
  * payload (the Linux install command carries the same string):
  *
- *     domovoi-room:1?core=<core base URL>&fp=<SHA256:… fingerprint>&room=<room name>
+ *     domovoi-room:1?core=<core base URL>&fp=<SHA256:… fingerprint>&room=<room name>[&in=<room id>]
  *
- * percent-encoded UTF-8, with no secret in it: the room's pairing key is
+ * (`in=`, 1.5.0: "Add a satellite to the Kitchen" names the device in
+ * `room` and the existing room it joins in `in`), percent-encoded UTF-8,
+ * with no secret in it: the room's pairing key is
  * minted on the phone and only its hash ever reaches the server, after a
  * person approves the device on the dashboard. The fingerprint is what
  * makes the first connect safe — the phone refuses any server that cannot
@@ -37,8 +39,21 @@ data class Enrolment(
     val fingerprint: String,
     /** The room id the phone connects as: `^[a-z][a-z0-9_]{0,31}$`. */
     val roomId: String,
-    /** The room's name exactly as the payload carried it. */
+    /** The room's name exactly as the payload carried it. With [inRoom]
+     *  set it is this device's own name ("Kitchen 2"). */
     val roomLabel: String,
+    /**
+     * `in=` (1.5.0): the existing room this device joins ("Add a satellite
+     * to the Kitchen" on the dashboard makes `room=Kitchen%202&in=kitchen`);
+     * null: a room of its own. Sent in the hello as `requested_room` until
+     * the device is approved. A value that is not a room id
+     * ([RoomEnrolment.isRoomId]) is ignored, like an unknown key.
+     */
+    val inRoom: String? = null,
+    /** The name of the room [inRoom] names, as far as the payload tells
+     *  ([RoomEnrolment.invitedRoomName]); null without [inRoom]. What the
+     *  phone says it joins until the server names the room in `ready`. */
+    val inRoomName: String? = null,
 ) {
     /** The satellite socket's base: the core URL with ws/wss. */
     val wsUrl: String get() = if (coreUrl.startsWith("https://")) "wss://" + coreUrl.removePrefix("https://") else "ws://" + coreUrl.removePrefix("http://")
@@ -59,6 +74,14 @@ object RoomEnrolment {
 
     /** The core's room-id rule (domovoi/main.py `_ROOM_ID_RE`). */
     val ROOM_ID = Regex("^[a-z][a-z0-9_]{0,31}$")
+
+    /** A room id coming in from outside (domovoi/room_ids.py `is_room_id`):
+     *  [ROOM_ID], or a setup portal's slug (a leading digit, dashes). */
+    private val ACCEPTED_ROOM_ID = Regex("^[a-z0-9][a-z0-9_-]{0,31}$")
+
+    /** A trailing " 2", " 3"…: what the core adds to a room's name to name
+     *  one more satellite of it (domovoi/room_invites.py `invite`). */
+    private val DEVICE_NUMBER = Regex("\\s+[0-9]+$")
     private val FP = Regex("^SHA256:[A-Za-z0-9+/]{43}$")
     private val KEY = Regex("^[a-z][a-z0-9_]{0,31}$")
     private val HOST_NAME = Regex("[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?")
@@ -169,8 +192,24 @@ object RoomEnrolment {
         val fp = fields.getValue("fp")
         if (!FP.matches(fp)) throw Refused(Reason.BAD_FP, "the fingerprint must be SHA256: and 43 base64 characters")
         val room = checkRoomName(fields.getValue("room"))
-        return Enrolment(core, fp, roomIdOrThrow(room), room)
+        val inRoom = fields["in"]?.takeIf { isRoomId(it) }
+        return Enrolment(core, fp, roomIdOrThrow(room), room, inRoom, inRoom?.let { invitedRoomName(room) })
     }
+
+    /** What a room id coming in from outside may be (domovoi/room_ids.py
+     *  `is_room_id`): lowercase letters, digits, `_` and `-`, starting with
+     *  a letter or digit, at most 32 characters. */
+    fun isRoomId(value: String?): Boolean = value != null && ACCEPTED_ROOM_ID.matches(value)
+
+    /**
+     * The room's name from an invitation's device name: the core names one
+     * more satellite of the Kitchen "Kitchen 2" (domovoi/room_invites.py),
+     * so the room is the name without its number. A name with no number
+     * (one an admin typed) is taken as it is. The server says the room's
+     * own name in `ready.room`, which then wins.
+     */
+    fun invitedRoomName(deviceName: String): String =
+        deviceName.replace(DEVICE_NUMBER, "").trim().ifEmpty { deviceName }
 
     // ── the room id ─────────────────────────────────────────────────────
 

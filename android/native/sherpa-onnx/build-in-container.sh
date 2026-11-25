@@ -74,9 +74,11 @@ if [ "$tag_now" != "$SHERPA_COMMIT" ]; then
 fi
 
 # ── Build ────────────────────────────────────────────────────────────────
-# Sources unset, so build-native.sh clones each at its pinned commit, as
-# F-Droid's srclibs are.
-ANDROID_NDK=$NDK ORT_AAR=/work/$ORT_AAR_NAME WORK=/work OUT=/out \
+# Sources unset and the submodules off (/src is this folder alone, where a
+# checked-out submodule's git data isn't reachable), so build-native.sh
+# clones each at its pinned commit: the same commits as the submodules,
+# the same files.
+ANDROID_NDK=$NDK ORT_AAR=/work/$ORT_AAR_NAME SHERPA_WORK=/work SHERPA_OUT=/out SHERPA_SUBMODULES=no \
   ABIS="${ALL_ABIS[*]}" bash /src/build-native.sh
 
 # ── Record ───────────────────────────────────────────────────────────────

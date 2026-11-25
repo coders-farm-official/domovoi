@@ -121,6 +121,15 @@ public struct InstallRecord: Codable, Equatable {
     /// uninstall, so a reinstall gives the kept files the same owner).
     public var roleAccount: String?
     public var roleUID: Int?
+    /// The offline kit's folder while the VM's settings share it in
+    /// (LimaTemplate kitMount), nil otherwise. A run that ends with it still
+    /// set (provisioning stopped, then taking it out failed) has the next
+    /// run take it out before the VM starts: with the stick gone, the VM
+    /// couldn't start with it.
+    public var kitMount: String?
+    /// The release an install from an offline kit installed ("1.5.0 v1.5.0
+    /// <commit>"), for the log and support; nil for an install with internet.
+    public var installedFromKit: String?
 
     public init(mode: Layout.Mode, root: String, answers: Answers, launchdDomain: String) {
         self.mode = mode

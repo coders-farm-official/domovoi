@@ -21,13 +21,20 @@
 //   account --exe PATH [--no-deny-logon]
 //   media
 //   firewall [--subnet CIDR]
-//   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--track-branch stable|main] [--lan-ip IP|auto|none]
+//   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--track-branch stable|main] [--lan-ip IP|auto|none] [--kit DIR]
+//       [--restore-identity FILE] [--import-in-place]   S3-4: a house identity backup; the kept disk
+//   kit-check --kit DIR --commit SHA --version V --ubuntu-name N --ubuntu-sha256 H
+//             --wsl-msi-name N --wsl-msi-sha256 H [--need-wsl] [--provision-sha256 H]   read-only (KitCheck.cs)
+//   Any verb with --offline: an install from an offline kit; nothing may
+//   reach beyond this PC (NetGuard throws).
 //   check-media --root DIR                          read-only
 //   host-start | host-retry | host-park | setup-code | record-ai
 //   run-update --from DIR --run NAME --tag T [--commit SHA] [--linuxfirst]   the Windows step, elevated (Update.cs)
 //   linux-update [--wait] [--run NAME]              the Linux part of the Windows update (Update.cs)
 //   saved-answers                                   read-only: the answers Setup's update mode keeps
-//   uninstall [--dry-run]                           exit 3: done, with leftovers
+//   adopt-kept --dir DIR                            S3-4: move a kept distro disk back in
+//   kept-data | check-backup --file FILE            S3-4, read-only: kept data; a backup's shape
+//   uninstall [--dry-run] [--keep-data]             exit 3: done, with leftovers
 //   copy-logs --kind install|uninstall --dest DIR [--uninstall-log FILE] [--note ID]   (ID: the tray's note, common\LogsFolder.cs)
 
 using System;
@@ -66,7 +73,7 @@ namespace Domovoi.Windows.Helper
 
     static class Program
     {
-        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "check-media", "saved-answers", "help" };
+        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "check-media", "saved-answers", "kit-check", "kept-data", "check-backup", "help" };
 
         static int Main(string[] argv)
         {
@@ -82,6 +89,7 @@ namespace Domovoi.Windows.Helper
             catch (ArgumentException e) { Console.Out.WriteLine("error=" + e.Message); return 2; }
 
             bool dry = a.Flag("--dry-run");
+            NetGuard.Offline = a.Flag("--offline");
             bool elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
             if (!ReadOnly.Contains(verb) && !(verb == "uninstall" && dry) && !elevated)
             {
@@ -125,21 +133,26 @@ namespace Domovoi.Windows.Helper
                     case "firewall": Steps.FirewallRules(o, a.Opt("--subnet")); return 0;
                     case "job":
                         Steps.WriteJob(o, a.Req("--image"), a.Req("--image-sha256"), a.Req("--provision"), a.Req("--provision-sha256"),
-                            a.Req("--repo-url"), a.Req("--ref"), a.Opt("--track-branch") ?? "stable", a.Opt("--lan-ip") ?? "auto");
+                            a.Req("--repo-url"), a.Req("--ref"), a.Opt("--track-branch") ?? "stable", a.Opt("--lan-ip") ?? "auto", a.Opt("--kit"),
+                            a.Opt("--restore-identity"), a.Flag("--import-in-place"));
                         return 0;
+                    case "kit-check": KitCheck.Run(o, a); return 0;
                     case "host-start": Steps.HostStart(o); return 0;
                     case "host-status": Steps.HostStatusOut(o); return 0;
                     case "host-retry": Steps.HostRetry(o); return 0;
                     case "host-park": Steps.HostPark(o); return 0;
                     case "check-media": Steps.CheckMedia(o, a.Req("--root")); return 0;
-                    case "setup-code": return Steps.ReadSetupCode(o);
+                    case "setup-code": return Steps.ReadSetupCode(o, a.Opt("--lan-ip"));
                     case "saved-ai": Steps.SavedAi(o); return 0;
                     case "record-ai": Steps.RecordAi(o); return 0;
                     case "plan": Steps.Plan(o); return 0;
                     case "linux-update": return Update.LinuxUpdate(o, a.Flag("--wait"), a.Opt("--run"));
                     case "run-update": return Update.RunUpdate(o, a.Req("--from"), a.Req("--run"), a.Req("--tag"), a.Opt("--commit"), a.Flag("--linuxfirst"));
                     case "saved-answers": Update.SavedAnswers(o); return 0;
-                    case "uninstall": return Uninstall.Run(o, dry);
+                    case "uninstall": return Uninstall.Run(o, dry, a.Flag("--keep-data"));
+                    case "adopt-kept": KeptData.Adopt(o, a.Req("--dir")); return 0;
+                    case "kept-data": KeptData.Find(o); return 0;
+                    case "check-backup": o.Kv("fingerprint", BackupShape.Fingerprint(KeptData.ReadBackup(a.Req("--file")))); return 0;
                     case "copy-logs": Logs.Copy(o, a.Req("--dest"), a.Req("--kind"), a.Opt("--uninstall-log"), a.Opt("--note")); return 0;
                     default:
                         o.Kv("error", "unknown verb: " + verb);
@@ -166,7 +179,7 @@ namespace Domovoi.Windows.Helper
             {
                 string k = argv[i];
                 if (!k.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("unexpected argument: " + k);
-                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--have-image" || k == "--no-deny-logon" || k == "--installing" || k == "--wait" || k == "--linuxfirst") { flags.Add(k); continue; }
+                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--have-image" || k == "--no-deny-logon" || k == "--installing" || k == "--wait" || k == "--linuxfirst" || k == "--offline" || k == "--need-wsl" || k == "--keep-data" || k == "--import-in-place") { flags.Add(k); continue; }
                 if (i + 1 >= argv.Length) throw new ArgumentException(k + " needs a value");
                 values[k] = argv[++i];
             }

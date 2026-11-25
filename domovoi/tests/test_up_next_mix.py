@@ -241,19 +241,34 @@ async def test_person_mix_is_an_admins_or_that_persons_own_phone(_db, clean):
     async with engine.begin() as conn:
         alex = (await conn.execute(text("INSERT INTO people (name) VALUES ('Alex') RETURNING id"))).scalar_one()
         sam = (await conn.execute(text("INSERT INTO people (name) VALUES ('Sam') RETURNING id"))).scalar_one()
-        for dev_id, owner in (("phone-alex", alex), ("phone-none", None)):
+        from web.backend.api.devices import claim_key_hash
+
+        for dev_id, owner, key in (("phone-alex", alex, "alex-key"), ("phone-none", None, None),
+                                   ("phone-alex-old", alex, None)):
             await conn.execute(text(
-                "INSERT INTO devices (device_id, name, owner_person_id) VALUES (:d, :d, :o)"), {"d": dev_id, "o": owner})
+                "INSERT INTO devices (device_id, name, owner_person_id, claim_key_hash) VALUES (:d, :d, :o, :h)"),
+                {"d": dev_id, "o": owner, "h": claim_key_hash(key) if key else None})
     body = {"override": {"discovery_favorites": 2, "close_wander": 4}}
 
-    def device(dev_id):
-        return web_client(headers={"X-Requested-With": "t", HEADER: token, "X-Device-Id": dev_id})
+    def device(dev_id, key=None):
+        headers = {"X-Requested-With": "t", HEADER: token, "X-Device-Id": dev_id}
+        if key:
+            headers["X-Domovoi-Claim-Key"] = key
+        return web_client(headers=headers)
 
     adm = web_client(headers={"X-Requested-With": "t", "Authorization": f"Bearer {admin_token}"})
-    async with device("phone-none") as nobody, device("phone-alex") as mine, adm as admin:
+    async with device("phone-none") as nobody, device("phone-alex", "alex-key") as mine, \
+            device("phone-alex") as keyless, device("phone-alex", "wrong") as wrong_key, \
+            device("phone-alex-old", "anything") as unkeyed, adm as admin:
         # No claim: refused on both.
         r = await nobody.put(f"/api/people/{alex}/music-mix", json=body)
         assert r.status_code == 403 and "own phone" in r.json()["detail"]
+        # L40 (1.5.0): claimed as Alex, but without Alex's claim key (none
+        # sent, a wrong one, or a claim from before keys): refused, coded.
+        for c in (keyless, wrong_key, unkeyed):
+            r = await c.put(f"/api/people/{alex}/music-mix", json=body)
+            assert r.status_code == 403 and r.json()["code"] == "claim_key_required", r.text
+        assert (await admin.get(f"/api/people/{alex}/music-mix")).json()["override"] is None
         assert (await nobody.put("/api/music/mix", json={"autoplay": False})).status_code in (401, 403)
         # Claimed as Alex: Alex's own, not Sam's, not the household's.
         assert (await mine.put(f"/api/people/{alex}/music-mix", json=body)).status_code == 200

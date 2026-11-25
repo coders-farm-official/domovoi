@@ -492,7 +492,7 @@ async def _clean_satellites():
 
     async def wipe():
         async with engine.begin() as conn:
-            await conn.execute(text("TRUNCATE satellite_approvals, satellite_pairings, satellites CASCADE"))
+            await conn.execute(text("TRUNCATE satellite_approvals, satellite_pairings, satellites, rooms CASCADE"))
 
     await wipe()
     yield

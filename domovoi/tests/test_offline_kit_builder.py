@@ -1,0 +1,1221 @@
+"""The offline kit's builder (release 1.5.0, phase P1; domovoi/kit_builder/,
+docs/OFFLINE_KIT.md "Making a kit").
+
+Fakes stand in for Docker, apt, Ollama, PyPI and the network: no test here
+downloads anything or needs mtools. The pins are the repository's own, so
+a pin file that stops parsing fails here. The real FAT32 image is built by
+test_offline_kit_e2e.py (gated: it needs mkfs.fat and mcopy).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import os
+import subprocess
+import re
+import tarfile
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from domovoi import egress
+from domovoi.kit_builder import (
+    apt_mirror, fatimage, fetch, guide, host, images, jobs, licences, ollama_store, parts, pins, plan,
+    wheels,
+)
+from domovoi.kit_builder.parts import Ctx, Part, Release
+from domovoi.offline_kit import FolderSink, Source, verify
+
+REPO = Path(__file__).resolve().parents[2]
+COMMIT = "a" * 40
+
+
+def repo_read(path: str) -> str:
+    return (REPO / path).read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def kit_home(tmp_path, monkeypatch):
+    root = tmp_path / "offline_kit"
+    monkeypatch.setattr(host, "kit_root", lambda: root)
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: False)
+    monkeypatch.setenv("DOMOVOI_KIT_OLLAMA_MODELS", "")
+    monkeypatch.setattr(host, "LINUX_OLLAMA_DIRS", ())
+    jobs._cancel.clear()
+    jobs._job.update(running=False, work=None)
+    plan.invalidate()
+    return root
+
+
+# ─── pins ────────────────────────────────────────────────────────────────
+
+def test_the_pins_are_read_from_the_release_commit_s_own_files():
+    p = pins.load(repo_read, COMMIT)
+    assert p.ollama_linux.name == "ollama-linux-amd64.tar.zst" and len(p.ollama_linux.sha256) == 64
+    assert p.ollama_linux.size and p.ollama_linux.url.startswith("https://github.com/ollama/ollama/releases/")
+    tags = {m.tag for m in p.models}
+    assert any(t.startswith("qwen3:4b") for t in tags) and any(t.startswith("llama3.2:3b") for t in tags)
+    assert {w.name.rsplit(".", 1)[-1] for w in p.windows} == {"msi", "wsl"}
+    assert all(i.digest and i.tag for i in p.images)
+    assert "python3" in p.apt_packages and "docker_ce" in p.manifest
+    assert p.whisper["whisper_model_bin_bytes"] > 400_000_000
+
+
+def test_searxng_never_goes_on_a_kit_and_every_image_is_pinned_by_digest():
+    imgs = pins.compose_images(repo_read(pins.COMPOSE))
+    assert imgs and not any("searxng" in i.repo for i in imgs)
+    with pytest.raises(pins.PinError):
+        pins.compose_images("services:\n  x:\n    image: postgres:16\n")
+
+
+def test_pins_iss_defines_resolve_their_concatenations():
+    got = pins.parse_iss('#define A "x"\n#define B "https://h/" + A + "/f"\n')
+    assert got["B"] == "https://h/x/f"
+
+
+# ─── licences (design section 9) ─────────────────────────────────────────
+
+@pytest.mark.parametrize("model,licence", [
+    ("qwen3:4b-instruct-2507-q4_K_M", "Apache-2.0"),
+    ("qwen3-vl:2b-instruct-q4_K_M", "Apache-2.0"),
+    ("llama3.2:3b-instruct-q4_K_M", "LicenseRef-Llama-3.2-Community"),
+    ("qwen2.5:14b", "Apache-2.0"),
+])
+def test_allowed_models_carry_their_licence(model, licence):
+    assert licences.model_licence(model) == licence and licences.refusal(model) is None
+
+
+@pytest.mark.parametrize("model", ["qwen2.5:3b", "qwen2.5:3b-instruct", "gemma2:9b", "gemma3:12b",
+                                   "llama3.2-vision:11b", "mistral:7b", "somebody/thing:latest"])
+def test_models_that_can_t_be_passed_on_are_refused_with_a_reason(model):
+    why = licences.refusal(model)
+    assert why and model in why
+
+
+# ─── fetch ───────────────────────────────────────────────────────────────
+
+class _Resp:
+    def __init__(self, body: bytes, status: int = 200):
+        self.status_code, self._body = status, body
+
+    def iter_bytes(self, n):
+        for i in range(0, len(self._body), n):
+            yield self._body[i:i + n]
+
+    def close(self):
+        pass
+
+
+def test_a_download_is_kept_only_at_its_pin(tmp_path, monkeypatch, kit_home):
+    body = b"x" * 1000
+    monkeypatch.setattr(fetch.net_safety, "open_stream_sync", lambda c, url, headers=None: _Resp(body))
+    monkeypatch.setattr(fetch, "http_client", lambda: _Ctx())
+    dest = tmp_path / "f.bin"
+    fetch.fetch_file("https://example.org/f", dest, sha256=hashlib.sha256(body).hexdigest(), size=1000)
+    assert dest.read_bytes() == body
+    with pytest.raises(fetch.FetchError):
+        fetch.fetch_file("https://example.org/f", tmp_path / "g.bin", sha256="0" * 64, size=1000)
+    with pytest.raises(fetch.FetchError):
+        fetch.fetch_file("https://example.org/f", tmp_path / "h.bin", sha256=hashlib.sha256(body).hexdigest(),
+                         size=999)
+    assert not (tmp_path / "g.bin").exists() and not list(tmp_path.glob(".*.part"))
+
+
+def test_under_never_nothing_is_requested(tmp_path, monkeypatch):
+    monkeypatch.setattr(egress, "policy", lambda: "never")
+    called = []
+    monkeypatch.setattr(fetch.net_safety, "open_stream_sync", lambda *a, **k: called.append(a))
+    with pytest.raises(Exception):
+        fetch.fetch_file("https://example.org/f", tmp_path / "f", sha256="0" * 64, size=1)
+    assert not called
+
+
+class _Ctx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+# ─── Ollama models ───────────────────────────────────────────────────────
+
+def _model_folder(root: Path, name: str, tag: str, blobs: list[bytes]) -> tuple[str, bytes]:
+    layers = []
+    for b in blobs:
+        d = hashlib.sha256(b).hexdigest()
+        (root / "blobs").mkdir(parents=True, exist_ok=True)
+        (root / "blobs" / f"sha256-{d}").write_bytes(b)
+        layers.append({"mediaType": "application/vnd.ollama.image.model", "digest": f"sha256:{d}", "size": len(b)})
+    manifest = json.dumps({"config": layers[0], "layers": layers[1:]}).encode()
+    mf = root / "manifests" / "registry.ollama.ai" / "library" / name / tag
+    mf.parent.mkdir(parents=True, exist_ok=True)
+    mf.write_bytes(manifest)
+    return hashlib.sha256(manifest).hexdigest(), manifest
+
+
+def test_a_local_model_is_found_by_its_pinned_manifest_digest(tmp_path):
+    folder = tmp_path / "models"
+    digest, _ = _model_folder(folder, "qwen3", "4b", [b"config", b"weights" * 100])
+    m = ollama_store.local_model("qwen3:4b", digest, [folder])
+    assert m and m.size == len(m.manifest) + 6 + 700
+    assert m.manifest_path() == "manifests/registry.ollama.ai/library/qwen3/4b"
+    assert ollama_store.local_model("qwen3:4b", "f" * 64, [folder]) is None
+    (folder / "blobs" / f"sha256-{hashlib.sha256(b'config').hexdigest()}").unlink()
+    assert ollama_store.local_model("qwen3:4b", digest, [folder]) is None
+
+
+def test_a_missing_model_comes_from_the_registry_held_to_its_pin(tmp_path, kit_home, monkeypatch):
+    src = tmp_path / "upstream"
+    digest, manifest = _model_folder(src, "qwen3", "4b", [b"c", b"w" * 50])
+    asked = []
+
+    def fetch_bytes(url, **kw):
+        asked.append(url)
+        return manifest
+
+    def fetch_file(url, dest, *, sha256, size, progress=None, headers=None):
+        asked.append(url)
+        data = (src / "blobs" / f"sha256-{sha256}").read_bytes()
+        assert len(data) == size
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return dest
+
+    monkeypatch.setattr(fetch, "fetch_bytes", fetch_bytes)
+    monkeypatch.setattr(fetch, "fetch_file", fetch_file)
+    m = ollama_store.fetch_model("qwen3:4b", digest)
+    assert asked[0] == "https://registry.ollama.ai/v2/library/qwen3/manifests/4b"
+    assert all(ollama_store.blob_source(m, b) for b in m.blobs)
+    with pytest.raises(ollama_store.ModelProblem):
+        ollama_store.registry_manifest("qwen3:8b", "e" * 64)
+
+
+# ─── apt ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("name,want", [
+    ("archive.ubuntu.com_ubuntu_dists_resolute_InRelease", ("ubuntu", "dists/resolute/InRelease")),
+    ("security.ubuntu.com_ubuntu_dists_resolute-security_main_binary-amd64_Packages",
+     ("ubuntu", "dists/resolute-security/main/binary-amd64/Packages")),
+    ("ports.ubuntu.com_ubuntu-ports_dists_resolute_universe_binary-arm64_Packages",
+     ("ubuntu", "dists/resolute/universe/binary-arm64/Packages")),
+    ("download.docker.com_linux_ubuntu_dists_resolute_stable_binary-amd64_Packages",
+     ("docker", "dists/resolute/stable/binary-amd64/Packages")),
+    ("nvidia.github.io_libnvidia-container_stable_deb_amd64_InRelease", ("nvidia", "InRelease")),
+    ("nvidia.github.io_libnvidia-container_stable_deb_amd64_._Packages", ("nvidia", "Packages")),
+    ("archive.ubuntu.com_ubuntu_dists_resolute_main_i18n_Translation-en", None),
+    ("evil.example.com_ubuntu_dists_resolute_InRelease", None),
+])
+def test_apt_s_lists_map_onto_repositories(name, want):
+    got = apt_mirror.classify(name)
+    assert (got and (got.repo, got.rel)) == want if want else got is None
+
+
+def _raw(tmp: Path, debs: dict[str, bytes], filename: str = "pool/main/h/hello/{n}") -> Path:
+    raw = tmp / "raw"
+    (raw / "lists").mkdir(parents=True)
+    (raw / "debs").mkdir()
+    stanzas = []
+    for n, data in debs.items():
+        (raw / "debs" / n).write_bytes(data)
+        stanzas.append(f"Package: {n}\nFilename: {filename.format(n=n)}\nSHA256: {hashlib.sha256(data).hexdigest()}\n")
+    (raw / "lists" / "archive.ubuntu.com_ubuntu_dists_resolute_main_binary-amd64_Packages").write_text("\n".join(stanzas))
+    (raw / "lists" / "archive.ubuntu.com_ubuntu_dists_resolute_InRelease").write_text("signed")
+    return raw
+
+
+def test_the_debs_are_laid_out_at_the_paths_their_index_names(tmp_path):
+    raw = _raw(tmp_path, {"hello_1_amd64.deb": b"one", "bye_2_amd64.deb": b"two"})
+    files = apt_mirror.assemble(raw, tmp_path / "out")
+    assert "ubuntu/pool/main/h/hello/hello_1_amd64.deb" in files
+    assert "ubuntu/dists/resolute/InRelease" in files
+    assert (tmp_path / "out/ubuntu/dists/resolute/main/binary-amd64/Packages").is_file()
+
+
+def test_a_deb_no_index_names_stops_the_mirror(tmp_path):
+    raw = _raw(tmp_path, {"a_1_amd64.deb": b"x"})
+    (raw / "debs" / "stray_1_amd64.deb").write_bytes(b"not listed")
+    with pytest.raises(apt_mirror.AptError, match="stray"):
+        apt_mirror.assemble(raw, tmp_path / "out")
+
+
+def test_an_index_naming_a_path_outside_the_repo_is_refused(tmp_path):
+    raw = _raw(tmp_path, {"a_1_amd64.deb": b"x"}, filename="../../etc/{n}")
+    with pytest.raises(apt_mirror.AptError, match="outside"):
+        apt_mirror.assemble(raw, tmp_path / "out")
+
+
+def _can_symlink(tmp: Path) -> bool:
+    try:
+        (tmp / ".probe").symlink_to(tmp)
+    except OSError:
+        return False
+    (tmp / ".probe").unlink()
+    return True
+
+
+@pytest.mark.parametrize("where", ["lists", "debs"])
+def test_the_mirror_takes_only_regular_files_from_the_container(tmp_path, where):
+    target = tmp_path / "server-file"
+    target.write_bytes(b"something of the server's")
+    kinds = ["folder"] + (["symlink"] if _can_symlink(tmp_path) else [])
+    for kind in kinds:
+        raw = _raw(tmp_path / kind, {"a_1_amd64.deb": b"x"})
+        name = ("archive.ubuntu.com_ubuntu_dists_resolute_InRelease" if where == "lists" else "a_1_amd64.deb")
+        odd = raw / where / name
+        odd.unlink()
+        if kind == "folder":
+            odd.mkdir()
+        else:
+            odd.symlink_to(target)
+        out = tmp_path / kind / "out"
+        with pytest.raises(apt_mirror.AptError, match="not a regular file"):
+            apt_mirror.assemble(raw, out)
+        assert not any(f.is_file() and f.read_bytes() == target.read_bytes() for f in out.rglob("*"))             if out.exists() else True
+
+
+def test_the_mirror_image_is_pinned_by_digest_in_the_pins_module():
+    assert apt_mirror.IMAGE == pins.APT_MIRROR_IMAGE
+    assert re.fullmatch(r"ubuntu:26\.04@sha256:[0-9a-f]{64}", apt_mirror.IMAGE)
+    p = pins.load(repo_read, COMMIT)
+    cmd = apt_mirror.docker_command(p, "amd64", Path("/x"))
+    assert apt_mirror.IMAGE in cmd and cmd[cmd.index("--name") + 1].startswith(apt_mirror.CONTAINER_PREFIX)
+
+
+def test_the_container_script_holds_only_pins_and_checks_the_keys():
+    p = pins.load(repo_read, COMMIT)
+    s = apt_mirror.script(p, "amd64", "1000:1000")
+    assert "--download-only" in s and "status.clean" in s and p.manifest["docker_key_fpr"] in s
+    assert f"docker-ce={p.manifest['docker_ce']}" in s and "nvidia-container-toolkit=" in s
+    assert "nftables" in s and "mtools" in s and "chown -R 1000:1000 /out" in s
+    assert "nvidia" not in apt_mirror.script(p, "arm64")
+    cmd = apt_mirror.docker_command(p, "amd64", Path("/x"))
+    assert "--privileged" not in cmd and "no-new-privileges" in cmd and apt_mirror.IMAGE in cmd
+    bad = pins.load(repo_read, COMMIT)
+    bad.manifest = {**bad.manifest, "docker_ce": "1; rm -rf /"}
+    with pytest.raises(apt_mirror.AptError):
+        apt_mirror.script(bad, "amd64")
+
+
+def test_a_mirror_is_built_once_and_reused_for_the_same_pins(kit_home, monkeypatch):
+    p = pins.load(repo_read, COMMIT)
+    runs = []
+
+    def fake_run(cmd, **kw):
+        runs.append(cmd)
+        out = Path(cmd[cmd.index("-v") + 1].rsplit(":/out", 1)[0])
+        tmp = out.parent / "src"
+        tmp.mkdir(exist_ok=True)
+        raw = _raw(tmp, {"hello_1_amd64.deb": b"deb!"})
+        for sub in ("lists", "debs"):
+            (out / sub).mkdir(parents=True, exist_ok=True)
+            for f in (raw / sub).iterdir():
+                (out / sub / f.name).write_bytes(f.read_bytes())
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    doc = apt_mirror.build(p, "amd64", run=fake_run)
+    assert len(runs) == 1 and apt_mirror.cached(p, "amd64") == doc and apt_mirror.fresh(doc)
+    assert not apt_mirror.fresh(doc, now=time.time() + apt_mirror.MAX_AGE_SEC + 1)
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: True)
+    with pytest.raises(egress.InternetTurnedOff):
+        apt_mirror.build(p, "amd64", run=fake_run)
+    assert len(runs) == 1
+
+
+# ─── wheels ──────────────────────────────────────────────────────────────
+
+def test_the_lock_is_read_with_every_hash():
+    locked = wheels.parse_lock(repo_read(pins.LOCK))
+    assert len(locked) > 50 and all(lk.hashes for lk in locked)
+    assert any(lk.name == "setuptools" for lk in locked)
+
+
+@pytest.mark.parametrize("name,arch,good", [
+    ("numpy-2.3.0-cp314-cp314-manylinux_2_28_x86_64.whl", "x86_64", True),
+    ("numpy-2.3.0-cp314-cp314-manylinux_2_28_aarch64.whl", "x86_64", False),
+    ("numpy-2.3.0-cp314-cp314t-manylinux_2_28_x86_64.whl", "x86_64", False),
+    ("numpy-2.3.0-cp313-cp313-manylinux_2_28_x86_64.whl", "x86_64", False),
+    ("cffi-2.0-cp39-abi3-manylinux2014_aarch64.whl", "aarch64", True),
+    ("x-1.0-py3-none-any.whl", "aarch64", True),
+    ("x-1.0-cp314-cp314-musllinux_1_2_x86_64.whl", "x86_64", False),
+    ("x-1.0-cp314-cp314-manylinux_2_99_x86_64.whl", "x86_64", False),
+    ("x-1.0-cp314-cp314-win_amd64.whl", "x86_64", False),
+])
+def test_a_wheel_is_taken_only_for_a_machine_it_installs_on(name, arch, good):
+    assert (wheels.rank(name, arch) > 1) is good
+
+
+def test_the_best_file_the_lock_allows_is_picked_per_machine():
+    files = [
+        {"filename": "m-1-py3-none-any.whl", "digests": {"sha256": "1" * 64}, "size": 10, "url": "u1"},
+        {"filename": "m-1-cp314-cp314-manylinux_2_28_x86_64.whl", "digests": {"sha256": "2" * 64}, "size": 20, "url": "u2"},
+        {"filename": "m-1-cp314-cp314-manylinux_2_28_aarch64.whl", "digests": {"sha256": "3" * 64}, "size": 30, "url": "u3"},
+        {"filename": "m-1.tar.gz", "digests": {"sha256": "4" * 64}, "size": 40, "url": "u4"},
+    ]
+    lk = wheels.Locked("m", "1", frozenset({"1" * 64, "2" * 64, "4" * 64}))
+    assert wheels.choose(lk, files, "x86_64").filename.endswith("x86_64.whl")
+    # The aarch64 wheel isn't in the lock's hashes: the pure-Python one.
+    assert wheels.choose(lk, files, "aarch64").filename == "m-1-py3-none-any.whl"
+    only_sdist = wheels.Locked("m", "1", frozenset({"4" * 64}))
+    assert wheels.choose(only_sdist, files, "aarch64").filename == "m-1.tar.gz"
+    with pytest.raises(wheels.WheelError):
+        wheels.choose(wheels.Locked("m", "1", frozenset({"9" * 64})), files, "x86_64")
+
+
+def test_the_picks_are_resolved_once_and_cached(kit_home):
+    lock = "m==1 \\\n    --hash=sha256:" + "2" * 64 + "\n"
+    calls = []
+
+    def files_of(lk):
+        calls.append(lk.name)
+        return [{"filename": "m-1-py3-none-any.whl", "digests": {"sha256": "2" * 64}, "size": 7, "url": "u"}]
+
+    picks = wheels.resolve(lock, "", files_of)
+    assert [p.filename for p in picks["x86_64"]] == ["m-1-py3-none-any.whl"]
+    assert wheels.resolve(lock, "", files_of) == picks and calls == ["m"]
+
+
+# ─── images (design risk 2) ──────────────────────────────────────────────
+
+def _oci_tar(path: Path, digest: str, name: str | None) -> None:
+    ann = {"io.containerd.image.name": name} if name else {}
+    index = json.dumps({"schemaVersion": 2, "manifests": [{"digest": f"sha256:{digest}", "annotations": ann}]}).encode()
+    with tarfile.open(path, "w") as tf:
+        info = tarfile.TarInfo("index.json")
+        info.size = len(index)
+        tf.addfile(info, io.BytesIO(index))
+
+
+def test_only_an_archive_naming_the_pinned_digest_and_its_tag_is_kept(tmp_path):
+    pin = pins.ImagePin(ref="postgres:16@sha256:" + "a" * 64, repo="postgres", tag="16", digest="a" * 64,
+                        licence="PostgreSQL")
+    good, by_digest, other = tmp_path / "g.tar", tmp_path / "d.tar", tmp_path / "o.tar"
+    _oci_tar(good, "a" * 64, "docker.io/library/postgres:16")
+    _oci_tar(by_digest, "a" * 64, None)              # saved by digest alone: not found after load
+    _oci_tar(other, "b" * 64, "docker.io/library/postgres:16")   # saved with --platform
+    assert images.archive_ok(good, pin)
+    assert not images.archive_ok(by_digest, pin) and not images.archive_ok(other, pin)
+
+
+def test_the_legacy_image_store_is_refused_with_the_reason():
+    def run(info):
+        return lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, json.dumps(info), "")
+
+    assert images.store_problem(run({"DriverStatus": [["driver-type", "io.containerd.snapshotter.v1"]]})) is None
+    why = images.store_problem(run({"Driver": "overlay2", "DriverStatus": [["Backing Filesystem", "extfs"]]}))
+    assert why and "older image store" in why
+    assert "isn't answering" in images.store_problem(
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "no daemon"))
+
+
+def test_an_image_is_saved_under_its_tag_without_platform(kit_home, monkeypatch):
+    pin = pins.ImagePin(ref="flyway/flyway:10@sha256:" + "c" * 64, repo="flyway/flyway", tag="10",
+                        digest="c" * 64, licence="Apache-2.0")
+    cmds = []
+
+    def run(cmd, **kw):
+        cmds.append(cmd)
+        if "save" in cmd:
+            _oci_tar(Path(cmd[cmd.index("-o") + 1]), "c" * 64, "docker.io/flyway/flyway:10")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    out = images.save(pin, ("amd64",), run=run)
+    assert out.is_file() and images.kit_path("flyway/flyway", "10") == "images/flyway_flyway_10.tar"
+    save = next(c for c in cmds if "save" in c)
+    assert "--platform" not in save and save[-1] == "flyway/flyway:10"
+    assert not any("pull" in c for c in cmds)          # docker image inspect said it is here
+    # A Mac's kit pulls arm64 first, through the outbound gate.
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: True)
+    with pytest.raises(egress.InternetTurnedOff):
+        images.save(pin, ("amd64", "arm64"), run=run)
+
+
+# ─── the FAT32 image's size ──────────────────────────────────────────────
+
+def test_the_image_size_covers_every_file_and_its_slack():
+    files = [(f"d{i % 7}/f{i}", 1000 + i) for i in range(500)]
+    size = fatimage.image_size(files)
+    assert size >= sum(s for _, s in files) + 500 * 512 and size % (1024 * 1024) == 0
+    big = fatimage.image_size([("ollama/models/blobs/x.part01", 3_900_000_000)])
+    assert 3_900_000_000 < big < 4_100_000_000
+    assert fatimage.cluster_size(20 * 10 ** 9) == 32 * 1024 and fatimage.cluster_size(40 * 10 ** 6) == 512
+
+
+def test_the_disk_has_one_fat32_partition_at_one_mib():
+    mbr = fatimage._mbr(64 * 1024 * 1024)
+    assert mbr[510:] == b"\x55\xaa" and mbr[446 + 4] == 0x0C
+    assert int.from_bytes(mbr[446 + 8:446 + 12], "little") == 2048
+
+
+# ─── the plan: defaults, sizes, fit, refusals ────────────────────────────
+
+def _part(pid, group="base", size=1_000_000, download=0, targets=(), kind="release", licence="MIT", **kw):
+    return Part(id=pid, group=group, kind=kind, name=kw.pop("name", pid), version="1", licence=licence, size=size,
+                exact=True, download=download, acquire=lambda ctx: [], targets=targets, **kw)
+
+
+def _cat(*ps):
+    return plan.Catalogue(release=Release("1.5.0", "v1.5.0", COMMIT), parts=list(ps), made=time.time())
+
+
+def test_the_owner_s_defaults_pc_ticked_mac_not_household_off():
+    sel = plan.Selection.from_body(None)
+    assert sel.targets == ("pc-x86_64",) and set(sel.includes) == {"ai", "vision", "rooms"} and not sel.household
+    cat = _cat(_part("rel"), _part("mac", targets=("mac-arm64",)),
+               _part("model:x", group="household", kind="ollama-model", household_added=True,
+                     note="not checked against a release"))
+    ids = {p.id for p in plan.selected(cat, sel)}
+    assert ids == {"rel"}
+    view = plan.plan(cat, sel, tools_ok=lambda: True, store_problem=lambda: None)
+    assert view["household"][0]["note"] == "not checked against a release" and not view["household"][0]["ticked"]
+    assert [t["ticked"] for t in view["targets"]] == [True, False]
+    sel2 = plan.Selection.from_body({"household": ["model:x"]})
+    assert {p.id for p in plan.selected(cat, sel2)} == {"rel", "model:x"}
+
+
+def test_a_stick_too_small_says_by_how_much_and_what_to_leave_out():
+    cat = _cat(_part("base", size=5_000_000_000), _part("ai", group="ai", size=3_000_000_000),
+               _part("pic", group="vision", size=1_900_000_000), _part("rooms", group="rooms", size=1_200_000_000))
+    sel = plan.Selection(stick_gb=8)
+    total = plan.image_bytes(plan.selected(cat, sel))
+    f = plan.fit(cat, sel, total)
+    assert f["fits"] is False and f["needed_gb"] == 16
+    assert f["message"].startswith("Too big for an 8 GB stick by ")
+    assert "Leave out AI chat and questions (3.0 GB)" in f["message"]
+    assert plan.fit(cat, plan.Selection(stick_gb=16), total)["fits"] is True
+    # Marketed GB: a 16 GB stick holds less than 16 GiB.
+    assert plan.stick_capacity(16) < 16 * 1024 ** 3
+
+
+def test_refusals_say_one_plain_reason(monkeypatch, kit_home):
+    cat = _cat(_part("rel", download=10, label="the Windows parts"), _part("mac", download=5, targets=("mac-arm64",),
+                                                                        label="the Mac parts"))
+    base = dict(tools_ok=lambda: True, store_problem=lambda: None)
+    sel = plan.Selection(targets=("pc-x86_64", "mac-arm64"))
+    assert plan.plan(cat, sel, busy=True, **base)["refusal"]["message"] == "A kit is already being made."
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: True)
+    why = plan.plan(cat, sel, **base)["refusal"]
+    assert why["reason"] == "internet_off"
+    assert why["message"] == ("This server has no internet, so it can't fetch: the Windows parts, the Mac "
+                              "parts. Untick them, or allow internet for a while.")
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: False)
+    monkeypatch.setattr(plan, "free_bytes", lambda p: 10)
+    assert plan.plan(cat, sel, **base)["refusal"]["message"].startswith("Needs ")
+    monkeypatch.setattr(plan, "free_bytes", lambda p: 10 ** 13)
+    assert plan.plan(cat, sel, tools_ok=lambda: False, store_problem=lambda: None)["refusal"]["reason"] == "no_tools"
+    assert plan.plan(cat, sel, tools_ok=lambda: True, store_problem=lambda: "old store")["refusal"]["message"] == "old store"
+    assert plan.plan(cat, sel, **base)["refusal"] is None
+
+
+def test_a_server_not_on_a_release_is_refused_and_one_behind_is_warned(monkeypatch):
+    from domovoi import git_run, git_version
+    from domovoi.kit_builder import service
+
+    def run(tag):
+        def r(cmd, **kw):
+            out = tag if "describe" in cmd else COMMIT
+            return subprocess.CompletedProcess(cmd, 0 if out else 128, out + "\n", "")
+        return r
+
+    monkeypatch.setattr(git_version, "tracking", lambda: {"channel": "main"})
+    monkeypatch.setattr(git_run, "run", run("v1.5.0"))
+    st = plan.release_state(".")
+    assert st.release is None and st.refusal["message"].startswith("Offline kits are made from a release. "
+                                                                    "This server follows main.")
+    monkeypatch.setattr(git_version, "tracking", lambda: {"channel": "stable"})
+    monkeypatch.setattr(git_version, "latest_release", lambda: "1.6.0")
+    st = plan.release_state(".")
+    assert st.release.version == "1.5.0" and st.release.commit == COMMIT and st.behind
+    assert service._behind_warning(st)["message"] == ("Domovoi 1.6.0 is out. Update this server first to put "
+                                                      "1.6.0 on the stick.")
+    monkeypatch.setattr(git_run, "run", run(""))
+    assert plan.release_state(".").refusal["reason"] == "not_release"
+
+
+# ─── the build job ───────────────────────────────────────────────────────
+
+_MADE: list[Path] = []
+
+
+@pytest.fixture(autouse=True)
+def _tidy_folder_images():
+    yield
+    import shutil
+    while _MADE:
+        shutil.rmtree(_MADE.pop(), ignore_errors=True)
+
+
+class _FolderImage(FolderSink):
+    """FatImage's place in tests: the same sink, into a folder (a short
+    one: Windows' path limit and Ollama's 71-character blob names)."""
+
+    last: Path | None = None
+
+    def __init__(self, path, total, label="DOMOVOIKIT"):
+        import tempfile
+        folder = Path(tempfile.mkdtemp(prefix="k"))
+        super().__init__(folder)
+        _FolderImage.last = folder
+        _MADE.append(folder)
+        Path(path).write_bytes(b"image")   # the job hashes the image file
+
+
+def _kit_parts(tmp: Path) -> list[Part]:
+    blob = tmp / "blob.bin"
+    blob.write_bytes(os.urandom(5000))
+    return [
+        Part(
+            id="installer", group="base", kind="release", name="installer", version="1.5.0", licence="MIT", size=3,
+            exact=True, download=0, acquire=lambda ctx: [Source("release/DomovoiSetup.exe", b"exe")]),
+        Part(id="model", group="ai", kind="ollama-model", name="llama3.2:3b", version="d", size=5000,
+             licence="LicenseRef-Llama-3.2-Community", exact=True, download=0, pinned_by="provision-manifest.conf",
+             acquire=lambda ctx: [Source("ollama/models/blobs/sha256-" + "b" * 64, blob)]),
+        Part(id="wake", group="base", kind="wake-word", name="domovoi_v1", version="1", size=4,
+             licence="CC-BY-NC-SA-4.0", exact=True, download=0, acquire=lambda ctx: [Source("wake/domovoi_v1.onnx", b"wake")]),
+    ]
+
+
+def test_a_built_kit_carries_install_sh_and_provision_sh_from_the_release_commit(kit_home, tmp_path, monkeypatch):
+    from domovoi import git_run
+
+    shown = []
+
+    def fake_git(cmd, *, timeout, cwd=None, **kw):
+        assert cmd[:2] == ["git", "show"]
+        shown.append(cmd[2])
+        return subprocess.CompletedProcess(cmd, 0, b"#!/bin/bash\n# " + cmd[2].encode() + b"\n", b"")
+
+    monkeypatch.setattr(git_run, "run", fake_git)
+    monkeypatch.setattr(parts, "_pack_size", lambda d: 1)
+    monkeypatch.setattr(fatimage, "FatImage", _FolderImage)
+    monkeypatch.setattr(plan, "free_bytes", lambda p: 10 ** 13)
+    rel = Release("1.5.0", "v1.5.0", COMMIT)
+    scripts = [p for p in parts.source_parts(rel, "/repo") if p.id == "source:install-sh"]
+    jobs.build(rel, plan.Selection(), scripts + _kit_parts(tmp_path))
+    assert shown == [f"{COMMIT}:scripts/linux/install.sh", f"{COMMIT}:scripts/linux/provision.sh"]
+    kit = json.loads((_FolderImage.last / "kit.json").read_text())
+    listed = {f["path"] for c in kit["components"] for f in c["files"]}
+    assert {"linux/install.sh", "linux/provision.sh"} <= listed
+    assert (_FolderImage.last / "linux" / "provision.sh").read_bytes().endswith(b"scripts/linux/provision.sh\n")
+    assert verify(_FolderImage.last, release_key=None).ok
+
+
+def test_a_kit_is_made_kept_listed_and_passes_the_checker(kit_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(fatimage, "FatImage", _FolderImage)
+    monkeypatch.setattr(plan, "free_bytes", lambda p: 10 ** 13)
+    rel = Release("1.5.0", "v1.5.0", COMMIT, assets={"DomovoiSetup.exe": {"size": 3, "sha256": "e" * 64}})
+    doc = jobs.build(rel, plan.Selection(), _kit_parts(tmp_path), core="http://192.168.1.20:6370")
+    folder = _FolderImage.last
+    report = verify(folder, release_key=None)
+    assert report.ok, report.errors
+    kit = json.loads((folder / "kit.json").read_text())
+    assert {n["id"] for n in kit["notices"]} >= {"do-not-sell", "wake-word-nc-sa", "llama"}
+    start = (folder / "START-HERE.txt").read_text()
+    assert "App Store" in start and "Don't sell this stick" in start and "Built with Llama" in start
+    assert jobs.build_info(doc["id"])["sha256"] == hashlib.sha256(b"image").hexdigest()
+    lst = jobs.os_list(doc)
+    assert lst["os_list"][0]["url"] == f"http://192.168.1.20:6370/v1/offline-kit/{doc['id']}/domovoi-offline-kit-1.5.0.img"
+    assert lst["os_list"][0]["extract_sha256"] == doc["sha256"] and "init_format" not in lst["os_list"][0]
+
+
+def test_cancel_stops_the_job_and_keeps_nothing(kit_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(fatimage, "FatImage", _FolderImage)
+    monkeypatch.setattr(plan, "free_bytes", lambda p: 10 ** 13)
+    jobs._cancel.set()
+    with pytest.raises(jobs.Cancelled):
+        jobs.build(Release("1.5.0", "v1.5.0", COMMIT), plan.Selection(), _kit_parts(tmp_path))
+    jobs._cancel.clear()
+    assert jobs.list_builds() == []
+    assert not jobs.builds_root().exists() or not list(jobs.builds_root().glob(".*"))
+
+
+def test_a_changed_blob_in_the_model_store_stops_the_build_and_keeps_nothing(kit_home, tmp_path, monkeypatch):
+    """A blob of the right size but other bytes in Ollama's folder is
+    offered by the card (cheap size check) and refused as it is copied."""
+    folder = tmp_path / "models"
+    weights = b"weights" * 100
+    digest, _ = _model_folder(folder, "qwen3", "4b", [b"config", weights])
+    monkeypatch.setattr(host, "ollama_models_dirs", lambda: [folder])
+    (folder / "blobs" / f"sha256-{hashlib.sha256(weights).hexdigest()}").write_bytes(b"W" + weights[1:])
+    part = parts._model_part("qwen3:4b", digest, "ai")
+    assert part is not None and part.download == 0
+    monkeypatch.setattr(fatimage, "FatImage", _FolderImage)
+    monkeypatch.setattr(plan, "free_bytes", lambda p: 10 ** 13)
+    _FolderImage.last = None
+    with pytest.raises(ValueError, match="doesn't match its pinned SHA-256"):
+        jobs.build(Release("1.5.0", "v1.5.0", COMMIT), plan.Selection(), [part])
+    assert jobs.list_builds() == []
+    assert not list(jobs.builds_root().glob(".*"))
+    assert _FolderImage.last is not None and not (_FolderImage.last / "kit.json").exists()
+
+
+def test_a_pinned_file_on_the_server_is_held_to_its_pin_as_it_is_copied(kit_home, tmp_path):
+    local = tmp_path / "ggml-small.en.bin"
+    local.write_bytes(b"model")
+    pin = pins.FilePin(name=local.name, url="https://huggingface.co/x/ggml-small.en.bin",
+                       sha256=hashlib.sha256(b"model").hexdigest(), size=5, pinned_by="mac/installer/pins.conf")
+    _, get = parts._pinned_file(pin, "mac", f"mac/{local.name}", local=local)
+    src = get(Ctx(targets=("mac-arm64",)))
+    assert src.src == local and src.sha256 == pin.sha256
+
+
+def test_a_file_pin_without_a_size_stops_the_card(monkeypatch):
+    def read(path):
+        text = repo_read(path)
+        if path == pins.WINDOWS_PINS:
+            text = text.replace("db084e536279a59e90a26ec598d8aa8a4dff8309f41d078fd06242953ac1ebcd", "1" * 64)
+        return text
+
+    with pytest.raises(pins.PinError, match="with no size"):
+        pins.load(read, COMMIT)
+    cat = plan.catalogue(Release("1.5.0", "v1.5.0", COMMIT, assets={"x": {}}), str(REPO), read=read, fresh=True)
+    assert cat.parts == [] and "with no size" in cat.problems[0]
+    with pytest.raises(fetch.FetchError, match="no pinned size"):
+        fetch.fetch_file("https://example.org/f", Path("unused.bin"), sha256="0" * 64, size=None)
+
+
+# ─── Domovoi's Ollama on every kit (owner decision, 1.5.0) ──────────────
+# "AI chat and questions" unticked means no models, not no Ollama: every
+# install from a kit runs Domovoi's own Ollama (provision.sh's kit_check and
+# the Mac's Setup refuse a kit without it), so AI can be turned on later.
+
+def _runtime_source(part: Part, monkeypatch) -> Source:
+    """The part's file as the builder would copy it, the cache standing in
+    for the download (nothing is fetched)."""
+    monkeypatch.setattr(fetch, "matches", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "fetch_file", lambda *a, **k: pytest.fail("downloaded"))
+    [src] = part.acquire(Ctx(targets=part.targets))
+    return src
+
+
+@pytest.mark.parametrize("target, kit_path, kind", [
+    ("pc-x86_64", "ollama/ollama-linux-amd64.tar.zst", "ollama-runtime"),
+    ("mac-arm64", "mac/ollama-darwin.tgz", "mac-part"),
+])
+def test_ollama_goes_on_a_kit_with_ai_unticked(kit_home, monkeypatch, target, kit_path, kind):
+    p = pins.load(repo_read, COMMIT)
+    runtimes = parts.ollama_runtime_parts(p)
+    model = _part("model:qwen3:4b", group="ai", kind="ollama-model", size=2_500_000_000)
+    cat = _cat(*runtimes, model)
+    for includes in ((), ("vision", "rooms"), plan.INCLUDE_ORDER):
+        got = plan.selected(cat, plan.Selection(targets=(target,), includes=includes))
+        ollama = [x for x in got if x.id.startswith("ollama:")]
+        assert len(ollama) == 1, includes
+        assert (model in got) == ("ai" in includes)
+    rt = ollama[0]
+    assert rt.group == "base" and rt.kind == kind and rt.targets == (target,)
+    pin = p.ollama_linux if target == "pc-x86_64" else p.ollama_darwin
+    src = _runtime_source(rt, monkeypatch)
+    # Where provision.sh (ollama/<asset>) and the Mac's Setup (mac/<the
+    # OLLAMA_URL file name>) look, held to the release's own pin.
+    assert src.path == kit_path and src.sha256 == pin.sha256 and rt.pinned_by == pin.pinned_by
+    # Leaving AI out to fit a stick frees the models only.
+    assert plan._group_bytes(cat, plan.Selection(targets=(target,)), "ai") == model.size
+
+
+def test_a_kit_for_both_targets_carries_both_ollamas_with_ai_unticked(kit_home):
+    p = pins.load(repo_read, COMMIT)
+    cat = _cat(*parts.ollama_runtime_parts(p))
+    got = plan.selected(cat, plan.Selection(targets=("pc-x86_64", "mac-arm64"), includes=()))
+    assert {x.id for x in got} == {"ollama:linux", "ollama:darwin"}
+    # The Mac's tarball isn't listed again among the other Mac files.
+    assert not [x for x in parts.platform_parts(p) if x.name == p.ollama_darwin.name]
+
+
+def test_a_mac_kit_is_refused_when_the_release_pins_no_ollama_for_macos(kit_home, monkeypatch):
+    import dataclasses
+    p = dataclasses.replace(pins.load(repo_read, COMMIT), ollama_darwin=None)
+    assert [x.id for x in parts.ollama_runtime_parts(p)] == ["ollama:linux"]
+    cat = _cat(_part("rel"))
+    cat.target_problems = parts.target_problems(p)
+    monkeypatch.setattr(plan, "free_bytes", lambda path: 10 ** 13)
+    base = dict(tools_ok=lambda: True, store_problem=lambda: None)
+    why = plan.plan(cat, plan.Selection(targets=("pc-x86_64", "mac-arm64")), **base)["refusal"]
+    assert why["reason"] == "release" and "Ollama for macOS" in why["message"]
+    assert plan.plan(cat, plan.Selection(targets=("pc-x86_64",)), **base)["refusal"] is None
+    assert parts.target_problems(pins.load(repo_read, COMMIT)) == {}
+
+
+def test_every_file_pin_in_the_release_has_a_size():
+    p = pins.load(repo_read, COMMIT)
+    assert all(fp.size for fp in [p.ollama_linux, *p.windows, *p.mac])
+
+
+class _FakeProc:
+    """A docker client that runs until it is killed."""
+
+    def __init__(self, cmd, **kw):
+        self.cmd, self.killed, self.returncode = cmd, False, None
+
+    def communicate(self, timeout=None):
+        if self.killed:
+            return "", ""
+        time.sleep(min(timeout or 0, 0.01))
+        raise subprocess.TimeoutExpired(self.cmd, timeout)
+
+    def kill(self):
+        self.killed, self.returncode = True, -9
+
+
+def test_a_cancel_stops_a_running_container_and_removes_it(monkeypatch):
+    removed = []
+    monkeypatch.setattr(jobs.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(jobs, "remove_container", lambda name, run=None: removed.append(name))
+    monkeypatch.setattr(jobs, "POLL_SEC", 0.01)
+    jobs._cancel.clear()
+    threading.Timer(0.05, jobs._cancel.set).start()
+    cmd = ["docker", "run", "--rm", "--name", "domovoi-kit-apt-amd64-1234abcd", "img", "sh"]
+    try:
+        with pytest.raises(jobs.Cancelled):
+            jobs._run(cmd, capture_output=True, text=True, timeout=3600)
+    finally:
+        jobs._cancel.clear()
+    assert removed == ["domovoi-kit-apt-amd64-1234abcd"]
+
+
+def test_a_timeout_stops_the_container_too(monkeypatch):
+    removed = []
+    monkeypatch.setattr(jobs.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(jobs, "remove_container", lambda name, run=None: removed.append(name))
+    monkeypatch.setattr(jobs, "POLL_SEC", 0.01)
+    jobs._cancel.clear()
+    with pytest.raises(subprocess.TimeoutExpired):
+        jobs._run(["docker", "run", "--name", "domovoi-kit-apt-arm64-0000ffff", "img"], timeout=0.05)
+    assert removed == ["domovoi-kit-apt-arm64-0000ffff"]
+
+
+def test_the_source_bundle_stops_on_a_cancel(kit_home, monkeypatch):
+    from domovoi import git_run
+
+    calls = []
+
+    def fake_git(cmd, *, timeout, cwd=None, stop=None, **kw):
+        if cmd[1] == "rev-parse":
+            return subprocess.CompletedProcess(cmd, 0, COMMIT + "\n", "")
+        calls.append(stop)
+        assert stop is not None and stop()
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(git_run, "run", fake_git)
+    monkeypatch.setattr(parts, "_pack_size", lambda d: 1)
+    bundle = next(p for p in parts.source_parts(Release("1.5.0", "v1.5.0", COMMIT), "/repo") if p.id == "source:bundle")
+
+    def check():
+        raise jobs.Cancelled()
+
+    with pytest.raises(jobs.Cancelled):
+        bundle.acquire(Ctx(targets=("pc-x86_64",), check=check, cancelled=lambda: True))
+    assert calls
+
+
+def test_leftover_kit_containers_and_half_made_kits_go_at_start(kit_home):
+    (jobs.builds_root() / ".half-made").mkdir(parents=True)
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        if cmd[:3] == ["docker", "ps", "-a"]:
+            return subprocess.CompletedProcess(cmd, 0, "domovoi-kit-apt-amd64-1\nsomeone-else\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    jobs.tidy_at_start(fake_run)
+    assert ["docker", "rm", "-f", "domovoi-kit-apt-amd64-1"] in seen
+    assert not any("someone-else" in c for c in seen)
+    assert not (jobs.builds_root() / ".half-made").exists()
+
+
+def test_the_cancel_flag_is_cleared_inside_the_lock(kit_home, monkeypatch):
+    """A cancel pressed for the next job is never wiped by the last one
+    finishing."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_build(*a, **kw):
+        started.set()
+        release.wait(5)
+        raise jobs.Cancelled()
+
+    monkeypatch.setattr(jobs, "build", slow_build)
+    done = threading.Event()
+    assert jobs.start(Release("1.5.0", "v1.5.0", COMMIT), plan.Selection(), [], on_done=lambda d: done.set())
+    started.wait(5)
+    assert jobs.cancel() and jobs._cancel.is_set()
+    release.set()
+    done.wait(5)
+    assert not jobs._cancel.is_set() and not jobs.busy()
+
+
+def test_old_kits_are_deleted_after_three_days_and_only_the_newest_is_kept(kit_home):
+    root = jobs.builds_root()
+    now = time.time()
+    ids = []
+    for i, age in enumerate((10, 100, jobs.KEEP_SEC + 5)):
+        bid = f"{i}" * 32
+        (root / bid).mkdir(parents=True)
+        (root / bid / jobs.BUILD_JSON).write_text(json.dumps({"format": 1, "id": bid, "made": now - age, "size": 1,
+                                                              "sha256": "0" * 64, "domovoi_version": "1.5.0"}))
+        ids.append(bid)
+    (root / ".half-made").mkdir()
+    assert sorted(jobs.prune(now)) == sorted(ids[1:])
+    assert [b["id"] for b in jobs.list_builds()] == [ids[0]] and not (root / ".half-made").exists()
+    assert jobs.prune(now + jobs.KEEP_SEC) == [ids[0]]
+
+
+@pytest.mark.parametrize("bad", ["", "../" * 11, "a" * 31, "a" * 33, "a/" * 16])
+def test_only_a_well_formed_id_names_a_kit(bad):
+    assert not jobs.valid_id(bad) and jobs.build_info(bad) is None
+
+
+def test_the_guide_names_the_release_the_installers_and_the_notices():
+    g = guide.GuideInfo(version="1.5.0", tag="v1.5.0", commit=COMMIT, targets=("pc-x86_64", "mac-arm64"),
+                        includes=("rooms",), installers={"DomovoiSetup.exe": "f" * 64},
+                        notices=("do-not-sell", "wake-word-nc-sa"), household=("qwen2.5:14b",))
+    t = guide.text(g).decode()
+    assert "Domovoi 1.5.0" in t and "f" * 64 in t and "DomovoiSetup-mac.pkg" in t and "install.sh --kit" in t
+    assert "qwen2.5:14b" in t and "not checked against a release" in t and "CC BY-NC-SA" in t
+    page = guide.page(g).decode()
+    assert page.startswith("<!doctype html>") and "<script" not in page
+
+
+# ─── what a kit never carries (design section 7) ─────────────────────────
+
+def test_a_kit_carries_nothing_from_the_household(kit_home, tmp_path, monkeypatch):
+    """A seeded server's secrets and names never reach the stick: only
+    files the parts name (pinned upstream files, caches, the release) and
+    the generated guide and licence notes, which come from the release."""
+    secrets_ = ["SECRET-SETUP-CODE-4711", "Kid's Room", "alex-admin-password", "kitchen-tablet"]
+    home = tmp_path / "home" / ".domovoi"
+    home.mkdir(parents=True)
+    (home / ".env").write_text("SETUP_CODE=SECRET-SETUP-CODE-4711\nADMIN_PASSWORD=alex-admin-password\n")
+    (home / "rooms.json").write_text(json.dumps({"rooms": ["Kid's Room", "kitchen-tablet"]}))
+    monkeypatch.setattr(fatimage, "FatImage", _FolderImage)
+    monkeypatch.setattr(plan, "free_bytes", lambda p: 10 ** 13)
+    ps = _kit_parts(tmp_path) + [Part(
+        id="lic", group="base", kind="licence", name="licences", version="1", licence="MIT", size=1, exact=True,
+        download=0, acquire=lambda ctx: [Source("licences/README.txt", parts.readme([]).encode())])]
+    doc = jobs.build(Release("1.5.0", "v1.5.0", COMMIT), plan.Selection(), ps)
+    folder = _FolderImage.last
+    blob = b"".join(f.read_bytes() for f in folder.rglob("*") if f.is_file())
+    blob += (jobs.builds_root() / doc["id"] / jobs.BUILD_JSON).read_bytes()
+    for s in secrets_:
+        assert s.encode() not in blob
+
+
+# ─── the dashboard card (JSX) ────────────────────────────────────────────
+
+HARNESS = Path(__file__).with_name("jsx_render_harness.js")
+
+PLAN = {
+    "release": {"version": "1.5.0", "tag": "v1.5.0", "commit": COMMIT},
+    "targets": [{"id": "pc-x86_64", "label": "A Windows or Linux PC", "ticked": True, "default": True},
+                {"id": "mac-arm64", "label": "A Mac with an Apple chip", "ticked": False, "default": False}],
+    "includes": [{"id": "ai", "label": "AI chat and questions", "bytes": 6_400_000_000, "ticked": True},
+                 {"id": "vision", "label": "Pictures in chat", "bytes": 1_900_000_000, "ticked": True},
+                 {"id": "rooms", "label": "Rooms: Raspberry Pis and spare computers", "bytes": 1_200_000_000, "ticked": True}],
+    "household": [{"id": "model:qwen2.5:14b", "name": "qwen2.5:14b", "kind": "ollama-model", "bytes": 9_000_000_000,
+                   "note": "not checked against a release", "ticked": False}],
+    "refused_models": [{"name": "gemma3:12b", "reason": "gemma3:12b: its licence doesn't allow passing it on"}],
+    "total_bytes": 14_100_000_000, "exact": True, "download_bytes": 2_400_000_000,
+    "download_labels": ["the Windows parts"],
+    "stick": {"needed_gb": 16, "chosen_gb": 8, "fits": False, "over_by": 6_100_000_000,
+              "message": "Too big for an 8 GB stick by 6.1 GB. Leave out AI chat and questions (6.4 GB) to fit."},
+    "stick_sizes": [8, 16, 32],
+}
+IDLE = {"running": False, "ok": None}
+SEL = {"targets": ["pc-x86_64"], "includes": ["ai", "vision", "rooms"], "household": [], "stick_gb": 8}
+BUILD = {"id": "A" * 32, "domovoi_version": "1.5.0", "size": 14_100_000_000, "expires": 4_000_000_000,
+         "image_url": "http://192.168.1.20:6370/v1/offline-kit/x/i.img", "os_list_url": "http://192.168.1.20:6370/x/os-list.json",
+         "manifest_url": "http://192.168.1.20:6370/x/m", "installers": {"DomovoiSetup.exe": "f" * 64}, "household": []}
+FN = ["onToggle", "onStick", "onMake", "onStop", "onDelete"]
+SCENARIOS = {
+    "plan": {"file": "web/static/offline_kit.jsx", "component": "OfflineKitView", "fnProps": FN,
+             "props": {"st": {"plan": PLAN, "refusal": None, "warning": None, "job": IDLE, "builds": []}, "sel": SEL}},
+    "behind": {"file": "web/static/offline_kit.jsx", "component": "OfflineKitView", "fnProps": FN,
+               "props": {"st": {"plan": PLAN, "refusal": None, "job": IDLE, "builds": [],
+                                "warning": {"reason": "behind", "message": "Domovoi 1.6.0 is out. Update this server first to put 1.6.0 on the stick."}},
+                         "sel": SEL}},
+    "running": {"file": "web/static/offline_kit.jsx", "component": "OfflineKitView", "fnProps": FN,
+                "props": {"st": {"plan": PLAN, "job": {"running": True, "stage": "write", "bytes_done": 8_400_000_000,
+                                                       "bytes_todo": 14_100_000_000}, "builds": []}, "sel": SEL}},
+    "ready": {"file": "web/static/offline_kit.jsx", "component": "OfflineKitView", "fnProps": FN,
+              "props": {"st": {"plan": PLAN, "job": IDLE, "builds": [BUILD]}, "sel": SEL}},
+    "household": {"file": "web/static/offline_kit.jsx", "component": "OfflineKitView", "fnProps": FN,
+                  "props": {"st": {"plan": PLAN, "job": IDLE, "builds": [
+                      {**BUILD, "household": ["my-model:latest"], "needs_admin": True,
+                       "image_name": "domovoi-offline-kit-1.5.0.img"}]}, "sel": SEL}},
+}
+
+
+@pytest.fixture(scope="module")
+def rendered() -> dict:
+    import shutil
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required to render web/static JSX")
+    proc = subprocess.run([node, str(HARNESS), str(REPO), json.dumps(SCENARIOS)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _text(els) -> str:
+    return " ".join(str(e.get("text") or "") for e in els)
+
+
+def test_the_card_shows_the_boxes_the_size_the_fit_and_the_notice(rendered):
+    t = _text(rendered["plan"])
+    assert "A Windows or Linux PC" in t and "A Mac with an Apple chip" in t and "Pictures in chat" in t
+    assert "14.1 GB" in t and "Needs a" in t and "16 GB" in t and "Too big for an 8 GB stick by 6.1 GB" in t
+    assert "2.4 GB will be downloaded first (the Windows parts)" in t
+    assert "not checked against a release" in t and "gemma3:12b" in t
+    assert "Don’t sell this stick" in t and "make the kit" in t
+
+
+def test_a_server_behind_the_latest_release_is_warned_but_may_go_on(rendered):
+    t = _text(rendered["behind"])
+    assert "Domovoi 1.6.0 is out" in t and "make it anyway" in t and "update first" in t
+
+
+def test_while_it_runs_one_bar_and_a_stop(rendered):
+    els = rendered["running"]
+    bar = [e for e in els if e["props"].get("role") == "progressbar"]
+    assert bar and bar[0]["props"]["aria-valuenow"] == 60
+    t = _text(els)
+    assert "Making the kit" in t and "8.4 GB of 14.1 GB" in t and "stop" in t
+
+
+def test_a_kit_with_household_items_downloads_only_signed_in(rendered):
+    els = rendered["household"]
+    t = _text(els)
+    src = (REPO / "web/static/offline_kit.jsx").read_text(encoding="utf-8")
+    assert "/ticket`, { method: 'POST' }" in src and "createObjectURL" not in src
+    assert "downloads only here, signed in as admin" in t and "Use custom" in t
+    assert not any(str(e["props"].get("href", "")).startswith("rpi-imager://") for e in els)
+    assert "download the image" in t
+
+
+def test_a_household_kit_needs_the_admin_bearer(kit_home, monkeypatch):
+    import asyncio
+
+    from fastapi import HTTPException
+
+    import domovoi.main as core_main
+    from domovoi.container_guard import freeze as container_freeze
+
+    root = jobs.builds_root()
+    for bid, household in (("H" * 32, ["my-model:latest"]), ("P" * 32, [])):
+        (root / bid).mkdir(parents=True)
+        (root / bid / jobs.BUILD_JSON).write_text(json.dumps({
+            "format": 1, "id": bid, "made": time.time(), "size": 5, "sha256": "0" * 64,
+            "domovoi_version": "1.5.0", "tag": "v1.5.0", "targets": ["pc-x86_64"], "includes": [],
+            "household": household}))
+        (root / bid / jobs.image_name("1.5.0")).write_bytes(b"image")
+    assert jobs.public_build(jobs.build_info("H" * 32))["needs_admin"] is True
+    assert jobs.public_build(jobs.build_info("P" * 32))["needs_admin"] is False
+
+    async def unfrozen(*a, **kw):
+        return None
+
+    tier = {"value": "no-auth"}
+
+    async def check(request, *a, **kw):
+        return tier["value"]
+
+    monkeypatch.setattr(container_freeze, "require_unfrozen", unfrozen)
+    monkeypatch.setattr(core_main, "check_admin_request", check)
+    name = jobs.image_name("1.5.0")
+
+    def get(bid, n):
+        return asyncio.run(core_main.offline_kit_file(bid, n, None, ticket=None))
+
+    assert get("P" * 32, name).status_code == 200
+    for t in ("no-auth", "cookie-only", "invalid"):
+        tier["value"] = t
+        for n in (name, jobs.OS_LIST, jobs.MANIFEST):
+            with pytest.raises(HTTPException) as e:
+                get("H" * 32, n)
+            assert e.value.status_code == 401 and "admin sign-in" in e.value.detail
+    tier["value"] = "ok"
+    assert get("H" * 32, name).status_code == 200
+
+
+def _two_kits(root: Path) -> None:
+    for bid, household in (("H" * 32, ["my-model:latest"]), ("G" * 32, ["other:latest"])):
+        (root / bid).mkdir(parents=True)
+        (root / bid / jobs.BUILD_JSON).write_text(json.dumps({
+            "format": 1, "id": bid, "made": time.time(), "size": 5, "sha256": "0" * 64,
+            "domovoi_version": "1.5.0", "tag": "v1.5.0", "targets": ["pc-x86_64"], "includes": [],
+            "household": household}))
+        (root / bid / jobs.image_name("1.5.0")).write_bytes(b"image")
+
+
+def test_a_download_ticket_works_once_for_its_own_kit_until_it_expires(kit_home, monkeypatch):
+    import asyncio
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    import domovoi.main as core_main
+    from domovoi.container_guard import freeze as container_freeze
+
+    _two_kits(jobs.builds_root())
+
+    async def unfrozen(*a, **kw):
+        return None
+
+    async def no_admin(request, *a, **kw):
+        return "no-auth"
+
+    monkeypatch.setattr(container_freeze, "require_unfrozen", unfrozen)
+    monkeypatch.setattr(core_main, "check_admin_request", no_admin)
+    name = jobs.image_name("1.5.0")
+
+    def get(bid, ticket, n=name):
+        return asyncio.run(core_main.offline_kit_file(bid, n, None, ticket=ticket))
+
+    def refused(bid, ticket, n=name):
+        with pytest.raises(HTTPException) as e:
+            get(bid, ticket, n)
+        return e.value.status_code == 401
+
+    minted = asyncio.run(core_main.admin_offline_kit_ticket("H" * 32))
+    ticket = minted["ticket"]
+    assert minted["image_name"] == name and minted["expires"] > time.time()
+    assert ticket not in json.dumps(list(jobs._tickets)) and len(jobs._tickets) == 1  # kept as its hash
+    assert refused("G" * 32, ticket)                    # another kit: refused, and not used up
+    assert refused("H" * 32, ticket, jobs.OS_LIST)      # only the image
+    r = get("H" * 32, ticket)
+    assert isinstance(r, FileResponse) and r.status_code == 200   # streamed from the file
+    assert refused("H" * 32, ticket)                    # used once
+    assert refused("H" * 32, "made-up")
+
+    old, _ = jobs.mint_ticket("H" * 32, now=time.time() - jobs.TICKET_SEC - 1)
+    assert refused("H" * 32, old)                       # expired
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(core_main.admin_offline_kit_ticket("Z" * 32))
+    assert e.value.status_code == 404
+
+
+def test_minting_a_ticket_needs_the_admin_bearer():
+    from domovoi import admin_auth
+    from domovoi.main import app as core_app
+    from web.backend.api import offline_kit as web_kit
+
+    def gates(routes, path):
+        route = next(r for r in routes if getattr(r, "path", "") == path and "POST" in r.methods)
+        return {d.call for d in route.dependant.dependencies}
+
+    assert admin_auth.require_admin_mutation in gates(core_app.routes, "/v1/admin/offline-kit/builds/{build_id}/ticket")
+    assert admin_auth.require_admin_mutation in gates(web_kit.router.routes, "/api/offline-kit/{build_id}/ticket")
+
+
+def test_the_dashboard_streams_the_image_with_the_ticket(monkeypatch):
+    import asyncio
+
+    import httpx
+    from starlette.requests import Request
+    from starlette.responses import StreamingResponse
+
+    from web.backend.api import offline_kit as web_kit
+
+    seen = {}
+    chunks = [b"a" * 1000, b"b" * 1000, b"c" * 10]
+
+    class _Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for c in chunks:
+                yield c
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        return httpx.Response(200, headers={"content-length": "2010"}, stream=_Body())
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(web_kit.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    req = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b"",
+                   "client": ("192.168.1.30", 5000)})
+    name = "domovoi-offline-kit-1.5.0.img"
+
+    async def run():
+        r = await web_kit.offline_kit_download("H" * 32, name, req, ticket="t0k")
+        assert isinstance(r, StreamingResponse)
+        got = [c async for c in r.body_iterator]
+        return r, got
+
+    r, got = asyncio.run(run())
+    assert got == chunks and r.headers["content-length"] == "2010"
+    assert 'filename="domovoi-offline-kit-1.5.0.img"' in r.headers["content-disposition"]
+    assert seen["url"].endswith(f"/v1/offline-kit/{'H' * 32}/{name}?ticket=t0k")
+
+
+def test_when_done_imager_download_and_delete(rendered):
+    els = rendered["ready"]
+    t = _text(els)
+    assert "Your offline kit is ready." in t and "Everything on the stick will be replaced." in t
+    assert any(str(e["props"].get("href", "")).startswith("rpi-imager://?repo=") for e in els)
+    assert "delete the kit" in t and "deleted by itself" in t
+
+
+# ─── the repositories' signing keys (apt/<arch>/docker/gpg) ──────────────
+
+def _pubkey(seed: bytes, *, version: int = 4) -> tuple[bytes, str]:
+    """A v4 public-key packet (old format, tag 6) and its fingerprint."""
+    body = bytes([version]) + b"\x5f\x00\x00\x00" + b"\x01" + b"\x00\x40" + seed.ljust(8, b"\0")[:8]
+    packet = bytes([0x80 | (6 << 2) | 0]) + bytes([len(body)]) + body
+    return packet, hashlib.sha1(b"\x99" + len(body).to_bytes(2, "big") + body).hexdigest().upper()
+
+
+def _armor(data: bytes) -> bytes:
+    import base64
+    return (b"-----BEGIN PGP PUBLIC KEY BLOCK-----\nComment: test\n\n" + base64.encodebytes(data)
+            + b"=abcd\n-----END PGP PUBLIC KEY BLOCK-----\n")
+
+
+def test_a_repository_key_is_held_to_its_pinned_fingerprint():
+    one, fpr = _pubkey(b"docker")
+    two, _ = _pubkey(b"other")
+    uid = bytes([0x80 | (13 << 2)]) + bytes([4]) + b"name"     # a user id packet after it
+    assert apt_mirror.primary_fingerprints(_armor(one + uid)) == [fpr]
+    assert apt_mirror.key_problem(_armor(one + uid), fpr) is None
+    assert apt_mirror.key_problem(one, fpr.lower()) is None          # binary, any case
+    assert "2 primary" in apt_mirror.key_problem(_armor(one + two), fpr)
+    assert apt_mirror.key_problem(_armor(two), fpr)
+    assert apt_mirror.key_problem(b"<html>not a key</html>", fpr)
+    assert apt_mirror.key_problem(_pubkey(b"x", version=5)[0], fpr)
+
+
+def test_the_kit_carries_docker_s_and_nvidia_s_keys_beside_their_mirrors(kit_home, monkeypatch):
+    p = pins.load(repo_read, COMMIT)
+    docker_key, docker_fpr = _pubkey(b"docker")
+    nvidia_key, nvidia_fpr = _pubkey(b"nvidia")
+    p.manifest = {**p.manifest, "docker_key_fpr": docker_fpr, "nvidia_key_fpr": nvidia_fpr}
+    served = {p.manifest["docker_key_url"]: _armor(docker_key), p.manifest["nvidia_key_url"]: _armor(nvidia_key)}
+    asked = []
+
+    def fetch_bytes(url, **kw):
+        asked.append(url)
+        return served[url]
+
+    monkeypatch.setattr(fetch, "fetch_bytes", fetch_bytes)
+    monkeypatch.setattr(apt_mirror, "cached", lambda pins_, arch: {"files": [], "made": time.time()})
+    amd64, arm64 = parts.apt_parts(p)
+    srcs = {s.path: s.src for s in amd64.acquire(Ctx(targets=("pc-x86_64",)))}
+    assert srcs["apt/amd64/docker/gpg"] == served[p.manifest["docker_key_url"]]
+    assert srcs["apt/amd64/nvidia/gpg"] == served[p.manifest["nvidia_key_url"]]
+    assert [s.path for s in arm64.acquire(Ctx(targets=("mac-arm64",)))] == ["apt/arm64/docker/gpg"]
+    assert len(asked) == 2                         # the arm64 kit reuses the cached Docker key
+    # A key that isn't the pinned one is never kept.
+    served[p.manifest["docker_key_url"]] = _armor(_pubkey(b"evil")[0])
+    for f in (kit_home / "cache" / "apt" / "keys").iterdir():
+        f.unlink()
+    with pytest.raises(apt_mirror.AptError, match="not the pinned one"):
+        amd64.acquire(Ctx(targets=("pc-x86_64",)))
+    # Under never the key is refused like every download.
+    monkeypatch.setattr(fetch, "fetch_bytes", lambda url, **kw: (_ for _ in ()).throw(egress.InternetTurnedOff(url)))
+    with pytest.raises(egress.InternetTurnedOff):
+        amd64.acquire(Ctx(targets=("pc-x86_64",)))

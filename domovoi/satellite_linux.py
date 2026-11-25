@@ -190,3 +190,128 @@ def start_fetch(lock: dict[str, Any]) -> bool:
 
     threading.Thread(target=run, name="satellite-linux-fetch", daemon=True).start()
     return True
+
+
+# ─── A Linux room's Python packages, from this server (offline kit, P6) ──
+#
+# install-pc.sh installs the satellite's packages from
+# ``satellite/locks/pc-<cpXY>-<machine>.txt`` with ``pip --require-hashes
+# --only-binary=:all: --no-deps``, from PyPI. A server installed from an
+# offline kit (domovoi/kit_rooms.py) holds those wheels in
+# ``cache/linux-wheels/``, and serves them, so a laptop in a house with no
+# internet installs with ``--no-index --find-links`` pointed here. Only a
+# wheel whose SHA-256 the lock lists for its package is served, and the
+# index page is offered only when every package of the lock is here (pip
+# then never needs PyPI); pip checks every hash again on the laptop.
+
+PC_LOCK_RE = re.compile(r"^pc-cp3[0-9]{1,2}-(x86_64|aarch64)\Z")
+WHEEL_BUCKET = "linux-wheels"
+_WHEEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.whl\Z")
+
+
+def wheel_dir() -> Path:
+    """The wheels' folder (not created: a read must not make it)."""
+    from domovoi.satellite_media import cache
+
+    return cache.CACHE_ROOT / WHEEL_BUCKET
+
+
+def normalize(name: str) -> str:
+    """A distribution name as PEP 503 compares it."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def pc_lock(locks_dir: Path, name: str) -> dict[str, frozenset[str]] | None:
+    """``{package: its allowed SHA-256s}`` of the spare-computer lock
+    ``name`` (``pc-cp313-x86_64``), or None for a name that isn't one or a
+    lock that isn't there."""
+    from domovoi.kit_builder import wheels
+
+    if not isinstance(name, str) or not PC_LOCK_RE.match(name):
+        return None
+    try:
+        text = (Path(locks_dir) / f"{name}.txt").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    locked = wheels.parse_lock(text)
+    return {normalize(lk.name): lk.hashes for lk in locked} or None
+
+
+def _wheel_sha(path: Path) -> str | None:
+    from domovoi.satellite_windows import _sha256
+
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        return _sha256(path)
+    except OSError:
+        return None
+
+
+def cached_wheel(lock: dict[str, frozenset[str]], name: str) -> Path | None:
+    """The wheel ``name`` if the lock allows its bytes for its package."""
+    if not isinstance(name, str) or not _WHEEL_RE.match(name):
+        return None
+    allowed = lock.get(normalize(name.split("-", 1)[0]))
+    if not allowed:
+        return None
+    path = wheel_dir() / name
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    sha = _wheel_verdicts.get((name, st.st_size, st.st_mtime_ns))
+    if sha is None:
+        sha = _wheel_sha(path)
+        if sha is None:
+            return None
+        _wheel_verdicts[(name, st.st_size, st.st_mtime_ns)] = sha
+    return path if sha in allowed else None
+
+
+_wheel_verdicts: dict[tuple[str, int, int], str] = {}
+
+
+def wheels_for(lock: dict[str, frozenset[str]]) -> dict[str, Path] | None:
+    """``{file name: path}``, one wheel the lock allows per package, or
+    None when some package has none here."""
+    found: dict[str, Path] = {}
+    have: set[str] = set()
+    d = wheel_dir()
+    try:
+        names = sorted(p.name for p in d.iterdir()) if d.is_dir() else []
+    except OSError:
+        names = []
+    for n in names:
+        pkg = normalize(n.split("-", 1)[0])
+        if pkg in lock and pkg not in have:
+            path = cached_wheel(lock, n)
+            if path is not None:
+                found[n] = path
+                have.add(pkg)
+    return found if have == set(lock) else None
+
+
+def wheel_index(lock: dict[str, frozenset[str]]) -> str | None:
+    """pip's ``--find-links`` page (plain links, relative) for the lock, or
+    None when this server can't serve all of it."""
+    import html
+
+    found = wheels_for(lock)
+    if found is None:
+        return None
+    links = "\n".join(f'<a href="{html.escape(n)}">{html.escape(n)}</a><br>' for n in found)
+    return f"<!DOCTYPE html>\n<html><body>\n{links}\n</body></html>\n"
+
+
+def wheels_status(locks_dir: Path) -> dict[str, bool]:
+    """``{lock name: whether this server serves all of it}``."""
+    out = {}
+    try:
+        names = sorted(p.stem for p in Path(locks_dir).glob("pc-*.txt"))
+    except OSError:
+        names = []
+    for n in names:
+        lock = pc_lock(locks_dir, n)
+        out[n] = bool(lock) and wheels_for(lock) is not None
+    return out

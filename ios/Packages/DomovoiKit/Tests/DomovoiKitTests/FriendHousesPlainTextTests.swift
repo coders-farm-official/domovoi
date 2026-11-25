@@ -71,8 +71,10 @@ final class FriendHousesPlainTextTests: XCTestCase {
     // MARK: - the source
 
     func testTheFilesAreThere() {
-        XCTAssertEqual(4, Self.appFiles.count, "the app's Friend houses files: \(Self.appFiles.map(\.0))")
-        XCTAssertEqual(5, Self.kitFiles.count, "DomovoiKit's Friend Houses files: \(Self.kitFiles.map(\.0))")
+        // 1.5.0: the admin tab, a file each (FriendHousesAdminZone.swift,
+        // FriendHousesAdmin.swift), held to the same plain-text rules.
+        XCTAssertEqual(5, Self.appFiles.count, "the app's Friend houses files: \(Self.appFiles.map(\.0))")
+        XCTAssertEqual(6, Self.kitFiles.count, "DomovoiKit's Friend Houses files: \(Self.kitFiles.map(\.0))")
     }
 
     func testEveryTextIsVerbatim() {

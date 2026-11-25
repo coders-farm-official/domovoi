@@ -16,8 +16,10 @@
 * ``POST /api/help/report`` — household tier: "Report a problem", the
   redacted summary the person reviews, then copies or saves. Nothing is
   sent anywhere and nothing is kept.
-* ``GET /api/help/deliveries`` — household READ: help steps sent by voice
-  to a person's phones (V035), for the app's catch-up read.
+* ``GET /api/help/deliveries`` — household READ: results sent by voice
+  to a person's phones (V035), for the app's catch-up read. Since 1.5.0
+  only a voice photo search sends ("Photos: …"); voice help answers aloud
+  and sends nothing. The path keeps its name for the apps that read it.
 
 Chat answers help questions through the same pieces
 (``web/backend/api/chat.py``, :func:`help_turn_for`): a thread titled
@@ -39,6 +41,7 @@ from sqlalchemy import text
 
 from domovoi import admin_auth, ai_features, egress
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.chat_access import VIEWER, Viewer
 from domovoi.help_desk import admin_tasks
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery, diagnostics
@@ -146,13 +149,13 @@ async def _room_records() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str
     try:
         async with session_scope() as s:
             for r in (await s.execute(text(
-                "SELECT DISTINCT ON (room_id) room_id, received_at, sample FROM satellite_health "
-                "ORDER BY room_id, received_at DESC"
+                "SELECT DISTINCT ON (satellite_id) satellite_id, received_at, sample "
+                "FROM satellite_health ORDER BY satellite_id, received_at DESC"
             ))).all():
                 samples[r[0]] = {"received_at": r[1], "sample": r[2] or {}}
             for r in (await s.execute(text(
-                "SELECT DISTINCT ON (room_id) room_id, reported_at, report FROM satellite_outages "
-                "ORDER BY room_id, reported_at DESC"
+                "SELECT DISTINCT ON (satellite_id) satellite_id, reported_at, report "
+                "FROM satellite_outages ORDER BY satellite_id, reported_at DESC"
             ))).all():
                 outages[r[0]] = {"reported_at": r[1], "report": r[2] or {}}
     except Exception as e:  # noqa: BLE001 — V022 missing: no records yet
@@ -239,13 +242,15 @@ async def help_turn_for(question: str, *, help_thread: bool, admin: bool = False
     about an admin's job (admin_tasks: add a room, update, install a
     plugin, the admin password, deleting files) is answered with the
     steps instead of who can do it and where. Those steps are the public
-    manual's, so a shared chat may hold them (owner D1, part a).
+    manual's, so any chat may hold them (owner D1, part a).
 
     Everything else stays the HOUSEHOLD view, whoever asks, a proven admin
     included (D1, part b): a chat on the home server is shared with every
-    paired device, so what Home shows only to an admin (the update's
-    details, the internet question, approvals) never goes into it; the
-    finding says where an admin reads it instead."""
+    paired device, or (1.5.0) private to one device and readable by every
+    admin and that device, which may not be an admin's, so what Home shows
+    only to an admin (the update's details, the internet question,
+    approvals) never goes into it; the finding says where an admin reads it
+    instead."""
     rooms: list[dict[str, Any]] | None = None
     plugins = await _plugins()
     index = index_for(plugins)
@@ -337,13 +342,16 @@ async def report(body: ReportBody, request: Request) -> dict[str, Any]:
 
 @router.get("/deliveries", dependencies=READ)
 async def deliveries(person_id: int | None = Query(None, ge=1), since_id: int | None = Query(None, ge=0),
-                     limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
-    """Help steps sent by voice (V035): newest first, or after ``since_id``
-    oldest first. The app reads its owner's on start and after a
-    ``help_deliveries.changed`` event."""
+                     limit: int = Query(20, ge=1, le=100),
+                     viewer: Viewer = VIEWER) -> dict[str, Any]:
+    """Results sent by voice to a person's phones (V035; a voice photo
+    search's since 1.5.0): newest first, or after ``since_id`` oldest
+    first. The app reads its owner's on start and after a
+    ``help_deliveries.changed`` event. A delivery made to one phone (1.5.0,
+    V086) is listed only to that phone (by its device key) and to admins."""
     try:
         async with session_scope() as s:
-            rows = await delivery.recent(s, person_id=person_id, since_id=since_id, limit=limit)
+            rows = await delivery.recent(s, person_id=person_id, since_id=since_id, limit=limit, viewer=viewer)
     except Exception as e:  # noqa: BLE001 — V035 missing: nothing was ever sent
         log.info("help: deliveries unreadable: %s", e)
         rows = []

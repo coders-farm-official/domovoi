@@ -72,6 +72,8 @@ const SHELL_ASSETS = [
   '/index.html',
   '/colors_and_type.css',
   '/styles.css',
+  // Read first, in <head>: the fragment of the setup-code QR (setup_fragment.js).
+  '/setup_fragment.js',
   '/auth.js',
   '/data.js',
   // The address to share in the header (components.jsx ShareAddressButton).
@@ -83,6 +85,7 @@ const SHELL_ASSETS = [
   '/library_tools.jsx',
   '/music.jsx',
   '/people.jsx',
+  '/support_session.jsx',
   '/satellites.jsx',
   '/calendar.jsx',
   '/lists.jsx',
@@ -93,7 +96,9 @@ const SHELL_ASSETS = [
   // Settings → Household → Media folders.
   '/media_folders.jsx',
   '/music_mix.jsx',
+  '/media_understanding.jsx',
   '/queue_history.jsx',
+  '/friend_apps.jsx',
   '/friend_houses.jsx',
   // Settings → Documents → Fonts, and the editors' font picker.
   '/fonts.jsx',

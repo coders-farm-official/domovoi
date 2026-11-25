@@ -76,14 +76,22 @@ public final class Downloader {
     /// Folders to take an already-verified copy from first (the user mode's
     /// `--seed-cache`): copied on APFS as a clone, so it costs no space.
     let seeds: [URL]
+    /// An offline kit (OfflineKit.swift): a pinned file comes from its
+    /// `mac/` folder instead of the internet, and nothing is downloaded at
+    /// all; a file neither the seeds nor the kit hold stops the install.
+    let kit: KitSource?
     let log: (String) -> Void
 
-    public init(runner: CommandRunner, cache: URL, seeds: [URL] = [], log: @escaping (String) -> Void = { _ in }) {
+    public init(runner: CommandRunner, cache: URL, seeds: [URL] = [], kit: KitSource? = nil, log: @escaping (String) -> Void = { _ in }) {
         self.runner = runner
         self.cache = cache
         self.seeds = seeds
+        self.kit = kit
         self.log = log
     }
+
+    /// Where an offline kit keeps a pinned Mac file.
+    public static func kitPath(_ pin: Pin) -> String { "mac/" + pin.fileName }
 
     public func path(for pin: Pin) -> URL { cache.appendingPathComponent(pin.fileName) }
 
@@ -102,6 +110,15 @@ public final class Downloader {
             guard fm.fileExists(atPath: s.path), try Digest.sha256(of: s) == pin.sha256 else { continue }
             try fm.copyItem(at: s, to: dest)
             log("took \(pin.fileName) from \(seed.path) (SHA-256 checked)")
+            return (dest, true)
+        }
+        if let kit {
+            let p = Self.kitPath(pin)
+            guard kit.has(p) else {
+                throw HelperError("\(pin.fileName) would be downloaded, and this install is from an offline kit: nothing may (the kit has no \(p)). Nothing was downloaded.")
+            }
+            try kit.copy(p, to: dest, sha256: pin.sha256)
+            log("took \(pin.fileName) from the offline kit (\(p); SHA-256 checked against the pin)")
             return (dest, true)
         }
         let part = dest.appendingPathExtension("part")

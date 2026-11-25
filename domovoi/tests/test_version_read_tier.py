@@ -24,6 +24,7 @@ from httpx import ASGITransport, AsyncClient
 
 from domovoi import admin_auth, git_version
 from domovoi.main import app as core_app
+from domovoi.tests.conftest import requires_db
 from domovoi.tests.auth_testkit import (
     COOKIE,
     HEADER,
@@ -149,3 +150,114 @@ async def test_the_web_hop_forwards_the_credential_and_bridges_the_refusal(
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["running_sha"] == "abc1234"
     assert HEADER not in seen[0] and seen[1][HEADER] == DEVICE_TOKEN
+
+
+# ─── "Database schema: V086": an admin's read only (1.5.0) ────────────────
+
+
+@pytest.fixture
+def schema_86(monkeypatch):
+    from domovoi import schema_version
+
+    async def fake_read(scope=None):
+        return 86
+
+    monkeypatch.setattr(schema_version, "read", fake_read)
+
+
+@pytest.mark.asyncio
+async def test_an_admin_read_carries_the_schema_version(monkeypatch, version_probe, schema_86) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        r = await c.get(VERSION, headers=bearer(ADMIN_TOKEN))
+        assert r.status_code == 200 and r.json()["schema_version"] == "V086"
+    async with _client() as c:
+        c.cookies.set(COOKIE, ADMIN_TOKEN)
+        assert (await c.get(VERSION)).json()["schema_version"] == "V086"
+
+
+@pytest.mark.asyncio
+async def test_a_members_read_never_carries_it(monkeypatch, version_probe, schema_86) -> None:
+    """The household token (every paired phone and browser) and a box with
+    no admin yet read the version, never the schema."""
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        r = await c.get(VERSION, headers={HEADER: DEVICE_TOKEN})
+        assert r.status_code == 200 and "schema_version" not in r.json()
+    install_fake_db(monkeypatch, admin=False)
+    async with _client() as c:
+        r = await c.get(VERSION)
+        assert r.status_code == 200 and "schema_version" not in r.json()
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_history_shows_nothing(monkeypatch, version_probe) -> None:
+    from domovoi import schema_version
+
+    class Broken:
+        async def __aenter__(self):
+            raise RuntimeError("no flyway_schema_history here")
+
+        async def __aexit__(self, *a):
+            return False
+
+    schema_version.reset_cache()
+    try:
+        assert await schema_version.read(lambda: Broken()) is None
+    finally:
+        schema_version.reset_cache()
+
+    async def none(scope=None):
+        return None
+
+    monkeypatch.setattr(schema_version, "read", none)
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        r = await c.get(VERSION, headers=bearer(ADMIN_TOKEN))
+        assert r.status_code == 200 and "schema_version" not in r.json()
+
+
+def test_the_schema_version_is_the_highest_whole_number() -> None:
+    from domovoi import schema_version
+
+    assert schema_version.highest(["1", "72", "086", "85", None, "1.2"]) == 86
+    assert schema_version.highest([]) is None
+    assert schema_version.label(86) == "V086" and schema_version.label(None) is None
+
+
+def test_the_version_card_shows_it_only_when_the_core_sent_it() -> None:
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "web" / "static" / "settings.jsx").read_text(encoding="utf-8")
+    i = src.index("version-schema")
+    block = src[src.rindex("{core && typeof core.schema_version === 'string'", 0, i):i + 200]
+    assert "database schema" in block and "core.schema_version" in block
+    # Read-only: nothing to press.
+    assert "onClick" not in block and "<button" not in block.lower()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_schema_version_reads_flyway_s_history() -> None:
+    """Against a real database: the highest successful version, a failed
+    one ignored."""
+    from sqlalchemy import text
+
+    from domovoi import schema_version
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        if (await s.execute(text("SELECT to_regclass('flyway_schema_history')"))).scalar() is not None:
+            pytest.skip("this test database has its own Flyway history")
+        await s.execute(text("CREATE TABLE flyway_schema_history (version TEXT, success BOOLEAN NOT NULL)"))
+        await s.execute(text("INSERT INTO flyway_schema_history VALUES ('085', true), ('086', true), "
+                             "('087', false), (NULL, true)"))
+        await s.commit()
+    schema_version.reset_cache()
+    try:
+        assert await schema_version.read() == 86
+    finally:
+        schema_version.reset_cache()
+        async with session_scope() as s:
+            await s.execute(text("DROP TABLE flyway_schema_history"))
+            await s.commit()

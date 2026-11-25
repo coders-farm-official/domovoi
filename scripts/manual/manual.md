@@ -334,6 +334,9 @@ two-way call into a room.
 to house, with no company server in between): friends are other Domovoi houses. On the dashboard,
 [Settings → Household → Friend Houses](#settings/friend-houses) shows the messages and shared lists to
 everyone in the household; making and managing friends is under **Friends and connections** *(admin)*.
+Both houses then show the same 6-digit code: call them and check it
+matches, if you like. Adding a friend needs Domovoi 1.5.0 or later on both
+houses; friends you already have keep working either way.
 To send one a message, say "message" and its name with the message, like
 "message the Smiths dinner's at six" (or "tell the Smiths …" when AI
 features are on): Domovoi reads it back and sends it when you say yes. It says "Sent" once
@@ -740,16 +743,18 @@ pick the room next to it, or send it to a room from the player.
 ## Chat and help
 
 **Intro:** Type to Domovoi on the dashboard or in the app. A chat on your
-home server is shared with the household; a chat on the phone stays on
-the phone. Domovoi asks before anything goes online, and it answers
-questions about itself.
+home server is private to the phone or browser that started it, unless
+you share it with the household; a chat on the phone stays on the phone.
+Domovoi asks before anything goes online, and it answers questions about
+itself.
 
 ### Chat
 
 Type to Domovoi in [Chat](#chat). A chat on the dashboard runs on your
-home server, with its models, and everyone in the household can see it.
-The app also has chats that run on the phone itself: see [Chat on the
-phone](#node:phone-chat).
+home server, with its models. It is private to the phone or browser that
+started it: only that device and the house's admins can see it. The app
+also has chats that run on the phone itself, which never leave the phone:
+see [Chat on the phone](#node:phone-chat).
 
 **How to**
 
@@ -758,6 +763,17 @@ phone](#node:phone-chat).
   give it stays.
 - Beside each chat: **rename**, **archive** and **delete** (the bin).
   **search chats** is above the list, and **archived** is at its end.
+- **Share with household** (the chat's header) lets every phone and
+  browser in the house read it and add to it. Turn it off and the other
+  devices don't see it any more, including anything they wrote in it. Only
+  the device that started a chat, or an admin, can share it, stop sharing
+  it or delete it. On a shared screen (the kitchen tablet) every chat is
+  shared.
+- **Admins** can read every chat in the house (**All chats in the house**
+  above the list), and share or delete any of them, but can't write in
+  another device's private chat.
+- **Save to Documents** from a private chat saves a copy to Documents,
+  where the household can see it.
 - **Pictures:** the paperclip adds up to 4 to a message (PNG, JPEG, GIF,
   WebP or BMP, 20 MB each). You can paste a screenshot too. The vision
   model reads them on your server.
@@ -1011,12 +1027,10 @@ says "The manual doesn't cover that." rather than guessing.
 - "how do I change the wake word"
 - "how do I add a printer"
 
-After the short answer, Domovoi asks "Want me to send the steps to your
-phone?" Say yes, and they arrive as a chat called "Help: …" on the phones
-marked as yours ([Settings → Household → Phones &
-browsers](#app/connection), **This phone belongs to**, in the app). If
-Domovoi doesn't know your voice, it asks who to send them to. It never
-sends them to every phone.
+Domovoi says the short answer and where it came from, then "The full
+answer is in the manual." Open the page with **?** on the dashboard, or
+in the app's manual. A plugin's own help ends "The full answer is in that
+plugin's help."
 
 **If something's wrong**
 
@@ -1203,8 +1217,8 @@ say out loud in a room.
 - If a letter has text aimed at an AI assistant ("ignore previous
   instructions…"), Domovoi doesn't follow it and says so: genuine letters
   don't do this.
-- Everyone in the house can see a home-server chat, so a phone chat is the
-  private place for personal mail. On a home server without a graphics
+- The house's admins can read every home-server chat, so a phone chat is
+  the private place for personal mail. On a home server without a graphics
   card a letter takes about 2 minutes.
 - **App:** in a phone chat, **+** → **take a photo** or **choose a photo**
   on phones that read photos themselves. The photo isn't kept; the text
@@ -1305,8 +1319,29 @@ Podcasts, Audiobooks, and plugged-in drives.
   from Chat.
 - **App:** **Chat documents** holds drafts saved in a phone chat. Files
   shows it once it holds one.
+- **Dashboard:** [Photos](#photos) shows every photo and video, newest
+  first, and finds them by what is in them and when: "dog at the beach",
+  "christmas 2023", "snow last winter". A video found by a moment opens
+  there. A description reads "Might show: …": it's a computer's guess,
+  sometimes wrong. Domovoi looks at your photos on this server, at night,
+  once **Understand photos and videos** is on in
+  [Settings → Chat & AI → Photos and videos](#settings/photos-and-videos);
+  until it has looked at some, Photos says so.
+- With **Understand photos and videos** on
+  ([Settings → Chat & AI → Photos and videos](#settings/photos-and-videos)), ask for them by voice or in a chat. The answer says
+  how many it found and that they're on the Photos page; a chat also
+  shows them. By voice, when it knows your voice and a phone is marked as
+  yours, it asks "Do you want them on your phone?" and a yes sends them there as
+  a chat. With **Recognize faces** on, a name finds that person's
+  photos, for a voice Domovoi recognizes, never a guest's.
 
 [More detail](docs/FAQ.md#can-i-move-files-around-without-the-command-line)
+· [Photos and videos](docs/PHOTOS_AND_VIDEOS.md)
+
+**Try saying**
+
+- "show me photos of the beach from last summer"
+- "find the video where we sang happy birthday"
 
 ### Documents and spreadsheets
 
@@ -1610,8 +1645,9 @@ the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
 **Chat** holds all your chats with Domovoi in one list. Each one is marked
 with where it runs:
 
-- **on home server**: answered by your home server, and shared with the
-  household. See [Chat](#node:chat).
+- **on home server**: answered by your home server, and private to this
+  phone (and the house's admins) unless you share it with the household.
+  See [Chat](#node:chat).
 - **on this phone**: answered by the phone itself, with no server, and
   kept only on this phone. See [Domovoi on this phone](#node:assistant).
 
@@ -1812,9 +1848,9 @@ chat can answer about a photo, in airplane mode too.
 [live slot: rooms]
 
 A room is a place in the house: its name, voice, music queue, wake
-words, timers and quiet hours. Each room has one satellite, the device
-that listens and plays there: a Raspberry Pi, a spare laptop, or a phone
-in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
+words, timers and quiet hours. A room has one or more satellites, the
+devices that listen and play there: a Raspberry Pi, a spare laptop, or a
+phone in room mode. [Settings → Household → Rooms](#settings/rooms) lists the
 rooms. Each card shows:
 
 - online or offline;
@@ -1844,6 +1880,28 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
   room**, in the same place.
 - A room's satellite replaced with new hardware: **Reset pairing** (also
   under **maintenance**), then approve the new device.
+- A second satellite in a room: open the room and press **Add a
+  satellite to the Kitchen** for its setup code; its approval then has
+  the room picked already. A device set up any other way: answer **Which
+  room is it in?** with that room when you approve it. Later, open the
+  room and use the satellite's **Move to another room**.
+
+**Several satellites in one room**
+
+- One wake word is one turn: the first satellite to hear it answers, the
+  others stay quiet, and Domovoi transcribes the microphone that heard you
+  best.
+- Music, answers, timers, alarms and announcements play from every
+  speaker in the room at the same moment. The speakers tune themselves
+  with a short chirp when a satellite joins the room (never in quiet
+  hours). If they sound slightly apart, open the room and press **Tune
+  the speakers** (nothing may be playing).
+- Two rooms that hear each other's wake word: open one and add the other
+  under **Rooms that can hear this one**, so it is one answer, not two.
+  The Rooms page suggests this when it notices.
+- A satellite or app from before 1.5.0 can't join in: it plays only when
+  it is the room's only satellite, and its room says **Update the app on
+  this phone.**
 
 **Quiet hours**
 
@@ -1912,6 +1970,17 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 **If something's wrong:** **show setup details** on the card lists the
 setup network and its page. [More detail](README.md#3-add-your-first-satellite)
 
+**A support session** *(admin)*: for a fault the room's **Diagnostics**
+tab can't explain, turn on **Allow support sessions** in the room's
+**Settings** tab, then **Open support session** and type the admin
+password: a shell on the Pi, as its own account, for up to 30 minutes.
+The room says it started, its light breathes magenta, and every dashboard
+shows a banner with **End**. Anyone can end it.
+
+**Try saying**
+
+- "end support session"
+
 ### A spare laptop or PC
 
 A Windows 10 or 11, or Linux, laptop or PC can be a room's satellite. Use one that
@@ -1971,7 +2040,7 @@ word, answers, plays the room's music, and takes announcements.
 5. Approve the six-digit code on the dashboard.
 
 **App:** a phone that already has the app can do this from [Settings →
-Household → Rooms](#settings/rooms) → **Use this device as a room**,
+Household → Rooms](#settings/rooms) → **Use this phone in a room**,
 or from the **Domovoi Room** icon. A phone you also use every day needs a
 screen lock, and while it's in room mode, the rest of the app is locked.
 
@@ -2141,6 +2210,33 @@ Domovoi?"). It doesn't mean Domovoi has forgotten you.
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
 
+### Faces in photos
+
+With **Recognize faces** on *(admin)*, Domovoi groups the same face across
+your photos and videos, on this server, so you can name the people you
+know. It's off until an admin turns it on in
+[Settings → Chat & AI → Photos and videos](#settings/photos-and-videos);
+turning it off deletes every face.
+
+**How to**
+
+- **Dashboard:** open [Faces](#faces). It's only there while faces are
+  on, and never for a guest or on a shared screen.
+- Name a group: open it, type a name (someone from People, or a new name)
+  and press **add name**.
+- Check a person's faces: on their page, **yes, Sarah** or **not this
+  person** on each face Domovoi suggested.
+- **hide this group** for a stranger. Groups of only a face or two stay
+  under **show more**, and Domovoi never asks who someone is.
+- *(admin)* merge two groups, split faces into a new group, move a
+  person's faces to someone else, and show a hidden group again.
+- **Forget my face**: on your own page, from the phone or browser that's
+  yours (**this is me**), or by an admin. It deletes every saved face of
+  you and keeps a pattern tied to nobody, so new photos of you aren't
+  grouped again. Your photos stay, and so do your voice and memories.
+
+[More detail](docs/PHOTOS_AND_VIDEOS.md#faces)
+
 ### Guests, household and admin
 
 - **Guests**: a phone or browser on your Wi-Fi that isn't paired. Guests
@@ -2192,7 +2288,7 @@ Everything stays on your server, or on your phone.
 
 | What | Kept |
 |---|---|
-| What you said to Domovoi by voice, and its replies | 90 days, or what **Keep voice history** says |
+| What you said to Domovoi by voice, and its replies | 90 days, or what [Settings → Privacy → Keep voice history](#settings/keep-voice-history) says |
 | Chats on the home server, with the pictures, documents and letter photos attached | until you delete the chat |
 | Every version of a draft in a chat | until you delete the chat |
 | A draft or a letter you saved | a file in Documents → From Chat, until you delete it |
@@ -2223,12 +2319,13 @@ Ask Domovoi itself: it answers from this house's own settings.
 
 - "forget me", in your own voice: deletes your profile, voice samples,
   memories and everything you said to Domovoi.
-- *(admin)* [Settings → Household → People](#settings/people) → **Voice history** → **Keep voice
-  history**: 30 days, 90 days (the default), 1 year or Forever. Older
-  turns are deleted every day. It's also in [Settings → System →
-  Advanced](#settings/advanced) → **show the settings** → **Privacy**.
-- *(admin)* **Delete all voice history**, on the same page, deletes it all
-  at once. People, voice samples, memories, notes, timers and chats stay.
+- How long what you say is kept: [Settings → Privacy → Keep voice
+  history](#settings/keep-voice-history). *(admin)* choose 30 days,
+  90 days (the default), 1 year or Forever. Older turns are deleted every
+  day, and at once when you save. Everyone else sees what it is set to.
+- *(admin)* **Delete all voice history**, on [Settings → Household →
+  People](#settings/people) → **Voice history**, deletes it all at once.
+  People, voice samples, memories, notes, timers and chats stay.
 - Clear your own listening history: your name on
   [Settings → Household → People](#settings/people) → **listening history**
   → **clear**, from your own phone or browser, from 10 minutes after you
@@ -2243,12 +2340,12 @@ Ask Domovoi itself: it answers from this house's own settings.
 - Delete a chat: the bin icon in [Chat](#chat). Its pictures, documents,
   letters and draft versions go with it.
 - *(admin)* turn recordings off in a room's **Settings** tab (**Stop and
-  delete**); the commands kept so far are in [Settings → Privacy → Voice
-  history](#settings/voice-history).
+  delete**); the commands kept so far are in [Settings → Privacy → Command
+  recordings](#settings/command-recordings).
 - *(admin)* listen to a room's command recordings, mark whether each one
-  ended at the right moment, and delete them: [Settings → Privacy → Voice
-  history](#settings/voice-history). A room keeps them only while an admin
-  has turned them on for it.
+  ended at the right moment, and delete them: [Settings → Privacy → Command
+  recordings](#settings/command-recordings). A room keeps them only while
+  an admin has turned them on for it.
 
 An admin can change play history, news and timer history in [Settings →
 System → Advanced](#settings/advanced). [More detail](docs/SECURITY_PRIVACY.md#data-at-rest)
@@ -2285,11 +2382,17 @@ answer doesn't reach it there.
 ### Updates
 
 [Settings → System → About & updates](#settings/about) shows the release
-you run.
+you run. An admin also sees the **database schema** it is on (for
+example V086), which is handy when asking for help.
+
+With the internet setting **Yes**, Domovoi looks by itself once a day and
+Home says *Domovoi 1.5.0 is available*. Untick **Check for updates by
+itself** to look only when you ask. Only a signed release makes this
+notice, with its three highlights; nothing installs by itself.
 
 **How to** *(admin)*
 
-1. **Check for updates**.
+1. **Check for updates** (or **Update** on Home).
 2. **Update Domovoi**. It pulls the update, then restarts with it.
 3. On a server that can't restart itself, **Restart to apply changes**
    comes next.

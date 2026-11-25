@@ -594,6 +594,34 @@ def check_route_tiers(
         )
 
 
+FRIEND_HOUSES_OPEN_ROUTES = (
+    "it holds permissions.friend_houses and has open routes (no sign-in at "
+    "all): never let one reach friends() or send_mail; those belong on "
+    "device-tier or admin routes (docs/PLUGIN_DEVELOPMENT.md, \"Apps with friends\")"
+)
+
+
+def friend_houses_open_routes(manifest: PluginManifest, open_routes: list[Any]) -> bool:
+    """The trust screen's flag (review D13): a ``friend_houses`` plugin that
+    also answers with no credential at all."""
+    return bool(manifest.permissions.get("friend_houses")) and bool(open_routes)
+
+
+def check_friend_houses_routes(
+    manifest: PluginManifest, routers: list[Any], report: ContractReport
+) -> None:
+    """A warning, never an error: a ``friend_houses`` plugin with open
+    routes (SDK 1.19). The trust screen flags the same."""
+    if not manifest.permissions.get("friend_houses"):
+        return
+    from domovoi.webkit import endpoint_tier, iter_plugin_routes
+
+    open_routes = [r for r in iter_plugin_routes(routers)
+                   if endpoint_tier(getattr(r, "endpoint", None)) == "open"]
+    if friend_houses_open_routes(manifest, open_routes):
+        report.warnings.append(FRIEND_HOUSES_OPEN_ROUTES)
+
+
 def check_containers(
     slug: str,
     manifest: PluginManifest,
@@ -644,6 +672,7 @@ def run_contract_checks(
     report = ContractReport()
     check_handlers(slug, handlers, report)
     check_route_tiers(list(routers or []), report, package_dir)
+    check_friend_houses_routes(manifest, list(routers or []), report)
     check_consumes(manifest, report)
     check_manifest_drift(
         slug, manifest, handlers, worker_names, hook_names,

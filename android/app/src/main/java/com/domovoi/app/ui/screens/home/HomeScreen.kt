@@ -83,8 +83,9 @@ import java.time.ZoneId
  * phone gets "everything".
  *
  * No home endpoint: the screen composes reads the dashboard already has,
- * all of them open but one: Friend Houses' unread count, a household read
- * (a count only, no names). The app has no admin session, so the
+ * all of them open but two household reads, asked only when paired: Friend
+ * Houses' unread count (a count only, no names) and the update notice
+ * (HomeUpdateNotice.kt). The app has no admin session, so the
  * admin-only problem rows are never asked for. Never on Home: transcripts, voice
  * notes, memories, people's names, chat titles, Wi-Fi names. A shared
  * screen (LocalSharedScreen) also hides calendar titles, reminder text and
@@ -161,6 +162,17 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val fhUnread = rememberApi(fhShown, fhGate.shownFor(serverUrl)?.unread) {
         if (fhShown) it.friendHouses.api.unread() else null
     }
+    // A new signed Domovoi release (GET /api/updates/notice, update
+    // notices 1.5.0): a device-tier read, so only a paired phone asks.
+    // Read on arrival and, like the web, again on coming back at most every
+    // ten minutes. An older server's 404 or a bad body is no row; a read
+    // that got no answer keeps the last one (UpdateNotices.read).
+    // The server is read before the request and travels with its answer, so
+    // one house's notice is never shown for another.
+    val updateNotice = rememberApi(paired) {
+        if (paired) ServerNotice(it.prefs.serverUrl.value, UpdateNotices.read(it.api)) else null
+    }
+    var noticeAt by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     // When the rooms and the timers were last read (each read is a new object).
     val satsAt = remember(sats.data) { System.currentTimeMillis() }
@@ -233,6 +245,10 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
         if (now - lastFocus >= HOME_FOCUS_GAP_MS) {
             lastFocus = now
             cfg.refresh(); health.refresh(); cal.refresh(); fhUnread.refresh()
+            if (now - noticeAt > HOME_UPDATE_NOTICE_GAP_MS) {
+                noticeAt = now
+                updateNotice.refresh()
+            }
             if (!live) {
                 roomsDirty = false; sats.refresh(); timers.refresh()
             } else if (roomsDirty) {
@@ -295,8 +311,13 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val guard by app.containerAlerts.state.collectAsState()
     val rows = attentionRows(health.data, rooms, plugins.data, acq.data, guard)
     val attention = withRow(
-        attentionView(rows, cfg.data?.home_problems_visibility, shared, cfg.answered()),
-        fhUnreadRow(if (fhShown) fhUnread.data else null),
+        withRow(
+            attentionView(rows, cfg.data?.home_problems_visibility, shared, cfg.answered()),
+            fhUnreadRow(if (fhShown) fhUnread.data else null),
+        ),
+        // The member's row on every phone: the app has no admin sign-in
+        // here yet, so `admin` (the seam for the admin's Update) stays false.
+        updateNoticeRow(updateNotice.data?.noticeFor(serverUrl), paired, admin = false, shared = shared),
     )
 
     // First run: a house with nothing in it yet gets one hint, taken from

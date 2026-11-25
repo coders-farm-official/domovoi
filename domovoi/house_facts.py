@@ -40,6 +40,7 @@ feature. Every "how to get it" clause goes through
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from dataclasses import dataclass
@@ -193,6 +194,10 @@ class HouseFacts:
     background: tuple[str, ...] | None = None
     vision_model: bool | None = None
     news_on: bool | None = None
+    # The typed chat being asked in (1.5.0 private chats, domovoi/chat_access.py
+    # ``Thread.state``): "private", "shared" (or "household"), "admin-only";
+    # None when the turn isn't in a known chat.
+    chat_state: str | None = None
 
 
 def _bool(get: SettingGetter, name: str) -> bool | None:
@@ -280,7 +285,10 @@ async def _device(scope: Any, *, room_id: str | None, device_kind: str | None,
         board = None
     if board is None:
         try:
-            board = await _scalar(scope, "SELECT board FROM satellites WHERE room_id = :r",
+            # 1.5.0: a room may hold several devices; the one named like the
+            # room (every device from before 1.5.0) first, then by id.
+            board = await _scalar(scope, "SELECT board FROM satellites WHERE room_id = :r "
+                                         "ORDER BY (satellite_id = :r) DESC, satellite_id LIMIT 1",
                                   {"r": room_id}, missing_table=None)
         except Exception as e:  # noqa: BLE001 — a room it is; only the phone's clause is lost
             log.debug("house facts: board unreadable for %s: %s", room_id, e)
@@ -520,9 +528,28 @@ def _lookup_clause(f: HouseFacts) -> str:
     return ""
 
 
+#: Who reads a home-server chat (1.5.0, domovoi/chat_access.py): private to
+#: the phone or browser that started it, unless it's shared.
+CHATS_WHO = ("A chat on this house's server is private to the phone or browser that started it, "
+             "and the house's admins can read it too. A chat shared with the household can be "
+             "read on every paired phone and browser.")
+CHAT_PRIVATE = ("This chat is private to the phone or browser that started it; the house's "
+                "admins can read it too.")
+CHAT_SHARED = "This chat is shared with everyone in the house: every paired phone and browser can read it."
+
+
 def _chat_shared() -> str:
-    return ("Everyone in this house: chats on this house's server can be read on every paired "
-            "phone and browser.")
+    return CHATS_WHO
+
+
+def _this_chat(f: HouseFacts) -> str:
+    """Who reads the chat being asked in, by its own state; the general
+    rule when that's unknown."""
+    if f.chat_state in ("shared", "household"):
+        return CHAT_SHARED
+    if f.chat_state == "private":
+        return CHAT_PRIVATE
+    return CHATS_WHO
 
 
 def answer(qid: str, f: HouseFacts) -> str:
@@ -601,8 +628,7 @@ def _leaves_house(f: HouseFacts) -> str:
 
 def _keep_answer(f: HouseFacts) -> str:
     if f.device == WEB_CHAT:
-        return ("Yes. This chat is kept until someone deletes it, and everyone in the house can "
-                "read it.")
+        return "Yes. This chat is kept until someone deletes it. " + _this_chat(f)
     keep = _keep_text(f.voice_keep)
     if keep is None:
         return CANT_CHECK
@@ -659,8 +685,7 @@ def _friend_houses(f: HouseFacts) -> str:
 
 def _private(f: HouseFacts) -> str:
     if f.device in CHAT_DEVICES:
-        return ("This chat is shared with everyone in the house: every paired phone and browser "
-                "can read it.")
+        return _this_chat(f)
     keep = _keep_text(f.voice_keep)
     out = "Not entirely: anyone in the room can hear us."
     if keep:
@@ -1623,9 +1648,11 @@ async def chat_reply(
     previous_assistant: Callable[[], Any] | None = None,
     admin_check: Callable[[], Any] | None = None,
     guest_check: Callable[[], Any] | None = None,
+    chat_state: str | None = None,
 ) -> str | None:
     """The deterministic reply to a typed chat message, or None (the chat
-    answers as before). ``previous_assistant`` is an async callable giving
+    answers as before). ``chat_state``: the chat's own visibility
+    (``chat_access.Thread.state``), for "is this chat private?". ``previous_assistant`` is an async callable giving
     the thread's last assistant row (``{"stats": ...}``) or None;
     ``admin_check`` an async callable giving whether THIS request carries
     a live admin sign-in (the server's own check), asked only for an
@@ -1648,15 +1675,22 @@ async def chat_reply(
     # yourself?") stays the help turn's, as before.
     task = (_admin_tasks.request(t)
             if admin_kind is None and _admin_tasks.match(t) is None else None)
+    # "Update yourself" on a house that updates from an offline kit (1.5.0,
+    # case 5.11b): the kit's words. "Can you update yourself?" is the help
+    # turn's update task, which gives the same words there.
+    kit_update = (admin_kind is None and task is None and _admin_tasks.match(t) is None
+                  and _admin_tasks.kit_update_asked(t) and _admin_tasks.updates_by_kit())
     # "Who can approve this?" / "who's the admin?": who does an admin's job.
-    who_kind = admin_who(t) if admin_kind is None and task is None else None
-    if admin_kind is not None or task is not None or who_kind is not None:
+    who_kind = admin_who(t) if admin_kind is None and task is None and not kit_update else None
+    if admin_kind is not None or task is not None or who_kind is not None or kit_update:
         admin: bool | None = None
         if admin_check is not None:
             try:
                 admin = bool(await admin_check())
             except Exception as e:  # noqa: BLE001 — unknown, said as such
                 log.debug("house facts: the admin check failed: %s", e)
+        if kit_update:
+            return _admin_tasks.kit_update_answer(admin=bool(admin))
         if task is not None:
             return _admin_tasks.answer(task, admin=bool(admin))
         if who_kind is not None:
@@ -1675,6 +1709,8 @@ async def chat_reply(
     if qid is None and cap is None:
         return None
     f = await read(chat=True, get_setting=get_setting, scope=scope)
+    if chat_state is not None:
+        f = dataclasses.replace(f, chat_state=chat_state)
     if qid is not None:
         return answer(qid, f)
     return await capability_answer(cap[0], f, scope=scope)

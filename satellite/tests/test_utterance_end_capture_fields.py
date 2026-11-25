@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import types
+from pathlib import Path
 
 from satellite.tests._client_import import import_client
 from satellite.tests.test_send_queue_lifecycle import (
@@ -65,6 +66,8 @@ def test_a_silence_ended_capture_reports_its_reason_and_exact_counts(monkeypatch
             # speculative-transcript check reads them).
             "utt": 0,
             "last_voiced_frame": 6,
+            # Where speech began (1.5.0, noisy rooms: domovoi/loud_room.py).
+            "first_voiced_frame": 0,
             "exit_reason": "vad_silence_after_speech",
             "frames": consumed,
             "voiced_frames": 7,
@@ -106,3 +109,30 @@ def test_speech_that_resumes_resets_the_silent_run(monkeypatch):
         assert end["trailing_silent_frames"] == end["silence_limit_frames"]
     finally:
         loop.close()
+
+
+def test_a_capped_capture_says_where_its_speech_began(monkeypatch):
+    """1.5.0, noisy rooms: a capture cut off at its cap names its first
+    voiced frame, so the core transcribes the command said there and not
+    the room's chatter after it (domovoi/loud_room.py)."""
+    monkeypatch.setattr(client, "webrtcvad", types.SimpleNamespace(Vad=FakeVad))
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop=loop)
+        sat.cfg.max_record_seconds = 0.3        # 10 frames
+        for f in [SILENCE] * 3 + [FRAME] * 9:
+            sat.raw_q.put(f)
+        end = json.loads(_capture(sat, loop)[-1][1])
+        assert end["exit_reason"] == "max_record_seconds"
+        assert end["first_voiced_frame"] == 3
+        assert end["last_voiced_frame"] == 9 and end["frames"] == 10
+        # The shared fixture's capped frame is what this client sends.
+        fixture = json.loads(
+            (Path(__file__).resolve().parents[2] / "docs" / "uml" / "satellite-fixtures.json")
+            .read_text(encoding="utf-8")
+        )["noisy_rooms"]["capped_utterance_end"]
+        assert set(fixture) <= set(end)
+        assert fixture["exit_reason"] == end["exit_reason"]
+    finally:
+        loop.close()
+

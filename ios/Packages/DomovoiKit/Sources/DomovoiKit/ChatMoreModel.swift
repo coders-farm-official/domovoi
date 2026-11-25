@@ -103,6 +103,11 @@ public final class ChatMoreModel {
     /// the composer cannot (see above).
     public private(set) var answering = false
 
+    /// The open chat is one this phone may read and not write (1.5.0: an
+    /// admin reading another device's private chat, ``ChatModel/openWritable``).
+    /// Every answer, pick and carry-on is a write, so none is offered.
+    public var readOnly = false
+
     /// The words of a card's answer as they arrive, drawn where the reply
     /// will be (`ChatScreen.kt:897`).
     public private(set) var cardReply = ""
@@ -319,7 +324,7 @@ public final class ChatMoreModel {
     }
 
     public func headsUpAnswerable(_ id: Int64, isLastRow: Bool) -> Bool {
-        guard isLastRow, !answering else { return false }
+        guard isLastRow, !answering, !readOnly else { return false }
         guard let card = detail.rows[id]?.headsUp else { return false }
         return headsUpChosen(for: id) == nil && card.chosen == nil
     }
@@ -533,7 +538,7 @@ public final class ChatMoreModel {
     /// The stopped job whose newest reply is this row — the one row that
     /// offers "carry on", and how many parts are left (`ChatScreen.kt:991`).
     public func carryOn(for id: Int64) -> (job: ChatMoreJob, left: Int)? {
-        guard !answering else { return nil }
+        guard !answering, !readOnly else { return nil }
         let rows = detail.rows.values.sorted { $0.id < $1.id }
         for job in ChatMoreJobRules.stopped(jobs) {
             guard ChatMoreJobRules.carryOnRow(for: job, rows: Array(rows)) == id else { continue }

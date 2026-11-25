@@ -75,9 +75,15 @@ Message details (V017): an assistant row keeps ``stats`` — Ollama's token
 counts and durations for the reply, the server's own first-token and wall
 times, how much of the thread was sent as context and which model setting
 answered (:func:`_reply_stats`). A user row keeps the ``device_id`` of the
-install that sent it — self-asserted, like queue provenance, and kept only
-when it is a well-formed id (``devices.valid_device_id``) — and reads join
-``devices`` for its current name.
+device that sent it — since 1.5.0 the one its device KEY resolved to
+(domovoi/chat_access.py), never an id the caller names — and reads join
+``devices`` for its current name. Reads never return the stored id (1.5.0,
+L39 of the 2026-11 review): a row says ``mine`` instead — true when it was
+sent from the caller's own device.
+
+Private chats (1.5.0, V086): every route here goes through
+:mod:`domovoi.chat_access` (who may see, read, write, share and delete a
+thread); docs/SECURITY_PRIVACY.md "Private chats".
 """
 
 from __future__ import annotations
@@ -101,8 +107,10 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import ai_features, chat_titles, egress, executors, house_facts, image_safety, live_env, lookup_answer, uncertainty
+from domovoi import (ai_features, chat_access, chat_titles, egress, executors, house_facts, image_safety, live_env,
+                     lookup_answer, uncertainty)
 from domovoi.admin_auth import request_is_guest, require_device, require_device_read
+from domovoi.chat_access import VIEWER, Action, Viewer
 from domovoi.clients import ollama as ollama_client
 from domovoi.help_desk import admin_tasks as help_admin_tasks
 from domovoi.help_desk import answer as help_answer
@@ -117,8 +125,9 @@ from web.backend.api import chat_letters as _letters
 from domovoi.doc_qa import letter as _letter
 from web.backend.api import chat_drafts as _drafts
 from web.backend.api import chat_videos as _videos
+from web.backend.api import chat_media as _media
+from domovoi.media_understanding import ask as _ask
 from web.backend.api import chat_memory
-from web.backend.api import devices as devices_api
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url, get_cached_snapshot
@@ -180,6 +189,10 @@ async def _notify_chat(s: Any, what: str) -> None:
 # ─── Threads ────────────────────────────────────────────────────────────────
 class ThreadCreate(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
+    # Private to this device (the default for a caller with a device key)
+    # or shared with the household (the default without one, and always on
+    # a shared screen). chat_access.new_thread has the rule.
+    shared: Optional[bool] = None
 
 
 class ThreadPatch(BaseModel):
@@ -187,6 +200,63 @@ class ThreadPatch(BaseModel):
     archived: Optional[bool] = None
     # The header chip: "Allow in this chat" on or off (V037).
     internet_allowed: Optional[bool] = None
+    # "Share with household" on or off: the owning device or an admin.
+    shared: Optional[bool] = None
+
+
+_THREAD_COLUMNS = (
+    "t.id, t.title, t.archived, t.title_by_user, t.created_at, t.updated_at, "
+    "t.internet_allowed, t.used_internet"
+)
+
+
+async def _select_threads(
+    s: Any, viewer: Viewer, where: list[str], params: dict[str, Any], *,
+    match_col: str = "NULL::text AS match_content", limit: str = "",
+) -> list[dict[str, Any]]:
+    """Thread rows as the list gives them, each with its access fields
+    (chat_access.flags) and, for an admin, the owning device's name."""
+    flags = await chat_access.thread_flags_sql(s, "t")
+    rows = (
+        await s.execute(
+            text(
+                f"""
+                SELECT {_THREAD_COLUMNS},
+                       COUNT(m.id) AS message_count,
+                       (SELECT LEFT(content, 120) FROM chat_messages
+                         WHERE thread_id = t.id ORDER BY id DESC LIMIT 1) AS last_snippet,
+                       {flags},
+                       {match_col}
+                  FROM chat_threads t
+                  LEFT JOIN chat_messages m ON m.thread_id = t.id
+                 WHERE {' AND '.join(where) or 'TRUE'}
+                 GROUP BY t.id
+                 ORDER BY t.updated_at DESC
+                 {limit}
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+    return [_thread_json(r, viewer) for r in rows]
+
+
+def _thread_json(r: Any, viewer: Viewer) -> dict[str, Any]:
+    d = {k: v for k, v in dict(r).items() if not k.startswith("ca_")}
+    d |= chat_access.flags(viewer, chat_access.thread_from_row(r))
+    d["owner_name"] = r.get("ca_owner_name") if viewer.admin else None
+    for key in ("created_at", "updated_at"):
+        if d.get(key) is not None and not isinstance(d[key], str):
+            d[key] = d[key].isoformat()
+    return d
+
+
+async def _one_thread(s: Any, thread_id: int, viewer: Viewer) -> dict[str, Any]:
+    rows = await _select_threads(s, viewer, ["t.id = :tid"], {"tid": thread_id})
+    if not rows:
+        raise HTTPException(status_code=404, detail=chat_access.THREAD_NOT_FOUND)
+    rows[0].pop("match_content", None)
+    return rows[0]
 
 
 # The longest search a client may send, and the most threads it returns.
@@ -232,7 +302,19 @@ async def list_threads(
         description="Search: threads whose title or any message contains this (case ignored), newest first, "
                     "at most 100, each with `match_snippet` (the words around the first match in a message).",
     ),
+    scope: Literal["mine", "all"] = Query(
+        "mine",
+        description="mine (the default, for everyone): this device's chats and the shared ones. all: every "
+                    "chat in the house, for an admin only (403 `admin_required` otherwise).",
+    ),
+    viewer: Viewer = VIEWER,
 ) -> dict[str, Any]:
+    """The threads this caller may see (domovoi/chat_access.py), newest
+    first, each with ``shared``, ``mine``, ``can_write``, ``can_share``,
+    ``can_delete``, ``admin_view`` and ``owner_name`` (the owning device's
+    name, for an admin; else null)."""
+    if scope == "all" and not viewer.admin:
+        raise chat_access.ADMIN_REQUIRED.http()
     query = (q or "").strip()
     where: list[str] = []
     params: dict[str, Any] = {}
@@ -253,32 +335,15 @@ async def list_threads(
         )
         limit = f"LIMIT {_SEARCH_LIMIT}"
     async with session_scope() as s:
-        rows = (
-            await s.execute(
-                text(
-                    f"""
-                    SELECT t.id, t.title, t.archived, t.title_by_user, t.created_at, t.updated_at,
-                           t.internet_allowed, t.used_internet,
-                           COUNT(m.id) AS message_count,
-                           (SELECT LEFT(content, 120) FROM chat_messages
-                             WHERE thread_id = t.id ORDER BY id DESC LIMIT 1) AS last_snippet,
-                           {match_col}
-                      FROM chat_threads t
-                      LEFT JOIN chat_messages m ON m.thread_id = t.id
-                     WHERE {' AND '.join(where)}
-                     GROUP BY t.id
-                     ORDER BY t.updated_at DESC
-                     {limit}
-                    """
-                ),
-                params,
-            )
-        ).mappings().all()
+        # Only the threads this caller may see, and so only their
+        # snippets and search matches (chat_access).
+        visible, vparams = await chat_access.visible_sql(s, "t", viewer, scope=scope)
+        where.append(visible)
+        params |= vparams
+        rows = await _select_threads(s, viewer, where, params, match_col=match_col, limit=limit)
     out = []
-    for r in rows:
-        d = dict(r)
+    for d in rows:
         match = d.pop("match_content", None)
-        d |= {"created_at": r["created_at"].isoformat(), "updated_at": r["updated_at"].isoformat()}
         if query:
             d["match_snippet"] = match_snippet(match, query)
         out.append(d)
@@ -286,20 +351,22 @@ async def list_threads(
 
 
 @router.post("/threads", dependencies=DEVICE)
-async def create_thread(body: ThreadCreate) -> dict[str, Any]:
+async def create_thread(body: ThreadCreate, viewer: Viewer = VIEWER) -> dict[str, Any]:
     title = chat_titles.plain_title(body.title) or None
+    owner, shared = chat_access.new_thread(viewer, body.shared)
     async with session_scope() as s:
+        cols, vals, extra = await chat_access.create_columns(s, owner, shared)
         row = (
             await s.execute(
                 text(
-                    """
-                    INSERT INTO chat_threads (title, title_by_user) VALUES (:t, :by)
+                    f"""
+                    INSERT INTO chat_threads (title, title_by_user{cols}) VALUES (:t, :by{vals})
                     RETURNING id, title, archived, title_by_user, created_at, updated_at,
                               internet_allowed, used_internet
                     """
                 ),
                 # A thread made with a name was named by whoever made it.
-                {"t": title, "by": title is not None},
+                {"t": title, "by": title is not None, **extra},
             )
         ).mappings().first()
         if (body.title or "").startswith(help_delivery.TITLE_PREFIX):
@@ -308,19 +375,22 @@ async def create_thread(body: ThreadCreate) -> dict[str, Any]:
             await help_delivery.mark_title_kept(s, row["id"])
         await _notify_chat(s, "thread-created")
         await s.commit()
-    return dict(row) | {
-        "created_at": row["created_at"].isoformat(),
-        "updated_at": row["updated_at"].isoformat(),
-        "message_count": 0,
-        "last_snippet": None,
-    }
+        return await _one_thread(s, row["id"], viewer)
 
 
 @router.patch("/threads/{thread_id}", dependencies=DEVICE)
-async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
-    """Rename and/or archive a thread. A title set here is the person's
+async def patch_thread(thread_id: int, body: ThreadPatch, viewer: Viewer = VIEWER) -> dict[str, Any]:
+    """Rename and/or archive a thread, its internet chip, or share it with
+    the household (``shared``). A title set here is the person's
     (``title_by_user``): the model's title job never writes over it. A
-    blank title is refused (400)."""
+    blank title is refused (400). Answers the thread as the list gives it.
+
+    Sharing is the owning device's or an admin's (403 ``not_yours``);
+    renaming, archiving and the chip are a write (an admin can't write in
+    another device's private chat: 403 ``admin_read_only``); 404 for a
+    chat the caller can't see, the body a missing one gets. A shared
+    screen's chats stay shared (409 ``shared_screen``). The switch waits
+    for a send that started before it (chat_access: the row lock)."""
     sets, params = [], {"id": thread_id}
     if body.title is not None:
         title = chat_titles.plain_title(body.title)
@@ -335,28 +405,42 @@ async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
     if body.internet_allowed is not None:
         sets.append("internet_allowed = :ia")
         params["ia"] = body.internet_allowed
-    if not sets:
+    if not sets and body.shared is None:
         raise HTTPException(status_code=400, detail="nothing to change")
+    what = "thread-patched"
     async with session_scope() as s:
-        r = await s.execute(
-            text(f"UPDATE chat_threads SET {', '.join(sets)} WHERE id = :id"),
-            params,
-        )
-        if r.rowcount == 0:
-            raise HTTPException(status_code=404, detail="thread not found")
-        await _notify_chat(s, "thread-patched")
+        if body.shared is not None:
+            thread = await chat_access.thread_for(s, thread_id, viewer, Action.SHARE, lock=True)
+            if sets:
+                await chat_access.thread_for(s, thread_id, viewer, Action.WRITE, lock=False)
+            if await chat_access.set_shared(s, thread, body.shared):
+                what = "thread-shared" if body.shared else "thread-unshared"
+        else:
+            await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
+        if sets:
+            r = await s.execute(
+                text(f"UPDATE chat_threads SET {', '.join(sets)} WHERE id = :id"),
+                params,
+            )
+            if r.rowcount == 0:
+                raise HTTPException(status_code=404, detail="thread not found")
+        await _notify_chat(s, what)
         await s.commit()
+        # Whoever may patch a thread may still read it afterwards (only its
+        # device or an admin can unshare it).
+        out = await _one_thread(s, thread_id, viewer)
     if body.title is not None:
         # A model title still being written would only be thrown away.
         cancel_title_job(thread_id)
-    return {"ok": True}
+    return {"ok": True} | out
 
 
 @router.delete("/threads/{thread_id}", dependencies=DEVICE)
-async def delete_thread(thread_id: int) -> dict[str, Any]:
+async def delete_thread(thread_id: int, viewer: Viewer = VIEWER) -> dict[str, Any]:
     """Delete a thread and its messages (CASCADE). Upload files referenced by
     the thread are removed too when no other message references them."""
     async with session_scope() as s:
+        await chat_access.thread_for(s, thread_id, viewer, Action.DELETE, lock=True)
         rows = (
             await s.execute(
                 text("SELECT images FROM chat_messages WHERE thread_id = :id AND images IS NOT NULL"),
@@ -418,14 +502,22 @@ _MSG_COLUMNS = (
 )
 
 
-def _msg_dict(r: Any) -> dict[str, Any]:
+def _msg_dict(r: Any, me: str | None = None) -> dict[str, Any]:
+    """A message row as clients read it. The sender's device id stays in
+    the database: the row says ``mine`` (sent with ``me``, the caller's own
+    id) and ``device_name`` instead."""
     d = dict(r)
+    stored = d.pop("device_id", None)
+    d["mine"] = bool(me) and stored == me
     d["created_at"] = d["created_at"].isoformat()
     for key in ("stats", "documents", "doc", "draft"):
         if isinstance(d.get(key), str):
             d[key] = json.loads(d[key])
     if isinstance(d.get("stats"), dict) and d["stats"].get("print_attachment"):
         d["print_attachment"] = d["stats"]["print_attachment"]
+    # A photo and video search's results (chat_media.py): the cards.
+    if isinstance(d.get("stats"), dict) and isinstance(d["stats"].get("media"), dict):
+        d["media"] = d["stats"]["media"]
     if d.get("speaker_confidence") is not None:
         d["speaker_confidence"] = round(float(d["speaker_confidence"]), 4)
     # The same judgement the core made when the turn came in
@@ -613,13 +705,17 @@ def _reply_stats(
 
 
 @router.get("/threads/{thread_id}/messages", dependencies=READ)
-async def list_messages(thread_id: int) -> dict[str, Any]:
+async def list_messages(
+    thread_id: int, request: Request = None, viewer: Viewer = VIEWER,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """The thread's messages, oldest first, and ``thread``: the thread as
+    the list gives it (its access fields: ``can_write``, ``admin_view``…).
+    No device ids: a user row says ``mine`` (sent from this caller's
+    device, by its device key) and ``device_name``."""
+    me = viewer.device_id
     async with session_scope() as s:
-        exists = (
-            await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-        if exists is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        await chat_access.thread_for(s, thread_id, viewer, Action.READ)
+        thread_json = await _one_thread(s, thread_id, viewer)
         rows = (
             await s.execute(
                 text(
@@ -648,7 +744,7 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — the messages still show
         log.warning("chat: the videos of thread %s are unreadable: %s", thread_id, type(e).__name__)
         videos = []
-    return {"messages": [_msg_dict(r) for r in rows], "jobs": jobs, "videos": videos}
+    return {"messages": [_msg_dict(r, me) for r in rows], "jobs": jobs, "videos": videos, "thread": thread_json}
 
 
 class SendBody(BaseModel):
@@ -963,7 +1059,7 @@ async def _help_turn(
 
 
 async def _house_fact_reply(thread_id: int, content: str, user_row_id: int,
-                            request: Request | None = None) -> str | None:
+                            request: Request | None = None, chat_state: str | None = None) -> str | None:
     """The house's own answer to ``content`` (domovoi/house_facts.py), or
     None. Settings come from the core's snapshot (this process's copy goes
     stale on a save); one it doesn't hold is "unknown", never a guess.
@@ -987,6 +1083,8 @@ async def _house_fact_reply(thread_id: int, content: str, user_row_id: int,
             scope=session_scope, previous_assistant=previous_assistant,
             admin_check=lambda: help_api.request_is_proven_admin(request),
             guest_check=lambda: request_is_guest(request),
+            # "Is this chat private?" by this chat's own state (1.5.0).
+            chat_state=chat_state,
         )
     except Exception as e:  # noqa: BLE001 — the chat answers as before
         log.warning("chat: house facts failed: %s: %s", type(e).__name__, str(e)[:200])
@@ -1014,16 +1112,19 @@ MEMORY_FAILED_TEXT = "I couldn't reach the saved memories just now, so nothing w
 
 
 async def _memory_reply(
-    thread_id: int, content: str, before_id: int, device_id: str | None,
+    thread_id: int, content: str, before_id: int, request: Request, body_device_id: str | None = None,
 ) -> chat_memory.Reply | None:
     """The memory step (web/backend/api/chat_memory.py) for ``content``,
     whose row is ``before_id``: done and committed, or None (not a memory
-    command: the model answers). A failure on a memory command is said as
-    one, never handed to the model."""
+    command: the model answers). It acts for the person of the device that
+    PROVES itself on ``request`` (its device key, or an older app's claim
+    key: chat_memory.caller_asker), never a self-asserted id. A failure on
+    a memory command is said as one, never handed to the model."""
     try:
         async with session_scope() as s:
             r = await chat_memory.reply(s, thread_id=thread_id, content=content,
-                                        before_id=before_id, device_id=device_id)
+                                        before_id=before_id, request=request,
+                                        body_device_id=body_device_id)
             if r is not None:
                 await s.commit()
             return r
@@ -1036,7 +1137,9 @@ async def _memory_reply(
 
 
 @router.post("/threads/{thread_id}/messages", dependencies=SEND)
-async def send_message(thread_id: int, body: SendBody, request: Request) -> StreamingResponse:
+async def send_message(
+    thread_id: int, body: SendBody, request: Request, viewer: Viewer = VIEWER,
+) -> StreamingResponse:
     """Persist the user turn, stream the assistant reply as SSE, persist the
     assistant turn at stream end. Events:
 
@@ -1085,17 +1188,16 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         raise HTTPException(status_code=404, detail="the attached video is no longer on this Domovoi; attach it again")
     if not body.content.strip() and not documents and not videos:
         raise HTTPException(status_code=422, detail="a message needs some words, or a document attached")
-    # Well-formed or nothing, as every other route that reads a device id.
-    device_id = valid_device_id(body.device_id)
-    if body.revise_draft is not None and not await _drafts.draft_in_thread(thread_id, body.revise_draft):
-        raise HTTPException(status_code=404, detail="draft not found in this chat")
+    # The device its KEY resolved to (chat_access), never the body's
+    # self-asserted device_id: a keyless caller's message has no device.
+    device_id = viewer.device_id
 
     async with session_scope() as s:
-        thread = (
-            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        # Checked, and the row locked until the user turn is in
+        # (chat_access): a share switch waits for it.
+        thread = await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
+        if body.revise_draft is not None and not await _drafts.draft_in_thread(thread_id, body.revise_draft, s):
+            raise HTTPException(status_code=404, detail="draft not found in this chat")
         # The model's attention is the reply's now: every title job stops
         # and waits for it (a refused request holds nothing up).
         stop_title_jobs()
@@ -1144,15 +1246,18 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         # "remember that …", "forget that", "what do you remember about
         # me?": done by the memory step for the person this device belongs
         # to, and said by it; the model never claims a memory
-        # (web/backend/api/chat_memory.py).
-        mem = await _memory_reply(thread_id, body.content, user_row_id,
-                                  device_id or devices_api.caller_device(request))
+        # (web/backend/api/chat_memory.py). The device proves itself with
+        # its key (or an older app's claim key); the body's device_id only
+        # names the row that claim key is checked against.
+        mem = await _memory_reply(thread_id, body.content, user_row_id, request,
+                                  valid_device_id(body.device_id))
         if mem is not None:
             return await _immediate_reply(thread_id, mem.text, mem.stats)
         # A privacy or "can you …?" question this house answers from its
         # own state (domovoi/house_facts.py), the same as by voice: said by
         # the app, no model asked.
-        fact = await _house_fact_reply(thread_id, body.content, user_row_id, request)
+        fact = await _house_fact_reply(thread_id, body.content, user_row_id, request,
+                                       chat_state=getattr(thread, "state", None))
         if fact is not None:
             return await _immediate_reply(thread_id, fact, {"model_role": "house_facts"})
         # "I'm the owner" / "who's in charge?": a fixed joke, as by voice
@@ -1172,7 +1277,8 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
 #: Who wrote a reply that "try again" may replace: the chat model, for a
 #: typed message (``stats.model_role``). A spoken turn's reply ("voice":
 #: the core answered it, maybe with an action such as a timer) and any
-#: other writer's (``"help"``: the help desk's delivered steps) are not
+#: other writer's (``"help"``: voice help's sent steps, before 1.5.0;
+#: ``"media"``: a voice photo search sent to a phone) are not
 #: the chat model's to write again. A row with no ``model_role`` (from
 #: before V017) counts as the chat model's when it was typed.
 RETRYABLE_ROLES = frozenset({"chat", "vision", "override"})
@@ -1211,7 +1317,7 @@ def _retry_refused(code: str, detail: str) -> JSONResponse:
                                     "writer's reply, not the chat model's), `already_retried` (another try again "
                                     "on this reply is running, or has replaced it)"}},
 )
-async def retry_reply(thread_id: int, request: Request = None) -> StreamingResponse:  # type: ignore[assignment]
+async def retry_reply(thread_id: int, request: Request, viewer: Viewer = VIEWER) -> StreamingResponse:
     """"Try again": a new reply to the thread's last question, in place of
     the reply it got. Streams as ``POST .../messages`` does; the old row is
     deleted and the new one written in one transaction once the new reply
@@ -1232,11 +1338,7 @@ async def retry_reply(thread_id: int, request: Request = None) -> StreamingRespo
     for the person the retrying device belongs to, and its words replace
     the model's (web/backend/api/chat_memory.py)."""
     async with session_scope() as s:
-        thread = (
-            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        thread = await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
         last = (
             await s.execute(
                 text(
@@ -1258,9 +1360,7 @@ async def retry_reply(thread_id: int, request: Request = None) -> StreamingRespo
         i for i in (last[1].images or []) if _upload_path((i or {}).get("token", "")) is not None
     ]
     if not asked_images and chat_memory.command(last[1].content or "") is not None:
-        return await _memory_retry(thread_id, last[0].id, last[1].id, last[1].content or "",
-                                   (devices_api.caller_device(request) if request is not None else None)
-                                   or valid_device_id(last[1].device_id))
+        return await _memory_retry(thread_id, last[0].id, last[1].id, last[1].content or "", request)
     stop_title_jobs()
     # The thread is marked as retrying by the stream itself (_answer), so a
     # client that drops before the first byte leaves no mark behind.
@@ -1273,18 +1373,20 @@ async def retry_reply(thread_id: int, request: Request = None) -> StreamingRespo
 
 
 async def _memory_retry(
-    thread_id: int, old_id: int, question_id: int, question: str, device_id: str | None,
+    thread_id: int, old_id: int, question_id: int, question: str, request: Request,
 ) -> StreamingResponse:
     """"Try again" on the model's reply to a memory command: the memory
-    step does it, and its reply replaces the model's in the same
-    transaction (``done`` carries ``replaces``, as a retry's does)."""
+    step does it, for the person of the device retrying (proven as for a
+    send: chat_memory.caller_asker), and its reply replaces the model's in
+    the same transaction (``done`` carries ``replaces``, as a retry's
+    does)."""
     if thread_id in _retrying:
         return _retry_refused("already_retried", "this reply is already being tried again")
     _retrying.add(thread_id)
     try:
         async with session_scope() as s:
             mem = await chat_memory.reply(s, thread_id=thread_id, content=question,
-                                          before_id=question_id, device_id=device_id)
+                                          before_id=question_id, request=request)
             if mem is None:  # pragma: no cover - the caller checked it is a command
                 mem = chat_memory.Reply(MEMORY_FAILED_TEXT, {"model_role": chat_memory.MODEL_ROLE,
                                                              "memory": {"action": "failed"}})
@@ -1335,7 +1437,9 @@ class HeadsUpAnswer(BaseModel):
                                     "card), `already_answered` (an option was picked already), `stale` (a newer "
                                     "message followed the card), `bad_option` (not one of the card's options)"}},
 )
-async def answer_heads_up(thread_id: int, body: HeadsUpAnswer, request: Request) -> Any:
+async def answer_heads_up(
+    thread_id: int, body: HeadsUpAnswer, request: Request, viewer: Viewer = VIEWER,
+) -> Any:
     """The person's pick on a heads-up card: the card row keeps it
     (``doc.heads_up.chosen``) and the question before it is answered that
     way, streamed as ``POST .../messages`` streams ("try anyway": as it
@@ -1344,11 +1448,7 @@ async def answer_heads_up(thread_id: int, body: HeadsUpAnswer, request: Request)
     card is answered once, and only while it is the thread's last
     message."""
     async with session_scope() as s:
-        thread = (
-            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-        if thread is None:
-            raise HTTPException(status_code=404, detail="thread not found")
+        thread = await chat_access.thread_for(s, thread_id, viewer, Action.WRITE)
         card = (await s.execute(text(
             "SELECT id, doc FROM chat_messages WHERE id = :m AND thread_id = :t AND role = 'assistant'"),
             {"m": body.message_id, "t": thread_id})).first()
@@ -1443,6 +1543,14 @@ async def _answer(
         dturn = await _drafts.plan_turn(thread_id, question, revise_draft=revise_draft, device_id=device_id)
         if dturn is not None:
             model_role = "draft"
+    if dturn is None and not has_images and replace_id is None and not documents and revise_draft is None:
+        # "show me photos of the dog" (chat_media.py, media slice 6): the
+        # household's photos and videos, answered by the app with result
+        # cards, no model asked. Ahead of a documents thread's find.
+        mreq = _media.fast_request(question)
+        if mreq is not None:
+            mturn = await _media.answer(mreq.q, request, mreq)
+            return await _immediate_reply(thread_id, mturn.text, {"model_role": "media", "media": mturn.media})
     if not has_images and replace_id is None and dturn is None:
         previous = await _docs.previous_question(thread_id, before_id=user_row_id)
         plan = await _docs.plan_reply(thread_id, question, documents or [], previous, heads_up)
@@ -1588,6 +1696,18 @@ async def _answer(
             video_rules = None
         if video_rules:
             system["content"] += "\n\n" + video_rules
+    # A chat that searched its photos and videos (chat_media.py): a later
+    # plain text turn is given the latest results, fenced as untrusted
+    # data (captions, tags and text from the pictures).
+    media_rules: str | None = None
+    if refusal is None and plan is None and dturn is None and help_turn is None and not vision_call:
+        try:
+            media_rules = await _media.rules(thread_id)
+        except Exception as e:  # noqa: BLE001 — the question is still answered
+            log.warning("chat: the photo results of thread %s are unreadable: %s", thread_id, type(e).__name__)
+            media_rules = None
+        if media_rules:
+            system["content"] += "\n\n" + media_rules
     # Lookups (part 5, W1): a plain text turn (not help, documents,
     # pictures, a draft or a retry) is told about LOOK_UP / READ_PAGE, and a
     # "look up …" or "what does this page say: …" needs no model to say so.
@@ -1602,7 +1722,8 @@ async def _answer(
     # about LOOK_UP / READ_PAGE and its reply is never read as a proposal,
     # so words from a video (its speech, a sign in a frame, its name) can't
     # send a search out, as on a document or picture turn.
-    model_lookups = lookups_offered and not video_rules
+    # The same for a turn carrying photo results (words in a picture).
+    model_lookups = lookups_offered and not video_rules and not media_rules
     proposal: lookup_answer.Proposal | None = None
     thread_allowed = False
     if lookups_offered:
@@ -1619,6 +1740,11 @@ async def _answer(
             thread_allowed = bool((await s.execute(
                 text("SELECT internet_allowed FROM chat_threads WHERE id = :id"), {"id": thread_id},
             )).scalar_one_or_none())
+    # The photo and video search (chat_media.py): offered to the model only
+    # when the message talks about photos or videos, as the voice tool gate.
+    media_tool = lookups_offered and proposal is None and _ask.mentions_media(question)
+    if media_tool:
+        system["content"] += "\n\n" + _ask.TOOL_PROMPT
     num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
     stream_knobs: dict[str, Any] = (
         {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
@@ -1670,6 +1796,8 @@ async def _answer(
         first_token_ms: float | None = None
         doc: dict[str, Any] | None = None
         draft: dict[str, Any] | None = None
+        media_q: str | None = None
+        media_card: dict[str, Any] | None = None
         if dturn is not None and dturn.immediate is not None:
             # "print it": the print card, with no model asked.
             first_token_ms = 0.0
@@ -1730,7 +1858,7 @@ async def _answer(
             # its first characters are held back, so a proposal never
             # reaches the screen as text.
             held = ""
-            holding = model_lookups
+            holding = model_lookups or media_tool
             proposing = False
             try:
                 async with contextlib.aclosing(ollama_client.chat_stream(
@@ -1743,9 +1871,12 @@ async def _answer(
                         if holding:
                             held += delta
                             head = held.lstrip()
-                            if not proposing and len(head) < 12 and lookup_answer.may_be_proposal(head):
+                            maybe = ((model_lookups and lookup_answer.may_be_proposal(head))
+                                     or (media_tool and _ask.may_be_tool(head)))
+                            if not proposing and len(head) < 12 and maybe:
                                 continue
-                            if proposing or _PROPOSAL_START.match(head):
+                            if (proposing or (model_lookups and _PROPOSAL_START.match(head))
+                                    or (media_tool and _ask.TOOL_START.match(head))):
                                 proposing = True
                                 first_line = head.split("\n", 1)
                                 if (len(first_line) > 1 and first_line[0].strip()) or len(head) > 400:
@@ -1757,11 +1888,13 @@ async def _answer(
                         if not checking:
                             yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
                 if held:
-                    proposal = lookup_answer.parse_proposal(held) if proposing else None
-                    if proposal is None:
+                    media_q = _ask.parse_tool(held) if (proposing and media_tool) else None
+                    proposal = (lookup_answer.parse_proposal(held)
+                                if (proposing and model_lookups and media_q is None) else None)
+                    if proposal is None and media_q is None:
                         chunks.append(held)
                         yield f"event: delta\ndata: {json.dumps({'text': held})}\n\n"
-                if chunks and proposal is None and ollama_stats.get("done_reason") == "length":
+                if chunks and proposal is None and media_q is None and ollama_stats.get("done_reason") == "length":
                     # The cap stopped it (a loop, or an answer that long):
                     # end it visibly, the same in the stream and the row.
                     tail = "…" + CUT_OFF_NOTE
@@ -1776,6 +1909,13 @@ async def _answer(
                     "chat stream failed (thread %s, model %s, %s): %s: %s",
                     thread_id, model, code, type(e).__name__, str(e)[:500],
                 )
+
+        if media_q is not None and error is None:
+            # The model asked for the photo and video search: the app
+            # answers with the results (chat_media.py), never the model.
+            mturn = await _media.answer(media_q, request)
+            chunks, media_card = [mturn.text], mturn.media
+            yield f"event: delta\ndata: {json.dumps({'text': mturn.text})}\n\n"
 
         if proposal is not None and error is None:
             # A lookup: local sources answer at once; anything that would
@@ -1830,6 +1970,9 @@ async def _answer(
                 stats["window_from_id"] = window["from_id"]
         if code is not None:
             stats["error_code"] = code
+        if media_card is not None:
+            stats["model_role"] = "media"
+            stats["media"] = media_card
         if help_turn is not None:
             stats["help"] = {
                 "covered": help_turn.covered,
@@ -2450,6 +2593,7 @@ async def decide_lookup(
     body: LookupDecision,
     thread_id: int = PathParam(..., ge=1, le=2**63 - 1),
     message_id: int = PathParam(..., ge=1, le=2**63 - 1),
+    viewer: Viewer = VIEWER,
 ) -> StreamingResponse:
     """The person's answer to a permission card (``stats.lookup_card`` on
     assistant row ``message_id``): ``once`` / ``chat`` look it up and
@@ -2458,6 +2602,7 @@ async def decide_lookup(
     (``delta`` / ``replace`` / ``done`` / ``error``). A card is answered
     once: 409 for a card already answered, 404 for no such card."""
     async with session_scope() as s:
+        await chat_access.thread_for(s, thread_id, viewer, Action.WRITE, not_found="no such lookup card")
         row = (
             await s.execute(
                 text(
@@ -2809,6 +2954,7 @@ async def send_voice(
     player: Optional[str] = Form(None, max_length=2048),
     # False: the phone speaks the reply itself, so the core renders none.
     speak: bool = Form(True),
+    viewer: Viewer = VIEWER,
 ):
     """One push-to-talk turn from the app's chat mic, answered in this
     thread: forwarded with the caller's credentials to the core's
@@ -2823,10 +2969,22 @@ async def send_voice(
     guard (domovoi/transport_guard.py: 1 MiB for a route not listed there,
     on a declared Content-Length and on a streamed overrun alike), which
     leaves room for the longest recording (30 s, 960 kB) and its form."""
+    # Checked here too (the core checks again, from the key forwarded
+    # with the caller's credentials): a hidden thread is a 404 before
+    # anything is recorded or forwarded.
+    async with session_scope() as s:
+        await chat_access.thread_for(s, thread_id, viewer, Action.WRITE, lock=False)
     data = await audio.read(_VOICE_MAX_BYTES + 1)
     if len(data) > _VOICE_MAX_BYTES:
         raise HTTPException(status_code=413, detail="a voice turn is at most 30 seconds")
     form = {"phone_id": phone_id, "thread_id": str(thread_id)}
+    # The core checks the thread again, from this caller's device key: the
+    # one hop the key is forwarded on (an app's header; a browser's cookie
+    # rides in the forwarded Cookie).
+    forward = auth_forward_headers(request)
+    key = chat_access.presented_device_key(request)
+    if key and request.headers.get(chat_access.DEVICE_KEY_HEADER):
+        forward[chat_access.DEVICE_KEY_HEADER] = key
     if player:
         form["player"] = player
     if not speak:
@@ -2841,7 +2999,7 @@ async def send_voice(
     _reply_started()
     try:
         async with _core_client() as client:
-            r = await client.post(url, data=form, files=files, headers=auth_forward_headers(request))
+            r = await client.post(url, data=form, files=files, headers=forward)
     except httpx.TimeoutException:
         log.warning("chat voice: the core took longer than %.0f s (thread %s)", _VOICE_TIMEOUT_SEC, thread_id)
         return JSONResponse(
@@ -3162,7 +3320,7 @@ async def _picture_heads_up(thread_id: int, user_row_id: int | None, question: s
 
 
 @router.get("/uploads/{token}", dependencies=READ)
-async def get_upload(token: str):
+async def get_upload(token: str, viewer: Viewer = VIEWER):
     """Serve a staged/persisted chat image inline (for rendering in the
     transcript). Token-addressed — the client never names paths. The token
     is unguessable, but the image is household content like the thread it
@@ -3171,6 +3329,11 @@ async def get_upload(token: str):
     p = _upload_path(token)
     if p is None:
         raise HTTPException(status_code=404, detail="upload not found")
+    # A capability (chat_access.token_readable): a caller with an identity
+    # must be able to read a thread the picture was sent in.
+    async with session_scope() as s:
+        if not await chat_access.token_readable(s, token, "images", viewer):
+            raise HTTPException(status_code=404, detail="upload not found")
     media = {
         ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",

@@ -456,7 +456,8 @@ def driven(tmp_path_factory) -> dict:
 
 
 def test_the_household_order_sets_the_top_level(driven):
-    media = {"group": "media", "label": "Media", "items": ["music", "podcasts", "audiobooks", "videos", "stations"]}
+    # (Photos since 1.5.0; Faces only while faces are on, which they aren't here)
+    media = {"group": "media", "label": "Media", "items": ["music", "podcasts", "audiobooks", "videos", "photos", "stations"]}
     tools = {"group": "tools", "label": "Tools", "items": ["news", "calendar", "lists", "files"]}
     # Kids is empty, so not drawn; the rest in the household's order.
     assert driven["r_order"] == ["plugins", tools, "chat", media]
@@ -478,7 +479,7 @@ def test_the_edit_operations(driven):
     end = o["end"]
     groups = {g["id"]: g for g in end["groups"]}
     assert set(groups) == {"media", "kids"}                      # tools deleted
-    assert groups["media"]["items"] == ["podcasts", "music", "audiobooks", "videos", "chat"]
+    assert groups["media"]["items"] == ["podcasts", "music", "audiobooks", "videos", "photos", "faces", "chat"]
     assert groups["kids"] == {"id": "kids", "label": "Kids", "items": ["files"]}
     # Tools' pages went to the top level where Tools was; the unknown move did nothing.
     assert end["order"] == ["group:media", "news", "calendar", "lists", "group:kids", "plugins"]
@@ -505,7 +506,7 @@ def test_the_moves_produce_the_expected_layout(driven):
     body = put[0]["body"]
     assert body["version"] == 1
     groups = {g["id"]: g for g in body["groups"]}
-    assert groups["media"]["items"] == ["music", "audiobooks", "podcasts", "videos", "stations", "chat"]
+    assert groups["media"]["items"] == ["music", "audiobooks", "podcasts", "videos", "photos", "faces", "stations", "chat"]
     assert groups["tools"] == {"id": "tools", "label": "Office", "items": ["calendar", "lists"]}
     assert groups["new-group"] == {"id": "new-group", "label": "Kids", "items": ["files"]}
     assert body["top"] == ["plugins", "news"]
@@ -536,7 +537,7 @@ def test_the_sidebar_draws_the_saved_layout(driven):
     o = driven["sidebar_saved"]
     assert o["rows"] == [["news", None], ["podcasts", "kids"], ["files", "kids"], ["chat", None],
                          ["videos", "media"], ["music", "media"], ["audiobooks", "media"],
-                         ["stations", "media"], ["calendar", None], ["lists", None], ["plugins", None]]
+                         ["photos", "media"], ["stations", "media"], ["calendar", None], ["lists", None], ["plugins", None]]
     assert o["heads"] == ["Kids", "Watch"]
 
 
@@ -546,7 +547,7 @@ def test_shared_screen_hiding_still_applies_on_top(driven):
     # the layout doesn't mention and whose Tools group it dropped, is a
     # top-level row in nav order.
     assert driven["sidebar_saved_shared"] == [
-        "calendar", "music", "podcasts", "audiobooks", "videos", "lists", "plugins"]
+        "calendar", "music", "podcasts", "audiobooks", "videos", "photos", "lists", "plugins"]
 
 
 def test_homes_grid_uses_the_saved_layout(driven):

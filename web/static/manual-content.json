@@ -138,6 +138,18 @@
     "screen": "Videos"
    }
   },
+  "photos": {
+   "dashboard": "#photos",
+   "app": {
+    "dashboard": true
+   }
+  },
+  "faces": {
+   "dashboard": "#faces",
+   "app": {
+    "dashboard": true
+   }
+  },
   "news": {
    "dashboard": "#news",
    "app": {
@@ -255,6 +267,12 @@
     "tab": "chat"
    }
   },
+  "settings/photos-and-videos": {
+   "dashboard": "#settings/photos-and-videos",
+   "app": {
+    "dashboard": true
+   }
+  },
   "settings/internet": {
    "dashboard": "#settings/internet",
    "app": {
@@ -274,11 +292,17 @@
     "dashboard": true
    }
   },
-  "settings/voice-history": {
-   "dashboard": "#settings/voice-history",
+  "settings/command-recordings": {
+   "dashboard": "#settings/command-recordings",
    "app": {
     "screen": "Settings",
     "tab": "voice-history"
+   }
+  },
+  "settings/keep-voice-history": {
+   "dashboard": "#settings/keep-voice-history",
+   "app": {
+    "dashboard": true
    }
   },
   "settings/listening-history": {
@@ -571,7 +595,7 @@
     "ai-off",
     "help-desk"
    ],
-   "intro": "Type to Domovoi on the dashboard or in the app. A chat on your home server is shared with the household; a chat on the phone stays on the phone. Domovoi asks before anything goes online, and it answers questions about itself."
+   "intro": "Type to Domovoi on the dashboard or in the app. A chat on your home server is private to the phone or browser that started it, unless you share it with the household; a chat on the phone stays on the phone. Domovoi asks before anything goes online, and it answers questions about itself."
   },
   {
    "id": "documents-and-letters",
@@ -682,6 +706,7 @@
    ],
    "pieces": [
     "people",
+    "faces",
     "guests",
     "devices",
     "kept",
@@ -1463,7 +1488,7 @@
     },
     {
      "type": "p",
-     "text": "**Friend Houses** (message and share lists with friends’ houses, house to house, with no company server in between): friends are other Domovoi houses. On the dashboard, [Settings → Household → Friend Houses](route:settings/friend-houses) shows the messages and shared lists to everyone in the household; making and managing friends is under **Friends and connections** {admin}. To send one a message, say \"message\" and its name with the message, like \"message the Smiths dinner's at six\" (or \"tell the Smiths …\" when AI features are on): Domovoi reads it back and sends it when you say yes. It says \"Sent\" once their house has it; when their house can't be reached, it says the message is queued and will go when it can. Ask \"did my message send?\" to hear where it is. Messages are read aloud only when you ask, and anyone in the room will hear them."
+     "text": "**Friend Houses** (message and share lists with friends’ houses, house to house, with no company server in between): friends are other Domovoi houses. On the dashboard, [Settings → Household → Friend Houses](route:settings/friend-houses) shows the messages and shared lists to everyone in the household; making and managing friends is under **Friends and connections** {admin}. Both houses then show the same 6-digit code: call them and check it matches, if you like. Adding a friend needs Domovoi 1.5.0 or later on both houses; friends you already have keep working either way. To send one a message, say \"message\" and its name with the message, like \"message the Smiths dinner's at six\" (or \"tell the Smiths …\" when AI features are on): Domovoi reads it back and sends it when you say yes. It says \"Sent\" once their house has it; when their house can't be reached, it says the message is queued and will go when it can. Ask \"did my message send?\" to hear where it is. Messages are read aloud only when you ask, and anyone in the room will hear them."
     },
     {
      "type": "p",
@@ -2249,7 +2274,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Type to Domovoi in [Chat](route:chat). A chat on the dashboard runs on your home server, with its models, and everyone in the household can see it. The app also has chats that run on the phone itself: see [Chat on the phone](node:phone-chat)."
+     "text": "Type to Domovoi in [Chat](route:chat). A chat on the dashboard runs on your home server, with its models. It is private to the phone or browser that started it: only that device and the house's admins can see it. The app also has chats that run on the phone itself, which never leave the phone: see [Chat on the phone](node:phone-chat)."
     },
     {
      "type": "label",
@@ -2265,6 +2290,15 @@
       },
       {
        "text": "Beside each chat: **rename**, **archive** and **delete** (the bin). **search chats** is above the list, and **archived** is at its end."
+      },
+      {
+       "text": "**Share with household** (the chat's header) lets every phone and browser in the house read it and add to it. Turn it off and the other devices don't see it any more, including anything they wrote in it. Only the device that started a chat, or an admin, can share it, stop sharing it or delete it. On a shared screen (the kitchen tablet) every chat is shared."
+      },
+      {
+       "text": "**Admins** can read every chat in the house (**All chats in the house** above the list), and share or delete any of them, but can't write in another device's private chat."
+      },
+      {
+       "text": "**Save to Documents** from a private chat saves a copy to Documents, where the household can see it."
       },
       {
        "text": "**Pictures:** the paperclip adds up to 4 to a message (PNG, JPEG, GIF, WebP or BMP, 20 MB each). You can paste a screenshot too. The vision model reads them on your server."
@@ -2805,7 +2839,7 @@
     "screenshot",
     "report a problem",
     "diagnostics",
-    "send the steps",
+    "full answer",
     "question mark"
    ],
    "blocks": [
@@ -2869,7 +2903,7 @@
     },
     {
      "type": "p",
-     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Household → Phones & browsers](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
+     "text": "Domovoi says the short answer and where it came from, then \"The full answer is in the manual.\" Open the page with **?** on the dashboard, or in the app's manual. A plugin's own help ends \"The full answer is in that plugin's help.\""
     },
     {
      "type": "label",
@@ -3213,7 +3247,7 @@
        "text": "If a letter has text aimed at an AI assistant (\"ignore previous instructions…\"), Domovoi doesn't follow it and says so: genuine letters don't do this."
       },
       {
-       "text": "Everyone in the house can see a home-server chat, so a phone chat is the private place for personal mail. On a home server without a graphics card a letter takes about 2 minutes."
+       "text": "The house's admins can read every home-server chat, so a phone chat is the private place for personal mail. On a home server without a graphics card a letter takes about 2 minutes."
       },
       {
        "text": "In a phone chat, **+** → **take a photo** or **choose a photo** on phones that read photos themselves. The photo isn't kept; the text read from it stays with the answer, so you can ask about the letter again, and goes when you delete the chat. On a phone that can't read photos itself, **+** offers **a letter for the home server: take a photo** or **choose a photo** when a paired home server has its picture model: your home server reads the photo and keeps nothing, and the explanation is written on this phone.",
@@ -3383,7 +3417,9 @@
     "delete",
     "usb drive",
     "from chat",
-    "scans"
+    "scans",
+    "photo search",
+    "might show"
    ],
    "blocks": [
     {
@@ -3442,14 +3478,41 @@
       {
        "text": "**Chat documents** holds drafts saved in a phone chat. Files shows it once it holds one.",
        "only": "app"
+      },
+      {
+       "text": "[Photos](route:photos) shows every photo and video, newest first, and finds them by what is in them and when: \"dog at the beach\", \"christmas 2023\", \"snow last winter\". A video found by a moment opens there. A description reads \"Might show: …\": it's a computer's guess, sometimes wrong. Domovoi looks at your photos on this server, at night, once **Understand photos and videos** is on in [Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos); until it has looked at some, Photos says so.",
+       "only": "dashboard"
+      },
+      {
+       "text": "With **Understand photos and videos** on ([Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos)), ask for them by voice or in a chat. The answer says how many it found and that they're on the Photos page; a chat also shows them. By voice, when it knows your voice and a phone is marked as yours, it asks \"Do you want them on your phone?\" and a yes sends them there as a chat. With **Recognize faces** on, a name finds that person's photos, for a voice Domovoi recognizes, never a guest's."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "[More detail](doc:docs/FAQ.md#can-i-move-files-around-without-the-command-line) · [Photos and videos](doc:docs/PHOTOS_AND_VIDEOS.md)"
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "show me photos of the beach from last summer",
+       "handler": "media_search",
+       "path": "fast"
+      },
+      {
+       "text": "find the video where we sang happy birthday",
+       "handler": "media_search",
+       "path": "fast"
       }
      ]
     }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/FAQ.md#can-i-move-files-around-without-the-command-line"
-   }
+   ]
   },
   {
    "id": "documents",
@@ -4128,7 +4191,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "**on home server**: answered by your home server, and shared with the household. See [Chat](node:chat)."
+       "text": "**on home server**: answered by your home server, and private to this phone (and the house's admins) unless you share it with the household. See [Chat](node:chat)."
       },
       {
        "text": "**on this phone**: answered by the phone itself, with no server, and kept only on this phone. See [Domovoi on this phone](node:assistant)."
@@ -4497,7 +4560,7 @@
     },
     {
      "type": "p",
-     "text": "A room is a place in the house: its name, voice, music queue, wake words, timers and quiet hours. Each room has one satellite, the device that listens and plays there: a Raspberry Pi, a spare laptop, or a phone in room mode. [Settings → Household → Rooms](route:settings/rooms) lists the rooms. Each card shows:"
+     "text": "A room is a place in the house: its name, voice, music queue, wake words, timers and quiet hours. A room has one or more satellites, the devices that listen and play there: a Raspberry Pi, a spare laptop, or a phone in room mode. [Settings → Household → Rooms](route:settings/rooms) lists the rooms. Each card shows:"
     },
     {
      "type": "list",
@@ -4546,6 +4609,31 @@
       },
       {
        "text": "A room's satellite replaced with new hardware: **Reset pairing** (also under **maintenance**), then approve the new device."
+      },
+      {
+       "text": "A second satellite in a room: open the room and press **Add a satellite to the Kitchen** for its setup code; its approval then has the room picked already. A device set up any other way: answer **Which room is it in?** with that room when you approve it. Later, open the room and use the satellite's **Move to another room**."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**Several satellites in one room**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "One wake word is one turn: the first satellite to hear it answers, the others stay quiet, and Domovoi transcribes the microphone that heard you best."
+      },
+      {
+       "text": "Music, answers, timers, alarms and announcements play from every speaker in the room at the same moment. The speakers tune themselves with a short chirp when a satellite joins the room (never in quiet hours). If they sound slightly apart, open the room and press **Tune the speakers** (nothing may be playing)."
+      },
+      {
+       "text": "Two rooms that hear each other's wake word: open one and add the other under **Rooms that can hear this one**, so it is one answer, not two. The Rooms page suggests this when it notices."
+      },
+      {
+       "text": "A satellite or app from before 1.5.0 can't join in: it plays only when it is the room's only satellite, and its room says **Update the app on this phone.**"
       }
      ]
     },
@@ -4683,6 +4771,25 @@
     {
      "type": "p",
      "text": "**show setup details** on the card lists the setup network and its page."
+    },
+    {
+     "type": "p",
+     "text": "**A support session** {admin}: for a fault the room's **Diagnostics** tab can't explain, turn on **Allow support sessions** in the room's **Settings** tab, then **Open support session** and type the admin password: a shell on the Pi, as its own account, for up to 30 minutes. The room says it started, its light breathes magenta, and every dashboard shows a banner with **End**. Anyone can end it."
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "end support session",
+       "handler": "support_session",
+       "path": "fast"
+      }
+     ]
     }
    ],
    "more": {
@@ -4810,7 +4917,7 @@
     },
     {
      "type": "p",
-     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's in room mode, the rest of the app is locked.",
+     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this phone in a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's in room mode, the rest of the app is locked.",
      "only": "app"
     },
     {
@@ -5187,6 +5294,60 @@
    }
   },
   {
+   "id": "faces",
+   "topic": "people-and-privacy",
+   "title": "Faces in photos",
+   "subtitle": "name the people in your photos",
+   "keywords": [
+    "faces",
+    "face",
+    "recognize faces",
+    "people in photos",
+    "forget my face",
+    "name a face"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "With **Recognize faces** on {admin}, Domovoi groups the same face across your photos and videos, on this server, so you can name the people you know. It's off until an admin turns it on in [Settings → Chat & AI → Photos and videos](route:settings/photos-and-videos); turning it off deletes every face."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Open [Faces](route:faces). It's only there while faces are on, and never for a guest or on a shared screen.",
+       "only": "dashboard"
+      },
+      {
+       "text": "Name a group: open it, type a name (someone from People, or a new name) and press **add name**."
+      },
+      {
+       "text": "Check a person's faces: on their page, **yes, Sarah** or **not this person** on each face Domovoi suggested."
+      },
+      {
+       "text": "**hide this group** for a stranger. Groups of only a face or two stay under **show more**, and Domovoi never asks who someone is."
+      },
+      {
+       "text": "{admin} merge two groups, split faces into a new group, move a person's faces to someone else, and show a hidden group again."
+      },
+      {
+       "text": "**Forget my face**: on your own page, from the phone or browser that's yours (**this is me**), or by an admin. It deletes every saved face of you and keeps a pattern tied to nobody, so new photos of you aren't grouped again. Your photos stay, and so do your voice and memories."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/PHOTOS_AND_VIDEOS.md#faces"
+   }
+  },
+  {
    "id": "guests",
    "topic": "people-and-privacy",
    "title": "Guests, household and admin",
@@ -5334,7 +5495,7 @@
      "rows": [
       [
        "What you said to Domovoi by voice, and its replies",
-       "90 days, or what **Keep voice history** says"
+       "90 days, or what [Settings → Privacy → Keep voice history](route:settings/keep-voice-history) says"
       ],
       [
        "Chats on the home server, with the pictures, documents and letter photos attached",
@@ -5440,10 +5601,10 @@
        "text": "\"forget me\", in your own voice: deletes your profile, voice samples, memories and everything you said to Domovoi."
       },
       {
-       "text": "{admin} [Settings → Household → People](route:settings/people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → System → Advanced](route:settings/advanced) → **show the settings** → **Privacy**."
+       "text": "How long what you say is kept: [Settings → Privacy → Keep voice history](route:settings/keep-voice-history). {admin} choose 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day, and at once when you save. Everyone else sees what it is set to."
       },
       {
-       "text": "{admin} **Delete all voice history**, on the same page, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
+       "text": "{admin} **Delete all voice history**, on [Settings → Household → People](route:settings/people) → **Voice history**, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
       },
       {
        "text": "Clear your own listening history: your name on [Settings → Household → People](route:settings/people) → **listening history** → **clear**, from your own phone or browser, from 10 minutes after you said **this is me** there. Anywhere else, or sooner, it asks for the admin password."
@@ -5461,10 +5622,10 @@
        "text": "Delete a chat: the bin icon in [Chat](route:chat). Its pictures, documents, letters and draft versions go with it."
       },
       {
-       "text": "{admin} turn recordings off in a room's **Settings** tab (**Stop and delete**); the commands kept so far are in [Settings → Privacy → Voice history](route:settings/voice-history)."
+       "text": "{admin} turn recordings off in a room's **Settings** tab (**Stop and delete**); the commands kept so far are in [Settings → Privacy → Command recordings](route:settings/command-recordings)."
       },
       {
-       "text": "{admin} listen to a room's command recordings, mark whether each one ended at the right moment, and delete them: [Settings → Privacy → Voice history](route:settings/voice-history). A room keeps them only while an admin has turned them on for it."
+       "text": "{admin} listen to a room's command recordings, mark whether each one ended at the right moment, and delete them: [Settings → Privacy → Command recordings](route:settings/command-recordings). A room keeps them only while an admin has turned them on for it."
       }
      ]
     },
@@ -5550,7 +5711,11 @@
    "blocks": [
     {
      "type": "p",
-     "text": "[Settings → System → About & updates](route:settings/about) shows the release you run."
+     "text": "[Settings → System → About & updates](route:settings/about) shows the release you run. An admin also sees the **database schema** it is on (for example V086), which is handy when asking for help."
+    },
+    {
+     "type": "p",
+     "text": "With the internet setting **Yes**, Domovoi looks by itself once a day and Home says *Domovoi 1.5.0 is available*. Untick **Check for updates by itself** to look only when you ask. Only a signed release makes this notice, with its three highlights; nothing installs by itself."
     },
     {
      "type": "label",
@@ -5563,7 +5728,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "**Check for updates**."
+       "text": "**Check for updates** (or **Update** on Home)."
       },
       {
        "text": "**Update Domovoi**. It pulls the update, then restarts with it."

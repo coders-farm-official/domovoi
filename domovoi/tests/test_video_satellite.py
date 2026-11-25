@@ -202,15 +202,17 @@ async def test_repository_crud_roundtrip() -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_set_room_label_creates_row_for_legacy_room() -> None:
-    """Labeling a pre-V003 satellite (mpd_rooms only) creates the inventory
-    row with the voice default rather than failing."""
+    """Labeling a room known only by its music player (mpd_rooms only)
+    creates its ``rooms`` row (V073: the label is the room's name) rather
+    than failing; no device row is made up."""
+    from domovoi.db.repositories import RoomsRepository
+
     async with session_scope() as s:
         await SatellitesRepository(s).set_room_label("kitchen", "Ground Floor")
-    row = await _get_row("kitchen")
-    assert row is not None
-    assert row["room_label"] == "Ground Floor"
-    assert row["sat_type"] == "voice"
-    assert row["adopted_via"] == "manual"
+    async with session_scope() as s:
+        room = await RoomsRepository(s).get("kitchen")
+    assert room is not None and room["name"] == "Ground Floor"
+    assert await _get_row("kitchen") is None
 
 
 # ─── /v1/admin/snapshot exposure ──────────────────────────────────────────

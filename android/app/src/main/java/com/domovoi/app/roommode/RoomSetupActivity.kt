@@ -62,7 +62,7 @@ import com.domovoi.app.ui.theme.ThemeMode
 /**
  * The way into room mode — from the "Domovoi Room" launcher icon (works on
  * a phone never paired with the household), from Settings → Rooms →
- * "Use this device as a room", and from a `domovoi-room:` link a camera app
+ * "Use this phone in a room", and from a `domovoi-room:` link a camera app
  * hands over. Three steps, all on this screen:
  *
  * 1. the explainer, scrolled to its end before **Start room mode** works
@@ -70,6 +70,9 @@ import com.domovoi.app.ui.theme.ThemeMode
  * 2. the microphone (and notifications) asked for here, in context;
  * 3. the room code from the dashboard: scanned or pasted, shown back
  *    (server, fingerprint, room name, which can be changed), then confirmed.
+ *    A code from "Add a satellite to the Kitchen" (`in=`) says which room
+ *    the phone joins, by name ("This phone will join the Kitchen"); the
+ *    name in it is then the phone's own ("Kitchen 2").
  *
  * A link or a scan only fills the form: nothing becomes a room until the
  * person has read the explainer and pressed the buttons. A phone that is
@@ -249,7 +252,7 @@ private fun Explainer(onStart: () -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
     val atEnd = scroll.maxValue == 0 || scroll.value >= scroll.maxValue - 8
     Column(Modifier.fillMaxSize().padding(20.dp)) {
-        Text("Use this device as a room", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+        Text(RoomStatusText.ENTRY_TITLE, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.semantics { heading() })
         Spacer(Modifier.height(8.dp))
         Column(Modifier.weight(1f).verticalScroll(scroll)) {
@@ -367,10 +370,16 @@ private fun RoomCode(initialPayload: String?, onDone: (Enrolment) -> Unit, onCan
             Text("Server: ${e.coreUrl.removePrefix("http://").removePrefix("https://")}", style = MaterialTheme.typography.bodyLarge)
             Text("Server key: ${e.fingerprint.take(20)}…", style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgMuted)
             Text("Compare it with the dashboard's Settings → About & updates.", style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+            // `in=`: an existing room, said by its name; the code's name is
+            // then this phone's own (the dashboard shows it in the room).
+            val joining = e.inRoomName
+            joining?.let {
+                Text(RoomStatusText.joinLine(it), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
             OutlinedTextField(
                 value = shown,
                 onValueChange = { name = it.take(RoomEnrolment.MAX_ROOM_NAME_LEN + 8) },
-                label = { Text("room name") },
+                label = { Text(if (joining != null) "this phone's name" else "room name") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -395,7 +404,7 @@ private fun RoomCode(initialPayload: String?, onDone: (Enrolment) -> Unit, onCan
                     },
                     enabled = roomId != null,
                     modifier = Modifier.weight(1f),
-                ) { Text("Become this room") }
+                ) { Text(joining?.let { "Join ${RoomStatusText.theRoom(it)}" } ?: "Become this room") }
             }
         } else {
             Spacer(Modifier.height(8.dp))

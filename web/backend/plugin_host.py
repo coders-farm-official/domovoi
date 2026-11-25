@@ -77,6 +77,9 @@ CORE_NAV: dict[str, int] = {
     "podcasts": 12,
     "audiobooks": 14,
     "videos": 15,
+    # Photos and Faces (1.5.0, media understanding), in the Media group.
+    "photos": 17,
+    "faces": 19,
     "news": 18,
     "people": 20,
     # No sidebar row since 2026-10-11 (a Settings tab; #settings/rooms opens it),
@@ -337,6 +340,24 @@ def _on_disk_version(install_dir: Path) -> str | None:
 
 
 # ─── The host state ────────────────────────────────────────────────────────
+
+
+def _home_cards_out(raw: object) -> list[dict]:
+    """The plugin's ``[[web.home_cards]]`` as the browser gets them; a
+    malformed row (written by a newer core) is skipped, never an error."""
+    out: list[dict] = []
+    for c in raw if isinstance(raw, list) else []:
+        if not isinstance(c, dict) or not isinstance(c.get("id"), str):
+            continue
+        if not isinstance(c.get("component"), str) or not isinstance(c.get("title"), str):
+            continue
+        order = c.get("order", 50)
+        out.append({
+            "id": c["id"], "title": c["title"], "component": c["component"],
+            "default_on": c.get("default_on", True) is not False,
+            "order": order if isinstance(order, int) and not isinstance(order, bool) else 50,
+        })
+    return out
 
 
 class WebPluginContext:
@@ -841,6 +862,8 @@ class PluginHost:
                         _asset_url(sc) for sc in (web.get("scripts") or [])
                     ],
                     "pages": pages,
+                    # Its [[web.home_cards]] (home.jsx PluginHomeCards).
+                    "home_cards": _home_cards_out(web.get("home_cards")),
                     "page_errors": self.page_route_errors(slug),
                     "player_sources": web.get("player_sources") or [],
                     "realtime_channels": realtime_channels,

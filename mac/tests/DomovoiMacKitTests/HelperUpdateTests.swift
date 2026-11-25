@@ -93,7 +93,7 @@ final class HelperUpdateTests: XCTestCase {
         XCTAssertEqual(installs[0].arguments, ["-pkg", runDir.appendingPathComponent(MacReleaseNames.package).path, "-target", "/"],
                        "the root-only copy, never the account's download")
         let repairs = runner.ran("DomovoiHelper")
-        XCTAssertEqual(repairs.map(\.arguments), [["install", "--system", "--repair"]])
+        XCTAssertEqual(repairs.map(\.arguments), [["install", "--system", "--repair", "--no-kit"]])
         XCTAssertEqual(repairs[0].executable, layout.helperProgram.path, "the NEW helper, from where the package put it")
         // The order: the package, then its repair.
         let names = runner.calls.map { ($0.executable as NSString).lastPathComponent }

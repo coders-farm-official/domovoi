@@ -118,11 +118,18 @@ case "$STATE" in
   *) exit 0 ;;
 esac
 
-# Root drives the array directly; the satellite user goes through the single
-# sudoers entry for this binary. leds.py probes in exactly this order.
+# Root drives the array directly; the satellite user goes through the
+# root-owned wrapper its sudoers line names (satellite/xvf_guard.py, which
+# takes exactly these LED verbs), then the tool itself on a card from before
+# 1.5.0 not yet switched. leds.py probes in exactly this order.
+XVF_WRAPPER=/usr/local/sbin/domovoi-xvf
 xvf() {
   [ -x "$XVF" ] || return 1
   "$XVF" "$@" >/dev/null 2>&1 && return 0
+  [ "$AS_ROOT" = "1" ] && return 1
+  if [ -x "$XVF_WRAPPER" ]; then
+    sudo -n "$XVF_WRAPPER" "$@" >/dev/null 2>&1 && return 0
+  fi
   sudo -n "$XVF" "$@" >/dev/null 2>&1
 }
 

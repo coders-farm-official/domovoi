@@ -78,6 +78,15 @@ ADMIN_IDLE_TIMEOUT_MIN = 60
 ADMIN_RELOAD_WINDOW_DEFAULT_MIN = 60
 ADMIN_RELOAD_WINDOW_MAX_MIN = ADMIN_IDLE_TIMEOUT_MIN
 
+# The noise-cleanup experiment's modes (``stt_denoise``, domovoi/stt_denoise.py).
+# Anything else stored (``rnnoise``, offered before the A/B dropped it)
+# reads as "off".
+STT_DENOISE_MODES = ("off", "spectral")
+STT_DENOISE_LABELS = {
+    "off": "Off (as captured)",
+    "spectral": "Spectral filter",
+}
+
 # `voice_history_keep` (owner, 2026-10-17): how long what people say to
 # Domovoi is kept. The values are days, or "forever"; second = default.
 # The dashboard shows them with VOICE_HISTORY_KEEP_LABELS. See the field
@@ -499,6 +508,12 @@ class Settings(BaseSettings):
     # satellite when a voice turn needs a model that isn't loaded, rather
     # than leaving the room silent through the load.
     ollama_cold_start_notice: bool = True
+    # 1.5.0, noisy rooms (owner answer Q8): the XVF3800 DSP preset a
+    # satellite is put on when it reports the array's own settings
+    # ("factory"). EMPTY on purpose: whether a preset helps, and which,
+    # waits for the hour-long room test; until then nothing changes. A
+    # name from domovoi/mic_dsp.PRESETS; anything else counts as unset.
+    mic_dsp_default_preset: str = ""
     # The household's "AI features" switch (Settings → Chat & AI → Models; both
     # installers ask "Include AI chat and questions?"). Off: nothing asks
     # a language model — no questions, no Chat, no news summary, no
@@ -544,6 +559,14 @@ class Settings(BaseSettings):
     # Internet; docs/INTERNET.md explains the answers. Aliases (yes/no/
     # offline/metered…) are accepted; anything else reads as unanswered.
     internet_access: str = ""
+
+    @field_validator("stt_denoise", mode="before")
+    @classmethod
+    def _stt_denoise_known(cls, v: object) -> str:
+        """An unknown mode, such as ``rnnoise`` saved before it was
+        dropped, reads as off."""
+        mode = str(v or "").strip().lower()
+        return mode if mode in STT_DENOISE_MODES else "off"
 
     @field_validator("internet_access", mode="before")
     @classmethod
@@ -848,6 +871,14 @@ class Settings(BaseSettings):
     # 191 for 10 s alone), at a second decode for 16-34% of command
     # captures. false = route the short-window text as it is.
     whisper_short_window_recheck: bool = True
+    # 1.5.0, noisy rooms (owner answer Q9): noise cleanup on a command's
+    # audio before Whisper hears it, an A/B experiment
+    # (domovoi/stt_denoise.py). "off" (the default) | "spectral" (a
+    # built-in Wiener filter). Never wake detection or voice ID. Any other
+    # value (an old "rnnoise") reads as off. OFF until the XVF3800 room
+    # test shows spectral helps (the synthetic A/B found it neutral).
+    # Applies on the next transcription.
+    stt_denoise: str = "off"
     # A speech-to-text service on another machine in the house, used
     # before this machine's own Whisper (domovoi/clients/whisper_remote.py):
     # on a Mac the core's VM has no GPU, and the Mac runs Whisper on its
@@ -1259,6 +1290,21 @@ class Settings(BaseSettings):
     # How often the core deletes guests (V023 guests_seen: a guest's
     # self-asserted id, address and user agent) not seen for 30 days.
     guests_seen_pruner_interval_sec: float = 3600.0
+    # How often the core deletes support-session transcripts past 30 days
+    # and over 200 MB in all (domovoi/support_sessions.py).
+    support_session_pruner_interval_sec: float = 3600.0
+    # How often the media catalogue (domovoi/media_understanding/catalog.py)
+    # looks whether a walk is due: a full stat()-only walk of Pictures and
+    # Videos once an hour, sooner after "Rescan" or an upload.
+    media_catalog_interval_sec: float = 60.0
+    # Where the two face models (YuNet, SFace; domovoi/media_understanding/
+    # face_models.py) are fetched, pinned by SHA-256, when an admin turns
+    # faces on. Never shipped; server-private, never served.
+    face_models_dir: str = str(Path.home() / ".domovoi" / "face_models")
+    # Where the GeoNames town list (domovoi/media_understanding/geocode.py)
+    # is fetched, pinned by SHA-256, when an admin turns photo locations on.
+    # Read on this server only: no coordinate is ever sent anywhere.
+    place_names_dir: str = str(Path.home() / ".domovoi" / "place_names")
 
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current
@@ -1418,6 +1464,18 @@ class Settings(BaseSettings):
     # every 30 min (every 2 h when the internet answer is "sometimes"),
     # backing off after failures; never under "never".
     calendar_feed_tick_sec: float = 300.0
+    # Plugin update checks (domovoi/plugins_runtime/update_check.py): how
+    # often the checker looks for a plugin that is due. Each GitHub-installed
+    # plugin's repo is asked once a day; never under "never".
+    plugin_update_check_tick_sec: float = 3600.0
+    # Update notices (domovoi/update_notice.py, 1.5.0): look for a new
+    # signed Domovoi release once a day and at start, only when this is on
+    # AND the internet answer is Yes (always). Nothing is ever installed by
+    # itself. The About & updates card owns the checkbox.
+    update_auto_check: bool = True
+    # How often the update-notice worker wakes to see whether a check is
+    # due (the check itself runs once a day). Read at start.
+    update_check_tick_sec: float = 3600.0
     # Default newest-N episodes to keep downloaded per show. Per-subscription
     # keep_n overrides this; used only as the default when a subscription
     # doesn't set its own. LRU eviction removes downloaded episodes beyond
@@ -1514,6 +1572,15 @@ class Settings(BaseSettings):
     # editable via the web gear.
     dropin_relay_gate_dbfs: float = -55.0
 
+    # Speaker tuning (domovoi/room_calibration.py): measure a satellite's
+    # real output delay on its own when it joins or moves into a room with
+    # other speakers, once (debounced), only while the room is idle (nothing
+    # playing, no turn) and never in its quiet hours (it waits for them to
+    # end). On by default (owner decision 2026-11-22): the run plays a short
+    # chirp from every speaker in the room. Off: only the room drawer's
+    # "Tune the speakers" runs it.
+    room_calibration_auto: bool = True
+
     # ─── Media-play history ─────────────────────────
     # The Satellites "Recently played" tab records one row per play.
     # The pruner deletes rows older than this many days so the table
@@ -1527,10 +1594,10 @@ class Settings(BaseSettings):
     # core deletes everything older from intents_log and conversation_log,
     # the rooms' short-term conversations (sessions idle that long; older
     # exchanges in a room still talking) and the satellites' logs kept on
-    # this server. "Keep voice history" is on the dashboard's Settings →
-    # Household → People → Voice history and in Settings → System →
-    # Advanced (Privacy); a save prunes at once. (Settings → Privacy →
-    # Voice history is the command recordings, not this.)
+    # this server. "Keep voice history" is edited in Settings → Privacy
+    # (People → Voice history and System → Advanced → Privacy link there); a
+    # save prunes at once. (Settings → Privacy → Command recordings is the
+    # opt-in recordings, not this.)
     # Never fatal and never shorter than asked: see the validator.
     voice_history_keep: str = VOICE_HISTORY_KEEP_DEFAULT
     # How often the pruner looks (workers/voice_history_pruner.py): it

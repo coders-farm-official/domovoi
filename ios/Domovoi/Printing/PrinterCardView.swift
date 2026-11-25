@@ -24,6 +24,9 @@ struct PrinterCardView: View {
     let printer: Printer
     let panel: PrintersPanelModel
 
+    /// Rename and remove (admin on this phone); nil draws neither.
+    var admin: PrinterAdminModel?
+
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// Opens the printer's own web page in Safari. Taken from the environment
@@ -39,6 +42,9 @@ struct PrinterCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             heading
+            if let admin {
+                PrinterAdminRowView(printer: printer, panel: panel, zone: admin)
+            }
             statusBlock
             supplies
             pills

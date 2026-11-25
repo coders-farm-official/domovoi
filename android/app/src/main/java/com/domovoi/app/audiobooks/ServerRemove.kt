@@ -220,6 +220,24 @@ object IdentityAdmission {
         }
     }
 
+    /** [verified], and the identity the server proved: what an admin
+     *  session is bound to (AdminSession), so a server that later proves a
+     *  different key never receives that session's Bearer. */
+    fun fingerprint(verdict: IdentityVerdict, base: HttpUrl): String {
+        verified(verdict, base)
+        return (verdict as IdentityVerdict.Verified).fingerprint
+    }
+
+    /** The app's wiring for [fingerprint] (a probe if it must; IO thread). */
+    fun fingerprintOf(gate: IdentityGate): (HttpUrl) -> String = { base ->
+        val verdict = try {
+            gate.verdictFor(base)
+        } catch (e: IOException) {
+            throw IOException("couldn't reach the server")
+        }
+        fingerprint(verdict, base)
+    }
+
     /** The app's wiring: ask [gate] (a probe if it must; IO thread). */
     fun of(gate: IdentityGate): (HttpUrl) -> Unit = { base ->
         val verdict = try {

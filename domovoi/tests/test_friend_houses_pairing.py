@@ -112,7 +112,7 @@ async def test_a_request_arrives_and_both_houses_get_the_same_code(tmp_path) -> 
         await asyncio.sleep(0.05)
     request = results[0]
     assert isinstance(request, fp.Request)
-    assert request.code == asker_code and len(asker_code) == 4 and asker_code.isdigit()
+    assert request.code == asker_code and len(asker_code) == 6 and asker_code.isdigit()
     assert request.house_key == b_keys.house_key
     assert request.statement.session_key == b_keys.session_key
     assert request.reach_private == reach.private
@@ -235,7 +235,7 @@ async def test_a_house_key_chosen_after_seeing_the_nonce_is_refused(tmp_path) ->
     async with server:
         r, w = await asyncio.open_connection("127.0.0.1", port)
         # Any house key other than the committed one stands for the grind's
-        # result (a full grind to a chosen code takes ~10,000 keys).
+        # result (a full grind to a chosen code takes ~1,000,000 keys).
         await _grinding_ask(r, w, file=f, session_private=b_keys.session_private)
         for _ in range(100):
             if results:
@@ -244,6 +244,174 @@ async def test_a_house_key_chosen_after_seeing_the_nonce_is_refused(tmp_path) ->
         w.close()
     assert isinstance(results[0], fp.PairingRefused)
     assert "commitment" in str(results[0])
+
+
+# ─── pairing v2: the 6-digit code, and no way back to v1 ──────────────────
+
+V1_PREFACE = b"DFP1"
+V1_PROLOGUE = b"domovoi-fh-pairing-v1"
+
+
+def _v1_file(keys: fid.HouseKeys, invite=b"\x22" * 16) -> str:
+    """A friend file exactly as a house before 1.5.0 makes it: version byte
+    1, signed by its house."""
+    import base64
+    import struct
+
+    name = b"Old House"
+    body = struct.pack(">B32s32s32s16s32sIB", 1, keys.house_key, keys.session_key,
+                       bytes(range(32)), invite, keys.invite_secret(invite), 20_500,
+                       len(name)) + name
+    raw = body + keys.sign(fid.CTX_FRIEND_FILE, body)
+    return ff.PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def test_the_code_is_six_digits_with_leading_zeros_kept(monkeypatch) -> None:
+    import secrets as _s
+
+    assert fp.CODE_DIGITS == 6 and fp.PROTOCOL_VERSION == 2
+    seen = set()
+    for _ in range(300):
+        c = fp.code(*(_s.token_bytes(32) for _ in range(5)))
+        assert fp.is_code(c) and len(c) == 6
+        seen.add(c)
+    assert len(seen) > 290  # a million values, not a handful
+    # A digest small enough to need padding still gives six digits.
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(fp.hashlib, "sha256", lambda data=b"": SimpleNamespace(
+        digest=lambda: bytes(31) + bytes([7])))
+    assert fp.code(b"", b"", b"", b"", b"") == "000007"
+    monkeypatch.undo()
+    for bad in ("1234", "12345", "1234567", "12345a", "١٢٣٤٥٦", None, 123456):
+        assert not fp.is_code(bad)
+
+
+def test_new_friend_files_are_version_2_and_old_houses_read_them_as_newer(tmp_path) -> None:
+    keys, f = _file(tmp_path)
+    text = f.to_text()
+    assert text.startswith("domovoi-friend:1:")  # the line format is unchanged
+    import base64
+
+    raw = base64.urlsafe_b64decode(text[len(ff.PREFIX):] + "==")
+    assert raw[0] == 2  # what a 1.4 house checks first: "from a newer Domovoi"
+
+
+def test_a_version_1_friend_file_is_refused_with_a_plain_message(tmp_path) -> None:
+    old = fid.create(tmp_path / "old.json")
+    with pytest.raises(ff.OldFriendFile) as err:
+        ff.parse(_v1_file(old))
+    assert str(err.value) == ff.OLD_FILE
+    assert "needs updating to add friends" in str(err.value)
+
+
+def test_a_v2_file_relabelled_as_v1_reads_as_damaged_not_old(tmp_path) -> None:
+    import base64
+
+    _, f = _file(tmp_path)
+    raw = bytearray(base64.urlsafe_b64decode(f.to_text()[len(ff.PREFIX):] + "=="))
+    raw[0] = 1
+    relabelled = ff.PREFIX + base64.urlsafe_b64encode(bytes(raw)).decode("ascii").rstrip("=")
+    with pytest.raises(ff.BadFriendFile) as err:
+        ff.parse(relabelled)
+    assert not isinstance(err.value, ff.OldFriendFile)
+    assert "changed or damaged" in str(err.value)
+
+
+async def _v1_ask(reader, writer, *, file_keys: fid.HouseKeys, invite: bytes, asker: fid.HouseKeys,
+                  preface: bytes = V1_PREFACE, prologue: bytes = V1_PROLOGUE) -> bytes | None:
+    """An asking house speaking pairing v1 (or a mix): returns the inviter's
+    nonce if it ever answered, else None."""
+    from domovoi.friend_houses import session as fs
+    from domovoi.friend_houses.noise import Handshake
+
+    hs = Handshake("IKpsk2", initiator=True, prologue=prologue, static=asker.session,
+                   remote_static=file_keys.session_key, psk=file_keys.invite_secret(invite))
+    writer.write(preface + fs.frame(hs.write_message(invite + b"\x00" * 32)))
+    await writer.drain()
+    try:
+        msg2 = await fs.read_frame(reader, max_size=fp._MSG2_SIZE, timeout=2)
+        return hs.read_message(msg2)
+    except Exception:  # noqa: BLE001 — refused, closed or garbled all mean "no answer"
+        return None
+
+
+@pytest.mark.parametrize("preface,prologue", [(V1_PREFACE, V1_PROLOGUE), (fp.PREFACE, V1_PROLOGUE)],
+                         ids=["v1", "v2-preface-v1-prologue"])
+async def test_a_v1_request_gets_no_answer_and_spends_nothing(tmp_path, preface, prologue) -> None:
+    # Downgrade: an asker claiming to be old (or mixing versions) never gets
+    # the inviter's nonce, so there is no 4-digit code to compute, and the
+    # v1 preface is refused before the invite is even looked up.
+    a_keys, f = _file(tmp_path)
+    b_keys, _ = _asker(tmp_path)
+    looked_up: list[bytes] = []
+    results: list = []
+
+    async def invite_open(invite_id: bytes) -> bool:
+        looked_up.append(invite_id)
+        return True
+
+    async def handler(reader, writer):
+        try:
+            results.append(await fp.answer(reader, writer, keys=a_keys, invite_open=invite_open))
+        except fp.PairingRefused as e:
+            results.append(e)
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(handler, "127.0.0.1", 0)
+    async with server:
+        r, w = await asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1])
+        nonce = await _v1_ask(r, w, file_keys=a_keys, invite=f.invite_id, asker=b_keys,
+                              preface=preface, prologue=prologue)
+        w.close()
+        for _ in range(40):
+            if results:
+                break
+            await asyncio.sleep(0.05)
+    assert nonce is None
+    assert isinstance(results[0], fp.PairingRefused)
+    if preface == V1_PREFACE:
+        assert looked_up == [] and "unknown protocol" in str(results[0])
+
+
+async def test_asking_an_old_house_never_offers_v1(tmp_path) -> None:
+    # The asking side: whatever answers, it opens with DFP2 and the v2
+    # prologue, so an old (v1-only) inviter just closes and nothing pairs.
+    _, f = _file(tmp_path)
+    b_keys, b_statement = _asker(tmp_path)
+    got: list[bytes] = []
+
+    async def old_inviter(reader, writer):
+        got.append(await reader.readexactly(4))
+        writer.close()  # what a 1.4 house does with anything but DFP1
+
+    server = await asyncio.start_server(old_inviter, "127.0.0.1", 0)
+    async with server:
+        r, w = await asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1])
+        with pytest.raises(fp.PairingRefused):
+            await fp.ask(r, w, file=f, keys=b_keys, statement=b_statement,
+                         reach_private=b"\x00" * 32, name="B")
+    assert got == [b"DFP2"]
+
+
+def test_the_friend_session_protocol_is_unchanged() -> None:
+    # Friends made with v1 keep talking: only pairing moved to v2.
+    from domovoi.friend_houses import session as fs
+
+    assert fs.PREFACE == b"DFH1" and fs.PROLOGUE == b"domovoi-fh-session-v1"
+
+
+def test_the_pairing_budget_is_unchanged_by_the_longer_code(tmp_path) -> None:
+    # Six digits make each try 100 times less likely to land; the limits
+    # stay as strict as with four: 20 requests an hour naming one open file.
+    from domovoi.friend_houses import listener as fl
+
+    assert fl.PAIRING_PER_HOUR == 20
+    state = fl.State(tmp_path, fid.create(tmp_path / "l.json"))
+    invite = b"" * 16
+    assert all(state.pairing_allowed(invite) for _ in range(fl.PAIRING_PER_HOUR))
+    assert not state.pairing_allowed(invite)
 
 
 async def test_runs_broken_off_after_the_nonce_close_the_friend_file(tmp_path, capsys) -> None:

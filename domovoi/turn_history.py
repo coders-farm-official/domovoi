@@ -267,7 +267,11 @@ async def _open_row(
     at: datetime,
     wake_score: float | None = None,
     wake_word: str | None = None,
+    satellite_id: str | None = None,
+    mic_satellite_id: str | None = None,
 ) -> int | None:
+    """``satellite_id`` / ``mic_satellite_id`` (V073): the device that
+    owned the turn and the one whose microphone was transcribed."""
     from domovoi.db.session import session_scope
 
     async def _write() -> int | None:
@@ -277,16 +281,21 @@ async def _open_row(
             # The wake's score (V044) and word (V063) when there are ones
             # and their columns are there.
             score_col, score_val, wake_params = await _wake_cols(s, wake_score, wake_word)
+            sat_col = sat_val = ""
+            sat_params: dict[str, str] = {}
+            if satellite_id is not None:
+                sat_col, sat_val = ", satellite_id, mic_satellite_id", ", :sat, :mic"
+                sat_params = {"sat": satellite_id, "mic": mic_satellite_id or satellite_id}
             row = (
                 await s.execute(
                     text(
                         f"""
                         INSERT INTO conversation_log
                             (session_id, room_id, user_text, utterance_trigger,
-                             turn_status, audio_ms, at{score_col})
+                             turn_status, audio_ms, at{score_col}{sat_col})
                         VALUES
                             (:session_id, :room_id, :user_text, :trigger,
-                             'pending', :audio_ms, :at{score_val})
+                             'pending', :audio_ms, :at{score_val}{sat_val})
                         RETURNING id
                         """
                     ),
@@ -298,6 +307,7 @@ async def _open_row(
                         "audio_ms": audio_ms,
                         "at": at,
                         **wake_params,
+                        **sat_params,
                     },
                 )
             ).first()

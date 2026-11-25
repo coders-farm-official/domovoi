@@ -241,8 +241,9 @@ rooms; and many tighter security checks and limits.
 
 **Coming in 1.5.0**
 
-Nothing new on `main` yet. First up: rooms with more than one satellite,
-and moving a satellite to another room.
+Rooms with more than one satellite, and moving a satellite to another
+room, are on the way: see the 1.5.0 entries in the
+[release notes](docs/RELEASE_NOTES.md).
 
 What's planned is in the [roadmap](docs/ROADMAP.md), grouped Now / Next /
 Later: an iPhone app, the Android app on F-Droid, the Windows installer
@@ -483,8 +484,8 @@ Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
 
 ### 3. Add your first satellite
 
-A satellite is the device in a room that listens and plays; today each
-room has exactly one. However you set one up, it ends the same way: the
+A satellite is the device in a room that listens and plays; a room can
+have several (1.5.0). However you set one up, it ends the same way: the
 device shows or says a six-digit approval code, and you type that code into
 **Settings → Household → Rooms** on the dashboard (as admin) to make it that
 room's satellite. Three routes:

@@ -69,6 +69,17 @@ CORE_EVENTS: frozenset[str] = frozenset({
     # heard_in [room...], acked_by}.
     "core.timer_fired",
     "core.timer_fire_settled",
+    # Added 2026-11-23, SDK 1.18 (additive, so the catalog stays v1;
+    # security review M8). Voice history was deleted and the deletion is
+    # committed (domovoi/voice_history.py, announce_forgets): a person's
+    # ("forget me", People -> delete person) as {person_id: int}, or all
+    # of it (an admin's "Delete all voice history", when its job finishes)
+    # as {person_id: None}. A plugin that keeps anything tied to a person
+    # deletes it here. NOT emitted for the daily "Keep voice history"
+    # trim: plugins apply core_config.voice_history_keep themselves.
+    # Delivered at least once (a forget made while the core was down is
+    # announced at its next start), so handle a repeat as a no-op.
+    "core.voice_history_deleted",
 })
 
 _PLUGIN_EVENT_PREFIX = "plugin."

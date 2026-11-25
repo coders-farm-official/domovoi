@@ -1467,7 +1467,8 @@ class VoiceProfileHandler(Handler):
         label: str | None = None
         try:
             row = (await session.execute(
-                sql_text("SELECT room_label FROM satellites WHERE room_id = :r"), {"r": room_id},
+                sql_text("SELECT NULLIF(name, room_id) FROM rooms WHERE room_id = :r"),
+                {"r": room_id},
             )).first()
             label = row[0] if row else None
         except Exception as e:
@@ -3266,6 +3267,9 @@ class VoiceProfileHandler(Handler):
             # person_id to NULL). domovoi/voice_history.py.
             await voice_history.delete_person_history(session, person_id)
             await PeopleRepository(session).delete(person_id)
+            # Plugins hear core.voice_history_deleted once the turn's
+            # transaction commits (SDK 1.18); a rollback tells nobody.
+            voice_history.announce_after_commit(session)
         except Exception as e:
             log.warning("forget-me delete failed: %s", e)
             return Response(

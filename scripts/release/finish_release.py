@@ -119,7 +119,12 @@ every check has passed):
    "Releasing"): first a Download section, each file a direct link on
    the release with what it is for (the Linux one-liner copied from the
    tag's docs/LINUX_HOST.md, Google Play and the APKs, the room Setup, how
-   an installed Domovoi updates). Then What's new, with a line linking
+   an installed Domovoi updates). From 1.5.0, then the release's three
+   Highlights (``## Highlights`` of ``docs/release/v<version>.md``: exactly
+   3 plain one-line items, the same 3 under ``### Highlights`` in its dated
+   section of ``docs/RELEASE_NOTES.md``; refused otherwise, here and in the
+   plan job; houses read them with the same parser,
+   domovoi/release_highlights.py). Then What's new, with a line linking
    the release's full notes and its RELEASE_NOTES.md section at the tag:
    the ``## At a glance`` section of ``docs/release/v<version>.md`` at the
    tag if there is one (the file is the full notes; see
@@ -205,6 +210,22 @@ from pathlib import Path
 from typing import Any, Callable, NoReturn
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+def _load_highlights_parser():
+    """domovoi/release_highlights.py, by path: the one parser the house
+    uses for the Highlights too (update notices), so the two can't
+    disagree. Standard library only, like this script."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "domovoi_release_highlights", Path(__file__).resolve().parents[2] / "domovoi" / "release_highlights.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+release_highlights = _load_highlights_parser()
 REPO_SLUG = "coders-farm-official/domovoi"
 REPO_URL = "https://github.com/" + REPO_SLUG
 SETUP_ASSET = "DomovoiSetup.exe"
@@ -437,6 +458,9 @@ class Release:
     notes_anchor: str | None = None   # this release's section of RELEASE_NOTES.md (:func:`notes_anchor`)
     mac_setup_sha256: str | None = None       # DomovoiSetup-mac.pkg, when --mac-pkg gave one
     mac_signatures: dict[str, str] | None = None  # its signature files -> their SHA-256
+    #: The release's three Highlights (docs/release/<tag>.md), from 1.5.0 on:
+    #: right after Download on the page. None or [] = no section.
+    highlights: list[str] | None = None
 
 
 def _who(abi: str) -> str:
@@ -465,6 +489,78 @@ LINUX_INSTALL_RE = re.compile(r"^curl -fsSL https://\S+/scripts/linux/install\.s
 #: The section of docs/release/v<version>.md (the release's FULL notes)
 #: that goes on the release page: the highlights, then short sections.
 GLANCE = "At a glance"
+#: The release's three Highlights (from 1.5.0): ``## Highlights`` right
+#: above ``## At a glance`` in docs/release/v<version>.md, ``### Highlights``
+#: in its dated section of RELEASE_NOTES.md, ``## Highlights`` on the page
+#: right after Download. Houses show them in About & updates before they
+#: update (domovoi/update_notice.py), read with the same parser.
+HIGHLIGHTS = "Highlights"
+#: The first release whose notes must carry them (the v1.4.x tags can't
+#: change, so their files have none).
+HIGHLIGHTS_FROM = (1, 5, 0)
+
+
+def highlights_required(version: str | None) -> bool:
+    m = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:-.*)?", version or "")
+    return bool(m) and tuple(int(x) for x in m.groups()[:3]) >= HIGHLIGHTS_FROM
+
+
+def release_highlights_of(text: str) -> list[str]:
+    """The three Highlights of a docs/release/v<version>.md, or []."""
+    return release_highlights.parse_highlights(text.encode("utf-8"))
+
+
+def _highlights_problems(text: str) -> list[str]:
+    """The Highlights rules (docs/CONTRIBUTING.md, "The release page")."""
+    text = text.replace("\r\n", "\n")
+    items = release_highlights_of(text)
+    if not items:
+        return [f"it needs exactly one \"## {HIGHLIGHTS}\" section of exactly 3 items (\"- text\", each 8 to 80 "
+                "characters (code points: an emoji counts once), plain words, no nesting): houses show them before they update"]
+    problems = release_highlights.markdown_problems(items)
+    heads = [(i, lvl, h) for i, lvl, h in _headings(text) if lvl <= 2]
+    at = [k for k, (_, _, h) in enumerate(heads) if _heading_text(h).strip() == HIGHLIGHTS]
+    if at and (at[0] + 1 >= len(heads) or _heading_text(heads[at[0] + 1][2]).strip() != GLANCE):
+        problems.append(f"\"## {HIGHLIGHTS}\" must come right above \"## {GLANCE}\"")
+    return problems
+
+
+def notes_highlights(release_notes: str, version: str) -> list[str] | None:
+    """The ``### Highlights`` of RELEASE_NOTES.md's dated section for this
+    release: its items, [] when the section has none valid, None when
+    there is no dated section."""
+    for e in entries(release_notes):
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2} — " + re.escape(version), _heading_text(e.heading).strip()):
+            # The heading, then its list: the lines up to the first blank
+            # line after it (the section's other bullets follow).
+            lines = e.body.split("\n")
+            at = [n for n, line in enumerate(lines) if line.rstrip() == f"### {HIGHLIGHTS}"]
+            if len(at) != 1:
+                return []
+            block, started = [f"## {HIGHLIGHTS}"], False
+            for line in lines[at[0] + 1:]:
+                if not line.strip():
+                    if started:
+                        break
+                    continue
+                started = True
+                block.append(line)
+            return release_highlights.parse_highlights("\n".join(block).encode("utf-8"))
+    return None
+
+
+def highlights_match_problems(doc_text: str, release_notes: str, version: str) -> list[str]:
+    """RELEASE_NOTES.md's dated section must carry the same three
+    Highlights as docs/release/v<version>.md."""
+    want = release_highlights_of(doc_text.replace("\r\n", "\n"))
+    got = notes_highlights(release_notes, version)
+    if got is None:
+        return [f"docs/RELEASE_NOTES.md has no dated section for {version} (\"## YYYY-MM-DD — {version}\") to "
+                f"carry its \"### {HIGHLIGHTS}\""]
+    if got != want:
+        return [f"the \"### {HIGHLIGHTS}\" in docs/RELEASE_NOTES.md's {version} section differ from "
+                f"docs/release/v{version}.md's"]
+    return []
 #: Headings the script writes on the page itself: never in the page part.
 GENERATED_HEADINGS = ("Download", "What's new", "Files", "Files and checksums", "Install or update")
 
@@ -480,7 +576,7 @@ def _glance(text: str) -> list[Entry]:
     return [e for e in entries(text) if _heading_text(e.heading).strip() == GLANCE]
 
 
-def release_doc_problems(text: str) -> list[str]:
+def release_doc_problems(text: str, version: str | None = None) -> list[str]:
     """What keeps a ``docs/release/v<version>.md`` from the house style
     (docs/CONTRIBUTING.md, "The release page"). The file is the release's
     full notes, title, intro and all; only its one ``## At a glance``
@@ -500,6 +596,9 @@ def release_doc_problems(text: str) -> list[str]:
     for _, _level, heading in _headings(found[0].body):
         if _heading_text(heading).strip() in GENERATED_HEADINGS or heading.startswith("What's new"):
             problems.append(f"\"## {GLANCE}\" has a \"{heading}\" heading, which finish_release.py writes itself")
+    # From 1.5.0, exactly one valid ``## Highlights`` above the glance.
+    if highlights_required(version):
+        problems += _highlights_problems(text)
     return problems
 
 
@@ -692,7 +791,10 @@ def body(rel: Release) -> str:
                       f"--source-ref refs/heads/main` "
                       f"([SECURITY.md, Verifying a release]({REPO_URL}/blob/{rel.tag}/SECURITY.md#verifying-a-release))."]
     where = ["<details>", "<summary>Where these files come from</summary>", "", *facts, "", "</details>"]
-    parts = [*([lead, ""] if lead else []), *download(rel), "", _with_more_detail(rel.notes, more_detail(rel)), "",
+    # The Highlights right after Download, before What's new (1.5.0 on).
+    highlights = ([f"## {HIGHLIGHTS}", "", *(f"- {h}" for h in rel.highlights), ""] if rel.highlights else [])
+    parts = [*([lead, ""] if lead else []), *download(rel), "", *highlights,
+             _with_more_detail(rel.notes, more_detail(rel)), "",
              *check, "", *files, "", *where]
     return "\n".join(parts).rstrip("\n") + "\n"
 
@@ -1433,7 +1535,16 @@ def plan(t: Tools, repo: Path, tag_arg: str | None = None) -> dict[str, Any]:
                 die(f"the app changed, but HEAD has no {whats_new_path(name)}: the notes of its release app-{name} "
                     "(and Google Play's What's new)")
         hand =t.git_bytes("show", f"{head}:docs/release/{tag}.md")
-        problems = release_doc_problems(hand.decode("utf-8")) if hand is not None else []
+        problems = release_doc_problems(hand.decode("utf-8"), tag[1:]) if hand is not None else []
+        if highlights_required(tag[1:]):
+            # Houses show a release's three Highlights before they update: a
+            # release without approved ones stops here, before anything is built.
+            if hand is None:
+                problems.append(f"from {'.'.join(map(str, HIGHLIGHTS_FROM))} on a release needs docs/release/{tag}.md "
+                                f"with its three \"## {HIGHLIGHTS}\"")
+            else:
+                notes = (t.git_bytes("show", f"{head}:docs/RELEASE_NOTES.md") or b"").decode("utf-8")
+                problems += highlights_match_problems(hand.decode("utf-8"), notes, tag[1:])
         if problems:
             die(f"docs/release/{tag}.md: " + "; ".join(problems)
                 + " (docs/CONTRIBUTING.md, \"The release page\", has the template)")
@@ -1824,12 +1935,18 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
                    mac_signatures=mac_signatures)
     current = (t.git_bytes("show", f"{tag_commit}:docs/RELEASE_NOTES.md") or b"").decode("utf-8")
     info.notes_anchor = notes_anchor(current, version)
+    if hand is None and highlights_required(version):
+        die(f"from {'.'.join(map(str, HIGHLIGHTS_FROM))} on a release needs docs/release/{tag}.md at the tag, with "
+            f"its three \"## {HIGHLIGHTS}\" (docs/CONTRIBUTING.md, \"The release page\")")
     if hand is not None:
-        problems = release_doc_problems(hand.decode("utf-8"))
+        problems = release_doc_problems(hand.decode("utf-8"), version)
+        if highlights_required(version):
+            problems += highlights_match_problems(hand.decode("utf-8"), current, version)
         if problems:
             die(f"docs/release/{tag}.md at the tag: " + "; ".join(problems)
                 + " (docs/CONTRIBUTING.md, \"The release page\", has the template)")
         info.full_notes = True
+        info.highlights = release_highlights_of(hand.decode("utf-8")) if highlights_required(version) else None
         info.notes = glance_notes(hand.decode("utf-8"), since=since)
         say(f"the notes: docs/release/{tag}.md at the tag (its \"{GLANCE}\" on the page, linked in full)")
     else:

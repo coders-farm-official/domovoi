@@ -546,6 +546,11 @@ struct SettingsSectionScreen: View {
             // 1.3.0: "Share this phone's calendars with the house", hidden
             // on a shared screen (``SettingsSection/sharedScreenHiddenKeys``).
             PhoneCalendarsPanel(model: model)
+        case "admin-on-phone":
+            // slot: admin-on-phone
+            // 1.5.0: the admin password, and today's grant behind Face ID;
+            // hidden on a shared screen (``SettingsSection/sharedScreenHiddenKeys``).
+            AdminPanel(model: model)
         case "app-layout":
             // slot: app-layout
             SystemSettingsLayoutPanel(model: model)
@@ -571,8 +576,11 @@ struct SettingsSectionScreen: View {
             // Dashboard-only, as Models is: `GET /api/config/internet` is the
             // panel's only data and is `require_admin_read`.
             AiSettingsDashboardPanel(model: model, section: section)
-        case "voice-history":
-            // slot: voice-history
+        case "keep-voice-history":
+            // slot: keep-voice-history (1.5.0)
+            KeepVoiceHistoryPanel(model: model)
+        case "command-recordings":
+            // slot: command-recordings ("voice-history" until 1.5.0)
             VoiceSettingsDashboardPanel(model: model, section: section)
         case "about":
             // slot: about

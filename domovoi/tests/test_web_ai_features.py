@@ -24,9 +24,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from domovoi import ai_features
+from domovoi.tests.chat_devices import DeviceTestClient
 from domovoi.tests.conftest import requires_db
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -43,7 +43,8 @@ FIELDS = [
 def _client():
     from web.backend.main import app
 
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 # ─── /api/capabilities ────────────────────────────────────────────────────

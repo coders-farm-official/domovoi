@@ -83,7 +83,7 @@ final class SettingsPlaceTests: XCTestCase {
         XCTAssertEqual(SettingsSection.all.count, counted)
         // The table's own order survives the filter.
         XCTAssertEqual(
-            ["rooms", "people", "phones-and-browsers", "music-mix", "printers", "phone-calendars"],
+            ["rooms", "people", "phones-and-browsers", "music-mix", "printers", "phone-calendars", "admin-on-phone"],
             sections(of: .household).map(\.key)
         )
     }
@@ -98,10 +98,11 @@ final class SettingsPlaceTests: XCTestCase {
         )
         XCTAssertEqual(
             [
-                ["Rooms", "People", "Phones & browsers", "Music mix", "Printers & scanners", "Phone calendars"],
+                ["Rooms", "People", "Phones & browsers", "Music mix", "Printers & scanners", "Phone calendars",
+                 "Admin on this phone"],
                 ["Wake words", "Voices", "Greetings"],
                 ["Models", "Chat"],
-                ["Internet", "Voice history"],
+                ["Internet", "Keep voice history", "Command recordings"],
                 ["About & updates", "Health", "App layout", "Advanced"],
             ],
             SettingsGroup.allCases.map { sections(of: $0).map(\.label) }
@@ -126,7 +127,8 @@ final class SettingsPlaceTests: XCTestCase {
             XCTAssertEqual(sections(of: group), sections(of: group, sharedScreen: true))
         }
         // And every other section still lands on itself there.
-        for section in SettingsSection.all where section.key != "people" && section.key != "phone-calendars" {
+        for section in SettingsSection.all
+        where !["people", "phone-calendars", "admin-on-phone"].contains(section.key) {
             XCTAssertEqual(.section(section), settingsPlace(of: section.key, sharedScreen: true))
         }
     }

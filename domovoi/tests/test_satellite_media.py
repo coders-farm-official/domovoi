@@ -78,6 +78,7 @@ def fake_repo(tmp_path, monkeypatch):
                    "domovoi-wifi-adapt"):
         (sat / "scripts" / helper).write_text("#!/bin/sh\n", encoding="utf-8")
     (sat / "_ed25519.py").write_text("# verifier\n", encoding="utf-8")
+    (sat / "xvf_guard.py").write_text("#!/usr/bin/python3 -I\n", encoding="utf-8")
     (sat / "secret.env").write_text("nope", encoding="utf-8")
     (repo / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
     monkeypatch.setattr(cache, "CACHE_ROOT", tmp_path / "cache")
@@ -126,6 +127,9 @@ def test_assemble_and_finalize(fake_repo, tmp_path, monkeypatch):
     assert not (pay / "satellite" / "secret.env").exists()     # denylisted
     assert (pay / "wheels" / "pip-24.0-py3-none-any.whl").is_file()
     assert (pay / "system" / "domovoi-apply-payload").is_file()
+    # The XVF3800 wrapper stage 1 installs root's (satellite/xvf_guard.py).
+    assert (pay / "system" / "domovoi-xvf").read_text(encoding="utf-8").startswith(
+        "#!/usr/bin/python3 -I")
     # The host name before the network (2026-10-12): the unit and its
     # root-owned helper, from the constants net_settings.py carries.
     assert (pay / "system" / "domovoi-hostname.service").read_text(encoding="utf-8").startswith("[Service]")

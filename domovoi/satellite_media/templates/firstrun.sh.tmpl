@@ -537,6 +537,28 @@ if ! skip units; then
   if [ -f "$PAYDIR/system/domovoi-wifi-adapt" ]; then
     install -m 0755 "$PAYDIR/system/domovoi-wifi-adapt" /usr/local/sbin/domovoi-wifi-adapt
   fi
+  # The XVF3800 wrapper (satellite/xvf_guard.py): sudoers names it, never
+  # xvf_host itself. Guarded: a payload from before it lacks it.
+  if [ -f "$PAYDIR/system/domovoi-xvf" ]; then
+    install -m 0755 -o root -g root "$PAYDIR/system/domovoi-xvf" /usr/local/sbin/domovoi-xvf
+  fi
+  # Root's own copy of the code (satellite/root_code.py): the provisioning
+  # unit runs it with the system Python, never the account's ~/domovoi tree.
+  # Copied from the root-owned payload, made root's and writable by nobody
+  # else, and the link pointed at it in one step. Root's boot step keeps it
+  # current from then on (a signed update only).
+  if [ -d "$PAYDIR/satellite" ]; then
+    ROOT_REL=/usr/local/lib/domovoi/root-code.d/card
+    mkdir -p /usr/local/lib/domovoi/root-code.d
+    rm -rf "$ROOT_REL"
+    mkdir -p "$ROOT_REL"
+    cp -r "$PAYDIR/satellite" "$ROOT_REL/"
+    rm -rf "$ROOT_REL/satellite/tests"
+    chown -R root:root /usr/local/lib/domovoi/root-code.d
+    chmod -R go-w /usr/local/lib/domovoi/root-code.d
+    ln -sfn "$ROOT_REL" /usr/local/lib/domovoi/root-code.new
+    mv -Tf /usr/local/lib/domovoi/root-code.new /usr/local/lib/domovoi/root-code
+  fi
   # The verifier that helper checks the server's signature with. Root's
   # copy, not the satellite user's: the helper runs as root on that
   # user's request and must import nothing that user can edit.

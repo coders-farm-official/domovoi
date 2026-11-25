@@ -17,7 +17,7 @@ under "1.5.0 (unreleased)" in the [release notes](RELEASE_NOTES.md) as
 they reach `main`.
 
 - **Rooms with several satellites, and moving a satellite to another
-  room.** Today a room has exactly one satellite.
+  room.** Built for 1.5.0; see [rooms and their satellites](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites).
 
 ## Next
 

@@ -524,11 +524,12 @@ async def _room_words(room: str) -> list[str] | None:
 async def _room_list(room: str, state: str, slugs: list[str], device_max: int | None = None) -> None:
     async with session_scope() as s:
         await s.execute(text(
-            "INSERT INTO room_wake_words (room_id, state, slug, slugs, device_max) "
-            "VALUES (:r, :st, :sl, :sls, :m) ON CONFLICT (room_id) DO UPDATE SET "
-            "state = EXCLUDED.state, slug = EXCLUDED.slug, slugs = EXCLUDED.slugs, "
-            "device_max = EXCLUDED.device_max"),
-            {"r": room, "st": state, "sl": slugs[0], "sls": slugs, "m": device_max})
+            "INSERT INTO room_wake_words (room_id, state, slug, slugs) "
+            "VALUES (:r, :st, :sl, :sls) ON CONFLICT (room_id) DO UPDATE SET "
+            "state = EXCLUDED.state, slug = EXCLUDED.slug, slugs = EXCLUDED.slugs"),
+            {"r": room, "st": state, "sl": slugs[0], "sls": slugs})
+        # The device's limit lives on its own row (V073).
+        await wake_default.record_device_max(s, room, device_max)
 
 
 def test_the_word_is_replaced_in_its_own_place():

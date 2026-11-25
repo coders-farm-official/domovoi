@@ -1944,6 +1944,11 @@ const CORE_NAV_ITEMS = [
   { route: 'videos',     icon: 'film',        label: 'Videos',     order: 15 },
   // order 16 is deliberately free — the Image Generation plugin's Images
   // page slots there (nav_order 16 in its manifest) when installed.
+  // Photos and Faces (1.5.0, photos.jsx): what is in the photos and videos,
+  // and the people in them. Faces is on a launcher only while faces are on
+  // (navItemsFor); 18 belongs to News, in Tools.
+  { route: 'photos',     icon: 'images',      label: 'Photos',     order: 17 },
+  { route: 'faces',      icon: 'scan-face',   label: 'Faces',      order: 19 },
   { route: 'news',       icon: 'newspaper',   label: 'News',       order: 18 },
   // A Settings section since 2026-11-09, on no launcher but the phone bar,
   // and there only when someone here picked it (Settings → App layout):
@@ -1966,7 +1971,7 @@ const CORE_NAV_ITEMS = [
  * groups and a household's own layout into what every launcher draws. */
 const NAV_GROUPS = [
   { id: 'media', label: 'Media', icon: 'circle-play', open: true,
-    routes: ['music', 'podcasts', 'audiobooks', 'videos'] },
+    routes: ['music', 'podcasts', 'audiobooks', 'videos', 'photos', 'faces'] },
   { id: 'tools', label: 'Tools', icon: 'wrench', open: false,
     routes: ['news', 'calendar', 'lists', 'files'] },
 ];
@@ -2391,12 +2396,87 @@ const useAiFeatures = () => {
   return on;
 };
 
+/* The Faces page (1.5.0, photos.jsx; design MEDIA-UNDERSTANDING §6/§8) is
+ * on a launcher only while "Recognize faces" is on, and never for a guest
+ * or on a shared screen: no misleading controls, and the household's faces
+ * are nobody else's. GET /api/faces/status decides. It is the household
+ * tier and refuses a shared screen (403) and a guest (401), so a refusal
+ * means "not here"; a guest isn't asked at all. Unknown (not answered yet)
+ * is hidden. Asked again when a credential changes, the tab comes back
+ * into view, or `media_understanding.changed` arrives (the switch), at
+ * most once every few seconds (progress fires that event often). */
+const FACES_ROUTE = 'faces';
+const FACES_ASK_GAP_MS = 5000;
+const FacesPageStore = (() => {
+  let on = null;
+  let asking = null;
+  let last = 0;
+  let trailing = null;
+  let watching = false;
+  const subs = new Set();
+  const set = (v) => {
+    if (v === on) return;
+    on = v;
+    subs.forEach((fn) => { try { fn(on); } catch { /* one bad subscriber */ } });
+  };
+  const ask = () => {
+    if (asking) return asking;
+    let guest = false;
+    try { guest = typeof isGuestViewer === 'function' && isGuestViewer(); } catch { guest = false; }
+    if (guest) { set(false); return Promise.resolve(false); }
+    last = Date.now();
+    asking = Promise.resolve()
+      .then(() => apiGet('/api/faces/status', { quiet: true }))
+      .then((st) => set(!!(st && st.enabled === true)), () => set(false))
+      .then(() => { asking = null; return on; });
+    return asking;
+  };
+  // A later ask, no sooner than the gap after the last one.
+  const soon = () => {
+    if (trailing) return;
+    const wait = Math.max(0, FACES_ASK_GAP_MS - (Date.now() - last));
+    trailing = setTimeout(() => { trailing = null; ask(); }, wait);
+  };
+  const watch = () => {
+    if (watching) return;
+    watching = true;
+    try { document.addEventListener('visibilitychange', () => { if (!document.hidden) soon(); }); } catch { /* no document */ }
+    try { if (typeof Auth !== 'undefined' && Auth.subscribe) Auth.subscribe(soon); } catch { /* auth.js absent */ }
+    try {
+      if (typeof stateBus !== 'undefined') {
+        stateBus.subscribe((ev) => { if (ev && ev.type === 'media_understanding.changed') soon(); });
+      }
+    } catch { /* data.js absent */ }
+  };
+  return {
+    get: () => on === true,
+    ask, watch,
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+})();
+const facesPageOn = () => FacesPageStore.get();
+// facesPageOn() that re-renders when the answer changes (asks once on mount).
+const useFacesPage = () => {
+  const [on, setOn] = useState(facesPageOn());
+  useEffect(() => {
+    const un = FacesPageStore.subscribe(() => setOn(facesPageOn()));
+    FacesPageStore.watch();
+    FacesPageStore.ask();
+    setOn(facesPageOn());
+    return un;
+  }, []);
+  return on;
+};
+
 // buildNavItems as a launcher shows it: on a shared screen, without the
 // SHARED_SCREEN_HIDDEN pages; with the household's AI features off,
-// without Chat (`ai`: the caller's useAiFeatures(), so it re-renders).
-const navItemsFor = (manifest, { shared = false, ai = aiFeaturesOn() } = {}) =>
+// without Chat (`ai`: the caller's useAiFeatures(), so it re-renders);
+// Faces only while faces are on here (`faces`: FacesPageStore, which the
+// caller's useFacesPage() keeps current), and never on a shared screen.
+const navItemsFor = (manifest, { shared = false, ai = aiFeaturesOn(), faces = facesPageOn() } = {}) =>
   buildNavItems(manifest).filter((it) => !(shared && SHARED_SCREEN_HIDDEN.has(it.route))
-    && !(!ai && AI_ONLY_ROUTES.has(it.route)));
+    && !(!ai && AI_ONLY_ROUTES.has(it.route))
+    && !(it.route === FACES_ROUTE && (shared || !faces)));
 
 /* ---- the phone bar ----------------------------------------------------
  * The tabs along the bottom of a phone-width screen (760px and below).
@@ -2736,6 +2816,7 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   const badges = given || own;
   const shared = useSharedScreen();
   const ai = useAiFeatures();
+  useFacesPage();   // re-renders when Faces comes and goes (navItemsFor reads it)
   const items = navItemsFor(manifest, { shared, ai });
   const strip = phoneBarRoutes(items, usePhoneBar());
   const primaryRoutes = new Set(strip);
@@ -3527,6 +3608,18 @@ const useFirstFieldFocus = (which) => {
   return ref;
 };
 
+/* The code a setup-code QR brought (setup_fragment.js: read from the
+ * address's #setup-code=... and already taken out of it), or ''. The
+ * claim form starts with it in its field and posts it exactly as a typed
+ * code. Never stored anywhere, never put in an address. */
+const setupFragmentCode = () => {
+  try { return (typeof window !== 'undefined' && window.SetupFragment) ? window.SetupFragment.code() : ''; }
+  catch { return ''; }
+};
+const forgetSetupFragment = () => {
+  try { if (typeof window !== 'undefined' && window.SetupFragment) window.SetupFragment.forget(); } catch { /* gone */ }
+};
+
 // The first-run form's own checks, before anything is sent: the same two
 // for the admin setup dialog and the welcome (FirstRunWelcome below).
 const setupFormError = (password, confirm) => {
@@ -3537,7 +3630,7 @@ const setupFormError = (password, confirm) => {
 
 const LoginModal = ({ onClose }) => {
   const [status, setStatus] = useState(Auth.status);
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(setupFragmentCode);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3605,7 +3698,7 @@ const LoginModal = ({ onClose }) => {
     // First-run setup done: "you're all set" and the household token next
     // (FirstRun below), then the internet question, when nobody (the
     // Windows installer, env_bootstrap) has answered it yet.
-    if (needsSetup) FirstRun.claimed();
+    if (needsSetup) { forgetSetupFragment(); FirstRun.claimed(); }
     // Signed in: auth.js has already taken the modal down. A host whose
     // onClose does more than that still hears about it — unless a NEW
     // prompt opened meanwhile, which is not this one to close.
@@ -3967,7 +4060,9 @@ const copyToClipboard = async (text) => {
 const FirstRun = (() => {
   let claiming = false;   // a claim from the welcome is on its way
   let allSet = false;     // a claim just landed in this tab
-  let wanted = false;     // "claim it" asked for the welcome again
+  // "claim it" asked for the welcome again; so did scanning the setup-code
+  // QR (its code is in the form), past an earlier "Not now".
+  let wanted = setupFragmentCode() !== '';
   let putAway = null;     // "Not now" in this page (its key), whatever storage does
   let tokenVersion = 0;   // bumped by every household token saved from "you're all set"
   const subs = new Set();
@@ -4016,7 +4111,7 @@ const welcomeShows = (status, { dismissed = false, wanted = false, claiming = fa
 };
 
 const FirstRunWelcome = () => {
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(setupFragmentCode);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -4058,6 +4153,7 @@ const FirstRunWelcome = () => {
       setErr(loginErrorText(failed));
       return;
     }
+    forgetSetupFragment();
     FirstRun.claimed();
   };
   // Claimed elsewhere while this stood open: coming back to the tab asks
@@ -5391,7 +5487,7 @@ Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
   CORE_NAV_ITEMS, NAV_GROUPS, resolveNavTree, NavGroupsStore,
-  NavLayoutStore, useNavLayout, navLayoutFull, navGroupId, navLayoutEdit, buildNavItems, navItemsFor, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
+  NavLayoutStore, useNavLayout, navLayoutFull, navGroupId, navLayoutEdit, buildNavItems, navItemsFor, FacesPageStore, facesPageOn, useFacesPage, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
   PluginPageFrame, pluginAccentStyle, ToastNotice,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,

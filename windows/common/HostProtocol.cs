@@ -38,6 +38,12 @@ namespace Domovoi.Windows
         public const string AccountName = "domovoi-svc";
         public const string DistroName = "domovoi";
         public const string UnregisterArg = "unregister";
+        // The keep-data uninstall (S3-4): stop the distro and end the
+        // account's WSL session, but don't unregister it, so its disk (the
+        // database, settings and the server's identity) survives for the
+        // uninstaller to keep aside. The registration lives in the account's
+        // own profile and goes with it.
+        public const string KeepArg = "release-keep";
 
         public static string ProgramData
         {
@@ -63,6 +69,12 @@ namespace Domovoi.Windows
         public static string CoreLogFile { get { return Path.Combine(Logs, CoreLog.FileName); } }
         public static string SwapFile { get { return Path.Combine(Wsl, "swap.vhdx"); } }
         public static string DistroDisk { get { return Path.Combine(Distro, "ext4.vhdx"); } }
+        // A house identity backup Setup was given (S3-4), for provision.sh
+        // --restore-identity: in host\in, so the account can read it and
+        // not change it.
+        public static string RestoreIdentityFile { get { return Path.Combine(HostIn, "restore-identity.json"); } }
+        // Where an uninstall keeps a distro disk: C:\ProgramData\Domovoi-kept-<time>.
+        public static string KeptPrefix { get { return ProgramData + "-kept-"; } }
 
         // The install record (the ledger): admin-written, readable by all,
         // outside ProgramData so it outlives a half-finished uninstall.
@@ -91,6 +103,18 @@ namespace Domovoi.Windows
         public string ProvisionSha256;
         public List<string> ProvisionArgs = new List<string>();
         public string WslConfig;
+        // The offline kit's folder on Windows (E:\, or a folder), which the
+        // host mounts in the distro at OfflineKit.MountPoint for each
+        // provision.sh run; null online.
+        public string Kit;
+        // S3-4. A house identity backup for provision.sh --restore-identity:
+        // Paths.RestoreIdentityFile and its SHA-256, or null.
+        public string RestoreIdentity;
+        public string RestoreIdentitySha256;
+        // The distro disk in Paths.Distro is one an earlier install kept
+        // (Setup's "use the kept data"): the host imports it in place
+        // instead of importing the Ubuntu image.
+        public bool ImportInPlace;
 
         public Dictionary<string, object> ToJson()
         {
@@ -106,6 +130,13 @@ namespace Domovoi.Windows
             d["provision_sha256"] = ProvisionSha256;
             d["provision_args"] = ProvisionArgs.ToArray();
             d["wslconfig"] = WslConfig;
+            if (Kit != null) d["kit"] = Kit;
+            if (RestoreIdentity != null)
+            {
+                d["restore_identity"] = RestoreIdentity;
+                d["restore_identity_sha256"] = RestoreIdentitySha256;
+            }
+            if (ImportInPlace) d["import_in_place"] = true;
             return d;
         }
 
@@ -121,6 +152,18 @@ namespace Domovoi.Windows
             j.ProvisionSha256 = Json.Str(d, "provision_sha256");
             j.ProvisionArgs = Json.StrList(d, "provision_args") ?? new List<string>();
             j.WslConfig = Json.Str(d, "wslconfig");
+            j.Kit = Json.Str(d, "kit");
+            if (j.Kit != null)
+            {
+                try { OfflineKit.DrvfsSource(j.Kit); }
+                catch (ArgumentException e) { throw new FormatException("job.json: " + e.Message); }
+            }
+            j.RestoreIdentity = Json.Str(d, "restore_identity");
+            j.RestoreIdentitySha256 = Json.Str(d, "restore_identity_sha256");
+            if (j.RestoreIdentity != null
+                && (!string.Equals(j.RestoreIdentity, Paths.RestoreIdentityFile, StringComparison.OrdinalIgnoreCase) || !Sha256.IsHex(j.RestoreIdentitySha256)))
+                throw new FormatException("job.json: restore_identity must be " + Paths.RestoreIdentityFile + " with its SHA-256");
+            j.ImportInPlace = Json.Bool(d, "import_in_place") == true;
             if (string.IsNullOrEmpty(j.Image) || string.IsNullOrEmpty(j.Provision) || string.IsNullOrEmpty(j.WslConfig))
                 throw new FormatException("job.json: missing image, provision or wslconfig");
             if (!Sha256.IsHex(j.ImageSha256) || !Sha256.IsHex(j.ProvisionSha256))

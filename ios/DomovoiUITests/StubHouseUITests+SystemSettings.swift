@@ -1160,8 +1160,9 @@ enum SystemSettingsStringsUnderTest {
         "A Pi in each room hears you",
         "It's local-first",
     ]
+    /// Signed out on a household phone: ``ServerUpdateWords/buildLineOrPhone``.
     static let serverBuildLine =
-        "The server's build / version identifiers live on the dashboard under About & updates."
+        "The server's build / version identifiers live on the dashboard under About & updates, or sign in as admin on this phone."
     /// ``systemSettingsAppVersionText(version:debugBuild:)``.
     static let versionPrefix = "app version "
     /// What that line reads when the bundle key did not read.

@@ -18,6 +18,7 @@ using System.ServiceProcess;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32;
+using Domovoi.Windows.Tray;
 
 namespace Domovoi.Windows.Helper
 {
@@ -405,9 +406,19 @@ namespace Domovoi.Windows.Helper
             return opts;
         }
 
-        public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp)
+        public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp, string kit,
+            string restoreIdentity, bool importInPlace)
         {
             Ledger l = NeedLedger();
+            // From an offline kit: the image and provision.sh are read off
+            // the stick, each copied only when it matches its pin, and the
+            // host mounts the kit in the distro for provision.sh.
+            string kitRoot = null;
+            if (kit != null)
+            {
+                kitRoot = OfflineKit.NormalizeRoot(kit);
+                OfflineKit.DrvfsSource(kitRoot);
+            }
             if (!Sha256.IsHex(imageSha) || !Sha256.IsHex(provisionSha)) throw new ArgumentException("pins must be SHA-256 hex");
             string imageDest = Path.Combine(Paths.HostIn, ImageName);
             string provDest = Path.Combine(Paths.HostIn, ProvisionName);
@@ -415,7 +426,29 @@ namespace Domovoi.Windows.Helper
             CopyPinned(provision, provDest, provisionSha, o);
 
             // The copy just checked against its pin: what DomovoiHost runs.
-            ProvisionOptions opts = JobOptions(l, repoUrl, commit, trackBranch, File.ReadAllText(provDest, Encoding.UTF8));
+            string scriptText = File.ReadAllText(provDest, Encoding.UTF8);
+            ProvisionOptions opts = JobOptions(l, repoUrl, commit, trackBranch, scriptText);
+            if (kitRoot != null)
+            {
+                opts.OfflineKit = OfflineKit.MountPoint;
+                opts.ScriptHasOfflineKit = ProvisionScript.SupportsOfflineKit(scriptText);
+            }
+            // S3-4: a house identity backup, copied into host\in (the account
+            // reads, can't change it). Only its shape is looked at here; the
+            // service user's python in the distro checks the key pair before
+            // it is used (provision.sh --restore-identity). Never logged.
+            string restoreSha = null;
+            if (restoreIdentity != null)
+            {
+                byte[] doc = KeptData.ReadBackup(restoreIdentity);
+                File.WriteAllBytes(Paths.RestoreIdentityFile, doc);
+                restoreSha = Sha256.OfFile(Paths.RestoreIdentityFile);
+                opts.RestoreIdentity = ProvisionArgs.InDistroRestoreIdentity;
+                opts.ScriptHasRestoreIdentity = ProvisionScript.SupportsRestoreIdentity(scriptText);
+                o.Say("the house identity backup goes to the new install (checked inside before it is used)");
+            }
+            if (importInPlace && !File.Exists(Paths.DistroDisk))
+                throw new InvalidOperationException("--import-in-place: there is no kept disk in " + Paths.Distro + " (adopt-kept first)");
             if (lanIp == "auto")
             {
                 Preflight.LanInfo lan = Preflight.Lan();
@@ -434,6 +467,13 @@ namespace Domovoi.Windows.Helper
             job.ProvisionSha256 = provisionSha;
             job.ProvisionArgs = ProvisionArgs.Build(opts);
             job.WslConfig = WslConfig.Render(w);
+            job.Kit = kitRoot;
+            if (restoreSha != null)
+            {
+                job.RestoreIdentity = Paths.RestoreIdentityFile;
+                job.RestoreIdentitySha256 = restoreSha;
+            }
+            job.ImportInPlace = importInPlace;
 
             // Same inputs, same generation: the host then skips work it did.
             HostJob old = null;
@@ -442,13 +482,15 @@ namespace Domovoi.Windows.Helper
             bool same = old != null && old.ImageSha256 == job.ImageSha256 && old.ProvisionSha256 == job.ProvisionSha256
                 && old.Image == job.Image && old.Provision == job.Provision
                 && string.Join("\n", old.ProvisionArgs.ToArray()) == string.Join("\n", job.ProvisionArgs.ToArray())
-                && old.WslConfig == job.WslConfig;
+                && old.WslConfig == job.WslConfig && old.Kit == job.Kit
+                && old.RestoreIdentitySha256 == job.RestoreIdentitySha256 && old.ImportInPlace == job.ImportInPlace;
             if (!same) l.JobGeneration++;
             if (l.JobGeneration == 0) l.JobGeneration = 1;
             job.Generation = l.JobGeneration;
             job.Attempt = l.JobAttempt;
             Json.WriteFile(Paths.Job, job.ToJson());
             SaveLedger(l);
+            if (kitRoot != null) o.Say("installing from the offline kit at " + kitRoot + "; DomovoiHost mounts it in the distro at " + OfflineKit.MountPoint);
             o.Say("wrote the host's job (generation " + Inv.S(job.Generation) + "): provision.sh " + string.Join(" ", job.ProvisionArgs.ToArray()));
             o.Say("the account's .wslconfig will cap its WSL VM at " + Inv.S(w.MemoryGb) + " GB, mirrored networking");
         }
@@ -498,6 +540,29 @@ namespace Domovoi.Windows.Helper
             return Json.ReadFile(path);
         }
 
+        // L42 (review 2026-11-23): the house identity backup Setup put in
+        // host\in (the house's private key) is deleted once DomovoiHost has
+        // recorded it restored (host-state.json's identity_restored names
+        // its SHA-256). DomovoiHost can only read host\in, so the helper
+        // does it, from Setup's status polls. Silent: the poll's output is
+        // key=value lines Setup reads.
+        static void ForgetUsedRestoreIdentity()
+        {
+            string path = Paths.RestoreIdentityFile;
+            try
+            {
+                if (!File.Exists(path)) return;
+                var state = ReadHostFile(Path.Combine(Paths.HostOut, "host-state.json"));
+                string done = state == null ? null : Json.Str(state, "identity_restored");
+                if (done == null || done != Sha256.OfFile(path)) return;
+                File.Delete(path);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (FormatException) { }
+            catch (InvalidOperationException) { }
+        }
+
         public static void HostStatusOut(Output o)
         {
             string svc = "missing";
@@ -517,6 +582,7 @@ namespace Domovoi.Windows.Helper
             catch (IOException) { }
             if (d == null) { o.Kv("state", "none"); return; }
             HostStatus st = HostStatus.FromJson(d);
+            if (st.State == "ready") ForgetUsedRestoreIdentity();
             o.Kv("state", st.State);
             o.Kv("percent", Inv.S(st.Percent));
             o.Kv("message", st.Message);
@@ -542,7 +608,11 @@ namespace Domovoi.Windows.Helper
         // code=... for Setup's finish page, and nowhere else. The request
         // file (host\in, admin-only) is deleted here; the answer (host\out)
         // is the host's to delete once the request is gone.
-        public static int ReadSetupCode(Output o)
+        //
+        // With --lan-ip (this PC's address on the network, as Setup's
+        // preflight found it), also the setup-code QR (SetupQr.cs): qr_size=
+        // and qr= on stdout, right after code=, and likewise nowhere else.
+        public static int ReadSetupCode(Output o, string lanIp)
         {
             using (var key = new SetupCodeKey())
             {
@@ -567,7 +637,15 @@ namespace Domovoi.Windows.Helper
                     string code = key.Decrypt(Json.Str(resp, "ciphertext"));
                     if (!SetupCode.IsWellFormed(code)) throw new InvalidOperationException("the answer is not a setup code");
                     o.Kv("code", code);
-                    o.LogOnly("read the setup code through DomovoiHost (shown on Setup's last page only)");
+                    string url = SetupQr.ClaimUrl(lanIp, code);
+                    if (url != null)
+                    {
+                        QrCode q = SetupQr.Encode(url);
+                        o.Kv("qr_size", q.Size.ToString(CultureInfo.InvariantCulture));
+                        o.Kv("qr", SetupQr.Bits(q));
+                    }
+                    o.LogOnly("read the setup code through DomovoiHost (shown on Setup's last page only"
+                        + (url != null ? ", with its QR code)" : ")"));
                     return 0;
                 }
                 finally

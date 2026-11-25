@@ -211,8 +211,12 @@ class XvfDsp:
     def _call(self, *args: str) -> tuple[int, str]:
         if self._prefix is None:
             # As the LED driver: a plain call first (a udev rule may grant
-            # USB access), then `sudo -n` (the sudoers entry in PROVISIONING).
-            for prefix in ([self._path], ["sudo", "-n", self._path]):
+            # USB access), then `sudo -n` through the root-owned wrapper
+            # (satellite/xvf_guard.py, which takes exactly these reads and
+            # writes), then the tool on a card not yet switched.
+            from satellite import xvf_guard
+
+            for prefix in ([self._path], *xvf_guard.sudo_prefixes(self._path)):
                 try:
                     rc, out = self._runner([*prefix, PARAMS[0]])
                 except (OSError, subprocess.SubprocessError):
@@ -389,6 +393,18 @@ class XvfDsp:
                     math.isclose(g, w, rel_tol=1e-5, abs_tol=1e-6) for g, w in zip(got, want)):
                 return False
         return True
+
+    def read_current(self) -> dict | None:
+        """The active preset and the five values the chip holds now: the
+        same ``xvf_host`` reads :meth:`apply` makes after a change, nothing
+        written. None when a change held the array too long (busy). For the
+        read-only diagnostics probe (satellite/diagnostics.py)."""
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT):
+            return None
+        try:
+            return {"preset": self._preset, "readback": self._read_all()}
+        finally:
+            self._lock.release()
 
     @property
     def active(self) -> bool:
