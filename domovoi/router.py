@@ -953,6 +953,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # True), so a degraded handler's offline-capable paths keep running
     # and its `fallback_offline` is genuinely reachable for the rest.
     hit = first_fast_path(transcript)
+    # A weather plugin's handler failed this turn: core weather may step in
+    # at the Q&A step below (domovoi/weather.py).
+    weather_plugin_failed = False
     if hit is not None and ctx.capped_capture:
         from domovoi.overheard import NOT_OVER_THE_TV
 
@@ -985,7 +988,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         try:
             response = phone_refusal(handler, ctx)
             if response is None:
-                response = await fp.method(handler, m, ctx, session)
+                response, weather_plugin_failed = await weather.plugin_attempt(
+                    handler, fp.method(handler, m, ctx, session), transcript
+                )
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
         if response is not None:
@@ -1051,7 +1056,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # A capped capture (domovoi/overheard.py) never reaches the tool model:
     # an action must come from a fast path said at its start, not from
     # whatever the TV said after it. (A long one that ended on a pause does.)
-    if not answers_without_tools(transcript) and not ctx.capped_capture:
+    if not answers_without_tools(transcript) and not ctx.capped_capture and not weather_plugin_failed:
         tool_schemas = offered_tool_schemas(transcript)
         tool_client = await _ready_for(ollama_client, ctx, "tool")
         # None: the router model isn't installed — the Q&A model below
@@ -1093,8 +1098,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                 response = await handler.fallback_offline(intent, ctx, session)
             else:
                 try:
-                    response = await handler.execute_from_tool(
-                        tool_call.get("args", {}), ctx, session
+                    response, weather_plugin_failed = await weather.plugin_attempt(
+                        handler,
+                        handler.execute_from_tool(tool_call.get("args", {}), ctx, session),
+                        transcript,
                     )
                 except MPDNotProvisioned:
                     response = _no_speakers_yet(session_id, ctx)
@@ -1130,9 +1137,33 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # opted in) or speak-then-offer.
     category = categorize_question(transcript)
     if category == CATEGORY_WEATHER and weather.plugin_handles_weather():
-        # A weather plugin is installed: core's weather path (the offer and
-        # the lookup) steps aside and the plugin's handler answers.
-        category = None
+        if not weather_plugin_failed:
+            # A weather plugin is installed: core's weather path (the offer
+            # and the lookup) steps aside and the plugin's handler answers.
+            category = None
+        elif not weather.core_may_step_in(ctx):
+            # It failed, and core may not look it up instead: say so.
+            response = Response(
+                text=weather.FAILED_LINE,
+                session_id=session_id,
+                matched_handler=None,
+                matched_path="qa",
+                online=ctx.online,
+                expect_followup=False,
+            )
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler=None,
+                matched_path="qa",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
+        # Else it failed and core's weather path below steps in, with its
+        # own gates ("Always" looks it up, "Sometimes" asks first).
     # "Always" means the household already said yes to the internet: a
     # weather question goes straight to the lookup, no "want me to check?".
     always_weather = (
@@ -1163,7 +1194,8 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             dc = HANDLER_BY_NAME.get("double_check")
             if dc is not None and hasattr(dc, "answer_question_from_web"):
                 response = await dc.answer_question_from_web(
-                    intent.transcript, ctx, session
+                    intent.transcript, ctx, session,
+                    weather_plugin_failed=weather_plugin_failed,
                 )
                 response.matched_handler = dc.name
                 response.matched_path = "auto_search"

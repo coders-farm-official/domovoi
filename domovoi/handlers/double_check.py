@@ -734,7 +734,8 @@ class DoubleCheckHandler(Handler):
 
     # ─── Question-mode answer-from-web (proactive offer + auto-search) ─
     async def answer_question_from_web(
-        self, question: str, ctx: Context, session: AsyncSession
+        self, question: str, ctx: Context, session: AsyncSession,
+        *, weather_plugin_failed: bool = False,
     ) -> Response:
         """Public entry for the router's auto-search short-circuit.
 
@@ -742,9 +743,13 @@ class DoubleCheckHandler(Handler):
         public name. The router calls this when ``web_search_prefs.
         auto_search = TRUE`` for the matched category; the
         ``self_doubt_offer`` confirmation path calls the underscore
-        version internally.
+        version internally. ``weather_plugin_failed``: the weather plugin
+        already failed this turn, so a weather question goes straight to
+        core's lookup (domovoi/weather.py, ``answer_for``).
         """
-        return await self._answer_question_from_web(question, ctx, session)
+        return await self._answer_question_from_web(
+            question, ctx, session, weather_plugin_failed=weather_plugin_failed
+        )
 
     def _ai_off(self, ctx: Context) -> Response | None:
         """The fixed reply while AI features are off: a fact-check or a
@@ -759,13 +764,18 @@ class DoubleCheckHandler(Handler):
         )
 
     async def _answer_question_from_web(
-        self, question: str, ctx: Context, session: AsyncSession
+        self, question: str, ctx: Context, session: AsyncSession,
+        *, weather_plugin_failed: bool = False,
     ) -> Response:
         off = self._ai_off(ctx)
         if off is not None:
             return off
         if categorize_question(question) == CATEGORY_WEATHER:
-            spoken = await weather.answer_weather(question, ctx)
+            # The same source the voice turn uses: a weather plugin first,
+            # core's lookup only when it fails (domovoi/weather.py).
+            spoken = await weather.answer_for(
+                question, ctx, session, plugin_failed=weather_plugin_failed
+            )
             if spoken:
                 return Response(
                     text=spoken,
