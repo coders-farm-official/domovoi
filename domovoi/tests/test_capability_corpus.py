@@ -302,6 +302,8 @@ def test_sandbox_refuses_the_database_and_the_model() -> None:
     case = next(c for c in CASES if c.id == "10.1")  # the timer: writes the database
     turn, _ = _run(case)
     assert turn.outcome == "needs_db"
-    case = next(c for c in CASES if c.id == "3.1")   # no fast path: the tool model
+    # No fast path: the tool model. (3.1, "can you order pizza?", was the
+    # example until the capability answers took it, N2.)
+    case = next(c for c in CASES if c.id == "2.3")
     turn, _ = _run(case)
     assert turn.outcome == "needs_model"
