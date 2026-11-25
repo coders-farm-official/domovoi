@@ -317,6 +317,58 @@ async def test_chat_lists_the_plugins_too() -> None:
     assert reply == "One plugin is on: Sleep."
 
 
+# ─── "Delete everything you know about me" in chat (15.20) ────────────────
+
+@pytest.mark.parametrize("said", [
+    "Delete everything you know about me", "delete everything you know about me please",
+    "Can you forget everything about me?", "Forget me", "forget all about me",
+    "Delete all my data", "erase everything you have on me", "wipe all the data about me",
+])
+def test_forget_everything_is_recognised(said: str) -> None:
+    assert hf.FORGET_ALL_RE.match(hf.normalize(said))
+
+
+@pytest.mark.parametrize("said", [
+    "forget that I like jazz", "forget it", "delete everything", "delete my list",
+    "what do you remember about me", "forget the timer", "remember that I like jazz",
+])
+def test_one_memory_and_other_deletes_are_not_it(said: str) -> None:
+    assert not hf.FORGET_ALL_RE.match(hf.normalize(said))
+
+
+def test_the_memory_step_never_takes_forget_everything() -> None:
+    """chat_memory runs first in chat.py: none of these is its command, so
+    the house's answer is the one said."""
+    from web.backend.api import chat_memory
+
+    for said in ("Delete everything you know about me", "Forget me", "Delete all my data"):
+        assert chat_memory.command(said) is None, said
+
+
+@pytest.mark.asyncio
+async def test_chat_points_to_the_real_flow_and_claims_nothing() -> None:
+    import re
+
+    reply = await _chat("Delete everything you know about me")
+    assert reply == hf.FORGET_ALL_CHAT
+    assert "haven't deleted anything" in reply
+    assert '"forget me"' in reply and "own voice" in reply
+    assert "forget person" in reply and "Settings → Household → People" in reply
+    assert not re.search(r"\bi'?ve (?:deleted|removed|forgotten|erased)|has been (?:deleted|removed)"
+                         r"|\bforgetting\b|\bdone\b", reply, re.I)
+
+
+def test_the_answer_names_what_the_voice_flow_and_the_page_really_have() -> None:
+    from pathlib import Path
+
+    from domovoi.handlers import voice_profile
+
+    repo = Path(__file__).resolve().parents[2]
+    assert voice_profile._FORGET_RE.match("forget me")
+    people = (repo / "web" / "static" / "people.jsx").read_text(encoding="utf-8")
+    assert "forget person" in people
+
+
 # ─── The web chat: these never reach the chat model ──────────────────────
 
 from domovoi.tests.conftest import requires_db  # noqa: E402

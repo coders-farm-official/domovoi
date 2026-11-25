@@ -1297,6 +1297,37 @@ async def plugins_answer(*, scope: Any = None) -> str:
     return help_facts.spoken_plugins(built.plugins)
 
 
+# "Delete everything you know about me" in typed chat (15.20): the model
+# said "Forgetting that…" and deleted nothing. Not done from a chat, on
+# purpose: forgetting a person deletes their voice, profile, memories and
+# what they said (voice_profile's "forget me"), and by voice that is held
+# to the person's own voice, asked first and confirmed from the same room.
+# A typed chat can't tell who is typing: a phone's link to a person ("this
+# is me", chat_memory) is a label anyone in the house can set, so a chat
+# that deleted on it could forget the wrong person. The answer says so,
+# that nothing was deleted, and the two real ways: "forget me" in your own
+# voice, or an admin's "forget person" on the People page. One memory at a
+# time stays typed: "forget that …" (chat_memory).
+_FORGET_VERB = r"(?:delete|erase|wipe|remove|clear|forget|get rid of|purge)"
+FORGET_ALL_RE = re.compile(
+    r"^(?:(?:can|could|would|will) you(?: please)? |please |i want you to |i'?d like you to )?(?:"
+    rf"{_FORGET_VERB} (?:everything|all|anything|whatever|all the (?:stuff|things|data|info(?:rmation)?))"
+    r"(?: (?:that )?you(?:'ve| have)? (?:know|have|remember|keep|kept|saved|stored|learned|got))?"
+    r" (?:about|on|of) (?:me|us)"
+    rf"|{_FORGET_VERB} (?:all )?(?:of )?my (?:data|personal data|info|information|profile|everything)"
+    r"|forget (?:me|my voice|who i am|all about me)"
+    r"|delete me"
+    r")(?:,? (?:please|now|for me))?\Z"
+)
+FORGET_ALL_CHAT = (
+    "I can't do that from a typed chat, so I haven't deleted anything: a chat can't tell who's "
+    "typing. To have me forget everything about you, say \"forget me\" in your own voice in any "
+    "room. I'll ask first, then delete your voice, your profile, what I remember about you and "
+    "what you've said to me. An admin can also press forget person on your entry in "
+    "Settings → Household → People. To drop one thing, type \"forget that\" and what it is."
+)
+
+
 # ─── The fallback: a fixed privacy answer, never a model's ────────────────
 
 _PRIVACY_WORDS_RE = re.compile(
@@ -1402,6 +1433,8 @@ async def chat_reply(
     a live admin sign-in (the server's own check), asked only for an
     admin sign-in question; without it the state is unknown."""
     t = normalize(message)
+    if FORGET_ALL_RE.match(t):
+        return FORGET_ALL_CHAT
     secret = secret_asked(t)
     if secret is not None:
         return secret_answer(secret)
