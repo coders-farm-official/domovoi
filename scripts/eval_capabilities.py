@@ -99,7 +99,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 VERDICTS = ("CAN", "CANT", "DEPENDS", "ADMIN", "DO_IT", "EXACT")
-WHERE = ("voice", "chat", "phone")
+WHERE = ("voice", "chat", "playbox", "phone")
 KINDS = ("question", "command")
 ASKERS = ("member", "proven_admin", "guest", "room_mode_phone", "shared_screen")
 INTERNET = ("always", "sometimes", "never")
@@ -121,6 +121,7 @@ HOUSE_KEYS = {
     "quiet_hours_active", "friend_houses", "friends", "asker", "admin_session",
     "command_recordings", "voice_history_days", "music_library", "listenbrainz",
     "offline_kit", "timers", "alarms", "list_writes", "secrets", "update_channel",
+    "people", "devices",
 }
 
 
@@ -148,6 +149,18 @@ class Case:
     skip_reason: str | None = None
     stub: bool = False
     note: str = ""
+    # Typed chat: the phone or browser it is typed on (a device id of the
+    # house's ``devices``), and the thread (turns in one thread see each
+    # other). None: the house's default device for its asker.
+    device: str | None = None
+    thread: str = "t1"
+    # Turns said first, in order ({"say", "device"?, "thread"?}); only the
+    # case's own utterance is scored.
+    before: list[dict[str, Any]] = field(default_factory=list)
+    # After the turn: memories that must be saved / must be gone, as
+    # [person_id or null, regex on the memory's text].
+    stored: list[list[Any]] = field(default_factory=list)
+    not_stored: list[list[Any]] = field(default_factory=list)
 
 
 def case_group(case_id: str) -> int:
@@ -171,6 +184,9 @@ def load_corpus(path: Path = DEFAULT_CORPUS) -> list[Case]:
                 needs_change=c.get("needs_change"), status=c.get("status"),
                 skip_reason=c.get("skip_reason"), stub=bool(c.get("stub")),
                 note=c.get("note", ""),
+                device=c.get("device"), thread=c.get("thread", "t1"),
+                before=list(c.get("before") or []),
+                stored=list(c.get("stored") or []), not_stored=list(c.get("not_stored") or []),
             )
         )
     return out
@@ -552,8 +568,12 @@ CURRENT: dict[str, Any] = {"house": {}, "lenient": False}
 class _Rows:
     """Enough of a SQLAlchemy result for the reads below."""
 
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
+    def __init__(self, rows: list[dict[str, Any]], rowcount: int | None = None) -> None:
         self._rows = rows
+        self.rowcount = len(rows) if rowcount is None else rowcount
+
+    def scalar_one(self) -> Any:
+        return self.scalar()
 
     def scalar(self) -> Any:
         return next(iter(self._rows[0].values())) if self._rows else None
@@ -638,6 +658,76 @@ def _timer_rows(house: dict) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: r["expires_at"])
 
 
+# The house's state a case changes, kept in memory for one case: the
+# memories (from the fixture's ``memory_items``) and typed-chat threads.
+STATE: dict[str, Any] = {}
+
+
+def reset_state(house: dict) -> None:
+    speaker = int((house.get("speaker") or {}).get("person_id", 1))
+    STATE.clear()
+    STATE["memories"] = [
+        {"id": i, "person_id": int(m.get("person_id", speaker)), "body": m["fact"]}
+        for i, m in enumerate(house.get("memory_items") or [], start=1)
+    ]
+    STATE["next_id"] = len(STATE["memories"]) + 1
+    STATE["threads"] = {}      # thread name -> [{"id", "role", "stats"}]
+    STATE["thread_ids"] = {}   # thread name -> int
+    STATE["next_row"] = 1
+
+
+def _mem_insert(h: dict, p: dict) -> list[dict[str, Any]]:
+    mid = STATE["next_id"]
+    STATE["next_id"] += 1
+    STATE["memories"].append({"id": mid, "person_id": int(p["person_id"]), "body": p["body"],
+                              "status": p.get("status", "active")})
+    return [{"id": mid}]
+
+
+def _mem_active(h: dict, p: dict) -> list[dict[str, Any]]:
+    return [{"id": m["id"], "body": m["body"], "topic": None, "source": "explicit"}
+            for m in STATE["memories"]
+            if m["person_id"] == int(p["pid"]) and m.get("status", "active") == "active"]
+
+
+def _mem_fuzzy(h: dict, p: dict) -> list[dict[str, Any]]:
+    frag = str(p["pat"]).strip("%").lower()
+    hits = [m for m in STATE["memories"]
+            if m["person_id"] == int(p["pid"]) and m.get("status", "active") == "active"
+            and frag in m["body"].lower()]
+    hits.sort(key=lambda m: (len(m["body"]), m["id"]))
+    return [{"id": m["id"], "body": m["body"]} for m in hits[: int(p.get("limit", 5))]]
+
+
+def _mem_delete(h: dict, p: dict) -> tuple[list[dict[str, Any]], int]:
+    before = len(STATE["memories"])
+    STATE["memories"] = [m for m in STATE["memories"]
+                         if not (m["id"] == int(p["id"]) and m["person_id"] == int(p["pid"]))]
+    return [], before - len(STATE["memories"])
+
+
+def _device_row(h: dict, p: dict) -> list[dict[str, Any]]:
+    for d in h.get("devices") or []:
+        if d["id"] == p.get("d"):
+            return [{"owner_person_id": d.get("person_id"), "shared_screen": bool(d.get("shared_screen"))}]
+    return []
+
+
+def _thread_rows(p: dict) -> list[dict[str, Any]]:
+    for name, tid in STATE["thread_ids"].items():
+        if tid == int(p["t"]):
+            return STATE["threads"][name]
+    return []
+
+
+def _previous_chat_row(h: dict, p: dict) -> list[dict[str, Any]]:
+    rows = [r for r in _thread_rows(p) if r["id"] < int(p["u"])]
+    if not rows:
+        return []
+    r = rows[-1]
+    return [{"role": r["role"], "stats": r.get("stats")}]
+
+
 # The database reads a house fixture answers: (what, SQL pattern, rows).
 FIXTURE_READS: list[tuple[str, re.Pattern[str], Any]] = [
     ("home location", re.compile(r"FROM household_settings WHERE key", re.I),
@@ -655,6 +745,16 @@ FIXTURE_READS: list[tuple[str, re.Pattern[str], Any]] = [
      lambda h, p: _alarm_rows(h)),
     ("timers", re.compile(r"SELECT expires_at, created_at, label FROM timers", re.I),
      lambda h, p: _timer_rows(h)),
+    ("memory saved", re.compile(r"INSERT INTO memories", re.I), _mem_insert),
+    ("memories", re.compile(r"SELECT id, body, topic, source FROM memories WHERE person_id = :pid "
+                            r"AND status = 'active'", re.I), _mem_active),
+    ("memory search", re.compile(r"SELECT id, body FROM memories .*ILIKE :pat", re.I), _mem_fuzzy),
+    ("memory deleted", re.compile(r"DELETE FROM memories WHERE id = :id AND person_id = :pid", re.I),
+     _mem_delete),
+    ("device's person", re.compile(r"SELECT owner_person_id, shared_screen FROM devices", re.I),
+     _device_row),
+    ("chat's previous row", re.compile(r"SELECT role, stats FROM chat_messages WHERE thread_id", re.I),
+     _previous_chat_row),
     ("room board", re.compile(r"SELECT board FROM satellites", re.I),
      lambda h, p: [{"board": "android_room" if h.get("asker") == "room_mode_phone" else "pi"}]),
 ]
@@ -671,7 +771,10 @@ class FixtureSession:
         house = CURRENT["house"]
         for _what, rx, rows in FIXTURE_READS:
             if rx.search(sql):
-                return _Rows(rows(house, params if isinstance(params, dict) else {}))
+                got = rows(house, params if isinstance(params, dict) else {})
+                if isinstance(got, tuple):   # (rows, rowcount): a write
+                    return _Rows(*got)
+                return _Rows(got)
         if CURRENT["lenient"]:
             TOUCHES.empty.append(sql[:70])
             return _Rows([])
@@ -998,6 +1101,7 @@ def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -
         ]
 
     CURRENT.update(house=house, lenient=lenient, catalogue=catalogue)
+    reset_state(house)
     added: list[tuple[str, str]] = []
     with egress.override_policy(house.get("internet", "always")), ai_features.override(
         bool(house.get("ai", True))
@@ -1087,6 +1191,8 @@ class Turn:
     handler: str | None = None
     path: str | None = None
     detail: str = ""
+    # The case's stored / not_stored checks that failed (check_state).
+    state_problems: list[str] = field(default_factory=list)
 
 
 async def run_voice_turn(utterance: str, ctx: Any) -> Turn:
@@ -1099,18 +1205,54 @@ async def run_voice_turn(utterance: str, ctx: Any) -> Turn:
     return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path)
 
 
-async def run_chat_turn(utterance: str, *, model_url: str | None, model: str | None) -> Turn:
-    """The home-server chat (web/backend/api/chat.py send_message): refused
-    with AI off; then the house's own answer (house_facts.chat_reply, the
-    privacy and "can you …?" matcher), then the help desk's fixed reply,
-    then the model."""
+def default_device(house: dict) -> str | None:
+    """The phone or browser a typed message comes from when the case names
+    none: the kitchen tablet on a shared screen, an unlinked browser for a
+    guest, else the asker's own linked phone."""
+    asker = house.get("asker", "member")
+    devices = house.get("devices") or []
+    if asker == "shared_screen":
+        return next((d["id"] for d in devices if d.get("shared_screen")), None)
+    if asker == "guest":
+        return next((d["id"] for d in devices if not d.get("person_id") and not d.get("shared_screen")), None)
+    pid = int((house.get("speaker") or {}).get("person_id", 1))
+    return next((d["id"] for d in devices if d.get("person_id") == pid), None)
+
+
+def _chat_row(thread: str, role: str, stats: dict[str, Any] | None = None) -> int:
+    STATE["thread_ids"].setdefault(thread, len(STATE["thread_ids"]) + 1)
+    rid = STATE["next_row"]
+    STATE["next_row"] += 1
+    STATE["threads"].setdefault(thread, []).append({"id": rid, "role": role, "stats": stats})
+    return rid
+
+
+async def run_chat_turn(
+    utterance: str, house: dict, *, device: str | None, thread: str,
+    model_url: str | None, model: str | None,
+) -> Turn:
+    """The home-server chat as web/backend/api/chat.py send_message runs a
+    typed message: refused with AI off (before anything is stored); the
+    memory step (chat_memory.reply, for the device's person); the house's
+    own answer (house_facts.chat_reply); a help turn (an admin's job is
+    answered by who is asking: a proven admin is this house's asker
+    "proven_admin", a live admin sign-in); then the model."""
     from domovoi import ai_features, house_facts
     from domovoi.clients import ollama as ollama_mod
     from domovoi.config import settings
+    from domovoi.help_desk import admin_tasks
     from domovoi.help_desk import answer as help_answer
+    from web.backend.api import chat_memory
 
     if ai_features.turned_off():
         return Turn("reply", ai_features.TURNED_OFF_REASON, None, "chat_refused")
+    user_row = _chat_row(thread, "user")
+    tid = STATE["thread_ids"][thread]
+    mem = await chat_memory.reply(FixtureSession(), thread_id=tid, content=utterance,
+                                  before_id=user_row, device_id=device)
+    if mem is not None:
+        _chat_row(thread, "assistant", mem.stats)
+        return Turn("reply", mem.text, "chat_memory", "chat")
 
     async def previous_assistant() -> None:
         return None
@@ -1120,25 +1262,69 @@ async def run_chat_turn(utterance: str, *, model_url: str | None, model: str | N
         previous_assistant=previous_assistant,
     )
     if fact is not None:
+        _chat_row(thread, "assistant", {"model_role": "house_facts"})
         return Turn("reply", fact, "house_facts", "chat")
-    if model_url is None:
-        return Turn("needs_model", detail="the chat model")
     system = ollama_mod.chat_system_prompt(None)
-    if help_answer.looks_like_help(utterance):
+    if help_answer.looks_like_help(utterance) or admin_tasks.match(utterance) is not None:
         from web.backend.api import help as help_api
 
-        turn = await help_api.help_turn_for(utterance, help_thread=False)
+        try:
+            turn = await help_api.help_turn_for(
+                utterance, help_thread=False, admin=house.get("asker") == "proven_admin")
+        except Exception:  # noqa: BLE001 - chat._help_turn: the chat answers as before
+            turn = None
         if turn is not None:
             system = help_answer.system_prompt(turn, bot=settings.bot_name)
             if not turn.covered:
-                return Turn("reply", help_answer.not_covered_answer(turn), None, "chat_help")
+                return Turn("reply", help_answer.not_covered_answer(turn), "help", "chat_help")
+            if turn.task_answer is not None:
+                _chat_row(thread, "assistant", {"model_role": "help"})
+                return Turn("reply", turn.task_answer, "help", "chat_help")
+    if model_url is None:
+        return Turn("needs_model", detail="the chat model")
     import ollama
 
     resp = await ollama.AsyncClient(host=model_url).chat(
         model=model or settings.ollama_model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": utterance}],
     )
+    _chat_row(thread, "assistant", {"model_role": "chat"})
     return Turn("reply", resp["message"]["content"], None, "chat")
+
+
+async def run_playbox_turn(utterance: str, house: dict) -> Turn:
+    """The dashboard's play box (main._admin_route_intent): route() with
+    no answer back, in the house's first room, and ``proven_admin`` only
+    when the request carries a live admin sign-in (this house's asker is
+    "proven_admin"); a device token, a guest or the cookie alone is a
+    member."""
+    from domovoi.models import Intent
+    from domovoi.router import route
+
+    ctx = build_context(house).model_copy(update={
+        "answerable": False, "proven_admin": house.get("asker") == "proven_admin",
+        "person_id": None, "voice_outcome": None, "voice_candidates": [], "trigger": None,
+    })
+    resp = await route(Intent(transcript=utterance, room_id=ctx.room_id), ctx, FixtureSession())
+    return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path)
+
+
+def check_state(case: Case) -> list[str]:
+    """The case's ``stored`` / ``not_stored`` memories, after its turn."""
+    out = []
+    mems = STATE.get("memories") or []
+
+    def found(pid: Any, pat: str) -> bool:
+        return any((pid is None or m["person_id"] == pid) and re.search(pat, m["body"], re.I)
+                   for m in mems)
+
+    for pid, pat in case.stored:
+        if not found(pid, pat):
+            out.append(f"no memory /{pat}/ saved for person {pid}")
+    for pid, pat in case.not_stored:
+        if found(pid, pat):
+            out.append(f"memory /{pat}/ of person {pid} is stored")
+    return out
 
 
 async def run_case(
@@ -1149,12 +1335,23 @@ async def run_case(
         return Turn("skipped", detail=case.skip_reason)
     TOUCHES.clear()
     lenient = model_url is not None
+
+    async def one(say: str, device: str | None, thread: str) -> Turn:
+        if case.where == "voice":
+            return await run_voice_turn(say, build_context(house))
+        if case.where == "playbox":
+            return await run_playbox_turn(say, house)
+        return await run_chat_turn(say, house, device=device or default_device(house),
+                                   thread=thread, model_url=model_url, model=model)
+
     with applied(house, catalogue, lenient=lenient):
         try:
-            if case.where == "voice":
-                turn = await run_voice_turn(case.utterance, build_context(house))
-            else:
-                turn = await run_chat_turn(case.utterance, model_url=model_url, model=model)
+            said_before = []
+            for b in case.before:
+                t = await one(b["say"], b.get("device", case.device), b.get("thread", case.thread))
+                said_before.append(f"{b['say']!r} -> {t.text!r}")
+            turn = await one(case.utterance, case.device, case.thread)
+            state_problems = check_state(case)
         except NeedsModel as e:
             return Turn("needs_model", detail=str(e))
         except NeedsDB as e:
@@ -1177,6 +1374,9 @@ async def run_case(
     if TOUCHES.empty:
         turn.detail = (turn.detail + "; " if turn.detail else "") + (
             f"{len(TOUCHES.empty)} database read(s) answered empty, e.g. {TOUCHES.empty[0]}")
+    if said_before:
+        turn.detail = (turn.detail + "; " if turn.detail else "") + "before: " + " / ".join(said_before)
+    turn.state_problems = state_problems
     return turn
 
 
@@ -1215,6 +1415,7 @@ def score(case: Case, turn: Turn, house: dict, tree: SettingsTree, catalogue: di
     problems = check_verdict(case, turn.text, turn.handler)
     if turn.outcome == "raised":
         problems.insert(0, f"handler raised ({turn.detail}); the turn is silent")
+    problems += turn.state_problems
     problems += global_problems(case, turn.text, house, tree, catalogue)
     r.problems = list(dict.fromkeys(problems))
     ok = not r.problems

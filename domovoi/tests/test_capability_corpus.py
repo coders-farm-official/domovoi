@@ -59,7 +59,18 @@ STUB_CASES = [c for c in CASES if c.stub]
 # expectation and aren't an open N item, reported for triage (test tooling
 # never changes the product to make a case pass). Expected failures here so
 # CI stays green; remove a line once fixed (it shows up as XPASS first).
+_NO_MEMORY_SWITCH = (
+    "the list expects a memory on/off switch ('memory is off'); there is none "
+    "(chat_memory.py: only the implicit offers can be turned off)"
+)
 STUB_FINDINGS = {
+    "6.9": "'can you remember things about me?' is SAVED as a memory ('things about me'): "
+           "handlers/memory.py _REMEMBER_RE takes the question after the router strips 'can you'",
+    "6.10": "the same save as 6.9; and " + _NO_MEMORY_SWITCH,
+    "9.9": "the memory list doesn't say how to forget one (handlers/memory.py _list_memories)",
+    "9.10": _NO_MEMORY_SWITCH,
+    "21.10": "the AI-off chat refusal names 'Settings → Models' (ai_features.TURNED_OFF_REASON); "
+             "the place is Settings → Chat & AI → Models",
 }
 
 
@@ -77,6 +88,14 @@ def test_corpus_ids_are_unique_and_numbered() -> None:
 def test_case_is_well_formed(case) -> None:
     assert case.utterance.strip()
     assert case.where in ev.WHERE
+    if case.device is not None:
+        assert case.where == "chat"
+        assert case.device in {d["id"] for d in HOUSES[case.house]["devices"]}, case.device
+    for b in case.before:
+        assert set(b) <= {"say", "device", "thread"} and b["say"].strip()
+    for pid, pat in case.stored + case.not_stored:
+        assert pid is None or isinstance(pid, int)
+        re.compile(pat)
     assert case.expect in ev.VERDICTS
     assert case.kind in ev.KINDS
     assert case.house in HOUSES, f"{case.id}: no house fixture {case.house!r}"
@@ -107,7 +126,7 @@ def test_the_list_is_covered() -> None:
     """Every group of the question list is in the corpus, the trust groups
     and DO IT concretely enough to check without a judge."""
     groups = {c.group for c in CASES}
-    assert groups == set(range(1, 14)) - {14} | set(range(15, 21))
+    assert groups == set(range(1, 14)) | set(range(15, 22))
     for g in (10, 16, 17, 18, 20):
         concrete = [c for c in CASES if c.group == g and not c.judge and not c.skip_reason]
         assert concrete, f"group {g} has no concrete case"
@@ -287,6 +306,33 @@ def test_stub_flags_are_honest() -> None:
         if turn.outcome in ("reply", "raised"):
             answered.append(case.id)
     assert sorted(answered) == sorted(c.id for c in STUB_CASES)
+
+
+def _reply(case_id: str) -> str:
+    turn, _ = _run(next(c for c in CASES if c.id == case_id))
+    assert turn.outcome == "reply", (case_id, turn.outcome, turn.detail)
+    return turn.text
+
+
+@pytest.mark.parametrize(
+    ("member", "admin"),
+    [("8.7b", "8.2"), ("8.3", "8.4"), ("8.5", "8.6"), ("8.7h", "8.7i"), ("8.7c", "8.2")],
+)
+def test_a_proven_admin_hears_other_words_than_a_member(member: str, admin: str) -> None:
+    """N1: the same admin's job, asked by a member (or a play box / chat
+    with no live admin sign-in) and by a proven admin, gets different
+    words: who and where, then the steps."""
+    assert _reply(member) != _reply(admin)
+
+
+def test_voice_is_never_a_proven_admin() -> None:
+    """The house owner recognised by voice hears the member answer."""
+    assert _reply("8.7a").startswith(_reply("8.7b"))
+
+
+def test_can_you_download_videos_is_one_answer_for_everyone() -> None:
+    """The capability table's answer, the same for a member and an admin."""
+    assert _reply("8.7e") == _reply("8.7d") == _reply("4.33")
 
 
 def test_findings_are_stub_cases_without_a_known_gap() -> None:

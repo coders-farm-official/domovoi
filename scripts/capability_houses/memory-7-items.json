@@ -3,25 +3,32 @@
   "note": "Seven remembered facts about the asker.",
   "memory_items": [
     {
-      "fact": "fact 1"
+      "fact": "fact 1",
+      "person_id": 1
     },
     {
-      "fact": "fact 2"
+      "fact": "fact 2",
+      "person_id": 1
     },
     {
-      "fact": "fact 3"
+      "fact": "fact 3",
+      "person_id": 1
     },
     {
-      "fact": "fact 4"
+      "fact": "fact 4",
+      "person_id": 1
     },
     {
-      "fact": "fact 5"
+      "fact": "fact 5",
+      "person_id": 1
     },
     {
-      "fact": "fact 6"
+      "fact": "fact 6",
+      "person_id": 1
     },
     {
-      "fact": "fact 7"
+      "fact": "fact 7",
+      "person_id": 1
     }
   ]
 }

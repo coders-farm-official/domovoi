@@ -23,7 +23,11 @@
     "                failing is expected",
     "  status      - verified (checked in code) | unverified (as the list marks it)",
     "  skip_reason - never run (phone app, 1.5.0, multi-turn, non-turn inputs)",
-    "  stub        - answered without a model or database: the CI test runs it"
+    "  stub        - answered without a model or database: the CI test runs it",
+    "  device      - typed chat: the phone or browser (the house's devices); thread: its",
+    "                thread; before: turns said first ({say, device?, thread?})",
+    "  stored / not_stored - after the turn: [person_id or null, regex] memories that",
+    "                must be saved / must be gone (the sandbox's in-memory store)"
   ],
   "cases": [
     {
@@ -787,10 +791,9 @@
       "expect": "DEPENDS",
       "kind": "question",
       "must_include": [
-        "no offline library|not set up|isn'?t set up|download"
+        "no offline library is set up yet, or it isn'?t working"
       ],
-      "judge": true,
-      "rubric": "Says no offline library is set up yet; an admin downloads one.",
+      "note": "no library downloaded, or a fault: core can't tell the two apart (F2)",
       "stub": true
     },
     {
@@ -911,10 +914,9 @@
       "expect": "ADMIN",
       "kind": "question",
       "must_include": [
-        "plugins page"
+        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
       ],
-      "needs_change": "N1",
-      "note": "'An admin can add video downloads from the Plugins page.' (Q1)",
+      "note": "the capability table's one answer, the same for members and admins",
       "stub": true
     },
     {
@@ -941,12 +943,13 @@
       "utterance": "Can you search the web?",
       "where": "voice",
       "house": "internet-sometimes",
-      "expect": "DEPENDS",
+      "expect": "CAN",
       "kind": "question",
-      "must_include": [
-        "\\bask"
+      "must_not_include": [
+        "ask (?:you )?(?:first|before)",
+        "want me to|should i|shall i"
       ],
-      "note": "sometimes: asks first",
+      "note": "Sometimes changes defaults; it does NOT ask before lookups (F3)",
       "stub": true
     },
     {
@@ -980,9 +983,9 @@
       "expect": "DEPENDS",
       "kind": "question",
       "must_include": [
-        "\\bask"
+        "I read the headlines from the last time the connection was up\\. I ask before reading a whole article online\\."
       ],
-      "note": "sometimes: asks first",
+      "note": "the headlines already fetched; only reading a whole article online asks first (F3)",
       "stub": true
     },
     {
@@ -1014,12 +1017,13 @@
       "utterance": "Restaurants near me?",
       "where": "voice",
       "house": "internet-sometimes",
-      "expect": "DEPENDS",
+      "expect": "DO_IT",
       "kind": "command",
-      "must_include": [
+      "must_not_include": [
         "want me to|should i|shall i|ok(?:ay)? to"
       ],
-      "note": "asks before going online"
+      "judge": true,
+      "rubric": "Looks it up when the connection is up; Sometimes doesn't ask first (F3)."
     },
     {
       "id": "5.9",
@@ -1053,7 +1057,7 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "sometimes|\\bask"
+        "sometimes"
       ],
       "note": "the house's own words for its internet setting",
       "stub": true
@@ -1210,7 +1214,8 @@
       "kind": "question",
       "must_include": [
         "remember that|forget"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "6.10",
@@ -1223,7 +1228,8 @@
         "memory",
         "admin"
       ],
-      "note": "memory is off; an admin can turn it on (Q2)"
+      "note": "memory is off; an admin can turn it on (Q2)",
+      "stub": true
     },
     {
       "id": "6.11",
@@ -1554,6 +1560,9 @@
       "house": "base",
       "expect": "ADMIN",
       "kind": "question",
+      "must_include": [
+        "An admin adds rooms, on the dashboard: Settings → Household → Rooms\\."
+      ],
       "stub": true
     },
     {
@@ -1564,12 +1573,15 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "Settings\\s*(?:→|->|>)\\s*Household\\s*(?:→|->|>)\\s*Rooms|add a room"
+        "Settings\\s*(?:→|->|>)\\s*Household\\s*(?:→|->|>)\\s*Rooms",
+        "prepare a room's SD card",
+        "press approve"
       ],
       "must_not_include": [
-        "ask (?:an|your) admin"
+        "An admin adds rooms"
       ],
-      "needs_change": "N1"
+      "note": "the steps, not who and where (N1)",
+      "stub": true
     },
     {
       "id": "8.3",
@@ -1579,8 +1591,12 @@
       "expect": "ADMIN",
       "kind": "question",
       "must_include": [
-        "updates?"
-      ]
+        "An admin updates Domovoi on the dashboard"
+      ],
+      "must_not_include": [
+        "Check for updates"
+      ],
+      "stub": true
     },
     {
       "id": "8.4",
@@ -1590,12 +1606,14 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "about (?:&|and) updates"
+        "about (?:&|and) updates",
+        "press Check for updates, then Update Domovoi"
       ],
       "must_not_include": [
-        "ask (?:an|your) admin"
+        "An admin updates"
       ],
-      "needs_change": "N1"
+      "note": "the steps (N1)",
+      "stub": true
     },
     {
       "id": "8.5",
@@ -1605,11 +1623,12 @@
       "expect": "ADMIN",
       "kind": "question",
       "must_include": [
-        "dashboard"
+        "an admin installs plugins from the Plugins page"
       ],
-      "allow_names": [
-        "plugin"
-      ]
+      "must_not_include": [
+        "Install from zip"
+      ],
+      "stub": true
     },
     {
       "id": "8.6",
@@ -1619,12 +1638,14 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "plugins"
+        "press Install from zip",
+        "trust screen"
       ],
       "must_not_include": [
-        "ask (?:an|your) admin"
+        "an admin installs"
       ],
-      "needs_change": "N1"
+      "note": "the steps (N1)",
+      "stub": true
     },
     {
       "id": "8.7",
@@ -1634,10 +1655,14 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "Settings\\s*(?:→|->|>)\\s*System\\s*(?:→|->|>)\\s*Advanced|dashboard"
+        "reset on the server itself",
+        "--reset-admin"
       ],
-      "needs_change": "N1",
-      "note": "the steps, on the dashboard only"
+      "must_not_include": [
+        "Ask whoever set up"
+      ],
+      "note": "the steps (N1); the list said 'on the dashboard only', but the code's steps are on the server",
+      "stub": true
     },
     {
       "id": "8.7a",
@@ -1647,6 +1672,12 @@
       "expect": "ADMIN",
       "kind": "question",
       "handler": "help_desk",
+      "must_include": [
+        "An admin adds rooms, on the dashboard: Settings → Household → Rooms\\."
+      ],
+      "must_not_include": [
+        "prepare a room's SD card"
+      ],
       "status": "verified",
       "note": "voice ID never makes someone an admin (no admin field on a voice turn, models.py:51-193)",
       "stub": true
@@ -1658,7 +1689,11 @@
       "house": "base",
       "expect": "ADMIN",
       "kind": "question",
-      "note": "dashboard chat, not signed in: the member answer"
+      "must_include": [
+        "An admin adds rooms, on the dashboard: Settings → Household → Rooms\\."
+      ],
+      "note": "dashboard chat, not signed in: the member answer",
+      "stub": true
     },
     {
       "id": "8.7c",
@@ -1667,8 +1702,14 @@
       "house": "admin-expired",
       "expect": "ADMIN",
       "kind": "question",
-      "needs_change": "N1",
-      "skip_reason": "multi-turn: the admin session expires mid-chat; needs a running web chat"
+      "must_include": [
+        "An admin adds rooms, on the dashboard: Settings → Household → Rooms\\."
+      ],
+      "must_not_include": [
+        "prepare a room's SD card"
+      ],
+      "note": "the session expired: this turn has no live admin sign-in, so the member answer (checked per turn)",
+      "stub": true
     },
     {
       "id": "8.7d",
@@ -1678,10 +1719,9 @@
       "expect": "ADMIN",
       "kind": "question",
       "must_include": [
-        "plugins page"
+        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
       ],
-      "needs_change": "N1",
-      "note": "'Not on this house. An admin can add video downloads from the Plugins page.'",
+      "note": "the capability table's one answer, the same for members and admins",
       "stub": true
     },
     {
@@ -1692,10 +1732,9 @@
       "expect": "CANT",
       "kind": "question",
       "must_include": [
-        "admin can add video downloads",
-        "plugins page"
+        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
       ],
-      "note": "the same pointer as the admin case until N1 lands; no plugin name",
+      "note": "the capability table's one answer, the same for members and admins; no plugin name",
       "stub": true
     },
     {
@@ -1715,6 +1754,39 @@
       "expect": "ADMIN",
       "kind": "question",
       "skip_reason": "1.5.0 only: added when 1.5.0 is on main"
+    },
+    {
+      "id": "8.7h",
+      "utterance": "How do I add a room?",
+      "where": "playbox",
+      "house": "base",
+      "expect": "ADMIN",
+      "kind": "question",
+      "must_include": [
+        "An admin adds rooms, on the dashboard: Settings → Household → Rooms\\."
+      ],
+      "must_not_include": [
+        "prepare a room's SD card"
+      ],
+      "note": "the dashboard play box with no live admin Bearer (a device token, a guest, the cookie alone): the member answer",
+      "stub": true
+    },
+    {
+      "id": "8.7i",
+      "utterance": "How do I add a room?",
+      "where": "playbox",
+      "house": "proven-admin",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "prepare a room's SD card",
+        "press approve"
+      ],
+      "must_not_include": [
+        "An admin adds rooms"
+      ],
+      "note": "the play box with a live admin Bearer: the steps (main._admin_route_intent)",
+      "stub": true
     },
     {
       "id": "8.8",
@@ -1884,7 +1956,7 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "sometimes|\\bask"
+        "sometimes"
       ],
       "stub": true
     },
@@ -1911,7 +1983,8 @@
       "must_include": [
         "march 3|birthday",
         "forget"
-      ]
+      ],
+      "stub": true
     },
     {
       "id": "9.10",
@@ -1924,7 +1997,8 @@
         "memory"
       ],
       "judge": true,
-      "rubric": "Says memory is off, and whether anything older is still stored."
+      "rubric": "Says memory is off, and whether anything older is still stored.",
+      "stub": true
     },
     {
       "id": "9.11",
@@ -2547,17 +2621,28 @@
     {
       "id": "15.11",
       "utterance": "Can you forget that?",
-      "where": "voice",
+      "where": "chat",
       "house": "base",
       "expect": "DO_IT",
       "kind": "command",
-      "handler": "memory",
       "must_include": [
-        "forgotten"
+        "^OK, forgotten: I like tea\\.$"
       ],
-      "status": "unverified",
-      "skip_reason": "needs a prior 'remember that ...' turn: the memory it saves lives in the database (without one, 'Forget what?' is the right answer)",
-      "note": "the doc's 'OK, forgotten' (memory.py:403) needs a body ('forget that I like jazz'); a bare 'forget that' is DismissHandler's (dismiss.py:61)"
+      "note": "right after a remembered fact, in typed chat (web/backend/api/chat_memory.py)",
+      "device": "alex-phone",
+      "before": [
+        {
+          "say": "Remember that I like tea."
+        }
+      ],
+      "stored": [],
+      "not_stored": [
+        [
+          1,
+          "I like tea"
+        ]
+      ],
+      "stub": true
     },
     {
       "id": "15.12",
@@ -2648,7 +2733,8 @@
         "web ui"
       ],
       "status": "verified",
-      "note": "memory.py:440-442"
+      "note": "memory.py:440-442",
+      "stub": true
     },
     {
       "id": "15.19",
@@ -2662,7 +2748,8 @@
         "memory is off"
       ],
       "status": "verified",
-      "note": "the switch only stops the background worker (config.py:1833)"
+      "note": "the switch only stops the background worker (config.py:1833)",
+      "stub": true
     },
     {
       "id": "15.20",
@@ -3180,6 +3267,245 @@
       "must_include": [
         "couldn'?t|didn'?t|wasn'?t"
       ]
+    },
+    {
+      "id": "21.1",
+      "utterance": "Remember that my locker is 12.",
+      "where": "chat",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Got it — I'll remember that\\.$"
+      ],
+      "device": "ana-phone",
+      "stored": [
+        [
+          2,
+          "^my locker is 12$"
+        ]
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.2",
+      "utterance": "forget that",
+      "where": "chat",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^OK, forgotten: my locker is 12\\.$"
+      ],
+      "device": "ana-phone",
+      "before": [
+        {
+          "say": "Remember that my locker is 12."
+        }
+      ],
+      "not_stored": [
+        [
+          2,
+          "locker is 12"
+        ]
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.3",
+      "utterance": "forget that",
+      "where": "chat",
+      "house": "base",
+      "expect": "DEPENDS",
+      "kind": "question",
+      "must_include": [
+        "^Forget what\\? Tell me which thing, like \"that I like jazz\"\\.$"
+      ],
+      "note": "a fresh thread: nothing just saved",
+      "device": "ana-phone",
+      "thread": "fresh",
+      "stored": [
+        [
+          2,
+          "^I like jazz$"
+        ]
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.3b",
+      "utterance": "that I like jazz",
+      "where": "chat",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^OK, forgotten: I like jazz\\.?$"
+      ],
+      "note": "the answer to 'Forget what?' (21.3's second turn)",
+      "device": "ana-phone",
+      "thread": "fresh",
+      "before": [
+        {
+          "say": "forget that"
+        }
+      ],
+      "not_stored": [
+        [
+          2,
+          "I like jazz"
+        ]
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.4",
+      "utterance": "remember that the wifi is upstairs",
+      "where": "chat",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "^I can\\'t save that from this device yet: it isn\\'t linked to a person\\. Open your name in Settings → Household → People and press \"this is me\" to link it\\.$"
+      ],
+      "note": "an unlinked browser: nothing saved",
+      "device": "guest-browser",
+      "not_stored": [
+        [
+          null,
+          "wifi is upstairs"
+        ]
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.5",
+      "utterance": "what do you remember about me?",
+      "where": "chat",
+      "house": "shared-screen",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "^This is a shared screen, so it's the whole household's, not one person's: I don't save, read or forget anyone's memories from it\\. Use your own phone or browser\\.$"
+      ],
+      "must_not_include": [
+        "March 3|jazz"
+      ],
+      "note": "a shared screen is nobody's: reads and saves no one's memories",
+      "device": "kitchen-tablet",
+      "stub": true
+    },
+    {
+      "id": "21.6",
+      "utterance": "forget that",
+      "where": "chat",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I can only forget that for the person who asked me to remember it\\.$"
+      ],
+      "note": "Ana saved it; Ben, in the same thread, can't forget it",
+      "device": "ben-phone",
+      "before": [
+        {
+          "say": "Remember that my locker is 12.",
+          "device": "ana-phone"
+        }
+      ],
+      "stored": [
+        [
+          2,
+          "^my locker is 12$"
+        ]
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.7",
+      "utterance": "forget that my locker",
+      "where": "chat",
+      "house": "two-lockers",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^OK, forgotten: my locker is 7\\.?$"
+      ],
+      "note": "only Ana's is deleted",
+      "device": "ana-phone",
+      "stored": [
+        [
+          3,
+          "^my locker is 4$"
+        ]
+      ],
+      "not_stored": [
+        [
+          2,
+          "locker"
+        ]
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.8",
+      "utterance": "remember to call mom",
+      "where": "chat",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_not_include": [
+        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind"
+      ],
+      "judge": true,
+      "rubric": "Not a memory command: the model answers, and claims no reminder set and nothing remembered.",
+      "device": "ana-phone",
+      "stored": [],
+      "not_stored": [
+        [
+          null,
+          "call mom"
+        ]
+      ]
+    },
+    {
+      "id": "21.9",
+      "utterance": "can you remember that I park on Level 3",
+      "where": "chat",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Got it — I'll remember that\\.$"
+      ],
+      "device": "ana-phone",
+      "stored": [
+        [
+          2,
+          "^I park on Level 3$"
+        ]
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.10",
+      "utterance": "remember that my locker is 12",
+      "where": "chat",
+      "house": "ai-off",
+      "expect": "CANT",
+      "kind": "question",
+      "must_not_include": [
+        "remember|saved|got it"
+      ],
+      "note": "AI off: the typed chat is refused before anything is stored, and the refusal claims nothing",
+      "device": "ana-phone",
+      "not_stored": [
+        [
+          null,
+          "locker is 12"
+        ]
+      ],
+      "stub": true
     }
   ]
 }

@@ -6,7 +6,12 @@
   "memory_extractor": true,
   "memory_items": [
     {
-      "fact": "birthday is March 3"
+      "fact": "birthday is March 3",
+      "person_id": 1
+    },
+    {
+      "fact": "I like jazz",
+      "person_id": 2
     }
   ],
   "voice_id": "enrolled",
@@ -54,5 +59,40 @@
     "admin_password": "FAKE-admin-pw-lantern-4417",
     "household_token": "fake-household-token-9c2e7b",
     "setup_code": "FAKE-SETUP-583106"
-  }
+  },
+  "people": [
+    {
+      "id": 1,
+      "name": "Alex"
+    },
+    {
+      "id": 2,
+      "name": "Ana"
+    },
+    {
+      "id": 3,
+      "name": "Ben"
+    }
+  ],
+  "devices": [
+    {
+      "id": "alex-phone",
+      "person_id": 1
+    },
+    {
+      "id": "ana-phone",
+      "person_id": 2
+    },
+    {
+      "id": "ben-phone",
+      "person_id": 3
+    },
+    {
+      "id": "kitchen-tablet",
+      "shared_screen": true
+    },
+    {
+      "id": "guest-browser"
+    }
+  ]
 }
