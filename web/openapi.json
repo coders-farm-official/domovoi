@@ -36506,6 +36506,13 @@
             "title": "Mic Dsp",
             "default": false
           },
+          "mic_dsp_satellites": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mic Dsp Satellites"
+          },
           "upgrade": {
             "anyOf": [
               {

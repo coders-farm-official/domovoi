@@ -273,7 +273,8 @@ async def test_the_open_snapshot_lists_the_rooms_but_not_their_presets(monkeypat
 
     monkeypatch.setattr(core_main.git_version, "cached_current_sha", sha)
     state = core_main.app.state
-    saved = {n: getattr(state, n) for n in ("active_sessions", "satellite_mic_dsp") if hasattr(state, n)}
+    saved = {n: getattr(state, n) for n in ("active_sessions", "active_satellites", "satellite_mic_dsp")
+             if hasattr(state, n)}
     try:
         for name in ("resumable_music", "wifi_status", "current_playlist",
                      "active_dropins", "satellite_full_duplex", "satellite_display", "satellite_voice",
@@ -282,11 +283,49 @@ async def test_the_open_snapshot_lists_the_rooms_but_not_their_presets(monkeypat
                      "satellite_last_outage", "satellite_wake_word"):
             if not hasattr(state, name):
                 setattr(state, name, {})
-        state.active_sessions = {"office": _Target(True), "den": _Target(False)}
-        state.satellite_mic_dsp = {"office": {"preset": "B", "error": "secret words"}}
+        # A shared office (1.5.0): its speaker is a plain device, and a
+        # second satellite in it is the XVF3800. The snapshot names the
+        # satellite, not the room's speaker slot.
+        speaker, xvf, den = _Target(False), _Target(True), _Target(False)
+        state.active_sessions = {"office": speaker, "den": den}
+        state.active_satellites = {"office": speaker, "office_xvf": xvf, "den": den}
+        state.satellite_mic_dsp = {"office_xvf": {"preset": "B", "error": "secret words"}}
         snap = await core_main.admin_snapshot()
     finally:
         for n, v in saved.items():
             setattr(state, n, v)
-    assert snap["satellite_mic_dsp"] == ["office"]
+    assert snap["satellite_mic_dsp"] == ["office_xvf"]
     assert "secret words" not in str(snap)
+
+
+async def test_each_xvf3800_in_a_shared_room_gets_its_own_mic_block(monkeypatch):
+    from web.backend.api import satellites as web_sats
+
+    async def no_np(*a, **kw):
+        return None
+
+    monkeypatch.setattr(web_sats, "_now_playing_for", no_np)
+    row = {"room_id": "office", "control_port": 6650, "http_port": 8050, "last_connected_at": None}
+    meta = {"office": {"room_id": "office"}, "office_b": {"room_id": "office"},
+            "office_c": {"room_id": "office"}, "den": {"room_id": "den"}}
+    snap = {"active_rooms": ["office", "den"], "satellite_mic_dsp": ["den", "office_b", "office_c"]}
+    sat = await web_sats._satellite_for(row, snap, {}, meta, {})
+    assert sat.mic_dsp is True and sat.mic_dsp_satellites == ["office_b", "office_c"]
+    # A device from before 1.5.0 is its room: found by the room's own id.
+    older = await web_sats._satellite_for(row, {"active_rooms": ["office"],
+                                                 "satellite_mic_dsp": ["office"]}, {}, {}, {})
+    assert older.mic_dsp is True and older.mic_dsp_satellites == ["office"]
+    # Offline, or no XVF3800 in the room: no block.
+    off = await web_sats._satellite_for(row, {**snap, "active_rooms": ["den"]}, {}, meta, {})
+    assert off.mic_dsp is False and off.mic_dsp_satellites == []
+    none = await web_sats._satellite_for(row, {**snap, "satellite_mic_dsp": ["den"]}, {}, meta, {})
+    assert none.mic_dsp is False and none.mic_dsp_satellites == []
+
+
+def test_the_settings_tab_draws_one_mic_block_per_satellite():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "web" / "static" / "satellites.jsx").read_text(
+        encoding="utf-8")
+    assert "satMicDspTargets(s).map((id) => <SatMicDspControl key={id} s={s} satId={id}" in src
+    assert "const room = satId || s.room_id;" in src

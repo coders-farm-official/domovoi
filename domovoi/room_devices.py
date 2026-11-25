@@ -28,7 +28,7 @@ from typing import Any, Callable
 
 from fastapi import HTTPException, Request
 
-from domovoi.room_ids import is_room_id
+from domovoi.room_ids import _REMOVABLE_RE, is_room_id
 
 log = logging.getLogger(__name__)
 
@@ -207,12 +207,28 @@ def registry(app: Any) -> RoomDevices:
 
 async def require_id_paths(request: Request) -> None:
     """Route dependency: 422 when a ``{room_id}``, ``{other_room_id}`` or ``{satellite_id}``
-    path parameter is not an id the house can have."""
+    path parameter is not an id the house can have.
+
+    One exception, as on the per-room routes
+    (:func:`domovoi.room_ids.require_room_id_path`): deleting a room
+    (``DELETE …/rooms/{room_id}``) passes an older id from before the rule
+    (a room re-keyed from such a satellite by V073), so it can still be
+    removed. The core's delete handler then refuses (422) one that names
+    no room."""
     for key, what in (("room_id", "room"), ("satellite_id", "satellite"),
                       ("other_room_id", "room")):
         value = request.path_params.get(key)
-        if value is not None and not is_room_id(value):
-            raise HTTPException(status_code=422, detail=f"not a {what} id")
+        if value is None or is_room_id(value):
+            continue
+        if key == "room_id" and _deletes_a_room(request) and _REMOVABLE_RE.fullmatch(value):
+            continue
+        raise HTTPException(status_code=422, detail=f"not a {what} id")
+
+
+def _deletes_a_room(request: Request) -> bool:
+    route = request.scope.get("route")
+    path = getattr(route, "path", "") or ""
+    return request.method == "DELETE" and path.endswith("/rooms/{room_id}")
 
 ROOM_ID_MAX = 32
 

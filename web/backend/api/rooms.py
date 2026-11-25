@@ -12,6 +12,7 @@ satellites".
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
@@ -83,8 +84,10 @@ async def rename_room(room_id: str, body: RoomName, request: Request) -> Any:
 
 @router.delete("/rooms/{room_id}", dependencies=ADMIN)
 async def delete_room(room_id: str, request: Request) -> Any:
+    # Quoted: an older room id (accepted on DELETE only) may hold any
+    # printable character but a slash.
     return _bridge(await delete_admin(
-        f"/v1/admin/rooms/{room_id}", headers=auth_forward_headers(request)))
+        f"/v1/admin/rooms/{quote(room_id, safe='')}", headers=auth_forward_headers(request)))
 
 
 @router.post("/rooms/{room_id}/merge", dependencies=ADMIN)

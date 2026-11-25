@@ -4,6 +4,20 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Rooms: mic presets per satellite, older rooms removable
+
+- **Every XVF3800 in a shared room gets its own Microphone DSP block** in
+  the room's Settings tab, not only the room's speaker. The open snapshot's
+  `satellite_mic_dsp` now lists satellite ids (a device from before 1.5.0
+  has its room's id, so a single-device room reads as before), and
+  `GET /api/satellites` adds `mic_dsp_satellites`, the room's connected
+  satellites that declared mic_dsp; `mic_dsp` is whether that list is
+  non-empty.
+- **A room with an id from before the one id rule can be deleted** from
+  the Rooms drawer (`DELETE /v1/admin/rooms/{room_id}`), as 1.4.1 allowed
+  for satellites. Such an id that names no room is still refused (422);
+  every other rooms route keeps refusing it.
+
 ## 1.5.0 (unreleased) — Friend Houses: apps with friends, sending and the page
 
 - **What changed.** Plugins can now send as well as receive: SDK 1.18's

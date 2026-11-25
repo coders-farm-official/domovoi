@@ -3308,12 +3308,15 @@ async def admin_snapshot() -> dict[str, Any]:
         # open; the results themselves are device-read
         # (GET /v1/admin/room-media/{room_id}).
         "room_media": _room_media_snapshot(),
-        # Rooms whose connected satellite declared mic_dsp (an XVF3800 with
-        # xvf_host). Only these get the Settings tab's Microphone DSP block.
-        # The preset state itself is read on the admin tier
-        # (GET /v1/admin/satellite/{room}/mic_dsp), not here.
+        # Connected satellites that declared mic_dsp (an XVF3800 with
+        # xvf_host), by SATELLITE id (1.5.0): each one in a shared room gets
+        # its own Microphone DSP block, not just the room's speaker. Every
+        # device from before 1.5.0 has its room's id, so older readers that
+        # look a room up here still find it. The preset state itself is read
+        # on the admin tier (GET /v1/admin/satellite/{satellite}/mic_dsp),
+        # not here.
         "satellite_mic_dsp": sorted(
-            room for room, sess in app.state.active_sessions.items()
+            sid for sid, sess in (getattr(app.state, "active_satellites", None) or {}).items()
             if "mic_dsp" in satellite_abilities.session_abilities(sess).names
         ),
         # Per-room active TTS voice (what each Pi reported via voice_status),
@@ -7085,9 +7088,16 @@ async def admin_rename_room(room_id: str, body: _RoomNameBody) -> dict[str, Any]
 @app.delete("/v1/admin/rooms/{room_id}", dependencies=_ROOM_ADMIN)
 async def admin_delete_room(room_id: str) -> dict[str, Any]:
     """Delete an EMPTY room (409 while it has satellites: move them
-    first). Its history keeps the id."""
+    first). Its history keeps the id.
+
+    An older id from before the one id rule (domovoi/room_ids.py) passes
+    the path check here only (so a room re-keyed from such a satellite can
+    still be removed) and is refused 422 when it names no room."""
     async with session_scope() as s:
-        result = await RoomsRepository(s).delete(room_id)
+        repo = RoomsRepository(s)
+        if not room_ids.is_room_id(room_id) and await repo.get(room_id) is None:
+            raise HTTPException(status_code=422, detail="not a room id")
+        result = await repo.delete(room_id)
     if result == "missing":
         raise HTTPException(status_code=404, detail=f"no room {room_id!r}")
     if result == "has_satellites":

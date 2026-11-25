@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from urllib.parse import quote
 from types import SimpleNamespace
 from typing import Any
 
@@ -620,7 +621,7 @@ BAD_IDS = [
     ("POST", "/v1/admin/satellites/Bad!/room", {"room_id": "den"}),
     ("PATCH", "/v1/admin/satellites/Bad!/name", {"name": "x"}),
     ("PATCH", "/v1/admin/rooms/Bad!", {"name": "x"}),
-    ("DELETE", "/v1/admin/rooms/Bad!", None),
+    ("DELETE", "/v1/admin/rooms/Bad%01", None),  # not even an older id (control char)
     ("POST", "/v1/admin/rooms/Bad!/merge", {"rooms": ["den"]}),
     ("POST", "/v1/admin/rooms/kitchen/merge", {"rooms": ["Bad!"]}),
     ("POST", "/v1/admin/satellites/sat_a/room", {"room_id": "Bad!"}),
@@ -637,6 +638,58 @@ async def test_a_malformed_id_is_refused_before_anything_is_read(
     async with _client() as c:
         r = await c.request(method, path, headers=bearer(ADMIN_TOKEN), **kw)
     assert r.status_code == 422, r.text
+
+
+@requires_db
+async def test_an_older_room_id_can_be_deleted_and_an_unknown_one_is_refused(
+    admin, monkeypatch,
+) -> None:
+    # A room re-keyed by V073 from a satellite paired before the one id rule
+    # keeps that id. Deleting it must still work, at the core and through
+    # the web hop; an older-shaped id naming no room is refused (422).
+    tag = uuid.uuid4().hex[:6]
+    old_core, old_web = f"Old Kitchen {tag}", f"Den #2?{tag}"
+    async with session_scope() as s:
+        for rid in (old_core, old_web):
+            await s.execute(text("INSERT INTO rooms (room_id, name) VALUES (:r, :r)"),
+                            {"r": rid})
+    try:
+        async with _core() as c:
+            r = await c.delete(f"/v1/admin/rooms/Nowhere {tag}", headers=admin)
+            assert r.status_code == 422 and r.json()["detail"] == "not a room id"
+            r = await c.patch(f"/v1/admin/rooms/{old_core}", json={"name": "x"}, headers=admin)
+            assert r.status_code == 422  # only DELETE takes an older id
+            r = await c.delete(f"/v1/admin/rooms/{old_core}", headers=admin)
+            assert r.status_code == 200, r.text
+            assert r.json() == {"room_id": old_core, "deleted": True}
+        # The web hop forwards the id quoted ("#" and "?" are path text).
+        from web.backend.api import rooms as rooms_api
+
+        forwarded: list[str] = []
+
+        async def to_core(path: str, headers: dict | None = None, **kw: Any):
+            forwarded.append(path)
+            async with _core() as c:
+                resp = await c.delete(path, headers=headers)
+            return resp.status_code, resp.json()
+
+        monkeypatch.setattr(rooms_api, "delete_admin", to_core)
+        async with web_client() as w:
+            r = await w.delete(f"/api/rooms/{quote(old_web, safe='')}", headers={
+                **admin, "X-Requested-With": "domovoi-tests"})
+            assert r.status_code == 200, r.text
+            r = await w.delete(f"/api/rooms/{quote('Nowhere ' + tag, safe='')}", headers={
+                **admin, "X-Requested-With": "domovoi-tests"})
+            assert r.status_code == 422, r.text
+        assert forwarded[0] == f"/v1/admin/rooms/{quote(old_web, safe='')}"
+        async with session_scope() as s:
+            left = (await s.execute(text("SELECT count(*) FROM rooms WHERE room_id = ANY(:i)"),
+                                    {"i": [old_core, old_web]})).scalar_one()
+        assert left == 0
+    finally:
+        async with session_scope() as s:
+            await s.execute(text("DELETE FROM rooms WHERE room_id = ANY(:i)"),
+                            {"i": [old_core, old_web]})
 
 
 @pytest.mark.parametrize("path", ["/api/rooms/Bad!", "/api/satellites/Bad!/name"])
