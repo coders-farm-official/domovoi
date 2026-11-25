@@ -165,10 +165,24 @@ class Case:
     # [person_id or null, regex on the memory's text].
     stored: list[list[Any]] = field(default_factory=list)
     not_stored: list[list[Any]] = field(default_factory=list)
+    # The reply is one of a set of owner-approved lines (the names of
+    # constants in domovoi/owner_easter_eggs.py, e.g. "CLAIM_LINES"), its
+    # {name}/{other} filled with the house's People list; ``one_of_rest``:
+    # what must follow the line (a regex; none: nothing follows).
+    one_of: list[str] = field(default_factory=list)
+    one_of_rest: str | None = None
+    # The reply is none of these line sets (a fact, never a joke).
+    not_one_of: list[str] = field(default_factory=list)
+    # The reply differs from the last ``before`` turn's reply.
+    differs_from_before: bool = False
 
 
 def case_group(case_id: str) -> int:
     return int(case_id.split(".")[0])
+
+
+def _as_list(v: Any) -> list[str]:
+    return [v] if isinstance(v, str) else list(v or [])
 
 
 def load_corpus(path: Path = DEFAULT_CORPUS) -> list[Case]:
@@ -191,6 +205,9 @@ def load_corpus(path: Path = DEFAULT_CORPUS) -> list[Case]:
                 device=c.get("device"), thread=c.get("thread", "t1"),
                 before=list(c.get("before") or []),
                 stored=list(c.get("stored") or []), not_stored=list(c.get("not_stored") or []),
+                one_of=_as_list(c.get("one_of")), one_of_rest=c.get("one_of_rest"),
+                not_one_of=_as_list(c.get("not_one_of")),
+                differs_from_before=bool(c.get("differs_from_before")),
             )
         )
     return out
@@ -435,6 +452,70 @@ def check_menu_paths(text: str, tree: SettingsTree) -> list[str]:
         for written, segs in find_menu_paths(text)
         if not _valid_segments(segs, tree)
     ]
+
+
+# ─── Owner-approved line sets (domovoi/owner_easter_eggs.py) ─────────
+
+LINE_SETS = ("CLAIM_LINES", "WHO_LINES", "ONE_PERSON_LINES", "NO_NAME_LINES")
+
+
+def line_set(name: str) -> tuple[str, ...]:
+    from domovoi import owner_easter_eggs
+
+    if name not in LINE_SETS:
+        raise KeyError(f"no line set {name!r}")
+    return tuple(getattr(owner_easter_eggs, name))
+
+
+def _template_re(template: str, names: list[str]) -> re.Pattern[str]:
+    """A line as a regex: {name} and {other} are names from ``names``; a
+    second {name} is the same person (a backreference)."""
+    who = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) or r"(?!)"
+    out, seen = "", set()
+    for part in re.split(r"(\{name\}|\{other\})", template):
+        if part in ("{name}", "{other}"):
+            key = part[1:-1]
+            out += f"(?P={key})" if key in seen else f"(?P<{key}>{who})"
+            seen.add(key)
+        else:
+            out += re.escape(part)
+    return re.compile(out + r"(?:\s+(?P<rest>.*))?\Z", re.S)
+
+
+def match_line(text: str, sets: list[str], names: list[str]) -> tuple[str, str] | None:
+    """``(template, rest)`` when ``text`` starts with a line of ``sets``
+    (filled with ``names``, {name} and {other} two different people);
+    else None."""
+    t = (text or "").strip()
+    for name in sets:
+        for template in line_set(name):
+            m = _template_re(template, names).match(t)
+            if m is None:
+                continue
+            g = m.groupdict()
+            if g.get("name") and g.get("other") and g["name"] == g["other"]:
+                continue
+            return template, (g.get("rest") or "").strip()
+    return None
+
+
+def check_lines(case: "Case", text: str, names: list[str], before: list[str]) -> list[str]:
+    out = []
+    if case.one_of:
+        got = match_line(text, case.one_of, names)
+        if got is None:
+            out.append(f"not a line of {'/'.join(case.one_of)} (with this house's People names)")
+        elif case.one_of_rest is None and got[1]:
+            out.append(f"more after the line: {got[1]!r}")
+        elif case.one_of_rest is not None and not re.fullmatch(case.one_of_rest, got[1], re.I | re.S):
+            out.append(f"after the line, {got[1]!r} is not /{case.one_of_rest}/")
+    if case.not_one_of:
+        everyone = names or ["(nobody)"]
+        if match_line(text, case.not_one_of, everyone) is not None:
+            out.append("a joke line where a fact is due")
+    if case.differs_from_before and before and before[-1].strip() == (text or "").strip():
+        out.append("the same line as the turn before")
+    return out
 
 
 # ─── Verdict checks ───────────────────────────────────────────────────
@@ -748,6 +829,10 @@ FIXTURE_READS: list[tuple[str, re.Pattern[str], Any]] = [
      lambda h, p: _alarm_rows(h)),
     ("timers", re.compile(r"SELECT expires_at, created_at, label FROM timers", re.I),
      lambda h, p: _timer_rows(h)),
+    ("people", re.compile(r"SELECT id, name FROM people ORDER BY id", re.I),
+     lambda h, p: [{"id": x["id"], "name": x["name"]} for x in h.get("people") or []]),
+    ("people names", re.compile(r"SELECT name FROM people ORDER BY id", re.I),
+     lambda h, p: [{"name": x["name"]} for x in h.get("people") or []]),
     ("memory saved", re.compile(r"INSERT INTO memories", re.I), _mem_insert),
     ("memories", re.compile(r"SELECT id, body, topic, source FROM memories WHERE person_id = :pid "
                             r"AND status = 'active'", re.I), _mem_active),
@@ -1215,6 +1300,8 @@ async def run_voice_turn(utterance: str, ctx: Any) -> Turn:
     from domovoi.router import route
 
     resp = await route(Intent(transcript=utterance, room_id=ctx.room_id), ctx, FixtureSession())
+    # The next turn is in the same conversation, as on a satellite.
+    ctx.session_id = resp.session_id
     return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path)
 
 
@@ -1270,13 +1357,23 @@ async def run_chat_turn(
     async def previous_assistant() -> None:
         return None
 
+    async def admin_check() -> bool:
+        return house.get("asker") == "proven_admin"
+
     fact = await house_facts.chat_reply(
         utterance, get_setting=house_facts.core_setting, scope=fixture_scope,
-        previous_assistant=previous_assistant,
+        previous_assistant=previous_assistant, admin_check=admin_check,
     )
     if fact is not None:
         _chat_row(thread, "assistant", {"model_role": "house_facts"})
         return Turn("reply", fact, "house_facts", "chat")
+    # chat._owner_egg_reply: "I'm the owner" (bare) / "who's in charge?".
+    from domovoi import owner_easter_eggs
+
+    egg = await owner_easter_eggs.chat_reply(utterance, scope=fixture_scope, key=f"chat:{tid}")
+    if egg is not None:
+        _chat_row(thread, "assistant", {"model_role": "owner_easter_egg"})
+        return Turn("reply", egg, "owner_easter_egg", "chat")
     system = ollama_mod.chat_system_prompt(None)
     if help_answer.looks_like_help(utterance) or admin_tasks.match(utterance) is not None:
         from web.backend.api import help as help_api
@@ -1363,9 +1460,13 @@ async def run_case(
     # "Playing some jazz by Stub Artist", rooms that don't exist).
     lenient = False
 
+    voice_ctx: list[Any] = []
+
     async def one(say: str, device: str | None, thread: str) -> Turn:
         if case.where == "voice":
-            return await run_voice_turn(say, build_context(house))
+            if not voice_ctx:
+                voice_ctx.append(build_context(house))
+            return await run_voice_turn(say, voice_ctx[0])
         if case.where == "playbox":
             return await run_playbox_turn(say, house)
         return await run_chat_turn(say, house, device=device or default_device(house),
@@ -1373,12 +1474,14 @@ async def run_case(
 
     with applied(house, catalogue, lenient=lenient):
         try:
-            said_before = []
+            said_before, before_texts = [], []
             for b in case.before:
                 t = await one(b["say"], b.get("device", case.device), b.get("thread", case.thread))
                 said_before.append(f"{b['say']!r} -> {t.text!r}")
+                before_texts.append(t.text)
             turn = await one(case.utterance, case.device, case.thread)
-            state_problems = check_state(case)
+            state_problems = check_state(case) + check_lines(
+                case, turn.text, [p["name"] for p in house.get("people") or []], before_texts)
         except NeedsModel as e:
             return Turn("needs_model", detail=str(e))
         except NeedsDB as e:
