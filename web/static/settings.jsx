@@ -300,8 +300,10 @@ const UploadPiper = ({ onUpload }) => {
           style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px' }}>
       <input className="cal-inp" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Ryan)"
              aria-label="Name" style={{ ..._voiceFieldLayout, width: 240 }}/>
-      <VoiceFilePick label="Model (.onnx)" accept=".onnx" file={onnx} onPick={setOnnx} disabled={busy}/>
-      <VoiceFilePick label="Config (.onnx.json)" accept=".json" file={json} onPick={setJson} disabled={busy}/>
+      {/* Android's picker filters by MIME type, and .onnx has none of its
+          own: application/octet-stream keeps it pickable on a phone. */}
+      <VoiceFilePick label="Model (.onnx)" accept=".onnx,application/octet-stream" file={onnx} onPick={setOnnx} disabled={busy}/>
+      <VoiceFilePick label="Config (.onnx.json)" accept=".json,application/json,text/plain,application/octet-stream" file={json} onPick={setJson} disabled={busy}/>
       <div>
         <Button variant="primary" icon="upload" type="submit" disabled={busy || missing.length > 0}
                 title={missing.length ? `Choose ${missing.join(', ')} first` : undefined}>
