@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -51,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -178,6 +180,8 @@ fun RoomDisplay(
             onMute = onMute, onResume = onResume, onSetLock = onSetLock, onCheckNow = onCheckNow, onExit = onExit,
             onControl = { source?.control(it) },
             onVolume = { dir -> volume?.let { v -> source?.setVolume(RoomDisplayModel.stepVolume(v, dir)) }; volume = source?.volume() },
+            // A result's thumbnail, from the room's own server, no credential.
+            loadImage = { path -> source?.art(path)?.let { decodeArt(it) } },
         )
         val inner = Modifier.fillMaxSize().offset(drift.x.dp, drift.y.dp).padding(if (s.compact) 16.dp else 24.dp)
         when (s.layout) {
@@ -195,6 +199,7 @@ private class DisplayActions(
     val onExit: () -> Unit,
     val onControl: (RoomControl) -> Unit,
     val onVolume: (Int) -> Unit,
+    val loadImage: suspend (String) -> ImageBitmap? = { null },
 )
 
 /** One column; the big button and Exit stay at the foot of the screen
@@ -266,6 +271,8 @@ private fun Cards(s: RoomDisplayModel.State, c: RoomColors, art: ImageBitmap?, a
     var first = true
     fun gapBefore(): Modifier = if (first) Modifier.also { first = false } else Modifier.padding(top = gap)
     if (withRinging) s.ringing?.let { Box(gapBefore()) { RingingCard(it, s.compact, c, a) } }
+    // Results someone just asked for come first after a ringing timer.
+    s.media?.let { m -> Box(gapBefore()) { MediaCard(m, s.compact, c, a) } }
     if (s.timersFirst && hasTimers) Box(gapBefore()) { TimersCard(s, c) }
     s.nowPlaying?.let { Box(gapBefore()) { NowPlayingCard(it, art, s.compact, c, a) } }
     if (!s.timersFirst && hasTimers) Box(gapBefore()) { TimersCard(s, c) }
@@ -444,6 +451,69 @@ private fun NowPlayingCard(np: RoomDisplayModel.NowPlaying, art: ImageBitmap?, c
                 }
             }
         }
+    }
+}
+
+/** Photo and video results asked for here (1.5.0; the dashboard kiosk's
+ *  DpMedia at phone size): the spoken answer, a grid of up to six tiles
+ *  (two across, three on a wide card) with a video marker and its moment,
+ *  "Might show: …" as plain text, the date, and "and more" when there are
+ *  more on the Photos page. Gone with the next results or after
+ *  `expires_in_ms` ([RoomDisplayModel.State.media]). */
+@Composable
+private fun MediaCard(m: RoomDisplayModel.Media, compact: Boolean, c: RoomColors, a: DisplayActions) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.card).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(16.dp)) {
+        if (m.said.isNotEmpty()) {
+            Text(m.said, color = c.text1, fontSize = if (compact) 16.sp else 18.sp)
+            Spacer(Modifier.height(12.dp))
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val across = if (maxWidth >= 520.dp) 3 else 2
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                m.tiles.chunked(across).forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        row.forEach { t ->
+                            key(m.id, t.thumb) { MediaTileView(t, c, a, Modifier.weight(1f)) }
+                        }
+                        repeat(across - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+        m.more?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(it, color = c.text2, fontSize = 15.sp)
+        }
+    }
+}
+
+@Composable
+private fun MediaTileView(t: RoomDisplayModel.MediaTile, c: RoomColors, a: DisplayActions, modifier: Modifier) {
+    val image by produceState<ImageBitmap?>(null, t.thumb) {
+        value = t.thumb?.let { a.loadImage(it) }
+    }
+    Column(modifier.clearAndSetSemantics { contentDescription = t.description }, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(RoundedCornerShape(8.dp)).background(c.raised).border(1.dp, c.border, RoundedCornerShape(8.dp))) {
+            image?.let {
+                Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().alpha(c.artAlpha))
+            }
+            if (t.video) {
+                Icon(
+                    Icons.Filled.PlayArrow, contentDescription = null, tint = c.text1,
+                    modifier = Modifier.align(Alignment.TopStart).padding(6.dp).size(22.dp).clip(CircleShape).background(Ink.copy(alpha = 0.6f)),
+                )
+            }
+            t.at?.let {
+                Text(
+                    it, color = c.text1, fontSize = 13.sp, style = Tabular,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(4.dp))
+                        .background(Ink.copy(alpha = 0.6f)).padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+        }
+        // A picture model's guess: plain text, never markup or a link.
+        t.caption?.let { Text(it, color = c.text2, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+        t.date?.let { Text(it, color = c.text2, fontSize = 13.sp, style = Tabular) }
     }
 }
 
