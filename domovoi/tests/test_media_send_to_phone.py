@@ -99,7 +99,8 @@ async def test_a_photo_send_still_reaches_the_phone_after_voice_help_stopped_sen
     """1.5.0 removed voice help's send (core.help_send / core.help_who) but
     the photos ride the same path to the phone: the row, the NOTIFY the
     live socket turns into ``help_deliveries.changed``, that channel's
-    snapshot, and ``GET /api/help/deliveries`` (the apps' catch-up read).
+    snapshot (content-free since 1.5.0: the kind, never the title), and
+    ``GET /api/help/deliveries`` (the apps' catch-up read, with the title).
     Every piece must still carry a "Photos: …" send, end to end."""
     import asyncio
 
@@ -129,9 +130,14 @@ async def test_a_photo_send_still_reaches_the_phone_after_voice_help_stopped_sen
         await conn.close()
     # The live socket maps the NOTIFY to the channel the apps listen on.
     assert realtime.NOTIFY_CHANNEL_TO_REALTIME[delivery.NOTIFY_CHANNEL] == "help_deliveries"
+    # Every socket gets the push, so it carries no chat title (1.5.0,
+    # PRIVATE-CHATS §2.4): only the kind. The title is in the read below.
     pushed = await realtime._snapshot_help_deliveries()
-    assert [(d["id"], d["person_id"], d["title"]) for d in pushed][:1] == [(delivery_id, sarah, "Photos: The beach")]
-    # The catch-up read: the asker's row, and nothing for anyone else.
+    assert [(d["id"], d["person_id"], d["title"]) for d in pushed][:1] == [
+        (delivery_id, sarah, realtime.HELP_DELIVERIES_PHOTOS_TITLE)]
+    assert "The beach" not in str(pushed)
+    # The catch-up read: the asker's row with its real title, and nothing
+    # for anyone else.
     mine = (await help_api.deliveries(person_id=sarah, since_id=None, limit=20))["deliveries"]
     assert [(d["id"], d["title"], d["thread_id"]) for d in mine] == [
         (delivery_id, "Photos: The beach", r.data["thread_id"])]

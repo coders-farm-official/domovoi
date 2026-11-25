@@ -248,14 +248,28 @@ ROUTES_ALLOWED: dict[tuple[str, str], str] = {
 
 
 def _chat_routes(app: Any) -> list[Any]:
-    from fastapi.routing import APIRoute
+    """The app's chat routes, and (for the web) its chat and help routers'
+    own, one per (methods, path). Routes are recognised by shape (a path,
+    methods and a ``dependant``), not ``isinstance(r, APIRoute)``: a test
+    elsewhere in a CI shard that re-imports modules leaves routes built
+    from another copy of the class (this check once saw no web route at
+    all that way)."""
+    import importlib
 
-    out = []
-    for r in app.routes:
-        if not isinstance(r, APIRoute):
+    sources = list(app.routes)
+    if app is _web_app():
+        for mod in ("web.backend.api.chat", "web.backend.api.help"):
+            sources += list(importlib.import_module(mod).router.routes)
+    out, seen = [], set()
+    for r in sources:
+        if not (hasattr(r, "dependant") and getattr(r, "methods", None) and isinstance(getattr(r, "path", None), str)):
             continue
-        if (r.path.startswith("/api/chat") or r.path == "/api/help/deliveries"
+        if not (r.path.startswith("/api/chat") or r.path == "/api/help/deliveries"
                 or r.path == "/v1/phone/voice"):
+            continue
+        key = (tuple(sorted(r.methods or ())), r.path)
+        if key not in seen:
+            seen.add(key)
             out.append(r)
     return out
 

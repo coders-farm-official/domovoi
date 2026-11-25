@@ -230,7 +230,7 @@ async def recent(session: AsyncSession, *, person_id: int | None = None, since_i
     that phone, by its device key, and to admins; one with no phone (sent
     shared, or before 1.5.0) to every caller, as before."""
     where, params = [], {"l": max(1, min(int(limit), 100))}
-    if viewer is not None and not getattr(viewer, "admin", False):
+    if viewer is not None and not getattr(viewer, "admin", False) and not getattr(viewer, "system", False):
         from domovoi import chat_access
 
         if await chat_access.has_private_columns(session):
