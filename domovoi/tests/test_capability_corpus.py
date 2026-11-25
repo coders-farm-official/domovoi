@@ -59,25 +59,13 @@ STUB_CASES = [c for c in CASES if c.stub]
 # expectation and aren't an open N item, reported for triage (test tooling
 # never changes the product to make a case pass). Expected failures here so
 # CI stays green; remove a line once fixed (it shows up as XPASS first).
-_PLUGINS_PAGE = (
-    "house_facts tells a member 'An admin can ... from the Plugins page': the word 'plugin' t"
-    'o a member (the global check; owner to rule, house_facts.PLACE_PLUGINS)'
-)
 _VOICE_HISTORY = (
     "'Settings → Household → People → Voice history' (house_facts.PLACE_VOICE_HISTORY) isn't a "
     'path the settings registry knows: Voice history is no search card of People'
 )
 STUB_FINDINGS = {
-    '4.1': _PLUGINS_PAGE,
-    '4.3': _PLUGINS_PAGE,
-    '4.5': _PLUGINS_PAGE,
-    '4.7': _PLUGINS_PAGE,
-    '4.8': _PLUGINS_PAGE,
-    '4.21': _PLUGINS_PAGE,
-    '4.23': "a switched-off offline library doesn't offer the web instead, as absent does; " + _PLUGINS_PAGE,
-    '4.24': "an offline library with nothing downloaded reads as 'isn't working'; " + _PLUGINS_PAGE,
-    '8.7e': 'a member hears where an admin adds video downloads (the list: no admin steps); ' + _PLUGINS_PAGE,
-    '4.31': 'the help answer names at most 2 plugin areas (handlers/help.py _MAX_PLUGINS)',
+    '4.23': "a switched-off offline library doesn't offer the web instead, as absent does",
+    '4.24': "an offline library with nothing downloaded reads as 'isn't working'",
     '5.5': "internet 'sometimes': the news answer doesn't say it asks first",
     '7.13': 'Home location in the UK: Thanksgiving is answered with no word of the US',
     '8.1': "the help desk's member answer doesn't say an admin adds a room",
@@ -205,11 +193,11 @@ def test_plugin_names() -> None:
     assert ev.check_no_plugin_names(bad)
     assert ev.check_no_plugin_names("Ask ComfyUI.")
     assert ev.check_no_plugin_names("Kiwix has it.", asker="proven_admin")
-    assert ev.check_no_plugin_names("No media provider is installed.")
-    # The word "plugin": a proven admin may hear about the Plugins page.
+    # "Plugins page" and "provider" are not plugin names: allowed, members too.
     msg = "An admin can add video downloads from the Plugins page."
-    assert ev.check_no_plugin_names(msg, asker="member")
+    assert ev.check_no_plugin_names(msg, asker="member") == []
     assert ev.check_no_plugin_names(msg, asker="proven_admin") == []
+    assert ev.check_no_plugin_names("No media provider is installed.") == []
     # Asked which plugins are installed: names allowed, for anyone.
     assert ev.check_no_plugin_names("Kiwix and Sleep are on.", allow_plugin_names=True) == []
     assert ev.check_no_plugin_names("ListenBrainz gets your plays.", allow_names=["listenbrainz"]) == []

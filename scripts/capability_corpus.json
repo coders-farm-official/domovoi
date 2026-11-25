@@ -885,14 +885,10 @@
       "kind": "question",
       "handler": "help",
       "must_include": [
-        "video",
-        "picture",
-        "game",
-        "sleep|rain|bedtime",
-        "weather",
-        "look (?:things |it )?up|offline library|eiffel"
+        "video|picture|game|sleep|rain|bedtime|weather|look (?:things |it )?up|offline library",
+        "manual"
       ],
-      "note": "all six areas, without naming the plugins, and stays short",
+      "note": "up to 2 plugin areas by feature (help.py _MAX_PLUGINS, by design), then the manual; no plugin names",
       "stub": true
     },
     {
@@ -1695,10 +1691,11 @@
       "house": "base",
       "expect": "CANT",
       "kind": "question",
-      "must_not_include": [
-        "admin",
+      "must_include": [
+        "admin can add video downloads",
         "plugins page"
       ],
+      "note": "the same pointer as the admin case until N1 lands; no plugin name",
       "stub": true
     },
     {

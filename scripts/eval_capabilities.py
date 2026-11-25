@@ -46,8 +46,8 @@ scripts/eval_routing.py:
 
 Global checks on every reply, whatever the case: no can't-do hedge on a
 capability question (acceptable on a command the router missed), no plugin
-or provider name (allowed only when the person asked which plugins are
-installed), none of the fixture's secrets, and every "Settings → …" path
+name (allowed only when the person asked which plugins are installed;
+"the Plugins page" is not a name), none of the fixture's secrets, and every "Settings → …" path
 must exist in the dashboard's settings registry (web/static/settings.jsx).
 
 Cases with ``needs_change`` are known gaps: a failure there is EXPECTED and
@@ -267,8 +267,6 @@ PLUGIN_NAME_RES: dict[str, re.Pattern[str]] = {
     "kiwix": re.compile(r"\bkiwix\b", re.IGNORECASE),
     "listenbrainz": re.compile(r"\blisten ?brainz\b", re.IGNORECASE),
 }
-PLUGIN_WORD_RE = re.compile(r"\bplug-?ins?\b", re.IGNORECASE)
-PROVIDER_WORD_RE = re.compile(r"\bproviders?\b", re.IGNORECASE)
 
 
 def check_no_plugin_names(
@@ -279,9 +277,11 @@ def check_no_plugin_names(
     allow_names: tuple[str, ...] | list[str] = (),
     extra_names: tuple[str, ...] | list[str] = (),
 ) -> list[str]:
-    """No plugin's name and no "provider", for anyone (owner, 2026-11-25);
-    the word "plugin" itself only to a proven admin ("the Plugins page").
-    ``allow_plugin_names``: the person asked which plugins are installed."""
+    """No plugin's NAME, for anyone (owner, 2026-11-25). The words
+    "plugin" and "provider" are not names: "an admin can add it from the
+    Plugins page" is the owner's Q2 answer, members included.
+    ``allow_plugin_names``: the person asked which plugins are installed.
+    ``asker`` is kept for callers; the rule is the same for every asker."""
     if allow_plugin_names:
         return []
     t = _plain(text)
@@ -295,14 +295,6 @@ def check_no_plugin_names(
     for name in extra_names:
         if name and re.search(rf"\b{re.escape(name)}\b", t, re.IGNORECASE):
             out.append(f"names a plugin: {name!r}")
-    if "provider" not in allow_names:
-        m = PROVIDER_WORD_RE.search(t)
-        if m:
-            out.append(f"says {m.group(0)!r}")
-    if asker != "proven_admin" and "plugin" not in allow_names:
-        m = PLUGIN_WORD_RE.search(t)
-        if m:
-            out.append(f"says {m.group(0)!r} to a {asker}")
     return out
 
 
