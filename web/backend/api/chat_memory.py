@@ -272,7 +272,7 @@ async def _forget_last(s: Any, *, thread_id: int, before_id: int, pid: int, brus
         memories = MemoriesRepository(s)
         body = next((b for i, b, _t, _s in await memories.list_active(pid) if i == memory_id), None)
         if body is not None and await memories.delete(memory_id, pid):
-            return _reply(f"OK, forgotten: {body}.", "forgotten", pid, memory_id=memory_id)
+            return _reply(_mem.forgotten_text(body), "forgotten", pid, memory_id=memory_id)
     if brush_off:
         return _reply(_ack(), "dismissed", pid)
     return _reply(_mem._FORGET_WHAT_TEXT, "forget_what", pid)

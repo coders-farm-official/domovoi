@@ -115,6 +115,13 @@ _SAVED_REPLY = "Got it — I'll remember that."
 # The last line of a memory list (G2): how to take one back. Voice and typed
 # chat (web/backend/api/chat_memory.py, via _list_memories) say the same.
 FORGET_HINT = 'Say "forget that …" to remove one.'
+
+
+def forgotten_text(body: str) -> str:
+    """"OK, forgotten: <fact>." — one wording, one closing period, on every
+    path (G5): "forget that <fact>", a bare "forget that", the answer to
+    "Forget what?", by voice and in typed chat."""
+    return f"OK, forgotten: {(body or '').rstrip(' .!?')}."
 _FORGET_WHAT_TEXT = 'Forget what? Tell me which thing, like "that I like jazz".'
 # A reply to "Forget what?" that drops the question.
 _NEVER_MIND_RE = re.compile(
@@ -550,7 +557,7 @@ class MemoryHandler(Handler):
         memory_id, body = matches[0]
         await repo.delete(memory_id, ctx.person_id)  # type: ignore[arg-type]
         return Response(
-            text=f"OK, forgotten: {body}",
+            text=forgotten_text(body),
             session_id=ctx.session_id,
             matched_handler=self.name,
             data={"deleted_memory_id": memory_id, "body": body},
@@ -635,7 +642,7 @@ class MemoryHandler(Handler):
                 await memories.delete(memory_id, owner)
                 await repo.set_context_key(ctx.session_id, LAST_SAVED_KEY, None)  # type: ignore[arg-type]
                 return Response(
-                    text=f"OK, forgotten: {body}.",
+                    text=forgotten_text(body),
                     session_id=ctx.session_id,
                     matched_handler=self.name,
                     data={"deleted_memory_id": memory_id, "body": body},

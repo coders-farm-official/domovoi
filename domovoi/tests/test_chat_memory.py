@@ -277,7 +277,7 @@ def test_list_and_forget_touch_only_the_askers_memories(house, model) -> None:
         forgot, done = _send(c, t, "forget that my locker", house["dev"]["ana"])
         nothing, _ = _send(c, t, "forget that I like jazz", house["dev"]["ana"])
     assert listed == "Here's what I remember: my locker is 12. " + mem_handler.FORGET_HINT
-    assert forgot == "OK, forgotten: my locker is 12"
+    assert forgot == "OK, forgotten: my locker is 12."
     assert done["stats"]["memory"]["action"] == "forgotten"
     assert nothing == 'I don\'t have anything saved about "I like jazz".'
     assert _memories(house["ana"]) == []
@@ -333,7 +333,7 @@ def test_the_answer_to_forget_what_forgets_or_goes_to_the_model(house, model) ->
         said, _ = _send(c, t, "that I like jazz", house["dev"]["ana"])
         assert _send(c, t, "forget that", house["dev"]["ana"])[0] == FORGET_WHAT
         _send(c, t, "the weather", house["dev"]["ana"])
-    assert said == "OK, forgotten: I like jazz"
+    assert said == "OK, forgotten: I like jazz."
     assert _memories(house["ana"]) == []
     assert len(model) == 2
 
