@@ -3,9 +3,11 @@
 Builds a throwaway database next to the test lane, migrates it to the last
 version before V073, fills it the way a 1.4 house looks (several one-device
 rooms, two of them sharing a label, a room known only by its pairing, one
-only by its music player, one only by its wake-word row, a phone's chat
-mic, a parked approval), runs V073 and checks that every room, id, token
-and label survived, and that rooms sharing a label were NOT merged.
+only by its music player, a phone's chat mic, a parked approval, and two
+wake-word rows left behind by satellites 1.4.x removed), runs V073 and
+checks that every room, id, token and label survived, that rooms sharing
+a label were NOT merged, and that the leftover wake-word rows made no
+room (pre-merge review M2).
 """
 from __future__ import annotations
 
@@ -50,7 +52,8 @@ VALUES ('lg_kitchen', 6651, 8051, 'mpd-lg_kitchen'), ('lg_porch', 6652, 8052, 'm
        ('phone-chat1', 6653, 8053, 'mpd-phone');
 INSERT INTO room_wake_words (room_id, state, slug, slugs, device_max)
 VALUES ('lg_kitchen', 'chosen', 'domovoi_v1', ARRAY['domovoi_v1'], 3),
-       ('lg_attic', 'kept', NULL, NULL, NULL);
+       ('lg_attic', 'kept', NULL, NULL, NULL),
+       ('lg_removed', 'chosen', 'domovoi_v1', ARRAY['domovoi_v1'], 2);
 INSERT INTO satellite_health (room_id, sample) VALUES ('lg_kitchen', '{"cpu": 1}');
 INSERT INTO satellite_outages (room_id, report) VALUES ('lg_office', '{"why": "x"}');
 INSERT INTO room_battery (room_id, percent) VALUES ('lg_den', 40);
@@ -99,7 +102,11 @@ async def test_a_1_4_house_keeps_its_rooms_ids_and_tokens(legacy_db):
     rooms = {r["room_id"]: r for r in await conn.fetch("SELECT * FROM rooms")}
     # Every room the house had, the phone's chat mic not among them.
     assert set(rooms) == {"lg_kitchen", "lg_kitchen_2", "lg_office", "lg_den",
-                          "lg_garage", "lg_porch", "lg_attic"}
+                          "lg_garage", "lg_porch"}
+    # M2: a wake-word row whose satellite is gone (1.4.x never deleted
+    # them) is no room; the row itself is left as it was.
+    assert "lg_attic" not in rooms and "lg_removed" not in rooms
+    assert {r[0] for r in await conn.fetch("SELECT room_id FROM room_wake_words")} >= {"lg_attic", "lg_removed"}
     # Rooms that shared a label are still two rooms.
     assert rooms["lg_kitchen"]["name"] == rooms["lg_kitchen_2"]["name"] == "Kitchen"
     assert rooms["lg_office"]["name"] == "lg_office"

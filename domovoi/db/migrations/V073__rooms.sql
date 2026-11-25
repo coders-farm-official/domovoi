@@ -42,8 +42,12 @@ FROM satellite_pairings p
 WHERE p.room_id NOT LIKE 'phone-%'
   AND NOT EXISTS (SELECT 1 FROM satellites s WHERE s.room_id = p.room_id);
 
--- The rooms: every device's, plus rooms known only by a music player or
--- a wake-word row. Room-level settings move over from the device row.
+-- The rooms: every device's (paired, or in the inventory), plus rooms
+-- known only by a music player. NOT a room known only by a wake-word row:
+-- 1.4.x never deleted those when a satellite was removed, so they would
+-- bring removed rooms back as empty ones (pre-merge review M2). Such a
+-- row stays as it was and names no room. Room-level settings move over
+-- from the device row.
 INSERT INTO rooms (room_id, name, voice, quiet_mode, quiet_start, quiet_end)
 SELECT u.room_id,
        COALESCE(NULLIF(btrim(s.room_label), ''), u.room_id),
@@ -52,8 +56,7 @@ SELECT u.room_id,
        s.quiet_start,
        s.quiet_end
 FROM (SELECT room_id FROM satellites
-      UNION SELECT room_id FROM mpd_rooms WHERE room_id NOT LIKE 'phone-%'
-      UNION SELECT room_id FROM room_wake_words WHERE room_id NOT LIKE 'phone-%') u
+      UNION SELECT room_id FROM mpd_rooms WHERE room_id NOT LIKE 'phone-%') u
 LEFT JOIN satellites s ON s.room_id = u.room_id;
 
 -- satellites: the device table. Its id is the old room id.
