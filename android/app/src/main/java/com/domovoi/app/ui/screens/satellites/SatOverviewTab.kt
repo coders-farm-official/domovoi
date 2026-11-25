@@ -25,7 +25,9 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -41,9 +43,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.net.AdminSession
+import com.domovoi.app.net.ApiException
+import com.domovoi.app.net.LocalSharedScreen
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
@@ -212,7 +218,7 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         DropInSection(s)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
-        MaintenanceSection(s, needsUpgrade, rebootReason, netStep, onRefresh)
+        MaintenanceSection(s, needsUpgrade, rebootReason, netStep, onRefresh, coreSha)
     }
 }
 
@@ -541,14 +547,32 @@ private fun MaintenanceSection(
     rebootReason: String? = null,
     netStep: NetStepLine? = null,
     onRefresh: () -> Unit = {},
+    coreSha: String? = null,
 ) {
     val toast = LocalToast.current
+    val app = LocalApp.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val shared = LocalSharedScreen.current
 
     // Restart and upgrade are admin on the server (satellites.py: restart is
-    // require_admin_mutation, upgrade require_admin_security), and a phone
-    // has no admin session, so neither is offered here: both buttons 401'd
-    // from every phone (the phone admin audit, 22 Nov 2026). What stays is
-    // the upgrade the server's record shows, started from a dashboard.
+    // require_admin_mutation, upgrade require_admin_security). Without admin
+    // on this phone neither is offered (both 401'd from every phone, the
+    // phone admin audit, 22 Nov 2026): what stays is the upgrade the
+    // server's record shows. With admin held (SatAdmin.kt), both are here,
+    // each confirmed in the dashboard's words and sent through
+    // AdminSession.act; never on a shared screen.
+    val adminState by app.admin.state.collectAsState()
+    val held = roomAdminHeld(adminState, shared)
+    val scope = rememberCoroutineScope()
+    val adminApi = remember(app) { RoomAdminApi(app.api) }
+    var asking by remember(s.room_id) { mutableStateOf(false) }
+    var restarting by remember(s.room_id) { mutableStateOf(false) }
+    var confirm by remember(s.room_id) { mutableStateOf<String?>(null) }
+    var adminProblem by remember(s.room_id) { mutableStateOf<String?>(null) }
+    DisposableEffect(context) {
+        app.adminLocker.promptHost = context
+        onDispose { if (app.adminLocker.promptHost === context) app.adminLocker.promptHost = null }
+    }
     var press by remember(s.room_id) { mutableStateOf(SatUpgradePresses.get(s.room_id)) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val upView = satUpgradeView(s, press, nowMs)
@@ -638,12 +662,45 @@ private fun MaintenanceSection(
                 )
             }
         }
-        Text(
-            ROOM_MAINTENANCE_ON_DASHBOARD,
-            style = MaterialTheme.typography.bodySmall,
-            color = Domovoi.colors.fgMuted,
-            modifier = Modifier.padding(top = 8.dp),
-        )
+        if (held) {
+            val canRestart = satCan(s, "restart")
+            val canUpgrade = satCan(s, "code_sync")
+            val upToDate = coreSha != null && s.version != null && s.version == coreSha
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    enabled = !upgrading && !restarting && s.online && canRestart,
+                    onClick = {
+                        when {
+                            upgrading -> toast(RoomAdminWords.upgradingAlready(s.room_id))
+                            !s.online -> toast(RoomAdminWords.offline(s.room_id))
+                            else -> confirm = "restart"
+                        }
+                    },
+                ) { Text(RoomAdminWords.RESTART) }
+                val primary = needsUpgrade && canUpgrade
+                val upgradeEnabled = !upgrading && !asking && s.online && !upToDate && canUpgrade
+                val upgradeLabel = if (upgrading || asking) RoomAdminWords.UPGRADING else RoomAdminWords.UPGRADE
+                if (primary) {
+                    Button(enabled = upgradeEnabled, onClick = { confirm = "upgrade" }) { Text(upgradeLabel) }
+                } else {
+                    OutlinedButton(enabled = upgradeEnabled, onClick = { confirm = "upgrade" }) { Text(upgradeLabel) }
+                }
+            }
+            RoomAdminWords.notOffered(canRestart, canUpgrade)?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint, modifier = Modifier.padding(top = 6.dp))
+            }
+            adminProblem?.takeIf { !upgrading }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.err, modifier = Modifier.padding(top = 6.dp))
+            }
+        } else {
+            Text(
+                // A shared screen never holds admin: its words stay as they were.
+                if (shared) ROOM_MAINTENANCE_ON_DASHBOARD else RoomAdminWords.MAINTENANCE_OR_PHONE,
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
         if (upgrading) {
             Text(
                 (if (s.online) "Syncing its code${upView.expected?.let { " to $it" } ?: ""} from the Domovoi server…"
@@ -668,5 +725,66 @@ private fun MaintenanceSection(
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
+    }
+
+    // The dashboard's confirms, word for word; then the call, as admin.
+    fun failed(action: String, e: Exception): String = when (e) {
+        is AdminSession.AdminUnavailable -> e.message ?: "admin isn't available"
+        else -> failureText(action, e)
+    }
+    when (confirm) {
+        "restart" -> ConfirmDialog(
+            title = RoomAdminWords.RESTART,
+            body = RoomAdminWords.restartConfirm(s.room_id),
+            confirmLabel = "restart",
+            onConfirm = {
+                restarting = true
+                adminProblem = null
+                scope.launch {
+                    try {
+                        app.admin.act { h, srv -> adminApi.restart(s.room_id, h, srv) }
+                        toast(RoomAdminWords.restarting(s.room_id))
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        adminProblem = failed("restart", e)
+                        toast(adminProblem!!)
+                    } finally {
+                        restarting = false
+                    }
+                }
+            },
+            onDismiss = { confirm = null },
+        )
+        "upgrade" -> ConfirmDialog(
+            title = RoomAdminWords.UPGRADE,
+            body = RoomAdminWords.upgradeConfirm(s.room_id, coreSha),
+            confirmLabel = "upgrade",
+            onConfirm = {
+                asking = true
+                adminProblem = null
+                scope.launch {
+                    try {
+                        val p = app.admin.act { h, srv -> adminApi.upgrade(s.room_id, h, srv) }
+                        // Locked from here until the room is back (satUpgradeView).
+                        SatUpgradePresses.put(s.room_id, p)
+                        press = p
+                        nowMs = System.currentTimeMillis()
+                        toast(RoomAdminWords.upgrading(s.room_id))
+                        refresh()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        adminProblem = failed("upgrade", e)
+                        toast(adminProblem!!)
+                        // 409: one is already under way (a dashboard): the list says so.
+                        if (e is ApiException && e.status == 409) refresh()
+                    } finally {
+                        asking = false
+                    }
+                }
+            },
+            onDismiss = { confirm = null },
+        )
     }
 }

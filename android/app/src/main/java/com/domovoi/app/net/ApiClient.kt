@@ -389,8 +389,13 @@ class ApiClient(
         onlyTo: String? = null,
     ): JsonElement =
         parse(raw("POST", path, jsonBody(body), headers = headers, onlyTo = onlyTo))
-    suspend fun patch(path: String, body: JsonElement? = null): JsonElement =
-        parse(raw("PATCH", path, jsonBody(body)))
+    suspend fun patch(
+        path: String,
+        body: JsonElement? = null,
+        headers: Map<String, String> = emptyMap(),
+        onlyTo: String? = null,
+    ): JsonElement =
+        parse(raw("PATCH", path, jsonBody(body), headers = headers, onlyTo = onlyTo))
     suspend fun put(
         path: String,
         body: JsonElement? = null,
