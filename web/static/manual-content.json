@@ -1027,6 +1027,11 @@
        "needs": "ai"
       },
       {
+       "text": "what timers do I have",
+       "handler": "timer",
+       "path": "fast"
+      },
+      {
        "text": "cancel the timer",
        "handler": "timer",
        "path": "fast"
@@ -1053,6 +1058,11 @@
       },
       {
        "text": "set an alarm for 6:30",
+       "handler": "reminder",
+       "path": "fast"
+      },
+      {
+       "text": "is my alarm set",
        "handler": "reminder",
        "path": "fast"
       },
