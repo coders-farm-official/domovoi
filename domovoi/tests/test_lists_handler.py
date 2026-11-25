@@ -505,3 +505,17 @@ async def test_a_bare_add_with_one_list_goes_to_it(voice) -> None:
     await voice.db.commit()
     r = await voice("add bananas")
     assert r.text == "Added bananas to your shopping list."
+
+
+@pytest.mark.parametrize("said", [
+    "add things to my list", "add stuff to the shopping list", "put things on my list",
+    "add stuff to the shopping", "add to my list stuff", "add stuff", "remove things from my list",
+    "take stuff off the shopping list", "cross things off my list", "cross off stuff", "tick things off",
+])
+def test_a_generic_item_is_never_a_list_command(said: str) -> None:
+    # G1: "can you add things to my list?" asks about the ability (the
+    # capability table answers); no item called "things" is ever written.
+    from domovoi.handlers.lists import ListsHandler
+
+    for fp in ListsHandler().fast_paths:
+        assert not fp.pattern.match(said), (said, fp.pattern.pattern)

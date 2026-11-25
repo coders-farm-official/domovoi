@@ -42,6 +42,7 @@ from domovoi.db.repositories import (
 )
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.dismiss import _ack
+from domovoi.house_facts import FORGET_YES, GENERIC_OBJECT, MEMORY_YES, is_generic_object
 from domovoi.models import Context, Intent, Response
 from domovoi.voice_identifier import UNHEARD, unheard_text
 
@@ -54,9 +55,17 @@ log = logging.getLogger(__name__)
 # "remember I'm allergic to peanuts". Negative lookahead on "to " carves
 # out reminder territory ("remember to call mom" → ReminderHandler's
 # domain, not ours).
+#
+# A generic object is not a fact (G1): "(can you) remember things about me"
+# is a question about the ability, and the capability table answers it
+# (house_facts, row "memory"). The lookahead keeps this fast path off it, so
+# the router keeps the question whole; _add_memory refuses one too (the
+# tool router and typed chat reach it without this regex).
+_GENERIC_BODY = rf"(?:{GENERIC_OBJECT})(?:,? (?:please|for me|for us|thanks|thank you))?$"
 _REMEMBER_RE = re.compile(
     r"^(?:i want you to |i'd like you to |)"
     r"remember (?!to )"
+    rf"(?!(?:that |this[:\-]?\s*|the (?:fact|thing) that )?{_GENERIC_BODY})"
     r"(?:that |this[:\-]?\s*|the (?:fact|thing) that )?"
     r"(?P<body>.+)$"
 )
@@ -72,7 +81,8 @@ _FORGET_MEMORY_RE = re.compile(
     r"^(?:"
     r"forget (?:that (?!(?:alias|name|nickname)$)|the (?:fact|thing|memory|note) (?:about |that ))"
     r"|stop (?:saving|remembering) (?:that |)"
-    r")(?P<body>.+)$"
+    # "forget that stuff", "stop remembering things": no one memory (G1).
+    rf")(?!{_GENERIC_BODY})(?P<body>.+)$"
 )
 
 # A BARE forget — no "that <fact>" after it (N15): "forget that", "forget
@@ -461,6 +471,10 @@ class MemoryHandler(Handler):
     async def _add_memory(
         self, body: str, ctx: Context, session: AsyncSession
     ) -> Response:
+        if is_generic_object(body):
+            # "things about me" is no fact (G1): the ability is explained,
+            # nothing is saved.
+            return Response(text=MEMORY_YES, session_id=ctx.session_id, matched_handler=self.name)
         guard = await self._ensure_person(ctx)
         if guard is not None:
             return guard
@@ -494,6 +508,9 @@ class MemoryHandler(Handler):
     async def _forget_memory(
         self, fragment: str, ctx: Context, session: AsyncSession
     ) -> Response:
+        if is_generic_object(fragment):
+            # "stuff" would fuzzy-match any memory (G1): nothing is deleted.
+            return Response(text=FORGET_YES, session_id=ctx.session_id, matched_handler=self.name)
         guard = await self._ensure_person(ctx)
         if guard is not None:
             return guard

@@ -279,6 +279,96 @@ def test_kept_question_only_for_a_table_x() -> None:
     assert strip_leading_filler("can you juggle") == "juggle"
     assert strip_leading_filler("can you set a timer for 10 minutes") == "set a timer for 10 minutes"
     assert strip_leading_filler("could you order pizza") == "order pizza"
+    # A generic object is the question after any lead (G1).
+    assert strip_leading_filler("could you remember things about me") == "can you remember things about me"
+    assert strip_leading_filler("would you please remember stuff") == "can you remember stuff"
+
+
+# ─── G1: "can you <verb> <generic object>?" is a question, never a command ─
+
+_GENERIC_ASKS = [
+    # memory (case 6.9)
+    ("Can you remember things about me?", "memory"),
+    ("can you remember stuff", "memory"), ("can you remember facts", "memory"),
+    ("can you remember anything", "memory"), ("can you remember everything", "memory"),
+    ("can you remember what I tell you", "memory"), ("can you remember what I say", "memory"),
+    ("can you remember things about us", "memory"), ("can you remember stuff like that", "memory"),
+    ("can you remember things like my birthday", "memory"), ("can you remember things for me", "memory"),
+    ("could you remember things about me", "memory"), ("would you please remember stuff", "memory"),
+    ("are you able to remember things", "memory"), ("do you remember things about me", "memory"),
+    ("can you please remember things about me", "memory"),
+    ("can you forget things", "forget"), ("can you forget stuff about me", "forget"),
+    ("could you forget everything", "forget"), ("can you stop remembering things", "forget"),
+    ("can you forget that stuff", "forget"),
+    # lists
+    ("can you add things to lists?", "list_add"), ("can you add stuff to my shopping list?", "list_add"),
+    ("can you put things on my list", "list_add"), ("could you add stuff to the shopping", "list_add"),
+    ("can you remove things from lists", "list_remove"),
+    ("can you take things off my list", "list_remove"), ("can you cross things off my list", "list_remove"),
+    # notes, announcements
+    ("can you jot down things", "note_things"), ("could you jot things down", "note_things"),
+    ("can you note things down", "note_things"), ("can you save stuff", "note_things"),
+    ("can you tell everyone things", "announce_things"), ("can you announce stuff", "announce_things"),
+]
+
+
+@pytest.mark.parametrize(("said", "row"), _GENERIC_ASKS)
+def test_a_generic_object_is_answered_by_voice(said: str, row: str) -> None:
+    from domovoi.router import plan_route
+
+    p = plan_route(said)
+    assert p is not None and p.handler.name == "house_facts", (said, p and p.handler.name)
+    found = hf.capability_of(p.transcript)
+    assert found is not None and found[0].key == row
+
+
+@pytest.mark.parametrize(("said", "row"), _GENERIC_ASKS)
+def test_a_generic_object_is_answered_in_chat(said: str, row: str) -> None:
+    found = hf.chat_capability(hf.normalize(said))
+    assert found is not None and found[0].key == row, said
+
+
+@pytest.mark.asyncio
+async def test_the_memory_capability_answers() -> None:
+    assert await _cap("Can you remember things about me?") == (
+        'Yes. Say "remember that …" and I\'ll keep it for you; "what do you remember about me?" lists it.')
+    assert await _cap("can you forget things") == hf.FORGET_YES
+    assert await _cap("can you add things to lists") == 'Yes. Say "add milk to the shopping list".'
+    assert await _cap("can you remove things from lists") == 'Yes. Say "cross milk off the shopping list".'
+
+
+@pytest.mark.parametrize(("said", "handler"), [
+    # The commands with a real object still act.
+    ("can you remember that my locker is 12", "memory"),
+    ("remember that things like keys go in the bowl", "memory"),
+    ("remember the thing that my code is 4", "memory"),
+    ("forget that I like jazz", "memory"),
+    ("can you add milk to the shopping list", "lists"),
+    ("add things to do to my to-do list", "lists"),
+    ("cross off milk", "lists"),
+    ("jot down buy milk", "voice_notes"),
+    ("tell everyone dinner's ready", "intercom"),
+    ("announce stuff is ready", "intercom"),
+    ("could you order pizza", None),
+])
+def test_a_real_object_is_still_the_command(said: str, handler: str | None) -> None:
+    assert _plan(said) == handler
+
+
+@pytest.mark.parametrize("body", [
+    "things about me", "stuff", "facts", "anything", "everything", "what i tell you", "what i say",
+    "things about us", "stuff like that", "that stuff", "things for me", "things like my birthday",
+])
+def test_generic_bodies(body: str) -> None:
+    assert hf.is_generic_object(body)
+
+
+@pytest.mark.parametrize("body", [
+    "my locker is 12", "things like keys go in the bowl", "everything is in the garage",
+    "the stuff for the party", "i like jazz",
+])
+def test_real_bodies(body: str) -> None:
+    assert not hf.is_generic_object(body)
 
 
 # ─── The capability table ─────────────────────────────────────────────────

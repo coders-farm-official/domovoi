@@ -88,7 +88,9 @@ NOT_YOURS_TEXT = "I can only forget that for the person who asked me to remember
 
 # The router's "can you …" lead (router._LEADING_FILLER_RE), which
 # house_facts.normalize keeps for its own questions: "can you remember
-# that my locker is 12" is the command, as it is by voice.
+# that my locker is 12" is the command, as it is by voice. "Can you remember
+# things about me?" is not: the memory regexes refuse a generic object (G1),
+# so it goes on to house_facts.chat_reply, which answers the question.
 _ASK_LEAD_RE = re.compile(r"^(?:(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+)+")
 
 

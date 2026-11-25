@@ -60,6 +60,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi import lists as L
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.house_facts import GENERIC_OBJECT
 from domovoi.models import Context, Intent, Response
 
 CREATE_KIND = "core.lists_create"
@@ -97,20 +98,34 @@ _LIST = rf"(?:{_ART} )?(?:{_NAME} )?list"
 # What can trail a command: "..., please", "... for me".
 _END = r"(?:,? (?:please|for me|for us|thanks|thank you))?$"
 _ADD_VERB = r"(?:jot down|stick down|write down|put down|add|put|stick|throw|pop|write|jot)"
+# The list part again, without its named group (for the lookaheads below).
+_LIST_NG = rf"(?:{_ART} )?(?:{_NAME.replace('(?P<list>', '(?:')} )?list"
+
+
+def _not_generic(rest: str) -> str:
+    """A lookahead refusing an item that is only a generic object followed
+    by ``rest`` (G1): "can you add things to my list?" asks about the
+    ability, and the capability table answers it; no item called
+    "things" is ever added, removed or crossed off."""
+    return rf"(?!(?:{GENERIC_OBJECT}){rest})"
+
+
+_INTO = r" (?:to|on|onto|in|into|on to|in to) "
 
 _ADD_RE = re.compile(
-    rf"^{_ADD_VERB} (?P<item>.+?) (?:to|on|onto|in|into|on to|in to) {_LIST}{_END}"
+    rf"^{_ADD_VERB} {_not_generic(_INTO + _LIST_NG + _END)}(?P<item>.+?) (?:to|on|onto|in|into|on to|in to) {_LIST}{_END}"
 )
 # "add to my to-do list tarp the trailer"
 _ADD_LATE_RE = re.compile(
-    rf"^{_ADD_VERB} (?:to|on|onto) {_LIST},? (?P<item>.+)$"
+    rf"^{_ADD_VERB} (?:to|on|onto) {_LIST},? {_not_generic(_END)}(?P<item>.+)$"
 )
 # "add eggs to the shopping", "add tarp the trailer to my to-do": the two
 # lists every house has, without the word "list". Only these names (a bare
 # "add it to my camping" could be anything), and "to do" with a space is
 # left out: "put the kettle on to do the dishes" is no list.
 _ADD_KNOWN_RE = re.compile(
-    rf"^{_ADD_VERB} (?P<item>.+?) (?:to|on|onto|in|into|on to|in to) (?:{_ART} )?"
+    rf"^{_ADD_VERB} {_not_generic(_INTO + f'(?:{_ART} )?(?:to-?dos?|shopping|groceries){_END}')}"
+    rf"(?P<item>.+?) (?:to|on|onto|in|into|on to|in to) (?:{_ART} )?"
     rf"(?P<list>to-?dos?|shopping|groceries){_END}"
 )
 
@@ -133,7 +148,7 @@ _BARE_ADD_NOT_OURS = (
 # which called the library). Only "add": "put the kettle", "throw a party"
 # and "write down that ..." are not list turns.
 _ADD_BARE_RE = re.compile(
-    rf"^add (?!{_BARE_ADD_PRONOUN})(?!.*(?:{_BARE_ADD_NOT_OURS}))(?P<item>[^,].*?){_END}"
+    rf"^add (?!{_BARE_ADD_PRONOUN})(?!.*(?:{_BARE_ADD_NOT_OURS})){_not_generic(_END)}(?P<item>[^,].*?){_END}"
 )
 
 
@@ -168,17 +183,18 @@ _LISTS_RE = re.compile(
 _CROSS_VERB = r"(?:cross|check|tick|strike|mark)"
 _CROSS_RES = tuple(re.compile(p) for p in (
     # "cross milk off the shopping list", "check off milk on my to-do list"
-    rf"^{_CROSS_VERB} (?P<item>.+?) off (?:of )?{_LIST}{_END}",
-    rf"^{_CROSS_VERB} off (?P<item>.+?) (?:on|from|in) {_LIST}{_END}",
+    rf"^{_CROSS_VERB} {_not_generic(f' off (?:of )?{_LIST_NG}{_END}')}(?P<item>.+?) off (?:of )?{_LIST}{_END}",
+    rf"^{_CROSS_VERB} off {_not_generic(f' (?:on|from|in) {_LIST_NG}{_END}')}(?P<item>.+?) (?:on|from|in) {_LIST}{_END}",
     # "cross off milk", "tick milk off" (any list)
-    rf"^{_CROSS_VERB} off (?P<item>.+?){_END}",
-    rf"^(?:cross|tick|strike|check|mark) (?P<item>.+?) off{_END}",
+    rf"^{_CROSS_VERB} off {_not_generic(_END)}(?P<item>.+?){_END}",
+    rf"^(?:cross|tick|strike|check|mark) {_not_generic(f' off{_END}')}(?P<item>.+?) off{_END}",
     # "mark tarp the trailer as done", "mark milk done on the shopping list"
     rf"^mark (?P<item>.+?) (?:as )?(?:done|complete|completed|finished)(?: (?:on|in) {_LIST})?{_END}",
 ))
 
 _REMOVE_RE = re.compile(
-    rf"^(?:remove|delete|take|erase|scratch|drop|get rid of) (?P<item>.+?)"
+    rf"^(?:remove|delete|take|erase|scratch|drop|get rid of) "
+    rf"{_not_generic(f' (?:from|off|off of|out of) {_LIST_NG}{_END}')}(?P<item>.+?)"
     rf" (?:from|off|off of|out of) {_LIST}{_END}"
 )
 
