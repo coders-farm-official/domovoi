@@ -46,6 +46,11 @@ public final class ShellModel {
 
     public let container: AppContainer
 
+    /// Admin on this phone, observable (1.5.0): the top bar's badge, Settings
+    /// → Household → Admin on this phone, and Settings → Rooms' "Asking to
+    /// join" all read this one, over ``AppContainer/admin``.
+    public let admin: AdminModel
+
     /// Whether this phone can start a chat on itself. See
     /// ``RouteVisibility/phoneCanChat`` — false until the on-device assistant
     /// exists, and this is the one place it is decided.
@@ -292,6 +297,7 @@ public final class ShellModel {
         serverAnsweredAtStart: Bool = false
     ) {
         self.container = container
+        self.admin = AdminModel(session: container.admin)
         self.phoneCanChat = phoneCanChat
         self.deviceSelf = deviceSelf
         let listenerStore = listeners ?? PlayerListenerStore()

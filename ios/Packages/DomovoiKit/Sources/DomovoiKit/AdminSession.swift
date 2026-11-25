@@ -380,12 +380,58 @@ public final class AdminSession: Sendable {
     /// or the server now proves a different identity, whatever `prove`
     /// throws when it cannot prove one, and whatever `block` throws.
     public func call<T>(
-        _ block: (_ headers: [String: String], _ server: String) async throws -> T
+        _ block: @Sendable (_ headers: [String: String], _ server: String) async throws -> T
     ) async throws -> T {
         try await calling { l in try await block(Self.bearer(l), l.server) }
     }
 
-    private func calling<T>(_ block: (Live) async throws -> T) async throws -> T {
+    /// An admin action a screen asks for (design §1: "a tap after the hour
+    /// but within the day asks for the biometric, then acts"). Android's
+    /// `act` (`AdminSession.kt`, bd5c4b5e).
+    ///
+    /// With a live session, ``call(_:)``. With admin kept today and no
+    /// session (the idle hour lapsed, the app restarted, or the server ended
+    /// the session), Face ID first (``resume()``), then the call — and when
+    /// that call says there is no session (``NotSignedIn``, or the server's
+    /// own admin refusal: its idle hour), one more resume and one more call,
+    /// never a loop. Without either, ``NotSignedIn``; a resume that didn't
+    /// work throws ``AdminUnavailable`` with its reason.
+    public func act<T>(
+        _ block: @Sendable (_ headers: [String: String], _ server: String) async throws -> T
+    ) async throws -> T {
+        if liveForActive() == nil, storedForActive() != nil { try await resumeOrThrow() }
+        do {
+            return try await call(block)
+        } catch {
+            let sessionGone: Bool
+            if error is NotSignedIn {
+                sessionGone = true
+            } else if let f = (error as? DomovoiError)?.failure, isAdminRefusal(status: f.status, body: f.body) {
+                // The server ended this session (its idle hour); today's
+                // grant may still be good for a new one.
+                sessionGone = true
+            } else {
+                sessionGone = false
+            }
+            guard sessionGone, storedForActive() != nil else { throw error }
+            try await resumeOrThrow()
+            return try await call(block)
+        }
+    }
+
+    /// ``act(_:)`` couldn't get a session: the reason, in plain words.
+    /// Android's `AdminUnavailable`.
+    public struct AdminUnavailable: Error, Equatable, Sendable {
+        public let reason: String
+        public init(_ reason: String) { self.reason = reason }
+        public var message: String { reason }
+    }
+
+    private func resumeOrThrow() async throws {
+        if case .refused(let why) = await resume() { throw AdminUnavailable(why) }
+    }
+
+    private func calling<T>(_ block: @Sendable (Live) async throws -> T) async throws -> T {
         guard let l = liveForActive() else {
             forget()
             throw NotSignedIn()

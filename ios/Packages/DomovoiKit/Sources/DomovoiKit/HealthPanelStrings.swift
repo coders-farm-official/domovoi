@@ -109,10 +109,12 @@ public enum HealthPanelStrings {
 
     // MARK: - the dashboard foot (`:160-172`)
 
-    /// `:163-165`, two Kotlin literals joined with `+`.
+    /// `:163-166`, three Kotlin literals joined with `+`. Since 1.5.0 it also
+    /// says that admin on this phone approves rooms (``AdminSession``).
     public static let dashboardFoot =
         "Updates, disk space, rooms waiting for approval and the internet are checked on the "
-        + "dashboard's Health, where the admin signs in."
+        + "dashboard's Health, where the admin signs in, or sign in as admin on this phone "
+        + "(Settings → Household → Admin on this phone) to approve rooms in Settings → Rooms."
 
     /// `:169`.
     public static let openTheDashboard = "Open the dashboard's Health"

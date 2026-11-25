@@ -269,6 +269,9 @@ struct RoomsView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
+                // Devices asking to join (1.5.0): only while this phone
+                // holds admin (``JoinRequestsCard``).
+                JoinRequestsCard(model: model)
                 // The roster, always: a room is pushed on top of this screen
                 // now (D56), so this one stays mounted underneath rather
                 // than being swapped for the detail.

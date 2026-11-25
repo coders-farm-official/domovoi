@@ -273,9 +273,10 @@ final class AdminSessionTests: XCTestCase {
         let s = session()
         _ = await signIn(s)
         let client = client!
+        let other = other
         do {
             _ = try await s.call { headers, server in
-                try await client.raw(method: "POST", path: "\(self.other)/api/x", headers: headers, onlyTo: server)
+                try await client.raw(method: "POST", path: "\(other)/api/x", headers: headers, onlyTo: server)
             }
             XCTFail("an absolute URL with the Bearer is refused")
         } catch {
@@ -609,6 +610,122 @@ final class AdminSessionTests: XCTestCase {
         lock.setRoomModeActive(false)
         XCTAssertNil(shelf.readGrant())
         XCTAssertEqual(.signedOut, s.state)
+    }
+
+    // MARK: - act: a tap after the hour asks for Face ID, then acts (bd5c4b5e)
+
+    private func actRestart(_ s: AdminSession) async throws {
+        let client = s.client
+        _ = try await s.act { headers, server in
+            try await client.raw(method: "POST", path: Self.restartPath, headers: headers, onlyTo: server)
+        }
+    }
+
+    func testActWithAKeptGrantResumesThenActs() async throws {
+        let s = keeping()
+        _ = await signIn(s)
+        _ = await s.keepToday(label: "phone")
+        s.forget()
+        try await actRestart(s)
+        XCTAssertEqual(1, locker.opens)
+        XCTAssertEqual(Self.bearerB, sent(Self.restartPath).last?.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testActAfterTheServerEndedTheSessionResumesOnce() async {
+        let s = keeping()
+        _ = await signIn(s)
+        _ = await s.keepToday(label: "phone")
+        sessionLive.set(false) // the idle hour, at the server
+        do {
+            try await actRestart(s)
+            XCTFail("the exchanged session is refused too here")
+        } catch {
+            XCTAssertEqual(401, (error as? DomovoiError)?.failure?.status, "\(error)")
+        }
+        XCTAssertEqual(1, locker.opens, "one Face ID check, not a loop")
+        XCTAssertEqual(1, sent("/api/auth/phone-grant/exchange").count)
+    }
+
+    func testActWithNothingKeptIsNotSignedIn() async {
+        let s = keeping()
+        do {
+            try await actRestart(s)
+            XCTFail("no admin")
+        } catch {
+            XCTAssertEqual(adminOnly, (error as? AdminSession.NotSignedIn)?.message, "\(error)")
+        }
+        XCTAssertEqual(0, locker.opens)
+        XCTAssertTrue(sent(Self.restartPath).isEmpty)
+    }
+
+    func testACancelledFaceIDCheckSaysSoAndKeepsTheGrant() async {
+        let s = keeping()
+        _ = await signIn(s)
+        _ = await s.keepToday(label: "phone")
+        s.forget()
+        locker.ok = false
+        do {
+            try await actRestart(s)
+            XCTFail("cancelled")
+        } catch {
+            let why = (error as? AdminSession.AdminUnavailable)?.reason ?? "\(error)"
+            XCTAssertTrue(why.contains("didn't finish"), why)
+        }
+        XCTAssertNotNil(shelf.readGrant())
+        XCTAssertTrue(sent(Self.restartPath).isEmpty)
+    }
+
+    /// With a live session, `act` is `call`: no Face ID at all.
+    func testActWithALiveSessionIsACall() async throws {
+        let s = keeping()
+        _ = await signIn(s)
+        _ = await s.keepToday(label: "phone")
+        try await actRestart(s)
+        XCTAssertEqual(0, locker.opens)
+        XCTAssertEqual(Self.bearerA, sent(Self.restartPath).last?.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    // MARK: - the panel's model (AdminModel)
+
+    @MainActor
+    func testThePanelSignsInAndKeepsTheDay() async {
+        let admin = AdminModel(session: keeping())
+        XCTAssertEqual(.signedOut, admin.state)
+        await admin.signIn(password: "nope", keep: true, label: "phone: iPhone")
+        XCTAssertEqual("wrong admin password", admin.message)
+        await admin.signIn(password: "right-password", keep: true, label: "phone: iPhone")
+        XCTAssertNil(admin.message)
+        XCTAssertFalse(admin.busy)
+        guard case .signedIn(_, _, let kept?) = admin.state else { return XCTFail("\(admin.state)") }
+        XCTAssertEqual(Self.ms("2026-11-25T10:00:00Z"), kept)
+        XCTAssertEqual(.filled, admin.badge(sharedScreen: false))
+        XCTAssertNil(admin.badge(sharedScreen: true))
+        admin.session.forget()
+        admin.refresh()
+        XCTAssertEqual(.muted, admin.badge(sharedScreen: false))
+        await admin.resume()
+        XCTAssertNil(admin.message)
+        XCTAssertEqual(.filled, admin.badge(sharedScreen: false))
+        await admin.signOut()
+        XCTAssertEqual(.signedOut, admin.state)
+        XCTAssertNil(admin.badge(sharedScreen: false))
+    }
+
+    @MainActor
+    func testADayThatCouldNotBeKeptStillLeavesTheHour() async {
+        let admin = AdminModel(session: keeping())
+        locker.ok = false
+        await admin.signIn(password: "right-password", keep: true, label: "phone")
+        XCTAssertTrue(admin.message?.hasPrefix("Signed in for the hour; not kept for the day: ") == true, admin.message ?? "")
+        XCTAssertEqual(.signedIn(server: server, idleUntilMs: clock.current + 3_600_000, keptUntilMs: nil), admin.state)
+    }
+
+    @MainActor
+    func testUnticked_TheDayIsNotKept() async {
+        let admin = AdminModel(session: keeping())
+        await admin.signIn(password: "right-password", keep: false, label: "phone")
+        XCTAssertNil(shelf.readGrant())
+        XCTAssertTrue(sent("/api/auth/phone-grant").isEmpty)
     }
 
     // MARK: - the pieces

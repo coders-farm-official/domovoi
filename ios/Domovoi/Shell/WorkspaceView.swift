@@ -152,7 +152,9 @@ struct WorkspaceView: View {
                     pill: model.chrome.pill,
                     onPill: { model.openConnection() }
                 ) {
-                    EmptyView()
+                    // Admin on this phone (1.5.0): the badge beside the
+                    // server pill while signed in or kept today.
+                    AdminBadgeView(model: model)
                 }
             }
             NavigationStack(path: $model.path) {
