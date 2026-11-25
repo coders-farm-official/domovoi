@@ -456,7 +456,7 @@ button.
 3. Back on the page, press **open as this room**. It opens **Domovoi
    Room** with the room code filled in. (Or open **Domovoi Room** from the
    home screen and scan the code there; on a phone that already uses the
-   app with your household: Settings → Household → Rooms → **Use this device as
+   app with your household: Settings → Household → Rooms → **Use this phone in
    a room**.)
 4. Read the explainer to the end and press **Start room mode**. It says
    what room mode means: always listening, a shared device, power and
@@ -466,7 +466,10 @@ button.
    otherwise **scan the room code** (the camera is asked for only now), or
    paste the text. The phone shows the server's address and the start of
    its key: compare the key with the dashboard's Settings → System → About & updates. Change
-   the room name if you like, then press **Become this room**.
+   the room name if you like, then press **Become this room**. A code made
+   with **Add a satellite to the Kitchen** says **This phone will join the
+   Kitchen** instead; the name under it is the phone's own ("Kitchen 2"),
+   and the button is **Join the Kitchen**.
 7. The room screen shows **waiting for approval** and a six-digit code. On
    the dashboard, Settings → Household → Rooms shows an approval card for the
    room: type the code the phone shows and approve. Within about half a
@@ -492,8 +495,10 @@ confirmation to 1 if the room misses you from across it).
 
 ### The room screen
 
-A dark full-screen display, deliberately unlike the app: the room's name,
-a clock, a ring that says what the room is doing — **idle**, **listening**,
+A dark full-screen display, deliberately unlike the app: the room's name
+and where the phone is in household words (**This phone is in the
+Kitchen**; **will join** until it is approved; it follows the room when it
+is moved on the dashboard, without reconnecting), a clock, a ring that says what the room is doing — **idle**, **listening**,
 **thinking**, **speaking**, **muted**, **offline**, **mic blocked** — the
 words under it, and:
 
@@ -599,7 +604,8 @@ You can turn your own phone into a room's satellite for a while. Then:
 |---|---|
 | waiting for approval | Approve it on the dashboard with the code on the phone. |
 | Another device is this room on the server | That room is paired with another device. On the dashboard, open the room and reset its pairing, or hold Exit, forget this room and choose another name. |
-| This room was removed on the dashboard | The room was removed (or its pairing reset) after it had been approved. Approve it again with the code shown, or hold Exit and forget it. |
+| This phone was removed on the dashboard | The phone was removed (or its pairing reset) after it had been approved. Approve it again with the code shown, or hold Exit and forget it. |
+| The server did not recognise this phone | The server read another device's name in the phone's hello (`satellite_id_mismatch`). Hold Exit, forget this room, and set the phone up again with a new code. |
 | Not listening: … needs a screen lock | This phone is also paired with your household. Set a PIN, pattern or password; the room starts again. |
 | Another device is already waiting for approval as this room | Reject the other request on the dashboard, or wait three minutes. |
 | …this is a different server… / …would not sign for… | The address in the room code answered with a different key, or something is relaying it. Make a new room code on the right server. A server reached through a name or a forwarded port needs that name in its `TRUSTED_HOSTS`. |

@@ -503,8 +503,11 @@ Since 1.5.0 the payload may carry an optional `in=<room id>`: "Add a
 satellite to the Kitchen" makes `room=Kitchen%202&in=kitchen`, where `room`
 names the device and `in` the existing room it joins. A device that reads it
 (`satellite/enrolment.py` `Enrolment.in_room`; the Pi and PC installers
-write it as `[satellite] requested_room`) sends it in its hello as
-`requested_room`. A parser from before ignores it (unknown keys are
+write it as `[satellite] requested_room`; the Android app's room mode keeps
+it with the room until its first `ready`, roommode/RoomStore.kt) sends it
+in its hello as `requested_room`. The phone shows the room by name before
+it joins ("This phone will join the Kitchen", the name being `room` without
+the number the core added) and, from `ready.room` on, the server's name. A parser from before ignores it (unknown keys are
 ignored) and connects as `kitchen_2`; the server remembered the invitation
 and pre-selects the Kitchen on the approval card either way. A value that
 is not a room id is ignored like an unknown key.

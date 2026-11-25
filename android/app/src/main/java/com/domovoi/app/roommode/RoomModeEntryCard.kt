@@ -14,24 +14,26 @@ import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.theme.Domovoi
 
-/** Settings → Rooms: "Use this device as a room" — opens room mode's
- *  explainer (roommode/RoomSetupActivity.kt) in its own task. */
+/** Settings → Rooms: "Use this phone in a room" — opens room mode's
+ *  explainer (roommode/RoomSetupActivity.kt) in its own task. Household
+ *  words: a room is a place and this phone one device in it; the phone
+ *  never says "satellite" ([RoomStatusText.ENTRY_TITLE]). */
 @Composable
 fun RoomModeEntryCard() {
     val context = LocalContext.current
     DomovoiCard {
-        SectionLabel("this device")
+        SectionLabel("this phone")
         Spacer(Modifier.height(6.dp))
-        Text("Use this device as a room", style = MaterialTheme.typography.titleMedium)
+        Text(RoomStatusText.ENTRY_TITLE, style = MaterialTheme.typography.titleMedium)
         Text(
-            "A spare phone or tablet on its charger can be a room: it listens for the wake word and speaks, " +
-                "like any other room device. The normal app is locked while it is one.",
+            "A spare phone or tablet on its charger can listen and speak in a room, on its own or beside the room's " +
+                "other devices. The normal app is locked while it does.",
             style = MaterialTheme.typography.bodyMedium,
             color = Domovoi.colors.fgMuted,
         )
         Spacer(Modifier.height(10.dp))
         OutlinedButton(onClick = {
             context.startActivity(Intent(context, RoomSetupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }) { Text("Use this device as a room") }
+        }) { Text(RoomStatusText.ENTRY_TITLE) }
     }
 }

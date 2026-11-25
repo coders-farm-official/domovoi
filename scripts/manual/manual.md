@@ -2024,7 +2024,7 @@ word, answers, plays the room's music, and takes announcements.
 5. Approve the six-digit code on the dashboard.
 
 **App:** a phone that already has the app can do this from [Settings →
-Household → Rooms](#settings/rooms) → **Use this device as a room**,
+Household → Rooms](#settings/rooms) → **Use this phone in a room**,
 or from the **Domovoi Room** icon. A phone you also use every day needs a
 screen lock, and while it's in room mode, the rest of the app is locked.
 

@@ -32,6 +32,14 @@ object RoomSessionRules {
             "minutes and this phone takes its place."
     const val THROTTLED_TEXT = "too many approval requests from this network; trying again shortly"
 
+    /** `satellite_id_mismatch` (1.5.0): the server read another device's
+     *  name in this phone's hello. The phone always names itself, so this
+     *  is a fault (an old server copy, a proxy rewriting the path): said in
+     *  household words, retried like a refusal. */
+    const val MISMATCH_TEXT =
+        "The server did not recognise this phone. Hold Exit to leave room mode and forget this room, then set the " +
+            "phone up again with a new code from the dashboard."
+
     fun verdict(reason: String?, code: String?, current: String?, approvedBefore: Boolean = false): Verdict = when (reason) {
         "awaiting_approval" -> {
             val keep = code?.takeIf { c -> c.length in 4..8 && c.all { it in '0'..'9' } }
@@ -43,6 +51,7 @@ object RoomSessionRules {
         "approval_conflict" -> Verdict(RoomEngine.Link.Conflict(CONFLICT_TEXT), "approval_conflict")
         "approval_throttled" -> Verdict(RoomEngine.Link.Offline(THROTTLED_TEXT), "approval_throttled")
         "approval_code_invalid" -> Verdict(null, "approval_code_invalid")
+        "satellite_id_mismatch" -> Verdict(RoomEngine.Link.Rejected(MISMATCH_TEXT), "satellite_id_mismatch")
         "hello_required" -> Verdict(null, "hello_required")
         else -> Verdict(null, null)
     }
@@ -52,7 +61,7 @@ object RoomSessionRules {
     fun retryAfterMs(outcome: String, backoff: Long): Long = when (outcome) {
         "ready" -> 1_000L
         "awaiting_approval" -> APPROVAL_RETRY_MS
-        "pairing_rejected", "approval_conflict", "approval_throttled" -> REFUSED_RETRY_MS
+        "pairing_rejected", "approval_conflict", "approval_throttled", "satellite_id_mismatch" -> REFUSED_RETRY_MS
         "approval_code_invalid" -> 1_000L
         else -> backoff
     }

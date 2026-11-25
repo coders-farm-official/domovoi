@@ -16,7 +16,9 @@ import java.util.Base64
  * Everything a room phone keeps, apart from the household app's own store:
  *
  * - the enrolment (the core's address, the PINNED server fingerprint, the
- *   room), the approval code it shows, the wake word the core pushed;
+ *   phone's own id, and the room it asked to join until it is approved),
+ *   the approval code it shows, the wake word the core pushed, and the
+ *   name of the room it is in as the server last said it;
  * - the room's pairing key: 32 random bytes minted here, sealed under its
  *   own Android Keystore key (`domovoi-room-key`, AES-GCM, the household
  *   vault's format) in its own file. Only its sha256 ever reaches the core.
@@ -44,8 +46,35 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
             val core = prefs.getString(K_CORE, null) ?: return null
             val fp = prefs.getString(K_FP, null) ?: return null
             val room = prefs.getString(K_ROOM, null) ?: return null
-            return Enrolment(core, fp, room, prefs.getString(K_LABEL, null) ?: room)
+            return Enrolment(core, fp, room, prefs.getString(K_LABEL, null) ?: room, requestedRoom)
         }
+
+    /**
+     * The room this phone asked to join (the room code's `in=`, 1.5.0),
+     * sent in every hello as `requested_room` until the server accepts the
+     * phone (its first `ready`, [clearRequestedRoom]); null: none asked for,
+     * or already approved. It only pre-selects the approval card's room.
+     */
+    val requestedRoom: String?
+        get() = prefs.getString(K_REQUESTED, null)?.takeIf { RoomEnrolment.isRoomId(it) }
+
+    /** Approved: the server decides the room from here on. */
+    fun clearRequestedRoom() {
+        if (prefs.contains(K_REQUESTED)) prefs.edit().remove(K_REQUESTED).apply()
+    }
+
+    /**
+     * The name of the room this phone is in, as the server last said it
+     * (`ready.room` / the `room` frame), or before that the room the room
+     * code said it joins; null: only the room code's own name is known
+     * ([Enrolment.roomLabel]). Kept so the screen and the notification say
+     * the room's name before the next connect.
+     */
+    val roomName: String? get() = prefs.getString(K_ROOM_NAME, null)?.takeIf { it.isNotBlank() }
+
+    fun setRoomName(name: String) {
+        if (name.isNotBlank() && name != roomName) prefs.edit().putString(K_ROOM_NAME, name).apply()
+    }
 
     /** Room mode is on: the normal app is locked (MainActivity sends the
      *  person here) and the household token is never put on a request. */
@@ -80,13 +109,20 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         if (!same || pairingToken() == null) {
             if (!vault.write(mapOf(TOKEN_KEY to newToken()))) return false
             prefs.edit().putString(K_CODE, newApprovalCode()).remove(K_SERIALS).remove(K_WAKE).remove(K_WAKE_WORDS).remove(K_THRESHOLD)
-                .remove(K_APPROVED).commit()
+                .remove(K_APPROVED).remove(K_ROOM_NAME).commit()
         }
         prefs.edit()
             .putString(K_CORE, e.coreUrl)
             .putString(K_FP, e.fingerprint)
             .putString(K_ROOM, e.roomId)
             .putString(K_LABEL, e.roomLabel)
+            .apply {
+                // The room the code says this phone joins (`in=`): asked for
+                // in each hello until the server accepts the phone.
+                val asked = e.inRoom?.takeIf { RoomEnrolment.isRoomId(it) }
+                if (asked != null) putString(K_REQUESTED, asked) else remove(K_REQUESTED)
+                e.inRoomName?.takeIf { asked != null && it.isNotBlank() }?.let { putString(K_ROOM_NAME, it) }
+            }
             .commit()
         return true
     }
@@ -201,6 +237,8 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         private const val K_SERIALS = "manifest_serials"
         private const val K_APPROVED = "approved_once"
         private const val K_TRAINED = "trained_sha:"
+        private const val K_REQUESTED = "requested_room"
+        private const val K_ROOM_NAME = "room_name"
         private val SERIALS = MapSerializer(String.serializer(), String.serializer())
 
         /** 32 random bytes, URL-safe base64 (as `secrets.token_urlsafe(32)`). */

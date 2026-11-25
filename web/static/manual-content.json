@@ -4892,7 +4892,7 @@
     },
     {
      "type": "p",
-     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's in room mode, the rest of the app is locked.",
+     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this phone in a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's in room mode, the rest of the app is locked.",
      "only": "app"
     },
     {
