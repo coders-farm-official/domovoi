@@ -114,8 +114,9 @@ PLUGIN_STATUS = ("ok", "error", "crash")
 # when asked) were resolved by the owner on 2026-11-25: the hedge is scored
 # per case kind, and a "which plugins" question may name them
 # (``allow_plugin_names``). 1.4.1 fixed N2-N6, N8, N9 and N11-N16; a case
-# keeps ``needs_change`` only while its gap is open (N1 today).
-NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 17) if i not in (7, 10))
+# keeps ``needs_change`` only while its gap is open (N1 today). N17
+# (device-state questions answered by the model) was found 2026-11-26.
+NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 18) if i not in (7, 10))
 CASE_STATUS = ("verified", "unverified")
 
 # What a house fixture may say (the schema the test checks).

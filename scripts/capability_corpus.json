@@ -2910,9 +2910,66 @@
       "house": "base",
       "expect": "CANT",
       "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
       "must_not_include": [
-        "(?:door )?is (?:locked|unlocked)|it'?s (?:locked|unlocked)"
-      ]
+        "(?<!if )\\b(?:the door|it)(?:'s| is) (?:still )?(?:locked|unlocked)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check doors or locks.'"
+    },
+    {
+      "id": "16.4b",
+      "utterance": "Are the lights on?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:the lights?|they)(?:'re| are| is) (?:still )?(?:on|off)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check the lights.'"
+    },
+    {
+      "id": "16.4c",
+      "utterance": "Is the garage door open?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:the (?:garage )?door|it)(?:'s| is) (?:still )?(?:open|closed|shut)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check doors.'"
+    },
+    {
+      "id": "16.4d",
+      "utterance": "Is anyone at the front door?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:there'?s|there is) (?:no ?one|nobody|someone|somebody|a person)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't see the door. I have no camera.'"
     },
     {
       "id": "16.5",
