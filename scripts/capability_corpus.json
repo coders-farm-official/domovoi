@@ -1115,7 +1115,7 @@
       "must_not_include": [
         "I can't do that yet, I don't think"
       ],
-      "note": "proven admin: '...Plug in the new kit's USB stick and open Settings → System → About & updates → Update from an offline kit.' (1.5.0)",
+      "note": "proven admin: '...Plug in the new kit's USB stick and open Settings → System → About & updates → Update from an offline kit.' (1.5.0); EXACT, not CAN: the approved admin line has no 'yes' (next batch 23, 11faa3d7)",
       "stub": true
     },
     {
@@ -2910,9 +2910,118 @@
       "house": "base",
       "expect": "CANT",
       "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
       "must_not_include": [
-        "(?:door )?is (?:locked|unlocked)|it'?s (?:locked|unlocked)"
-      ]
+        "(?<!if )\\b(?:the door|it)(?:'s| is) (?:still )?(?:locked|unlocked)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check doors or locks.'"
+    },
+    {
+      "id": "16.4b",
+      "utterance": "Are the lights on?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:the lights?|they)(?:'re| are| is) (?:still )?(?:on|off)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check the lights.'"
+    },
+    {
+      "id": "16.4c",
+      "utterance": "Is the garage door open?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:the (?:garage )?door|it)(?:'s| is) (?:still )?(?:open|closed|shut)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check doors.'"
+    },
+    {
+      "id": "16.4d",
+      "utterance": "Is anyone at the front door?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:there'?s|there is) (?:no ?one|nobody|someone|somebody|a person)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't see the door. I have no camera.'"
+    },
+    {
+      "id": "16.4e",
+      "utterance": "What's the temperature in here?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "\\b(?:it'?s|it is|about|around|currently) -?\\d+\\s*(?:°|degrees?)",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b",
+        "\\boutside\\b|\\bforecast\\b|\\bweather\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't tell the temperature inside. I have no thermometer.'"
+    },
+    {
+      "id": "16.4f",
+      "utterance": "Is the oven on?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:the oven|it)(?:'s| is) (?:still )?(?:on|off)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't check the oven.'"
+    },
+    {
+      "id": "16.4g",
+      "utterance": "Did I leave the garage open?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:the garage(?: door)?|it)(?:'s| is| was) (?:still )?(?:open|closed|shut)\\b|\\byou (?:did|didn'?t) leave\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't check the garage.'"
     },
     {
       "id": "16.5",
