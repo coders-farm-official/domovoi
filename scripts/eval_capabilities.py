@@ -115,7 +115,8 @@ PLUGIN_STATUS = ("ok", "error", "crash")
 # per case kind, and a "which plugins" question may name them
 # (``allow_plugin_names``). 1.4.1 fixed N2-N6, N8, N9 and N11-N16; a case
 # keeps ``needs_change`` only while its gap is open (N1 today). N17
-# (device-state questions answered by the model) was found 2026-11-26.
+# (device-state questions answered by the model) was found 2026-11-26 and
+# fixed with house_facts' device-state answers (16.4-16.4g are stub cases).
 NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 18) if i not in (7, 10))
 CASE_STATUS = ("verified", "unverified")
 

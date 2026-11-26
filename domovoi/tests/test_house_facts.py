@@ -723,6 +723,132 @@ async def test_print_depends_on_a_printer(db_session) -> None:
         "Not yet: no printer is set up. An admin can add one in Settings → Household → Printers & scanners.")
 
 
+# ─── Device-state questions (N17) ────────────────────────────────────────
+
+DOORS_LOCKS = "No, I can't check doors or locks."
+LIGHTS = "No, I can't check the lights."
+NO_CAMERA = "No, I can't see the door. I have no camera."
+NO_THERMOMETER = "No, I can't tell the temperature inside. I have no thermometer."
+
+
+@pytest.mark.parametrize(("said", "expected"), [
+    # 16.4-16.4g
+    ("Is the door locked?", DOORS_LOCKS),
+    ("Are the lights on?", LIGHTS),
+    ("Is the garage door open?", "No, I can't check doors."),
+    ("Is anyone at the front door?", NO_CAMERA),
+    ("What's the temperature in here?", NO_THERMOMETER),
+    ("Is the oven on?", "No, I can't check the oven."),
+    ("Did I leave the garage open?", "No, I can't check the garage."),
+    # neighbours of each
+    ("Did I lock the door?", DOORS_LOCKS),
+    ("did I lock the front door", DOORS_LOCKS),
+    ("is the back door unlocked", DOORS_LOCKS),
+    ("did I forget to lock the door", DOORS_LOCKS),
+    ("is the house locked", DOORS_LOCKS),
+    ("Did I leave the lights on?", LIGHTS),
+    ("are the kitchen lights on", LIGHTS),
+    ("are the lights still on in the kitchen", LIGHTS),
+    ("did I turn off the lights", LIGHTS),
+    ("is the front door open", "No, I can't check doors."),
+    ("did I leave the garage door open", "No, I can't check the garage."),
+    ("who's at the door", NO_CAMERA),
+    ("is there someone at the door", NO_CAMERA),
+    ("who rang the doorbell", NO_CAMERA),
+    ("how warm is it inside", NO_THERMOMETER),
+    ("what's the temperature in the house", NO_THERMOMETER),
+    ("did I leave the stove on", "No, I can't check the stove."),
+    ("did I turn the iron off", "No, I can't check the iron."),
+    ("is the dishwasher running", "No, I can't check the dishwasher."),
+    ("is the washing machine done", None),   # not a state we answer: the model's, as before
+    ("is the tv on", "No, I can't check the TV."),
+    ("is the ac on", "No, I can't check the air conditioning."),
+])
+def test_device_state_questions_get_a_fixed_can_t(said: str, expected: str | None) -> None:
+    assert hf.device_state_answer(hf.normalize(said)) == expected
+
+
+@pytest.mark.parametrize("said", [
+    # Not this house's state: a story, a film, a song, somewhere else.
+    "is the door locked in the movie", "is the door open in the story", "who's at the door in the song",
+    "are the lights on in the movie", "are the lights on at the stadium",
+    "is there anyone at the door of the shop",
+    # The weather, outside: the weather's question, never this one.
+    "what's the temperature", "what's the temperature outside", "what is the temperature in paris",
+    "how cold is it outside", "is it cold outside", "what's the weather",
+    # Commands: the capability rows' and the handlers' own.
+    "lock the door", "turn on the lights", "turn off the oven",
+    # Other words that start the same.
+    "is the oven on sale", "is the door locked yet or not today please", "are the lights on sale",
+])
+def test_other_questions_are_not_device_state(said: str) -> None:
+    assert hf.device_state_answer(hf.normalize(said)) is None
+    assert hf.DEVICE_STATE_RE.match(hf.normalize(said)) is None
+
+
+class _PluginHandler:
+    """A stand-in plugin handler whose fast path takes ``pattern``."""
+
+    def __init__(self, slug: str, pattern: str) -> None:
+        import re as _re
+
+        from domovoi.handlers.base import FastPath
+
+        self.name = f"plugin_{slug}"
+        self.plugin_slug = slug
+        self.fast_paths = [FastPath(_re.compile(pattern), lambda *a: None)]
+
+
+def test_a_plugin_that_takes_the_question_is_stepped_aside_for(monkeypatch) -> None:
+    from domovoi import handlers
+    from domovoi.capabilities import CAPABILITIES, WEATHER_PROVIDER
+
+    assert hf.device_state_reply("is the door locked") == DOORS_LOCKS
+    smart = _PluginHandler("smarthome", r"^is the (?:front )?door locked\Z")
+    monkeypatch.setattr(handlers, "HANDLERS", [*handlers.HANDLERS, smart])
+    assert hf.device_state_reply("is the door locked") is None
+    assert hf.device_state_reply("are the lights on") == LIGHTS     # only what it takes
+    # A weather plugin never takes "what's the temperature in here?".
+    wx = _PluginHandler("wx", r"^what's the temperature.*\Z")
+    monkeypatch.setattr(handlers, "HANDLERS", [*handlers.HANDLERS, wx])
+    CAPABILITIES.register(WEATHER_PROVIDER, object(), slug="wx")
+    try:
+        assert hf.device_state_reply("what's the temperature in here") == NO_THERMOMETER
+    finally:
+        CAPABILITIES.unregister(WEATHER_PROVIDER, slug="wx")
+    assert hf.device_state_reply("what's the temperature in here") is None  # wx not weather now
+
+
+@pytest.mark.asyncio
+async def test_chat_device_state_question_gets_the_fixed_line() -> None:
+    def get(name: str):
+        return {"internet_access": "always"}.get(name)
+
+    assert await hf.chat_reply("Is the door locked?", get_setting=get, scope=None) == DOORS_LOCKS
+    assert await hf.chat_reply("What's the temperature in here?", get_setting=get,
+                               scope=None) == NO_THERMOMETER
+    assert await hf.chat_reply("is the door locked in the movie", get_setting=get, scope=None) is None
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("said", "expected"), [
+    ("Is the door locked?", DOORS_LOCKS),
+    ("Are the lights on?", LIGHTS),
+    ("Is anyone at the front door?", NO_CAMERA),
+    ("What's the temperature in here?", NO_THERMOMETER),
+    ("Is the oven on?", "No, I can't check the oven."),
+    ("Did I leave the garage open?", "No, I can't check the garage."),
+])
+async def test_device_state_by_voice_needs_no_model(db_session, monkeypatch, said: str, expected: str) -> None:
+    from domovoi import router
+
+    monkeypatch.setattr(router, "get_ollama_client", lambda: _NoModel())
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
+    r = await router.route(Intent(transcript=said, room_id="kitchen"), ctx, db_session)
+    assert (r.matched_handler, r.matched_path, r.text) == ("house_facts", "fast", expected)
+
+
 # ─── The router: no model, and the backstop ───────────────────────────────
 
 class _NoModel:

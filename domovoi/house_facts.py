@@ -928,6 +928,116 @@ _ANY_ASK_TAIL_RE = re.compile(r"(?:^|[,\s])(?:can|could|would|will) you(?:[,\s]+
 _OTHER_ASK_LEAD_RE = re.compile(r"^(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+")
 
 
+# ─── Device-state questions (N17) ─────────────────────────────────────────
+#
+# "Is the door locked?", "are the lights on?", "is anyone at the door?",
+# "what's the temperature in here?", "is the oven on?": the house has no
+# lock, light, door, camera, thermometer or appliance sensor, and the Q&A
+# model, asked, pretended to sense one ("I can hear the creak of the
+# door"). A fixed line, no model (capability cases 16.4-16.4g). Whole
+# questions about this house only: "is the door locked in the movie",
+# "what's the temperature" (the weather's) and "is it cold outside" are
+# not these. When a plugin's own fast path takes the question (a future
+# smart-home plugin), these step aside, as the command rows do
+# (:func:`device_state_steps_aside`).
+
+_DOOR_WHICH = r"(?:the |my |our )?(?:front |back |side |patio |kitchen |garden |main )?"
+_ROOM_WORDS = (r"(?:kitchen|living room|lounge|bedroom|bathroom|garage|hall|hallway|porch|basement|"
+               r"office|dining room|den|nursery|attic|upstairs|downstairs|house)")
+_LIGHTS = r"(?:the |my |our )?(?:" + _ROOM_WORDS + r" )?lights?"
+_IN_ROOM = r"(?: in (?:the |my |our )?" + _ROOM_WORDS + r")?"
+_WHO_I = r"(?:i|we)"
+_APPLIANCES = (r"oven|stove|cooker|hob|iron|dishwasher|washing machine|washer|dryer|tumble dryer|"
+               r"space heater|heater|kettle|coffee maker|toaster|fridge|freezer|tv|television|"
+               r"air conditioning|ac")
+#: The appliance as the line says it.
+_APPLIANCE_SAID = {"ac": "air conditioning", "tv": "TV", "television": "TV"}
+
+DEVICE_STATE_LINES: dict[str, str] = {
+    "locks": "No, I can't check doors or locks.",
+    "doors": "No, I can't check doors.",
+    "garage": "No, I can't check the garage.",
+    "lights": "No, I can't check the lights.",
+    "at_door": "No, I can't see the door. I have no camera.",
+    "temperature": "No, I can't tell the temperature inside. I have no thermometer.",
+    # "appliance" is said with its name: "No, I can't check the oven."
+}
+
+DEVICE_STATE_QUESTIONS: tuple[tuple[str, str], ...] = (
+    ("locks",
+     rf"(?:is|are) {_DOOR_WHICH}doors? (?:still )?(?:locked|unlocked)"
+     rf"|is (?:the |my |our )?(?:house|place) (?:locked(?: up)?|unlocked)"
+     rf"|did {_WHO_I} (?:remember to )?lock {_DOOR_WHICH}doors?"
+     rf"|did {_WHO_I} (?:forget to lock {_DOOR_WHICH}doors?|leave {_DOOR_WHICH}doors? unlocked)"),
+    ("garage",
+     rf"(?:is|was) (?:the |my |our )?garage (?:still )?(?:open|closed|shut|up|down)"
+     rf"|did {_WHO_I} (?:leave (?:the |my |our )?garage(?: door)? (?:open|up)"
+     rf"|(?:close|shut) (?:the |my |our )?garage(?: door)?)"),
+    ("doors",
+     rf"(?:is|are) {_DOOR_WHICH}(?:garage )?doors? (?:still )?(?:open|closed|shut)"
+     rf"|did {_WHO_I} leave {_DOOR_WHICH}doors? open"),
+    ("lights",
+     rf"(?:are|is) {_LIGHTS} (?:still )?(?:on|off){_IN_ROOM}"
+     rf"|did {_WHO_I} (?:leave {_LIGHTS} on{_IN_ROOM}"
+     rf"|turn (?:off {_LIGHTS}|{_LIGHTS} off){_IN_ROOM})"),
+    ("at_door",
+     rf"(?:is )?(?:there )?(?:anyone|anybody|someone|somebody) at {_DOOR_WHICH}door"
+     rf"|who(?:'s| is) at {_DOOR_WHICH}door"
+     r"|who(?:'s| is) (?:knocking|ringing the (?:door ?bell|bell))|who rang the (?:door ?bell|bell)"),
+    ("temperature",
+     r"(?:what(?:'s| is) the temperature|what temperature is it|how (?:warm|hot|cold) is it)"
+     r" (?:in here|inside|indoors|in the house|in this room|in this house)"),
+    ("appliance",
+     rf"(?:is|are) (?:the |my |our )?(?P<appliance>{_APPLIANCES}) (?:still )?(?:on|off|running)"
+     rf"|did {_WHO_I} (?:leave (?:the |my |our )?(?P<appliance2>{_APPLIANCES}) on"
+     rf"|turn (?:off (?:the |my |our )?(?P<appliance3>{_APPLIANCES})"
+     rf"|(?:the |my |our )?(?P<appliance4>{_APPLIANCES}) off))"),
+)
+
+DEVICE_STATE_RE = re.compile(
+    r"^(?:" + "|".join(f"(?P<state_{k}>{rx})" for k, rx in DEVICE_STATE_QUESTIONS) + r")\Z"
+)
+
+
+def device_state_answer(transcript: str) -> str | None:
+    """The fixed line for a device-state question (normalized), or None."""
+    m = DEVICE_STATE_RE.match(transcript or "")
+    if m is None:
+        return None
+    kind = next(k[6:] for k, v in m.groupdict().items() if k.startswith("state_") and v is not None)
+    if kind == "appliance":
+        name = next(v for k in ("appliance", "appliance2", "appliance3", "appliance4")
+                    if (v := m.group(k)) is not None)
+        return f"No, I can't check the {_APPLIANCE_SAID.get(name, name)}."
+    return DEVICE_STATE_LINES[kind]
+
+
+def device_state_steps_aside(transcript: str) -> bool:
+    """Whether a plugin's own fast path takes ``transcript`` (a future
+    smart-home plugin that can check the door): then the question is its,
+    as a command row's is (:func:`_command_takes`). A weather plugin never
+    counts: "what's the temperature in here?" is not the weather's."""
+    from domovoi.capabilities import CAPABILITIES, WEATHER_PROVIDER
+    from domovoi.handlers import HANDLERS
+
+    weather = set(CAPABILITIES.providers_for(WEATHER_PROVIDER))
+    plugins = [h for h in HANDLERS
+               if getattr(h, "plugin_slug", None) is not None and h.plugin_slug not in weather]
+    if not plugins:
+        return False
+    from domovoi.router import first_fast_path
+
+    return first_fast_path(transcript, plugins) is not None
+
+
+def device_state_reply(transcript: str) -> str | None:
+    """:func:`device_state_answer`, unless a plugin takes the question."""
+    said = device_state_answer(transcript)
+    if said is None or device_state_steps_aside(transcript):
+        return None
+    return said
+
+
 def capability_of(transcript: str) -> tuple[Capability, str] | None:
     """The table row a capability question asks about, and its X."""
     m = CAP_RE.match(transcript or "")
@@ -1722,6 +1832,9 @@ async def chat_reply(
     household = household_question(t)
     if household is not None:
         return await household_reply(household, scope=scope, guest=await _is_guest(guest_check))
+    state = device_state_reply(t)
+    if state is not None:
+        return state
     qid = question_id(t)
     if qid == "internet_for_that":
         prev = await previous_assistant() if previous_assistant is not None else None
