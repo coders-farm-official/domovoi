@@ -916,12 +916,12 @@
       "utterance": "Can you download videos?",
       "where": "chat",
       "house": "admin-no-video",
-      "expect": "ADMIN",
+      "expect": "CANT",
       "kind": "question",
       "must_include": [
-        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
+        "No, not on this house\\. You can add video downloads from the Plugins page\\."
       ],
-      "note": "the capability table's one answer, the same for members and admins",
+      "note": "a proven admin hears that they can add it, and where (owner decision 2026-11-25); no plugin name",
       "stub": true
     },
     {
@@ -1721,12 +1721,12 @@
       "utterance": "Can you download videos?",
       "where": "chat",
       "house": "admin-no-video",
-      "expect": "ADMIN",
+      "expect": "CANT",
       "kind": "question",
       "must_include": [
-        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
+        "No, not on this house\\. You can add video downloads from the Plugins page\\."
       ],
-      "note": "the capability table's one answer, the same for members and admins",
+      "note": "a proven admin hears that they can add it, and where (owner decision 2026-11-25); no plugin name",
       "stub": true
     },
     {
@@ -1739,7 +1739,7 @@
       "must_include": [
         "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
       ],
-      "note": "the capability table's one answer, the same for members and admins; no plugin name",
+      "note": "a member hears who can add it (an admin's is 8.7d); no plugin name",
       "stub": true
     },
     {

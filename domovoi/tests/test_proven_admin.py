@@ -47,6 +47,7 @@ DELETE_MEMBER = "Deleting needs the admin: an admin deletes files on the dashboa
 WAKE_MEMBER = "An admin changes the wake word, on the dashboard: Settings → Voice → Wake words."
 RESTART_MEMBER = "An admin restarts Domovoi, on the dashboard: Settings → System → About & updates."
 VIDEO_POINTER = "No, not on this house. An admin can add video downloads from the Plugins page."
+VIDEO_POINTER_ADMIN = "No, not on this house. You can add video downloads from the Plugins page."
 
 CASES = [
     # (case, question, task key, who: "member" | "admin")
@@ -110,7 +111,7 @@ def test_each_how_to_turn_on_step_names_a_real_control() -> None:
     plugins, models, printers = _src("plugins.jsx"), _src("models.jsx"), _src("printers.jsx")
     steps = off_answers.PLACE_STEPS
     assert ">enable</Button>" in plugins and "press enable" in steps[(off_answers.PLUGINS_PAGE, False)]
-    assert (off_answers.PLUGINS_PAGE, True) not in steps   # 4.33 / 8.7d: one answer for everyone
+    assert (off_answers.PLUGINS_PAGE, True) not in steps   # 4.33 / 8.7d: a pointer, not steps
     models_add = steps[("Settings → Chat & AI → Models", True)]
     assert "vision: 'Vision'" in models and 'title="Active models"' in models and ">Switch</Button>" in models
     assert "Vision row of Active models" in models_add and "press Switch" in models_add
@@ -611,13 +612,14 @@ def test_each_case_in_a_chat(chat, case, question, key, who, title) -> None:
 
 @requires_db
 @pytest.mark.parametrize(("case", "who"), [("8.7d", "admin"), ("8.7e", "member")])
-def test_download_videos_is_one_pointer_for_everyone(chat, case, who) -> None:
-    """8.7d/8.7e: the capability table answers, the same for a member and a
-    proven admin (Testing's corpus, 2026-11-25), with no plugin name."""
+def test_download_videos_points_the_admin_to_the_plugins_page(chat, case, who) -> None:
+    """8.7d/8.7e: the capability table answers. A proven admin hears that
+    they can add it, a member who can (owner decision 2026-11-25); neither
+    hears a plugin's name."""
     headers = ADMIN_H if who == "admin" else MEMBER_H
     tid = _thread(chat.c, None, headers)
     done = _ask(chat.c, tid, "Can you download videos?", headers)
-    assert done["content"] == VIDEO_POINTER, case
+    assert done["content"] == (VIDEO_POINTER_ADMIN if who == "admin" else VIDEO_POINTER), case
     assert chat.calls == []
 
 

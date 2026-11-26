@@ -1242,9 +1242,11 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return CANT_CHECK
         feature = cap.text or "it"
         if state == "absent":
-            # One answer for a member and a proven admin alike (capability
-            # cases 4.33 / 8.7d / 8.7e, Testing's corpus): no admin steps.
-            return f"No, not on this house. {_how_to_turn_on(feature, add=True)}" + _instead(cap, f)
+            # A member hears who can add it; a proven admin hears that they
+            # can, and where (owner decision 2026-11-25; capability cases
+            # 4.33 / 8.7d / 8.7e). The feature's name, never the plugin's.
+            return (f"No, not on this house. {_how_to_turn_on(feature, add=True, admin=admin)}"
+                    + _instead(cap, f))
         if state == "off":
             return (f"No, {feature} is switched off on this house. {_how_to_turn_on(feature, admin=admin)}"
                     + _instead(cap, f))

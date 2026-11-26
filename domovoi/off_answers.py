@@ -105,9 +105,11 @@ PLUGINS_PAGE = "the Plugins page"
 #: Look for printers / Add by address, and the News worker field
 #: (config_schema.py) under Workers. A test checks each
 #: label against those files. A place not here keeps the member wording
-#: for everyone, as does adding a plugin's feature from the Plugins page
-#: ("can you download videos?" is one answer for everyone, capability
-#: cases 4.33 / 8.7d / 8.7e).
+#: for everyone. Adding a plugin's feature from the Plugins page has no
+#: steps (a plugin isn't one button), but a proven admin hears it as
+#: theirs to do: "You can add video downloads from the Plugins page."
+#: (owner decision 2026-11-25; capability cases 4.33 / 8.7d, where a
+#: member's 8.7e keeps "An admin can add …"). Feature names only.
 PLACE_STEPS: dict[tuple[str, bool], str] = {
     (PLUGINS_PAGE, False): "press enable on its row",
     ("Settings → Chat & AI → Models", False): FEATURES[AI].steps,
@@ -132,6 +134,8 @@ def how_to_turn_on(feature: str, *, place: str = PLUGINS_PAGE, add: bool = False
     steps = PLACE_STEPS.get((place, add)) if admin else None
     if steps:
         return f"{verb[0].upper()}{verb[1:]} {feature} {where}: {steps}."
+    if admin and add and place == PLUGINS_PAGE:
+        return f"You can {verb} {feature} {where}."
     return f"An admin can {verb} {feature} {where}."
 
 

@@ -196,7 +196,7 @@ TASKS: tuple[AdminTask, ...] = (
     ),
     # "Can you download videos?" (8.7d/8.7e) is the capability table's
     # (domovoi/house_facts.py, video_downloads), which knows the plugin's
-    # state: one answer, the same pointer for members and admins.
+    # state: a member hears who can add it, a proven admin that they can.
 )
 
 TASK_BY_KEY: dict[str, AdminTask] = {t.key: t for t in TASKS}
