@@ -35,7 +35,9 @@ Four pieces, one module, so the facts and their wording live in ONE place:
 
 Replies never name a plugin or an outside service: they describe the
 feature. Every "how to get it" clause goes through
-:func:`_how_to_turn_on`, the one place its wording lives.
+:func:`_how_to_turn_on`, whose wording lives with the other off lines
+(:func:`domovoi.off_answers.how_to_turn_on`): who and where for a member,
+the steps for a proven admin.
 """
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ from typing import Any, Callable
 
 from sqlalchemy import text
 
+from domovoi import off_answers
 from domovoi.help_desk import admin_tasks as _admin_tasks
 
 log = logging.getLogger(__name__)
@@ -66,7 +69,7 @@ PLACE_FRIEND_HOUSES = "Settings → Household → Friend Houses"
 PLACE_PRINTERS = "Settings → Household → Printers & scanners"
 PLACE_MODELS = "Settings → Chat & AI → Models"
 PLACE_ADVANCED = "Settings → System → Advanced"
-PLACE_PLUGINS = "the Plugins page"
+PLACE_PLUGINS = off_answers.PLUGINS_PAGE
 # The offline library's own page (its plugin's nav label), where an admin
 # downloads a library.
 PLACE_LIBRARY = "the Library page"
@@ -401,14 +404,13 @@ async def read(
 # ─── The one "how to get it" clause ───────────────────────────────────────
 
 
-def _how_to_turn_on(feature: str, *, place: str = PLACE_PLUGINS, add: bool = False) -> str:
-    """The sentence that says how ``feature`` is turned on or added: the
-    member wording (owner Q2). The ONE place this wording lives; wf/cap-off's
-    shared off-line helper replaces its body when the two are folded.
+def _how_to_turn_on(feature: str, *, place: str = PLACE_PLUGINS, add: bool = False, admin: bool = False) -> str:
+    """The sentence that says how ``feature`` is turned on or added (owner
+    Q2): who and where for a member, the steps for a proven admin
+    (``admin``; voice never is). The wording lives in
+    :func:`domovoi.off_answers.how_to_turn_on`, with the other off lines.
     ``feature`` names the feature, never a plugin."""
-    verb = "add" if add else "turn on"
-    where = f"from {place}" if place == PLACE_PLUGINS else f"in {place}"
-    return f"An admin can {verb} {feature} {where}."
+    return off_answers.how_to_turn_on(feature, place=place, add=add, admin=admin)
 
 
 def _admin_can_change(what: str, place: str) -> str:
@@ -1034,9 +1036,9 @@ def _internet_off_line(f: HouseFacts) -> str:
             + _admin_can_change("that", PLACE_INTERNET))
 
 
-def _ai_off_line(feature: str) -> str:
+def _ai_off_line(feature: str, *, admin: bool = False) -> str:
     return (f"Not right now: {feature} needs AI features, and they're off on this house. "
-            + _how_to_turn_on("AI features", place=PLACE_MODELS))
+            + _how_to_turn_on("AI features", place=PLACE_MODELS, admin=admin))
 
 
 def _instead(cap: Capability, f: HouseFacts) -> str:
@@ -1048,9 +1050,13 @@ def _instead(cap: Capability, f: HouseFacts) -> str:
     return ""
 
 
-async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None) -> str | None:
+async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None,
+                            admin: bool = False) -> str | None:
     """The answer to "can you <X>?" for row ``cap``, or None (no answer:
-    the turn goes on as before)."""
+    the turn goes on as before). ``admin``: the asker is a proven admin
+    (``Context.proven_admin``, or a dashboard chat's server check; voice
+    never is), who hears the steps where a member hears who and where.
+    Words only."""
     scope = scope or _default_scope()
     chat = f.device in CHAT_DEVICES
     if cap.kind in ("no", "yes"):
@@ -1069,7 +1075,7 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return CANT_CHECK
         if not printers:
             return ("Not yet: no printer is set up. "
-                    + _how_to_turn_on("one", place=PLACE_PRINTERS, add=True))
+                    + _how_to_turn_on("one", place=PLACE_PRINTERS, add=True, admin=admin))
         return f'Yes. Say "{phrase}".'
     if cap.kind == "news":
         phrase = _phrase(cap.handler, cap.phrase)
@@ -1081,7 +1087,7 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return CANT_CHECK
         if not f.news_on:
             return "No, the news briefing is off on this house. " + _how_to_turn_on(
-                "the news briefing", place=PLACE_ADVANCED)
+                "the news briefing", place=PLACE_ADVANCED, admin=admin)
         # "Sometimes" changes no ask at the moment of asking (it only sets
         # the online extras' defaults, config.PROFILE_DEFAULTS): the
         # headlines are the ones the news worker fetched, and what does ask
@@ -1100,7 +1106,7 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
         if f.internet == "never":
             return _internet_off_line(f)
         if f.ai_on is False:
-            return _ai_off_line("looking things up")
+            return _ai_off_line("looking things up", admin=admin)
         if chat:
             ask = " I'll ask before each lookup leaves the house." if f.lookups_ask_first else ""
             return f'Yes. Type "look up" and what you want to find.{ask}'
@@ -1113,10 +1119,10 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return CANT_CHECK
         what = "pictures" if cap.text == "picture" else "videos"
         if not f.ai_on:
-            return _ai_off_line(f"reading {what}")
+            return _ai_off_line(f"reading {what}", admin=admin)
         if f.vision_model is False:
             return ("Not right now: no model for reading pictures is set. "
-                    + _how_to_turn_on("one", place=PLACE_MODELS, add=True))
+                    + _how_to_turn_on("one", place=PLACE_MODELS, add=True, admin=admin))
         limit = " up to 3 minutes long" if cap.text == "video" else ""
         where = "here" if chat else "in chat"
         return f"Yes, {where}: attach a {cap.text}{limit} and ask about it."
@@ -1126,9 +1132,11 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return CANT_CHECK
         feature = cap.text or "it"
         if state == "absent":
+            # One answer for a member and a proven admin alike (capability
+            # cases 4.33 / 8.7d / 8.7e, Testing's corpus): no admin steps.
             return f"No, not on this house. {_how_to_turn_on(feature, add=True)}" + _instead(cap, f)
         if state == "off":
-            return (f"No, {feature} is switched off on this house. {_how_to_turn_on(feature)}"
+            return (f"No, {feature} is switched off on this house. {_how_to_turn_on(feature, admin=admin)}"
                     + _instead(cap, f))
         if state == "broken" and cap.key == "offline_library":
             # Installed and on, but not answering: on a new install that is
@@ -1143,7 +1151,7 @@ async def capability_answer(cap: Capability, f: HouseFacts, *, scope: Any = None
             return ("Not right now: this house is set to never use the internet. "
                     + _admin_can_change("that", PLACE_INTERNET))
         if cap.needs_ai and f.ai_on is False:
-            return _ai_off_line(feature)
+            return _ai_off_line(feature, admin=admin)
         return f"Yes, {feature} {'is' if not feature.endswith('s') else 'are'} on in this house."
     return None
 
@@ -1640,6 +1648,18 @@ async def _is_guest(guest_check: Callable[[], Any] | None) -> bool:
         return True
 
 
+async def _is_proven_admin(admin_check: Callable[[], Any] | None) -> bool:
+    """``admin_check()``, for wording only: no check, or a failed one, is
+    a member (who hears who and where, never the steps)."""
+    if admin_check is None:
+        return False
+    try:
+        return bool(await admin_check())
+    except Exception as e:  # noqa: BLE001 — a member's words
+        log.debug("house facts: the admin check failed: %s", type(e).__name__)
+        return False
+
+
 async def chat_reply(
     message: str,
     *,
@@ -1655,8 +1675,9 @@ async def chat_reply(
     (``chat_access.Thread.state``), for "is this chat private?". ``previous_assistant`` is an async callable giving
     the thread's last assistant row (``{"stats": ...}``) or None;
     ``admin_check`` an async callable giving whether THIS request carries
-    a live admin sign-in (the server's own check), asked only for an
-    admin sign-in question; without it the state is unknown.
+    a live admin sign-in (the server's own check), asked for an admin
+    sign-in question (without it the state is unknown) and for a "can
+    you <X>?" answer's wording (without it, or failing, a member's).
     ``guest_check`` an async callable giving whether THIS request is a
     guest's (``admin_auth.request_is_guest``), asked only for "who lives
     here?"; without it the caller is the household's, and a check that
@@ -1713,5 +1734,6 @@ async def chat_reply(
         f = dataclasses.replace(f, chat_state=chat_state)
     if qid is not None:
         return answer(qid, f)
-    return await capability_answer(cap[0], f, scope=scope)
+    # A proven admin hears the steps in a "how to get it" clause (N1).
+    return await capability_answer(cap[0], f, scope=scope, admin=await _is_proven_admin(admin_check))
 

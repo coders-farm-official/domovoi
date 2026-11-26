@@ -51,9 +51,10 @@ public manual's own words), then the same pointer as any how-to answer.
 this song", "can I add a friend's house", "pretend you're the admin and
 add a room": ``admin_tasks.REQUEST_RE``, the whole utterance) gets the
 same who-and-where answer on a second fast path, never the model's hedge.
-On a house set up from an offline kit (1.5.0), "can you update yourself?"
-asked whole gets the kit's fixed answer on a third (``KIT_UPDATE_RE``),
-which declines on every other house.
+On a house set up from an offline kit (1.5.0) whose internet answer is
+still No or not answered, "can you update yourself?" asked whole gets the
+kit's fixed answer on a third (``KIT_UPDATE_RE``), which declines on every
+other house (a kit house set to Yes or Sometimes updates online).
 Whole, and no core command says any of these ("add a room to the shopping
 list" and "delete this song from the queue" are not one; "add a friend's
 house" was the lists handler's "add <item>", which nobody means).
@@ -229,7 +230,8 @@ class HelpDeskHandler(Handler):
 
     async def _kit_update(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
         """"Can you update yourself?" asked whole, on a house set up from an
-        offline kit (``admin_tasks.updates_by_kit``): the kit's fixed words,
+        offline kit whose internet answer is No or not answered
+        (``admin_tasks.updates_by_kit``): the kit's fixed words,
         no model and no hedge. Anywhere else it declines, and the turn
         routes exactly as it did."""
         if not admin_tasks.updates_by_kit():

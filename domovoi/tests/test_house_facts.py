@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
+from domovoi import off_answers
 from domovoi import house_facts as hf
 from domovoi.clients.ollama import VOICE_QA_SYSTEM_PROMPT
 from domovoi.models import Context, Intent
@@ -388,10 +389,10 @@ def test_real_bodies(body: str) -> None:
 
 # ─── The capability table ─────────────────────────────────────────────────
 
-async def _cap(said: str, facts: hf.HouseFacts = BASE) -> str | None:
+async def _cap(said: str, facts: hf.HouseFacts = BASE, *, admin: bool = False) -> str | None:
     found = hf.capability_of(hf.normalize(said))
     assert found is not None, said
-    return await hf.capability_answer(found[0], facts)
+    return await hf.capability_answer(found[0], facts, admin=admin)
 
 
 @pytest.mark.asyncio
@@ -458,6 +459,67 @@ async def test_ai_off_answers() -> None:
     assert await _cap("can you look at a picture", R(BASE, ai_on=False)) == (
         "Not right now: reading pictures needs AI features, and they're off on this house. An admin "
         "can turn on AI features in Settings → Chat & AI → Models.")
+
+
+@pytest.mark.asyncio
+async def test_how_to_turn_on_a_proven_admin_hears_the_steps() -> None:
+    """N1: the "how to get it" clause gives a proven admin the steps; a
+    member (and every voice turn) keeps who and where."""
+    assert await _cap("can you look at a picture", R(BASE, ai_on=False), admin=True) == (
+        "Not right now: reading pictures needs AI features, and they're off on this house. Turn on "
+        "AI features in Settings → Chat & AI → Models: press turn on on the AI chat and questions card.")
+    assert await _cap("can you check the news", R(BASE, news_on=False), admin=True) == (
+        "No, the news briefing is off on this house. Turn on the news briefing in Settings → System → "
+        "Advanced: press show the settings, switch on News worker under Workers, then press Save; it "
+        "starts after a restart.")
+    assert await _cap("can you look at a picture", R(BASE, vision_model=False), admin=True) == (
+        "Not right now: no model for reading pictures is set. Add one in Settings → Chat & AI → Models: "
+        "pick a model in the Vision row of Active models, then press Switch.")
+    assert await _cap("can you look at a picture", R(BASE, vision_model=False)) == (
+        "Not right now: no model for reading pictures is set. An admin can add one in "
+        "Settings → Chat & AI → Models.")
+
+
+def test_the_how_to_turn_on_clause_by_place() -> None:
+    for (place, add) in off_answers.PLACE_STEPS:
+        member = hf._how_to_turn_on("it", place=place, add=add)
+        admin = hf._how_to_turn_on("it", place=place, add=add, admin=True)
+        assert member.startswith("An admin can ") and place in member
+        assert not admin.startswith("An admin") and place in admin and admin.endswith(".")
+    # The plugin page's two: today's member words, and the admin's steps.
+    assert hf._how_to_turn_on("picture making") == "An admin can turn on picture making from the Plugins page."
+    assert hf._how_to_turn_on("picture making", admin=True) == (
+        "Turn on picture making from the Plugins page: press enable on its row.")
+    # Adding a plugin's feature is one answer for everyone (4.33 / 8.7d / 8.7e).
+    assert hf._how_to_turn_on("picture making", add=True, admin=True) == (
+        "An admin can add picture making from the Plugins page.")
+    # A place with no steps keeps the member words for everyone.
+    assert hf._how_to_turn_on("it", place="Settings → Somewhere", admin=True) == (
+        "An admin can turn on it in Settings → Somewhere.")
+
+
+@pytest.mark.asyncio
+async def test_chat_capability_answer_takes_the_admin_check() -> None:
+    def get(name: str):
+        return {"internet_access": "always", "news_enabled": False}.get(name)
+
+    async def yes() -> bool:
+        return True
+
+    async def no() -> bool:
+        return False
+
+    async def broken() -> bool:
+        raise RuntimeError("no session")
+
+    member = await hf.chat_reply("can you check the news", get_setting=get, scope=None, admin_check=no)
+    admin = await hf.chat_reply("can you check the news", get_setting=get, scope=None, admin_check=yes)
+    assert member is not None and member.endswith(
+        "An admin can turn on the news briefing in Settings → System → Advanced.")
+    assert admin is not None and "press show the settings, switch on News worker" in admin
+    assert await hf.chat_reply("can you check the news", get_setting=get, scope=None) == member
+    assert await hf.chat_reply("can you check the news", get_setting=get, scope=None,
+                               admin_check=broken) == member
 
 
 def test_an_unknown_x_never_gets_a_no() -> None:

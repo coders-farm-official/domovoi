@@ -153,7 +153,10 @@ class HouseFactsHandler(Handler):
         found = house_facts.capability_of(m.group(0))
         if found is None:
             return None
-        text = await house_facts.capability_answer(found[0], await self._facts(ctx))
+        # A proven admin (the play box with a live sign-in; voice never is)
+        # hears the steps in a "how to get it" clause (N1).
+        text = await house_facts.capability_answer(found[0], await self._facts(ctx),
+                                                    admin=ctx.proven_admin)
         if text is None:
             return None
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)

@@ -1,6 +1,7 @@
 """"Can you update yourself?" on a house that updates from an offline kit
 (1.5.0; capability cases 5.11 / 5.11b): a fixed answer from the code, no
-model and no hedge. Every other house keeps 1.4.1's answer."""
+model and no hedge, while its internet answer is No or not answered. A kit
+house set to Yes or Sometimes, and every other house, keeps 1.4.1's answer."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import json
 import pytest
 
 from domovoi import house_facts as hf
-from domovoi import kit_rooms
+from domovoi import egress, kit_rooms
 from domovoi.help_desk import admin_tasks
 from domovoi.models import Context, Intent
 from domovoi.tests.conftest import requires_db
@@ -67,6 +68,54 @@ def test_an_online_house_keeps_main_s_answer(online_house) -> None:
     assert admin_tasks.answer(task, admin=True) == task.admin
 
 
+# ─── The house's internet answer, read live ─────────────────────────────
+
+@pytest.mark.parametrize("policy, kit", [
+    ("never", True),       # No: the kit
+    ("", True),            # not answered: the kit
+    ("always", False),     # Yes: updates online, main's answer
+    ("sometimes", False),  # Sometimes: Check for updates works, main's answer
+])
+def test_a_kit_house_follows_its_current_internet_answer(kit_house, policy, kit) -> None:
+    task = admin_tasks.TASK_BY_KEY["update"]
+    with egress.override_policy(policy):
+        assert admin_tasks.installed_from_kit() is True
+        assert admin_tasks.updates_by_kit() is kit
+        assert admin_tasks.answer(task, admin=False) == (MEMBER if kit else task.member)
+        assert admin_tasks.answer(task, admin=True) == (ADMIN if kit else task.admin)
+
+
+def test_kit_and_yes_gets_main_s_answer(kit_house) -> None:
+    task = admin_tasks.TASK_BY_KEY["update"]
+    with egress.override_policy("always"):
+        assert admin_tasks.answer(task, admin=False) == task.member
+        assert admin_tasks.answer(task, admin=True) == task.admin
+
+
+def test_kit_and_no_gets_the_kit_answer(kit_house) -> None:
+    task = admin_tasks.TASK_BY_KEY["update"]
+    with egress.override_policy("never"):
+        assert admin_tasks.answer(task, admin=False) == MEMBER
+        assert admin_tasks.answer(task, admin=True) == ADMIN
+
+
+@pytest.mark.parametrize("policy", ["never", "", "always", "sometimes"])
+def test_not_a_kit_house_gets_main_s_answer_whatever_the_internet(online_house, policy) -> None:
+    task = admin_tasks.TASK_BY_KEY["update"]
+    with egress.override_policy(policy):
+        assert admin_tasks.updates_by_kit() is False
+        assert admin_tasks.answer(task, admin=False) == task.member
+        assert admin_tasks.answer(task, admin=True) == task.admin
+
+
+def test_an_unreadable_answer_keeps_the_kit(kit_house, monkeypatch) -> None:
+    def broken() -> str:
+        raise OSError("no .env")
+
+    monkeypatch.setattr(egress, "policy", broken)
+    assert admin_tasks.updates_by_kit() is True
+
+
 @pytest.mark.parametrize("said", [
     "can you update yourself", "Can you update yourself?", "update yourself", "please update yourself",
     "could you upgrade yourself", "will you update yourself now", "update domovoi",
@@ -118,6 +167,23 @@ async def test_voice_elsewhere_routes_as_before(online_house, db_session) -> Non
     assert "offline kit" not in (r.text or "")
 
 
+@requires_db
+@pytest.mark.asyncio
+async def test_voice_on_a_kit_house_set_to_yes_routes_as_before(kit_house, db_session) -> None:
+    with egress.override_policy("always"):
+        r = await _route("can you update yourself", db_session)
+    assert "offline kit" not in (r.text or "")
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_voice_how_do_i_update_on_a_kit_house_set_to_yes_is_main_s(kit_house, db_session) -> None:
+    with egress.override_policy("always"):
+        r = await _route("how do I update domovoi", db_session)
+    assert r.matched_handler == "help_desk"
+    assert r.text.startswith(admin_tasks.TASK_BY_KEY["update"].member)
+
+
 # ─── Chat (house_facts.chat_reply and the help turn) ────────────────────
 
 def _get(name: str):
@@ -138,6 +204,25 @@ async def test_chat_bare_update_yourself_on_a_kit_house(kit_house, admin, expect
 async def test_chat_bare_update_yourself_elsewhere_is_not_answered_here(online_house) -> None:
     said = await hf.chat_reply("update yourself", get_setting=_get, scope=None)
     assert said is None
+
+
+@pytest.mark.asyncio
+async def test_chat_bare_update_yourself_on_a_kit_house_set_to_yes(kit_house) -> None:
+    with egress.override_policy("always"):
+        said = await hf.chat_reply("update yourself", get_setting=_get, scope=None)
+    assert said is None
+
+
+def test_chat_help_turn_update_task_on_a_kit_house_set_to_yes(kit_house) -> None:
+    from domovoi.help_desk import answer as help_answer
+    from domovoi.help_desk.index import HelpIndex
+
+    task = admin_tasks.TASK_BY_KEY["update"]
+    with egress.override_policy("always"):
+        for admin, expected in ((True, task.admin), (False, task.member)):
+            turn = help_answer.plan("Can you update yourself?", HelpIndex([]), admin=admin)
+            assert turn.task is not None and turn.task.key == "update"
+            assert turn.task_answer == expected
 
 
 def test_chat_help_turn_update_task_on_a_kit_house(kit_house) -> None:

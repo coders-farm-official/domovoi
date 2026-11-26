@@ -109,10 +109,18 @@ def _said(text: str) -> str:
     return sanitize_for_speech(text)
 
 
-def _how_to_add_printer() -> str:
+#: Where printers and scanners are added (house_facts.PLACE_PRINTERS).
+PRINTERS_PLACE = "Settings → Household → Printers & scanners"
+
+
+def _how_to_add_printer(*, admin: bool = False) -> str:
     """Where a printer (or scanner) is added: the one line every "none set
-    up" answer ends with."""
-    return "An admin can add one in Settings → Household → Printers & scanners."
+    up" answer ends with. Who and where for a member; the steps for a
+    proven admin (``Context.proven_admin``: the play box with a live
+    sign-in, never voice), from :func:`domovoi.off_answers.how_to_turn_on`."""
+    from domovoi import off_answers
+
+    return off_answers.how_to_turn_on("one", place=PRINTERS_PLACE, add=True, admin=admin)
 
 
 def _list_words(names: list[str]) -> str:
@@ -280,7 +288,7 @@ class PrintingHandler(Handler):
         except devices.AmbiguousPrinter as e:
             return self._reply(ctx, _said("Which printer? Say print a test page on the %s." % e.names[0]))
         except devices.DeviceError as e:
-            return self._reply(ctx, _said(self._no_printer_text(str(e))))
+            return self._reply(ctx, _said(self._no_printer_text(str(e), admin=ctx.proven_admin)))
         try:
             devices.ipp_printer(row)
         except devices.DeviceError as e:
@@ -296,7 +304,7 @@ class PrintingHandler(Handler):
             return None
         # No printer: say so first, not "which document?" (finding N14).
         if not await self._any_printer():
-            return self._reply(ctx, self._no_printer_text("No printer"))
+            return self._reply(ctx, self._no_printer_text("No printer", admin=ctx.proven_admin))
         wanted: dict[str, Any] = {}
         copies = m.group("copies")
         if copies:
@@ -339,7 +347,7 @@ class PrintingHandler(Handler):
             return self._reply(ctx, _said("Which printer? Print it from the draft in the chat, or say print and the "
                                           "document's name on %s." % devices.the(e.names[0])))
         except devices.DeviceError as e:
-            return self._reply(ctx, _said(self._no_printer_text(str(e))))
+            return self._reply(ctx, _said(self._no_printer_text(str(e), admin=ctx.proven_admin)))
         title = "%s v%d" % (d.title, d.version)
         path = drafts.pdf_to_temp(d)
         try:
@@ -392,9 +400,9 @@ class PrintingHandler(Handler):
             return True
 
     @staticmethod
-    def _no_printer_text(reason: str) -> str:
+    def _no_printer_text(reason: str, *, admin: bool = False) -> str:
         if reason.startswith("No printer"):
-            return ("There's no printer set up. " + _how_to_add_printer()
+            return ("There's no printer set up. " + _how_to_add_printer(admin=admin)
                     + " Or say set up the printer to look for one.")
         return reason
 
@@ -427,7 +435,7 @@ class PrintingHandler(Handler):
                 {"doc": doc_rel, "wanted": wanted, "printers": names},
             )
         except devices.DeviceError as e:
-            return self._reply(ctx, _said(self._no_printer_text(str(e))))
+            return self._reply(ctx, _said(self._no_printer_text(str(e), admin=ctx.proven_admin)))
         return await self._confirm_print(doc_rel, row, wanted, ctx, session)
 
     async def _confirm_print(self, doc_rel: str, row: dict, wanted: dict, ctx: Context,
@@ -515,7 +523,7 @@ class PrintingHandler(Handler):
 
         rows = await self._printers_for_status(ctx)
         if not rows:
-            return self._reply(ctx, self._no_printer_text("No printer"))
+            return self._reply(ctx, self._no_printer_text("No printer", admin=ctx.proven_admin))
         lines = []
         for row in rows[:3]:
             status = await devices.refresh_status(row)
@@ -530,7 +538,7 @@ class PrintingHandler(Handler):
 
         rows = await self._printers_for_status(ctx)
         if not rows:
-            return self._reply(ctx, self._no_printer_text("No printer"))
+            return self._reply(ctx, self._no_printer_text("No printer", admin=ctx.proven_admin))
         lines = []
         asked_paper = "paper" in said
         asked_jam = "jam" in said
@@ -611,7 +619,8 @@ class PrintingHandler(Handler):
                                           "I can scan on %s." % " or ".join(devices.the(n) for n in e.names[:3])))
         except devices.DeviceError as e:
             if "no scanner" in str(e).lower():
-                return self._reply(ctx, "There's no scanner set up. " + _how_to_add_printer())
+                return self._reply(ctx, "There's no scanner set up. "
+                                   + _how_to_add_printer(admin=ctx.proven_admin))
             return self._reply(ctx, _said(str(e)))
         except (escl.EsclError, http11.HttpError):
             return self._reply(ctx, "The scanner isn't answering. Is it switched on?")

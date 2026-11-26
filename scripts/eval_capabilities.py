@@ -1192,7 +1192,7 @@ def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -
     saved_names = dict(fh._NAMES)
     saved_home = (home_location._cache, home_location._cached_at)
     saved_list_printers = printer_store.list_printers
-    saved_updates_by_kit = admin_tasks.updates_by_kit
+    saved_installed_from_kit = admin_tasks.installed_from_kit
 
     async def fixture_printers(s: Any = None) -> list[dict[str, Any]]:
         return [
@@ -1226,8 +1226,10 @@ def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -
                 home_location.clean(loc, rematch=False) if loc else None, time.monotonic())
             printer_store.list_printers = fixture_printers
             # A house set up from an offline kit (1.5.0): the record
-            # domovoi.kit_rooms writes at install, as the fixture says.
-            admin_tasks.updates_by_kit = lambda: bool(house.get("offline_kit"))
+            # domovoi.kit_rooms writes at install, as the fixture says. Whether
+            # it still updates from a kit is admin_tasks.updates_by_kit's own
+            # call, from that and the internet answer overridden above.
+            admin_tasks.installed_from_kit = lambda: bool(house.get("offline_kit"))
             for p in house.get("plugins") or []:
                 if not p.get("enabled", True):
                     continue
@@ -1255,7 +1257,7 @@ def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -
             fh._NAMES.update(saved_names)
             home_location._cache, home_location._cached_at = saved_home
             printer_store.list_printers = saved_list_printers
-            admin_tasks.updates_by_kit = saved_updates_by_kit
+            admin_tasks.installed_from_kit = saved_installed_from_kit
             CURRENT.update(house={}, lenient=False)
 
 

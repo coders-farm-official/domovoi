@@ -94,7 +94,48 @@ def with_turn_on(text: str, feature: str, *, admin: bool = False) -> str:
     return f"{text.rstrip()} {turn_on_line(feature, admin=admin)}"
 
 
+# ─── "How to get it": a feature turned on, or a thing added, at a place ───
+
+PLUGINS_PAGE = "the Plugins page"
+
+#: The steps a proven admin hears for :func:`how_to_turn_on`, by (place,
+#: add). The places are house_facts' ``PLACE_*`` names; the steps quote
+#: the dashboard's own labels: plugins.jsx's enable button, models.jsx's
+#: AI chat and questions card and Active models' Vision row, printers.jsx's
+#: Look for printers / Add by address, and the News worker field
+#: (config_schema.py) under Workers. A test checks each
+#: label against those files. A place not here keeps the member wording
+#: for everyone, as does adding a plugin's feature from the Plugins page
+#: ("can you download videos?" is one answer for everyone, capability
+#: cases 4.33 / 8.7d / 8.7e).
+PLACE_STEPS: dict[tuple[str, bool], str] = {
+    (PLUGINS_PAGE, False): "press enable on its row",
+    ("Settings → Chat & AI → Models", False): FEATURES[AI].steps,
+    ("Settings → Chat & AI → Models", True): "pick a model in the Vision row of Active models, then press Switch",
+    ("Settings → Household → Printers & scanners", True):
+        "press Look for printers and Add on yours, or press Add by address",
+    ("Settings → System → Advanced", False):
+        "press show the settings, switch on News worker under Workers, then press Save; it starts after "
+        "a restart",
+}
+
+
+def how_to_turn_on(feature: str, *, place: str = PLUGINS_PAGE, add: bool = False, admin: bool = False) -> str:
+    """The sentence that says how ``feature`` (never a plugin's name) is
+    turned on, or added (``add``), at ``place``. A member hears who and
+    where ("An admin can add one in …"); a proven admin (``admin``, the
+    turn's ``Context.proven_admin`` or a dashboard chat's server check;
+    voice never is) hears the steps there, when :data:`PLACE_STEPS` has
+    them."""
+    verb = "add" if add else "turn on"
+    where = f"from {place}" if place == PLUGINS_PAGE else f"in {place}"
+    steps = PLACE_STEPS.get((place, add)) if admin else None
+    if steps:
+        return f"{verb[0].upper()}{verb[1:]} {feature} {where}: {steps}."
+    return f"An admin can {verb} {feature} {where}."
+
+
 __all__ = [
-    "AI", "DROP_IN", "FEATURES", "FRIEND_HOUSES", "INTERNET", "LYRICS_SEARCH",
-    "OffFeature", "turn_on_line", "with_turn_on",
+    "AI", "DROP_IN", "FEATURES", "FRIEND_HOUSES", "INTERNET", "LYRICS_SEARCH", "PLACE_STEPS", "PLUGINS_PAGE",
+    "OffFeature", "how_to_turn_on", "turn_on_line", "with_turn_on",
 ]
