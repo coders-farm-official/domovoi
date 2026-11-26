@@ -2917,7 +2917,7 @@
         "(?<!if )\\b(?:the door|it)(?:'s| is) (?:still )?(?:locked|unlocked)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check doors or locks.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -2934,7 +2934,7 @@
         "(?<!if )\\b(?:the lights?|they)(?:'re| are| is) (?:still )?(?:on|off)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check the lights.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -2951,7 +2951,7 @@
         "(?<!if )\\b(?:the (?:garage )?door|it)(?:'s| is) (?:still )?(?:open|closed|shut)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check doors.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -2968,7 +2968,7 @@
         "(?<!if )\\b(?:there'?s|there is) (?:no ?one|nobody|someone|somebody|a person)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't see the door. I have no camera.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -2986,7 +2986,7 @@
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b",
         "\\boutside\\b|\\bforecast\\b|\\bweather\\b"
       ],
-      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't tell the temperature inside. I have no thermometer.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -3003,7 +3003,7 @@
         "(?<!if )\\b(?:the oven|it)(?:'s| is) (?:still )?(?:on|off)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't check the oven.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -3020,7 +3020,7 @@
         "(?<!if )\\b(?:the garage(?: door)?|it)(?:'s| is| was) (?:still )?(?:open|closed|shut)\\b|\\byou (?:did|didn'?t) leave\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't check the garage.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
