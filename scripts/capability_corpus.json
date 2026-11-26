@@ -916,13 +916,18 @@
       "utterance": "Can you download videos?",
       "where": "chat",
       "house": "admin-no-video",
-      "expect": "ADMIN",
+      "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
+        "^You can add video downloads on the Plugins page\\.$"
       ],
-      "note": "the capability table's one answer, the same for members and admins",
-      "stub": true
+      "note": "N18, owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Proven admin (live dashboard session): the pointer, not the member line",
+      "stub": true,
+      "must_not_include": [
+        "\\bnot on this house\\b",
+        "\\ban admin can\\b"
+      ],
+      "needs_change": "N18"
     },
     {
       "id": "4.34",
@@ -1721,13 +1726,18 @@
       "utterance": "Can you download videos?",
       "where": "chat",
       "house": "admin-no-video",
-      "expect": "ADMIN",
+      "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
+        "^You can add video downloads on the Plugins page\\.$"
       ],
-      "note": "the capability table's one answer, the same for members and admins",
-      "stub": true
+      "note": "N18, owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Proven admin (live dashboard session): the pointer, not the member line",
+      "stub": true,
+      "must_not_include": [
+        "\\bnot on this house\\b",
+        "\\ban admin can\\b"
+      ],
+      "needs_change": "N18"
     },
     {
       "id": "8.7e",
@@ -1737,44 +1747,58 @@
       "expect": "CANT",
       "kind": "question",
       "must_include": [
-        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
       ],
-      "note": "the capability table's one answer, the same for members and admins; no plugin name",
+      "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Member: the can't line, unchanged",
       "stub": true
     },
     {
       "id": "8.7f",
-      "utterance": "How do I add a room?",
-      "where": "phone",
-      "house": "proven-admin",
-      "expect": "EXACT",
+      "utterance": "Can you download videos?",
+      "where": "chat",
+      "house": "admin-expired",
+      "expect": "CANT",
       "kind": "question",
-      "skip_reason": "1.5.0 only: added when 1.5.0 is on main"
+      "must_include": [
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
+      ],
+      "must_not_include": [
+        "^You can add"
+      ],
+      "stub": true,
+      "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Expired admin session: no live sign-in this turn, so the member line"
     },
     {
       "id": "8.7g",
-      "utterance": "How do I add a room?",
-      "where": "phone",
-      "house": "base",
-      "expect": "ADMIN",
+      "utterance": "Can you download videos?",
+      "where": "chat",
+      "house": "guest",
+      "expect": "CANT",
       "kind": "question",
-      "skip_reason": "1.5.0 only: added when 1.5.0 is on main"
+      "must_include": [
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
+      ],
+      "must_not_include": [
+        "^You can add"
+      ],
+      "stub": true,
+      "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Guest: the member line"
     },
     {
       "id": "8.7h",
-      "utterance": "How do I add a room?",
-      "where": "playbox",
-      "house": "base",
-      "expect": "ADMIN",
+      "utterance": "Can you download videos?",
+      "where": "voice",
+      "house": "admin-no-video",
+      "expect": "CANT",
       "kind": "question",
       "must_include": [
-        "An admin adds rooms, on the dashboard: Settings → Household → Rooms\\."
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
       ],
       "must_not_include": [
-        "prepare a room's SD card"
+        "^You can add"
       ],
-      "note": "the dashboard play box with no live admin Bearer (a device token, a guest, the cookie alone): the member answer",
-      "stub": true
+      "stub": true,
+      "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Voice is never a proven admin (Q1), even in the proven-admin house"
     },
     {
       "id": "8.7i",
