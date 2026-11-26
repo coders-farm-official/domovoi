@@ -9,8 +9,10 @@ import androidx.compose.runtime.Composable
  *
  *  - [Phone]: the model on this phone (the on-device assistant). Private to
  *    this phone, works with no server and no internet.
- *  - [Server]: the home server's chat (`/api/chat`). The household's: every
- *    paired device sees the same threads.
+ *  - [Server]: the home server's chat (`/api/chat`). Since 1.5.0 a chat
+ *    there is private to the phone that started it (and the house's
+ *    admins) unless it is shared with the household (ChatPrivacy.kt); a
+ *    phone without a device key, or an older server, has household chats.
  *
  * Each place answers from its own world and they never blend (owner,
  * 2026-10-21): a phone chat never reads the server's conversations or data,
@@ -84,6 +86,15 @@ data class ChatRow(
     val match: String? = null,
     /** A lookup in this chat went online: the list draws a globe. */
     val usedInternet: Boolean = false,
+    /** Private chats (1.5.0): shared with the household (null: the place
+     *  doesn't say, as a phone chat or an older server). */
+    val shared: Boolean? = null,
+    /** Whether the server lets this phone write in it (rename and archive
+     *  are writes) and delete it; an older server denies nothing. */
+    val canWrite: Boolean = true,
+    val canDelete: Boolean = true,
+    /** Another device's chat, for an admin: that device's name. */
+    val owner: String? = null,
 )
 
 /** Both places' chats in one list, the most recently used first; on a tie
@@ -119,12 +130,13 @@ fun withPins(rows: List<ChatRow>, pins: Set<String>, server: String): List<ChatR
     rows.map { it.copy(pinned = pinKey(it, server) in pins) }
 
 /** What a chat's long-press menu offers, in order. */
-internal fun rowActions(row: ChatRow): List<String> = listOf(
-    ACTION_RENAME,
+internal fun rowActions(row: ChatRow): List<String> = listOfNotNull(
+    ACTION_RENAME.takeIf { row.canWrite },
     if (row.pinned) ACTION_UNPIN else ACTION_PIN,
-    if (row.archived) ACTION_UNARCHIVE else ACTION_ARCHIVE,
+    (if (row.archived) ACTION_UNARCHIVE else ACTION_ARCHIVE).takeIf { row.canWrite },
     ACTION_SHARE,
-    ACTION_DELETE,
+    // Another device's shared chat: no delete at all (§2.5).
+    ACTION_DELETE.takeIf { row.canDelete },
 )
 
 internal const val ACTION_RENAME = "rename"
@@ -238,6 +250,9 @@ class ChatFrame(
     /** A new chat started from the list's "Message Domovoi…" box: this is
      *  sent as its first message as soon as the chat opens. */
     val firstMessage: String? = null,
+    /** This build can chat on the phone itself: a private home-server chat
+     *  may say once that that one never leaves the phone (ChatPrivacy.kt). */
+    val truePrivateNote: Boolean = false,
 )
 
 /**
@@ -288,4 +303,13 @@ interface ChatPlace {
     /** The conversation: [row] null is a new chat in this place. */
     @Composable
     fun Conversation(row: ChatRow?, frame: ChatFrame)
+
+    /** The admin's "My chats" / "All chats in the house" filter is offered
+     *  (the home server's, for an admin; ChatPrivacy.kt). */
+    val offersScope: Boolean get() = false
+
+    /** Listing every chat in the house (`scope=all`). */
+    val allChats: Boolean get() = false
+
+    fun showAllChats(all: Boolean) {}
 }

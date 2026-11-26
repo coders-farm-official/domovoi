@@ -124,7 +124,10 @@ class _FakeApprovals:
     def __init__(self, session: Any) -> None:
         pass
 
-    async def approve(self, room_id: str, code: str) -> str:
+    async def get(self, room_id: str) -> None:
+        return None  # 1.5.0: no room asked for
+
+    async def approve(self, room_id: str, code: str, *, into: str | None = None) -> str:
         type(self).seen.append((room_id, code))
         return type(self).answers.pop(0) if type(self).answers else "mismatch"
 

@@ -47,7 +47,7 @@ extension StubHouseUITests {
         static let wrongVersionWhy = "this room code is version 2; this app understands 1"
 
         static let entry = "room-mode-entry"
-        static let explainerTitle = "Use this device as a room"
+        static let explainerTitle = "Use this phone in a room"
         static let readToTheEnd = "Read to the end to continue."
         static let start = "Start room mode"
         static let notNow = "Not now"
@@ -124,7 +124,7 @@ extension StubHouseUITests {
     func roomModeSetup() -> XCUIApplication? {
         let app = launch(server: false, args: ["-domovoi-room-feed"])
         let entry = app.buttons[RoomModeUnderTest.entry]
-        guard roomModeWait(app, entry, "the no-server shell does not offer “Use this device as a room”") else { return nil }
+        guard roomModeWait(app, entry, "the no-server shell does not offer “Use this phone in a room”") else { return nil }
         entry.tap()
         let start = app.buttons[RoomModeUnderTest.start]
         guard roomModeWait(app, start, "setup did not open on the explainer") else { return nil }
@@ -231,7 +231,7 @@ extension StubHouseUITests {
             app.swipeUp()
             swipes += 1
         }
-        guard roomModeWait(app, entry, "Settings → Rooms does not offer “Use this device as a room”", timeout: 5) else { return }
+        guard roomModeWait(app, entry, "Settings → Rooms does not offer “Use this phone in a room”", timeout: 5) else { return }
         evidence(app, "roommode-entry-rooms")
         while !entry.isHittable && swipes < 16 {
             app.swipeUp()

@@ -40,11 +40,18 @@ FILES = ["web/static/components.jsx", "web/static/chat_markdown.js",
          "web/static/chat.jsx"]
 
 
+def _caller_headers(src: str) -> str:
+    """data.js's callerDeviceHeaders: the chat's reads send X-Device-Id (1.5.0 L39)."""
+    c = re.search(r"^const callerDeviceHeaders = .*?^};$", src, re.M | re.S)
+    assert c, "callerDeviceHeaders is gone from web/static/data.js"
+    return "\n" + c.group(0) + "\n"
+
+
 def _retry_helper() -> str:
     src = DATA_JS.read_text(encoding="utf-8")
     m = re.search(r"^const useRetryAfterCredential = .*?^};$", src, re.M | re.S)
     assert m, "useRetryAfterCredential is gone from web/static/data.js"
-    return m.group(0)
+    return m.group(0) + _caller_headers(src)
 
 
 def _setup(width: int) -> str:

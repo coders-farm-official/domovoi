@@ -175,6 +175,10 @@ def _make_matcher(sdk: PluginSDK):
         or None to pass to the next matcher in the chain.
         """
         row = None
+        # A room's player plays an internet station through the core's
+        # relay (sdk.playback.relay_url): its file is the relay URL, which
+        # stands for the station's own.
+        mpd_file = sdk.playback.relay_target(mpd_file) or mpd_file
         if mpd_file:
             row = (
                 await session.execute(

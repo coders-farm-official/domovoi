@@ -445,6 +445,45 @@ it buys and costs).
 An older satellite that doesn't have this setting shows **needs a
 satellite upgrade** in its place on the dashboard.
 
+### A command in a loud room
+
+At a party the room never goes quiet, so the capture runs to its
+recording cap (`[listen] max_record_seconds`, 30 s). Domovoi then
+listens only to how the capture **started**: a satellite from 1.5.0 says
+where your speech began, and the server transcribes the few seconds from
+there, where the command is. The chatter after it is not answered.
+
+- A command that only reads something ("what time is it", "what's on the
+  shopping list") is answered after "It's loud in here. I heard: what
+  time is it."
+- A command that would change something in the house (music, lists,
+  timers, messages, anything a plugin does) is asked about first: "It's
+  loud in here. Should I play some jazz in the kitchen?" The satellite
+  listens for your answer. **Yes** (within a minute) does it; **no**, or
+  no answer, doesn't.
+- When the start isn't a clear command or a question to Domovoi, nothing
+  happens, as before: the turn shows "ignored" in the room's history.
+
+An older satellite doesn't say where speech began; its whole capture is
+transcribed and the command at its start is found as before, then said
+back or asked about the same way. Saying the wake word close to the
+satellite, then the command right away, works best. Details:
+[uml/satellite-protocol.md](uml/satellite-protocol.md#noisy-rooms-first_voiced_frame-150).
+
+**An experiment: cleaning up the noise before transcribing.** Settings →
+Configuration → Speech-to-text → *Clean up noise before transcribing
+(experiment)* (`STT_DENOISE`) set to *spectral* cleans a command's audio
+with a built-in filter before Whisper hears it. It is **off by default**:
+on synthetic party noise it neither helped nor hurt (clean speech came
+through unharmed, for about 3% of Whisper's CPU). RNNoise, tried in the
+same test, cut off the start of commands ("pause the music" heard as "the
+music") and was dropped; a saved `rnnoise` reads as off. Whether
+*spectral* becomes the default waits for the XVF3800 room test. The wake
+word and voice recognition always hear the room as it is, and anything
+that goes wrong uses the raw audio. Developers compare the modes with
+`scripts/dev/denoise_ab.py`, on synthetic party noise or on a room's kept
+command recordings.
+
 ## Custom wake words
 
 A new satellite boots on `hey_jarvis`, and its server then gives it the
@@ -533,6 +572,14 @@ same room history; the server side doesn't change at all.
 
 ## Multi-room tips
 
+- **A room can have several satellites (1.5.0).** Put a second one where
+  the first can't hear you or doesn't reach, and approve it into the same
+  room (**Which room is it in?**). They answer one wake word once and play
+  the room's sound together: see [Rooms and their
+  satellites](SPARE_DEVICE_SATELLITES.md#rooms-and-their-satellites). Give
+  each satellite a name of its own; the room keeps its name. Mixing
+  boards is fine; the XVF3800 (on-chip echo cancellation) is the one to
+  put where people talk over music.
 - **Name rooms once, well.** `room_id` is the identity everywhere: the
   WebSocket path, intent logs, music queues, and how intercom addresses a
   room ("tell the kitchen…"). Match it to the hostname suffix and keep it

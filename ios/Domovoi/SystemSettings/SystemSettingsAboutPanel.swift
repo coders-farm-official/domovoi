@@ -43,6 +43,11 @@ struct SystemSettingsAboutPanel: View {
         VStack(alignment: .leading, spacing: 16) {
             aboutCard
             helpCard
+            // The Domovoi server: install an update, restart (admin on
+            // this phone, never on a shared screen).
+            if serverAdminHeld(model.admin.state, sharedScreen: model.visibility.sharedScreen) {
+                SystemSettingsServerCard(model: model)
+            }
             SystemSettingsProblemsCard(model: model)
             SystemSettingsPrivacyCard()
             SystemSettingsLicencesCard()
@@ -100,10 +105,15 @@ struct SystemSettingsAboutPanel: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(SystemSettingsStrings.serverBuildLine)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
+                // With admin held here the server's card says it; signed
+                // out the line names this phone's admin sign-in; a shared
+                // screen keeps its words.
+                if !serverAdminHeld(model.admin.state, sharedScreen: model.visibility.sharedScreen) {
+                    Text(model.visibility.sharedScreen ? SystemSettingsStrings.serverBuildLine : ServerUpdateWords.buildLineOrPhone)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 manualButton(SystemSettingsStrings.openTheUserManual, symbol: "book")
             }
         }

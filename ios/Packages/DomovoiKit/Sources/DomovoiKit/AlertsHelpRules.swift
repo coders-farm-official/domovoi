@@ -1,11 +1,12 @@
 import Foundation
 
 // ---------------------------------------------------------------------------
-// Help steps, as rules: someone asks a room "how do I…", Domovoi answers in a
-// sentence and offers to send the steps to their phone. A yes opens a
-// home-server chat ("Help: …") and lists a delivery for the asker. This phone
-// notifies for a delivery only when it is for **the person this phone belongs
-// to on that server**, once, and never on a shared screen.
+// Deliveries to this phone, as rules: a home-server chat opened for a person
+// and listed as a delivery for them (photos found for them, for one; 1.5.0
+// removed the voice "send the steps to your phone" offer, and a 1.4.x server
+// may still send its "Help: …" threads). This phone notifies for a delivery
+// only when it is for **the person this phone belongs to on that server**,
+// once, and never on a shared screen.
 //
 // Ported from `android/.../alerts/HelpDeliveries.kt:36-105` (read at
 // `898b3af2`). The route is `GET /api/help/deliveries` (`web/backend/api/
@@ -30,17 +31,23 @@ public func alertsHelpPath(personID: Int64, sinceID: Int64?) -> String {
     return path
 }
 
-/// `helpTitle` (`HelpDeliveries.kt:79`) — the notification's title: the row's
-/// own, with the `Help: ` the assistant plan names added when the row lacks
-/// it, and `Help from Domovoi` when the row has no title at all.
-///
-/// The prefix test is case-insensitive, as the Kotlin's is: a thread titled
-/// `help: add a room` is not given a second prefix.
+/// `helpTitle` (`HelpDeliveries.kt`) — the notification's title: the chat's
+/// title exactly as sent ("Photos: The beach"; a 1.4.x server's "Help: add a
+/// room" as it is), or `From Domovoi` when it has none. Nothing is added:
+/// 1.5.0 removed the voice "send the steps to your phone" offer, and the
+/// same delivery path now carries other things (photos found for a person).
 public func alertsHelpTitle(_ row: AlertsHelpDelivery) -> String {
     let title = row.title.trimmingCharacters(in: .whitespacesAndNewlines)
-    if title.isEmpty { return AlertsStrings.helpUntitled }
-    if title.lowercased().hasPrefix("help:") { return title }
-    return AlertsStrings.helpTitlePrefix + title
+    return title.isEmpty ? AlertsStrings.helpUntitled : title
+}
+
+/// `rows` with a blank title filled from `titles` (the push's, by id):
+/// `withPushTitles` (`HelpDeliveries.kt`).
+public func alertsWithPushTitles(_ rows: [AlertsHelpDelivery], _ titles: [Int64: String]) -> [AlertsHelpDelivery] {
+    rows.map { row in
+        guard row.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let title = titles[row.id] else { return row }
+        return AlertsHelpDelivery(id: row.id, personID: row.personID, threadID: row.threadID, title: title, createdAt: row.createdAt)
+    }
 }
 
 /// What to post and what to remember — `HelpPlan` (`HelpDeliveries.kt:89`).

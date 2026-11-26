@@ -33,7 +33,7 @@ const ChatDrafts = (() => {
   const WIDE_MIN = 1100;
 
   const api = {
-    get: (id) => apiGet(`/api/chat/drafts/${id}`),
+    get: (id) => apiGet(`/api/chat/drafts/${id}`, { headers: callerDeviceHeaders() }),
     thread: (tid) => apiGet(`/api/chat/threads/${tid}/drafts`, { quiet: true }),
     all: () => apiGet('/api/chat/drafts'),
     edit: (id, text, base) => apiPost(`/api/chat/drafts/${id}/versions`, {
@@ -84,8 +84,8 @@ const ChatDrafts = (() => {
   const sourceLabel = (v) => {
     if (!v) return '';
     if (v.source === 'edited') {
-      const mine = typeof DeviceIdentity !== 'undefined' && v.device_id && v.device_id === DeviceIdentity.id();
-      return mine ? 'edited by you' : `edited on ${v.device_name || v.device_id || 'another device'}`;
+      // `mine`: the server compared the version with this browser's X-Device-Id.
+      return v.mine ? 'edited by you' : `edited on ${v.device_name || 'another device'}`;
     }
     if (v.source === 'first') return 'first draft';
     const based = v.based_on && v.based_on !== v.version - 1 ? ` · based on v${v.based_on}` : '';

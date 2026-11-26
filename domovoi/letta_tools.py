@@ -322,6 +322,13 @@ async def _dispatch_handler(name: str, args: dict[str, Any], *, app: Any) -> str
 
     if response is None:  # the tool declined the call
         return f"I can't {name} that."
+    from domovoi.sdk.friend_houses import guard_response, holds_permission
+
+    if holds_permission(getattr(handler, "plugin_slug", None)):
+        # M5 (SDK 1.19): the chat model reads a friend_houses plugin's
+        # reply as its history keeps it, never a friend's words.
+        await guard_response(response)
+        return (response.history_text or "").strip() or "Done."
     return (response.text or "").strip() or "Done."
 
 

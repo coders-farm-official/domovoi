@@ -575,9 +575,13 @@ internal data class AttentionRow(
     val key: String,
     val tone: Tone,
     val text: String,
-    val target: HomeTarget,
+    /** Where a tap goes; null for a row that opens nothing (the update notice). */
+    val target: HomeTarget?,
     /** When it happened (ISO), shown relative — "offline · 2h ago". */
     val at: String? = null,
+    /** The update notice's lines (HomeUpdateNotice.kt): drawn as its own
+     *  wrapping row, not one line. Null for every other row. */
+    val update: UpdateNoticeLines? = null,
 )
 
 /** What the "needs attention" card shows. */

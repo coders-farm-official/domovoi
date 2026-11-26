@@ -2,6 +2,10 @@ package com.domovoi.app.net
 
 import android.os.Build
 import com.domovoi.app.AppContainer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonNull
@@ -155,7 +159,7 @@ fun suggestedDeviceName(): String {
  *  [rememberDeviceAnswer]). */
 suspend fun registerDevice(app: AppContainer): DeviceRow? = runCatching {
     val row = registerWith(
-        app.api, app.prefs, app.prefs.serverUrl.value, app.prefs.deviceId,
+        app.api, app.prefs, app.prefs, app.prefs.serverUrl.value,
         suggestedDeviceName(), "Android ${Build.VERSION.RELEASE}; ${Build.MODEL}",
     )
     // The server answered: a good moment to send the songs waiting in the
@@ -164,21 +168,52 @@ suspend fun registerDevice(app: AppContainer): DeviceRow? = runCatching {
     row
 }.getOrNull()
 
-/** The registration itself, for [server]: the body, the call (sent only
- *  while [server] is still the active one), and the answer stored for
- *  [server]. Throws on a failure. */
+/** One registration at a time, app-wide: two first registrations racing
+ *  (the shell's start and the Connection panel, say) would have the server
+ *  mint ONE key, answer it to one of them, and tell the other
+ *  `device_key_ok: false`, which reads as a lost key. One after the other,
+ *  the second presents the key the first stored. */
+private val registering = Mutex()
+
+/**
+ * The registration itself, for [server]: the body (with `want_device_key`,
+ * always), the call (sent only while [server] is still the active one; the
+ * interceptor adds the device key this phone holds there), and the answer
+ * stored for [server]: whose the phone is, and the device key.
+ *
+ *  * `device_key` (just minted, answered once): kept, before anything else
+ *    can register.
+ *  * `device_key_ok: false` (the row has a key this phone didn't present:
+ *    lost to a reinstall, cleared storage, a Keystore that forgot its key):
+ *    this phone starts over at [server] under a NEW device id and registers
+ *    again, once. Its old private chats stay there, for the admins.
+ *  * `device_key_ok: true`: nothing changes.
+ *  * Neither (a server from before 1.5.0): the phone carries on keyless.
+ *
+ * Throws on a failure.
+ */
 suspend fun registerWith(
     api: ApiClient,
     book: ClaimBook,
+    keys: DeviceKeyBook,
     server: String,
-    deviceId: String,
     name: String,
     userAgent: String,
-): DeviceRow {
-    val answer = api.post("/api/devices/register", registerPayload(deviceId, name, userAgent), onlyTo = server)
-    val obj = answer as? JsonObject ?: throw java.io.IOException("unexpected registration answer")
+): DeviceRow = registering.withLock {
+    suspend fun post(deviceId: String): JsonObject =
+        api.post("/api/devices/register", registerPayload(deviceId, name, userAgent), onlyTo = server) as? JsonObject
+            ?: throw java.io.IOException("unexpected registration answer")
+    var obj = post(keys.deviceIdFor(server))
+    if (deviceKeyAnswer(obj) == DeviceKeyAnswer.Lost) {
+        // Not this phone's row any more: start over there, once. A second
+        // "lost" (an id that, against the odds, is another phone's) leaves
+        // the phone keyless until the next start.
+        obj = post(withContext(Dispatchers.IO) { keys.startOverAt(server) })
+    }
+    val key = deviceKeyAnswer(obj)
+    if (key is DeviceKeyAnswer.Minted) withContext(Dispatchers.IO) { keys.rememberDeviceKey(server, key.reveal()) }
     rememberDeviceAnswer(book, server, obj)
-    return obj.decode()
+    obj.decode()
 }
 
 /**
@@ -187,6 +222,11 @@ suspend fun registerWith(
  * 2026-11-12, `null` when the local "This phone belongs to" was unset)
  * would undo, on every app start, a claim made on the People page or by an
  * admin. Whose the phone is comes back in the answer instead.
+ *
+ * `want_device_key: true` on EVERY registration (core-0063): this app keeps
+ * the key, so the server may mint one for a row that has none. A 1.4.x app
+ * never asked, so its row stayed keyless and this app's first start gets
+ * the key without pairing again.
  */
 fun registerPayload(deviceId: String, name: String, userAgent: String): JsonObject =
     buildJsonObject {
@@ -194,6 +234,7 @@ fun registerPayload(deviceId: String, name: String, userAgent: String): JsonObje
         put("name", name)
         put("platform", "android")
         put("user_agent", userAgent)
+        put(WANT_DEVICE_KEY, true)
     }
 
 /** Rename this device. Throws so the Settings panel can report the failure. */

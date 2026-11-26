@@ -142,6 +142,16 @@ internal interface DraftDoc {
     /** Where a save lands, in words ("Chat documents on this phone"). */
     val saveWhere: String
 
+    /** Asked before a save, when the save shares what wasn't shared (a
+     *  private home-server chat's draft going to the household's
+     *  Documents); null: saved at once. */
+    val saveAsk: String? get() = null
+
+    /** Whether this phone may write to it: save, hand edits and print are
+     *  writes (1.5.0: an admin reading another device's private chat may
+     *  not); false hides them. */
+    val writable: Boolean get() = true
+
     /** A version's first lines, for its card; null when not known. */
     suspend fun firstLines(version: Int): String? = null
 }
@@ -246,7 +256,8 @@ internal fun DraftCard(
     card: DraftCardData,
     canPrint: Boolean,
     onOpen: () -> Unit,
-    onSave: () -> Unit,
+    /** Null: no save (the chat is read only here). */
+    onSave: (() -> Unit)?,
     onShare: () -> Unit,
     onPrint: () -> Unit,
     /** The Revise box: its text revises this draft, whatever it says;
@@ -286,7 +297,7 @@ internal fun DraftCard(
                 OutlinedButton(onClick = onOpen) { Text("open") }
             } else {
                 OutlinedButton(onClick = onOpen) { Text("open") }
-                OutlinedButton(onClick = onSave) { Text("save") }
+                onSave?.let { OutlinedButton(onClick = it) { Text("save") } }
                 OutlinedButton(onClick = onShare) { Text("share") }
                 if (canPrint) OutlinedButton(onClick = onPrint) { Text("print") }
             }
@@ -338,6 +349,7 @@ internal fun DraftCanvas(
     var busy by remember { mutableStateOf(false) }
     var saved by remember(doc.key) { mutableStateOf<DraftSaveResult?>(null) }
     var menu by remember { mutableStateOf(false) }
+    var saveAsking by remember { mutableStateOf<String?>(null) }
 
     suspend fun load(jumpTo: Int?) {
         runCatching { doc.load() }
@@ -407,7 +419,7 @@ internal fun DraftCanvas(
             Text(view?.title ?: "draft", style = MaterialTheme.typography.titleSmall, color = Domovoi.colors.fg,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (editing == null && v != null) {
-                IconButton(onClick = { editing = TextFieldValue(v.body) }, enabled = !busy) {
+                if (doc.writable) IconButton(onClick = { editing = TextFieldValue(v.body) }, enabled = !busy) {
                     Icon(Icons.Outlined.Edit, contentDescription = "edit", tint = Domovoi.colors.fgMuted)
                 }
                 IconButton(onClick = {
@@ -476,26 +488,22 @@ internal fun DraftCanvas(
                     onCheckedChange = { showChanges = it })
             }
         }
-        if (editing == null && v != null) {
+        if (editing == null && v != null && doc.writable) {
+            fun saveAs(format: String) {
+                busy = true
+                scope.launch {
+                    runCatching { doc.save(v.version, format) }
+                        .onSuccess { saved = it; load(v.version) }
+                        .onFailure { toast(failureText("save", it)) }
+                    busy = false
+                }
+            }
+            // A save from a private chat asks first ([DraftDoc.saveAsk]).
+            fun ask(format: String) { if (doc.saveAsk != null) saveAsking = format else saveAs(format) }
+            saveAsking?.let { f -> SaveAsk(doc.saveAsk, onConfirm = { saveAs(f) }, onDismiss = { saveAsking = null }) }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(enabled = !busy, onClick = {
-                    busy = true
-                    scope.launch {
-                        runCatching { doc.save(v.version, fmt) }
-                            .onSuccess { saved = it; load(v.version) }
-                            .onFailure { toast(failureText("save", it)) }
-                        busy = false
-                    }
-                }) { Text("save ${label(fmt)}") }
-                OutlinedButton(enabled = !busy, onClick = {
-                    busy = true
-                    scope.launch {
-                        runCatching { doc.save(v.version, other) }
-                            .onSuccess { saved = it; load(v.version) }
-                            .onFailure { toast(failureText("save", it)) }
-                        busy = false
-                    }
-                }) { Text(label(other)) }
+                Button(enabled = !busy, onClick = { ask(fmt) }) { Text("save ${label(fmt)}") }
+                OutlinedButton(enabled = !busy, onClick = { ask(other) }) { Text(label(other)) }
                 onPrint?.let { print ->
                     IconButton(onClick = { print(v.version) }) {
                         Icon(Icons.Outlined.Print, contentDescription = "print", tint = Domovoi.colors.fgMuted)

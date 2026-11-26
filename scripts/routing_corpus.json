@@ -1839,6 +1839,14 @@
       "path": "fast",
       "tags": ["action", "voice_profile"],
       "note": "2026-11-16 live 1.3.0 check: names the room the turn came from, never Q&A"
-    }
+    },
+    {"utterance": "show me photos of the beach from last summer", "handler": "media_search", "path": "fast", "tags": ["action", "media_search"], "note": "1.5.0 media slice 6: words and a time"},
+    {"utterance": "find the video where we sang happy birthday", "handler": "media_search", "path": "fast", "tags": ["action", "media_search"], "note": "1.5.0 media slice 6: a where-clause"},
+    {"utterance": "do we have any pictures from christmas", "handler": "media_search", "path": "fast", "tags": ["action", "media_search"], "note": "1.5.0 media slice 6: a 'do we have' question"},
+    {"utterance": "do i have any videos from christmas", "handler": "media_search", "path": "fast", "tags": ["action", "media_search"], "note": "1.5.0 media slice 6: library's 'do i have X' is music-only; a video word makes it ours"},
+    {"utterance": "search my photos for snow", "handler": "media_search", "path": "fast", "tags": ["action", "media_search"], "note": "1.5.0 media slice 6"},
+    {"utterance": "find photos in my library", "handler": "library", "path": "fast", "tags": ["action", "media_search"], "note": "1.5.0 media slice 6: '... in my library' stays library's"},
+    {"utterance": "play the video of the beach", "handler": "music", "path": "fast", "tags": ["action", "media_search"], "note": "1.5.0 media slice 6: 'play' is never media_search's"},
+    {"utterance": "print the photos of the beach", "handler": "printing", "path": "fast", "tags": ["action", "media_search"], "note": "1.5.0 media slice 6: 'print' stays printing's"}
   ]
 }

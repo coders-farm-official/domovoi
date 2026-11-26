@@ -118,8 +118,12 @@ class RoomModeActivity : ComponentActivity() {
                 val update = updateState?.takeIf { AppUpdate.shows(it, dismissed) }?.let { st ->
                     noticeFor(st, onOpen = { openUpdate(it) }) { dismissals.dismiss(st) }
                 }
+                // The room's name and where this phone is, in household
+                // words: never the room's or the phone's id.
+                val roomName = RoomStatusText.roomName(status, store.roomName, store.roomNameRoom, store.enrolment?.roomLabel)
                 RoomDisplay(
-                    label = store.enrolment?.roomLabel ?: "room",
+                    label = RoomStatusText.title(roomName),
+                    where = RoomStatusText.whereLine(status, roomName, store.approvedOnce),
                     status = status,
                     running = running && engine != null,
                     approvalCode = (status?.link as? RoomEngine.Link.AwaitingApproval)?.code,

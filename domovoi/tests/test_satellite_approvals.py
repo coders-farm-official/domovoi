@@ -321,7 +321,7 @@ def test_a_takeover_between_the_check_and_the_bind_binds_nothing():
                     async with engine.begin() as conn:
                         await conn.execute(text(
                             "UPDATE satellite_approvals SET token_hash = :h, code = :c "
-                            "WHERE room_id = :r"
+                            "WHERE satellite_id = :r"
                         ), {"h": HASH_B, "c": OTHER_CODE, "r": ROOM})
                 return result
 

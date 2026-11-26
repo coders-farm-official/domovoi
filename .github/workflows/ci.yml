@@ -271,6 +271,18 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
+      # The dashboard's real-browser render tests
+      # (domovoi/tests/test_web_update_notices_render.py) drive the runner
+      # image's google-chrome headless. DOMOVOI_REQUIRE_CHROME makes a
+      # missing browser a failure there, never a quiet skip; this step
+      # fails first if the image ever drops it.
+      - name: Chrome for the real-browser render tests
+        run: |
+          chrome=$(command -v google-chrome || command -v google-chrome-stable || true)
+          if [ -z "$chrome" ]; then echo "::error::google-chrome is not on this runner"; exit 1; fi
+          "$chrome" --version
+          echo "DOMOVOI_TEST_CHROME=$chrome" >>"$GITHUB_ENV"
+          echo "DOMOVOI_REQUIRE_CHROME=1" >>"$GITHUB_ENV"
       - name: System tools some tests use (ffmpeg; tesseract for the scan reader's real OCR test)
         run: |
           sudo apt-get update -qq
@@ -499,7 +511,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.harness == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The provision harness alone takes ~21 min, and the two images are
+    # built fresh every run (2 to 19 min, by the mirrors' day): 30 cut
+    # green runs off mid-harness.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -17,6 +17,7 @@ from domovoi import egress
 from domovoi.models import Context, Intent
 from domovoi.tests.conftest import requires_db
 
+from domovoi import player_relay
 from domovoi_plugin_radio import station_match as sm
 from domovoi_plugin_radio.clients import radio_browser
 from domovoi_plugin_radio.clients.radio_browser import RadioBrowserStation
@@ -274,7 +275,7 @@ async def test_directory_search_offers_two_and_plays_the_pick(stub_sdk, db_sessi
     resp = await h.handle_choice_reply(KIND, data, "the second one", _ctx(), db_session)
     assert resp.text == "Streaming Groove Salad Classic."
     (play,) = _plays(stub_sdk)
-    assert play["stream_url"] == "http://groove2.example/s.mp3"
+    assert player_relay.target_for(play["stream_url"]) == "http://groove2.example/s.mp3"
     # Saved as a played-once row (in Recent, not a favorite), and the
     # now-playing data carries its id so "add this to favorites" works.
     row = (await db_session.execute(text(

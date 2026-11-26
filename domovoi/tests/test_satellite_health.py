@@ -368,13 +368,13 @@ async def test_health_rows_are_kept_pruned_and_summarised():
 
     room = "health-test-room"
     async with session_scope() as s:
-        await s.execute(text("DELETE FROM satellite_health WHERE room_id = :r"), {"r": room})
+        await s.execute(text("DELETE FROM satellite_health WHERE satellite_id = :r"), {"r": room})
         repo = SatelliteHealthRepository(s)
         await repo.insert(room, {"seq": 1, "rss_kb": 50_000, "cpu_pct": 2.0})
         await repo.insert(room, {"seq": 2, "rss_kb": 52_000, "cpu_pct": 4.0})
         # An old row, as if from yesterday.
         await s.execute(
-            text("INSERT INTO satellite_health (room_id, received_at, sample) "
+            text("INSERT INTO satellite_health (satellite_id, received_at, sample) "
                  "VALUES (:r, now() - interval '25 hours', CAST(:s AS jsonb))"),
             {"r": room, "s": json.dumps({"seq": 0, "rss_kb": 1})},
         )
@@ -386,7 +386,7 @@ async def test_health_rows_are_kept_pruned_and_summarised():
         assert [r[1]["seq"] for r in rows] == [1, 2], "the 25 h old row is outside the window"
         assert sh.summarize_history(rows)["rss_kb"] == {"min": 50_000, "max": 52_000, "last": 52_000}
         assert await repo.prune(room, 24) == 1
-        await s.execute(text("DELETE FROM satellite_health WHERE room_id = :r"), {"r": room})
+        await s.execute(text("DELETE FROM satellite_health WHERE satellite_id = :r"), {"r": room})
 
 
 @requires_db
@@ -399,7 +399,7 @@ async def test_outages_keep_the_last_n_per_room():
 
     room = "outage-test-room"
     async with session_scope() as s:
-        await s.execute(text("DELETE FROM satellite_outages WHERE room_id = :r"), {"r": room})
+        await s.execute(text("DELETE FROM satellite_outages WHERE satellite_id = :r"), {"r": room})
         repo = SatelliteOutageRepository(s)
         for i in range(7):
             await repo.insert(room, f"boot-{i}", {"last_exit_reason": f"reason {i}"}, keep=5)
@@ -412,7 +412,7 @@ async def test_outages_keep_the_last_n_per_room():
         latest = await repo.latest(room)
         assert latest["prev_boot_id"] == "boot-6"
         assert await repo.latest("never-reported") is None
-        await s.execute(text("DELETE FROM satellite_outages WHERE room_id = :r"), {"r": room})
+        await s.execute(text("DELETE FROM satellite_outages WHERE satellite_id = :r"), {"r": room})
 
 
 # ─── review 2026-10-09: containment, authentication, bounds ───────────────

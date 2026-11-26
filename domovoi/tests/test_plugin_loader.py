@@ -545,3 +545,43 @@ async def test_discovery_loads_in_slug_order_and_honors_tombstone(
         await LOADER.shutdown()
         for slug in slugs:
             await reg.delete_plugin(slug)
+
+
+# ─── The household's AI switch reaches a loaded plugin (main 1.4.1 + 1.5.0) ─
+
+async def test_a_loaded_needs_ai_plugin_is_off_with_the_ai_switch(tmp_path: Path) -> None:
+    """Pre-merge review B1: after main (SDK 1.14 needs_ai) merged into 1.5.0,
+    a plugin loaded through the real loader with ``[ai]`` and a
+    ``needs_ai`` handler is still answered by core while AI is off; its
+    code never runs. The manifest/code cross-check still holds too."""
+    from domovoi import ai_features
+    from domovoi.models import Context
+    from domovoi.router import run_fast_path
+
+    slug = "aipaint"
+    root = make_plugin(tmp_path, slug, pattern=r"^aipaint (.+) please$")
+    toml = root / "domovoi-plugin.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8").replace('label = "aipaint"', 'label = "aipaint"\nneeds_ai = true')
+        + '\n[ai]\ndoes = "paint pictures"\n',
+        encoding="utf-8",
+    )
+    core = root / f"domovoi_plugin_{slug}" / "core.py"
+    core.write_text(re.sub(r'(?m)^(\s+)requires_network = "no"$', r'\g<0>\n\1needs_ai = True',
+                           core.read_text(encoding="utf-8"), count=1), encoding="utf-8")
+    await _load(root, slug)
+    try:
+        h = HANDLER_BY_NAME[slug]
+        assert h.needs_ai is True
+        assert ai_features.plugin_ai(slug) is not None and ai_features.plugin_ai(slug).does == "paint pictures"
+        fp = h.fast_paths[0]
+        m = fp.pattern.match("aipaint a dog please")
+        with ai_features.override(False):
+            off = await run_fast_path(h, fp, m, Context(room_id="kitchen"), None)
+        assert off.text.startswith("AI is off on this house, so I can't paint pictures.")
+        with ai_features.override(True):
+            on = await run_fast_path(h, fp, m, Context(room_id="kitchen"), None)
+        assert on.text == "ok"
+    finally:
+        await LOADER.unload_plugin(slug)
+    assert ai_features.plugin_ai(slug) is None

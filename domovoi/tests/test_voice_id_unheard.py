@@ -23,7 +23,6 @@ import pytest
 from domovoi import voice_identifier
 from domovoi.clients.voice_embedder import EMBEDDING_DIM, RealVoiceEmbedder
 from domovoi.config import settings
-from domovoi.handlers.help_desk import WHO_KIND, HelpDeskHandler
 from domovoi.handlers.memory import MemoryHandler
 from domovoi.handlers.voice_profile import VoiceProfileHandler
 from domovoi.models import Context
@@ -168,10 +167,3 @@ async def test_memory_does_not_ask_an_unheard_voice_to_introduce_itself() -> Non
     unknown = await handler._ensure_person(_ctx("no_match"))
     assert unknown is not None and "my name is" in unknown.text
     assert await handler._ensure_person(_ctx("too_short", person_id=3)) is None
-
-
-async def test_help_desk_send_it_to_me_when_too_short() -> None:
-    resp = await HelpDeskHandler().handle_choice_reply(WHO_KIND, {}, "me", _ctx("too_short"), None)
-    assert resp is not None
-    assert resp.text.startswith("That was too short for me to tell who's talking.")
-    assert resp.text.endswith("Nothing was sent.") and "yet" not in resp.text

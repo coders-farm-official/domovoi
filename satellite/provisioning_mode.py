@@ -2066,6 +2066,24 @@ def apply_base_packages() -> dict[str, Any] | None:
         return None
 
 
+def switch_to_root_copy() -> dict[str, Any] | None:
+    """satellite/root_code.py, as root on the satellite itself; a no-op
+    anywhere else, and when this run already is root's own copy. On a card
+    prepared before 1.5.0 this unit still runs the account's tree as root:
+    this run moves the card onto root's own copy (the code, the XVF3800
+    wrapper, this unit and sudoers), once, all or nothing. Never raises."""
+    geteuid = getattr(os, "geteuid", None)
+    if sys.platform != "linux" or geteuid is None or geteuid() != 0:
+        return None
+    try:
+        from satellite import root_code
+
+        return root_code.switch_running_card()
+    except Exception as e:  # noqa: BLE001 — never take the boot down
+        log.warning("root code switch: %s", e)
+        return None
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -2086,6 +2104,9 @@ def main() -> int:
         # whose setup lost one (mpg123 on the office unit, 2026-10-17) gets it
         # back at the next boot, online. Nothing runs when none is missing.
         apply_base_packages()
+        # Last: a card from before 1.5.0 switches to root's own copy of this
+        # code; the next boot runs that copy (satellite/root_entry.py).
+        switch_to_root_copy()
     return run()
 
 

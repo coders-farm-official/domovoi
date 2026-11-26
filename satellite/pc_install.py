@@ -71,6 +71,9 @@ def config_changes(e: enrolment.Enrolment, permissions: str, *,
         "device.profile": profile,
         "satellite.room_id": e.room_id,
         "satellite.room_name": e.room,
+        # `in=` (1.5.0): the room it joins as one more satellite; "" for a
+        # room of its own (an earlier enrolment's value is cleared).
+        "satellite.requested_room": e.in_room or "",
         "satellite.domovoi_url": e.ws_url,
         "satellite.server_fingerprint": e.fp,
         "pc.permissions": permissions,

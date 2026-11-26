@@ -89,8 +89,11 @@ def test_voice_rooms_lists_every_room_and_whether_it_knows_the_voice() -> None:
         async with engine.begin() as conn:
             await conn.execute(text("TRUNCATE people RESTART IDENTITY CASCADE"))
             await conn.execute(text("DELETE FROM satellites"))
+            await conn.execute(text("DELETE FROM rooms"))
             for room in ("dining", "garage", "office"):
-                await conn.execute(text("INSERT INTO satellites (room_id) VALUES (:r)"), {"r": room})
+                await conn.execute(text("INSERT INTO rooms (room_id, name) VALUES (:r, :r)"), {"r": room})
+                await conn.execute(text("INSERT INTO satellites (satellite_id, room_id) VALUES (:r, :r)"),
+                                   {"r": room})
             pid = int((await conn.execute(
                 text("INSERT INTO people (name) VALUES ('Priya') RETURNING id"),
             )).scalar_one())

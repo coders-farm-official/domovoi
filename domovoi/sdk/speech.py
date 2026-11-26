@@ -13,6 +13,12 @@ The active-session map lives on the FastAPI app state; the core binds a
 provider at startup (``bind_active_sessions`` in main.py's lifespan).
 Before binding — or in the web process, where this API must never be
 used — ``announce`` reports zero rooms reached rather than raising.
+
+Words from a friend house (SDK 1.19): ``announce`` and ``render`` take a
+:class:`~domovoi.sdk.friend_houses.FriendText` or a ``friend_sentence(...)``
+as well as a ``str`` and filter the friend's words with the wake-phrase
+filter people's messages get. For a plugin with the ``friend_houses``
+permission every line is filtered, a plain ``str`` too.
 """
 
 from __future__ import annotations
@@ -66,10 +72,16 @@ async def _room_voice_name(room_id: str | None) -> str | None:
 class SpeechAPI:
     """Injected as ``sdk.speech`` — never constructed by plugins."""
 
-    def __init__(self, slug: str = "core") -> None:
+    def __init__(self, slug: str = "core", *, friend_houses: bool = False) -> None:
         self.slug = slug
+        self.friend_houses = friend_houses
 
-    async def render(self, text: str, *, room_id: str | None = None) -> bytes:
+    async def _said(self, text: Any) -> str:
+        from domovoi.sdk.friend_houses import speakable_for
+
+        return await speakable_for(text, always=self.friend_houses)
+
+    async def render(self, text: Any, *, room_id: str | None = None) -> bytes:
         """Render ``text`` to audio and return it as one mono 16-bit WAV
         (SDK 1.9). Nothing is played: the plugin decides where the audio
         goes (a file a room's player queues, a stream to a browser).
@@ -80,6 +92,7 @@ class SpeechAPI:
         text is rendered a sentence at a time and joined, so there is no
         length cap. Raises ``ValueError`` for empty text; an engine
         failure raises like the TTS client does. The core process only."""
+        text = await self._said(text)
         if not (text or "").strip():
             raise ValueError("speech.render: nothing to say")
         import io
@@ -116,7 +129,7 @@ class SpeechAPI:
             wf.writeframes(b"".join(parts))
         return buf.getvalue()
 
-    async def announce(self, room_id: str | None, text: str) -> list[str]:
+    async def announce(self, room_id: str | None, text: Any) -> list[str]:
         """Speak ``text`` in ``room_id`` (or every connected room when
         None). Returns the room_ids actually reached — empty when the
         target isn't connected. Never raises for delivery problems:
@@ -125,6 +138,7 @@ class SpeechAPI:
         returned list, not on exceptions. A room in its quiet hours
         (domovoi/quiet_hours.py) is not reached: nothing is spoken there,
         then or later."""
+        text = await self._said(text)
         if not (text or "").strip():
             return []
         if _active_sessions_provider is None:

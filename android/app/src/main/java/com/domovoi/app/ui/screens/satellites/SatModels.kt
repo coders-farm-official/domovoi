@@ -136,6 +136,9 @@ data class Satellite(
     // A code upgrade under way or just finished (SatUpgrade.kt); null when
     // there is none, and from an older server.
     val upgrade: SatUpgrade? = null,
+    // What the device declared (S0): null from a Pi, which sends no list
+    // (it can do everything a Pi does), and from an older server.
+    val supports: List<String>? = null,
 ) {
     val online: Boolean get() = status == "online"
 }
@@ -268,6 +271,9 @@ data class SatConfigField(
     val unit: String? = null,
     val help: String? = null,
     val value: JsonElement? = null,
+    // False: the room's software doesn't have this setting yet (upgrade it
+    // first). Absent from an older server: it has.
+    val supported: Boolean? = null,
 )
 
 @Serializable

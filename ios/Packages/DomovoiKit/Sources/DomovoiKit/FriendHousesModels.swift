@@ -63,6 +63,7 @@ public enum FhWords {
     public static let tabMessages = "messages"
     public static let tabFriends = "friends"
     public static let tabShared = "shared lists"
+    public static let tabConnections = "friends & connections"
 
     /// A list a friend shared with this house, not accepted yet (the
     /// dashboard's `FhListOffer`).
@@ -163,15 +164,21 @@ public enum FhWords {
 }
 
 /// The tabs, in the dashboard's order (1.4.1): Messages, then Shared lists.
-/// The Friends tab went with the admin zone, which the phones hide.
+/// The dashboard's admin zone is a third, "friends & connections", only while
+/// this phone holds admin (1.5.0): which ones show is
+/// ``fhTabsFor(_:sharedScreen:)``, never `allCases`.
 public enum FhTab: String, CaseIterable, Sendable {
     case messages
     case shared
+
+    /// Only while this phone holds admin (``FriendHousesAdminModel``).
+    case connections
 
     public var label: String {
         switch self {
         case .messages: return FhWords.tabMessages
         case .shared: return FhWords.tabShared
+        case .connections: return FhWords.tabConnections
         }
     }
 }

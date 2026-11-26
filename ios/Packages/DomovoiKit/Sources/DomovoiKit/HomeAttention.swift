@@ -116,13 +116,20 @@ public struct HomeAttentionState: Equatable, Sendable {
     /// for whoever may read the inbox, with no names in it.
     public let friendHouses: AttentionRow?
 
+    /// The update notice's row (``homeUpdateNoticeRow(notice:paired:admin:shared:)``),
+    /// or nil. Added after Friend Houses' row exactly as the dashboard adds
+    /// `HomeUpdateRow` after it (`HomeWithRow`, `home.jsx`): not a problem,
+    /// and not the visibility setting's to hide.
+    public let update: AttentionRow?
+
     public init(
         view: AttentionView,
         checking: Bool = false,
         isStale: Bool = false,
         compact: Bool = true,
         expanded: Bool = false,
-        friendHouses: AttentionRow? = nil
+        friendHouses: AttentionRow? = nil,
+        update: AttentionRow? = nil
     ) {
         self.view = view
         self.checking = checking
@@ -130,6 +137,7 @@ public struct HomeAttentionState: Equatable, Sendable {
         self.compact = compact
         self.expanded = expanded
         self.friendHouses = friendHouses
+        self.update = update
     }
 
     /// Build the card from the reads, with `rooms` **nullable** — trap 1.
@@ -151,7 +159,8 @@ public struct HomeAttentionState: Equatable, Sendable {
         isStale: Bool = false,
         compact: Bool = true,
         expanded: Bool = false,
-        friendHouses: AttentionRow? = nil
+        friendHouses: AttentionRow? = nil,
+        update: AttentionRow? = nil
     ) -> HomeAttentionState {
         let rows = attentionRows(
             health: health, rooms: rooms, plugins: plugins, acq: acq, guard: guardState
@@ -164,19 +173,25 @@ public struct HomeAttentionState: Equatable, Sendable {
             isStale: isStale,
             compact: compact,
             expanded: expanded,
-            friendHouses: friendHouses
+            friendHouses: friendHouses,
+            update: update
         )
     }
 
     /// Whether to draw anything: a problem the setting lets this phone see,
-    /// or Friend Houses' row.
-    public var shown: Bool { attentionShown(view) || friendHouses != nil }
+    /// Friend Houses' row, or the update notice.
+    public var shown: Bool { attentionShown(view) || friendHouses != nil || update != nil }
 
-    /// Every row of the rows branch: the problems, then Friend Houses' row.
-    /// With nothing for the problems (`.none`) it is that row on its own; in
-    /// the summary branch it is ``extraRows``' instead.
+    /// The rows that are not problems, in the dashboard's order: Friend
+    /// Houses', then the update notice.
+    private var notProblems: [AttentionRow] { [friendHouses, update].compactMap { $0 } }
+
+    /// Every row of the rows branch: the problems, then Friend Houses' row,
+    /// then the update notice. With nothing for the problems (`.none`) it is
+    /// those rows on their own; in the summary branch they are
+    /// ``extraRows``' instead.
     public var allRows: [AttentionRow] {
-        let extra = friendHouses.map { [$0] } ?? []
+        let extra = notProblems
         switch view {
         case .rows(let rows): return rows + extra
         case .none: return extra
@@ -184,10 +199,11 @@ public struct HomeAttentionState: Equatable, Sendable {
         }
     }
 
-    /// The rows under the summary line: Friend Houses' row, or none.
+    /// The rows under the summary line: Friend Houses' row and the update
+    /// notice, or none.
     public var extraRows: [AttentionRow] {
-        guard case .summary = view, let friendHouses else { return [] }
-        return [friendHouses]
+        guard case .summary = view else { return [] }
+        return notProblems
     }
 
     /// The rows actually drawn: every one on a wide pane, the first
@@ -265,6 +281,7 @@ public struct HomeAttentionState: Equatable, Sendable {
     /// three-element row reads as three VoiceOver stops with no relation
     /// between them. Part 1 hit the same thing with the date and the counts.
     public func spokenRow(_ row: AttentionRow, nowMs: Int64) -> String {
+        if let update = row.update { return update.spoken }
         guard let at = row.at else { return row.text }
         return "\(row.text), \(relTime(at, nowMs: nowMs))"
     }

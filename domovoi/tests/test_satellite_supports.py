@@ -117,12 +117,27 @@ def inventory(monkeypatch):
         async def room_voice(self, room):
             return None  # the server keeps no voice for the room (a read)
 
+        async def room_of(self, satellite_id):
+            return None  # in the room of its own id, as before 1.5.0
+
+    class Rooms:
+        """A room migrated from before 1.5.0 with no label: V073 named it by
+        its id, so the fixtures' `ready.room.name` is the id. (A room whose
+        row can't be read sends no name: test_rooms_fixtures.py.)"""
+
+        def __init__(self, _s):
+            pass
+
+        async def get(self, room_id):
+            return {"room_id": room_id, "name": room_id, "satellites": 1}
+
     @asynccontextmanager
     async def scope():
         yield None
 
     monkeypatch.setattr(streaming, "session_scope", scope)
     monkeypatch.setattr(streaming, "SatellitesRepository", Repo)
+    monkeypatch.setattr(streaming, "RoomsRepository", Rooms)
     return writes
 
 
@@ -331,6 +346,11 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
                 await session.request_logs(max_bytes=4096, timeout=0.01)
             except (TimeoutError, asyncio.TimeoutError):
                 pass  # sent, and nobody answers in a test
+        elif frame == "diag_request":
+            try:
+                await session.request_diagnostic("versions", timeout=0.01)
+            except (TimeoutError, asyncio.TimeoutError):
+                pass  # sent, and nobody answers in a test
         elif frame == "start_wake_recording":
             await session.start_wake_recording(
                 wake_word_id=1, slug="hey_test", clip_seconds=2.0, target_count=3)
@@ -350,6 +370,10 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
             await session.send_mic_dsp_mark("block 2, 1m")
         elif frame == "chat_start":
             await session.send_chat_start()
+        elif frame.startswith("support_"):
+            # A support session's frames (domovoi/support_sessions.py), all
+            # through the one method that checks the ability.
+            await session.send_support({"type": frame, "session_id": "0" * 32})
         elif frame == "announcement":
             async def fake_announce(text, defer, *_extra):
                 await ws.send_text(json.dumps({"type": "announcement"}))
@@ -373,6 +397,11 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
                         break
                     await asyncio.sleep(0.01)
                 await feed.stop()
+        elif frame in ("wake_grant", "capture_keep"):
+            # Both answer a device's own claim (1.5.0, wake_claims.py): a
+            # device that never declared `wake_claim` is not answered.
+            await session._on_control({"type": "wake_claim", "claim": 1, "word": "hey_test",
+                                       "score": 0.9, "floor_dbfs": -50.0})
         else:  # pragma: no cover
             raise AssertionError(frame)
     except Exception as e:  # noqa: BLE001

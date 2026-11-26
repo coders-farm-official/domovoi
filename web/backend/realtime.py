@@ -19,6 +19,9 @@ Channels emitted (core; enabled plugins add their own via manifest
 * ``satellites.wifi`` — per-room WiFi telemetry from the admin snapshot
 * ``satellites.display`` — per-room screen/kiosk state video satellites
   report (display toggles, kiosk-browser death/recovery)
+* ``satellites.media`` — which rooms show photo and video results on a
+  screen now (1.5.0): ``{room: results id}``, a digest, never a caption;
+  the kiosk page reads ``GET /api/satellites/{room}/media``
 * ``satellites.pending`` — unprovisioned satellites presenting a USB
   adoption volume on the server (plug/unplug/status flips)
 * ``people.last_seen`` — fires when a person's ``last_seen_at`` advances
@@ -43,12 +46,18 @@ Channels emitted (core; enabled plugins add their own via manifest
 * ``containers`` — the container guard's open and recent incidents in
   plain words, the banner every page shows and whether the freeze is on
   (V024, docs/CONTAINER_GUARD.md); fires on every incident write
-* ``help_deliveries`` — help steps sent by voice to a person's phones in
-  the last hour (V035: ``{id, person_id, thread_id, title, created_at}``,
+* ``help_deliveries`` — results sent by voice to a person's phones in
+  the last hour (a voice photo search's "Photos: …" chats; voice help's
+  "Help: …" steps before 1.5.0) (V035: ``{id, person_id, thread_id,
+  title, created_at}``,
   newest first, at most 20); fires when one is sent. A phone posts a
   notification for a row whose person is its owner ("This phone belongs
-  to"); every other phone ignores it. The titles are those of chats every
-  household device can read already
+  to"); every other phone ignores it. Every socket gets it, so ``title``
+  is never the chat's: "Photos from Domovoi" for a photo search's, else
+  ``""`` (the app reads the rest from ``GET /api/help/deliveries``)
+* ``chat`` — ``{"changed": <opaque digest>}``: a chat was written
+  somewhere. Content-free (no count, time or id); each client reads its
+  own thread list again
 * ``lyrics`` — a digest of the lyrics tables (V021): counts, the newest
   ``updated_at`` and the lyrics workers' states. Never a title or a lyric:
   the words are household-tier HTTP reads (web/backend/api/lyrics.py); this
@@ -65,6 +74,9 @@ Channels emitted (core; enabled plugins add their own via manifest
   digest (counts, id sums, the newest ``updated_at`` of lists and items),
   never a name or an item; fires on every list or item write, by voice or
   from any screen, and an open Lists page reads the lists again
+* ``support_sessions`` — the satellite support sessions open now (1.5.0:
+  ``{id, satellite_id, room_id, ends_at, state}``), from the admin
+  snapshot; every page's "Support session open" banner rides it
 * ``nav_layout`` — the household's web menu (V045, Settings → App layout):
   the layout ``GET /api/nav-layout`` returns, null for the default; fires
   when an admin saves or resets it, and every open dashboard redraws its
@@ -94,9 +106,12 @@ LISTEN/NOTIFY pipeline:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
@@ -221,9 +236,10 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # `containers.changed` event (the household view: plain words, no
     # image references — an admin reads those over HTTP).
     "container_incidents_changed": "containers",
-    # Help steps sent by voice to a person's phones (V035,
-    # domovoi/help_desk/delivery.py). The app's notification rides the
-    # resulting `help_deliveries.changed` event.
+    # Results sent by voice to a person's phones (V035,
+    # domovoi/help_desk/delivery.py: a voice photo search's since 1.5.0).
+    # The app's notification rides the resulting `help_deliveries.changed`
+    # event.
     "help_deliveries_changed": "help_deliveries",
     # A phone room's battery (V040, domovoi/room_battery.py): a new report
     # the core kept, a low-battery warning opening or closing, a room's
@@ -241,6 +257,11 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # core's lists handler) or from the dashboard and the apps, fires
     # `lists_changed`; an open Lists page reads again on `lists.changed`.
     "lists_changed": "lists",
+    # Media understanding (V078, domovoi/media_understanding/): the
+    # runner's progress (at most every 10 s), its pause for a voice turn,
+    # a catalogue walk, a switch or an excluded folder. Settings → Photos
+    # and videos reads again on `media_understanding.changed`.
+    "media_understanding_changed": "media_understanding",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -461,6 +482,15 @@ class StatePollLoop:
                 # kiosk-death/recovery; the satellites page (and the kiosk
                 # display page itself) refetch on it.
                 ("satellites.display", snapshot.get("satellite_display") or {}),
+                # Photo and video results on a room's screen (1.5.0,
+                # domovoi/room_media.py): a digest, {room: results id},
+                # never a caption. The kiosk page reads its room's results
+                # from GET /api/satellites/{room}/media on it.
+                ("satellites.media", room_media_digest(snapshot)),
+                # Support sessions open now (1.5.0, domovoi/support_sessions.py):
+                # ids, the satellite and when it ends. Every page's banner
+                # rides `support_sessions.changed`.
+                ("support_sessions", snapshot.get("support_sessions") or []),
             ):
                 async with self._diff_lock:
                     old_value = self._previous.get(key)
@@ -473,6 +503,22 @@ class StatePollLoop:
 
 
 # ─── Snapshot helpers ──────────────────────────────────────────────────────
+
+
+def room_media_digest(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """``{room: results id}`` for the rooms whose screen shows photo and
+    video results now (the snapshot's ``room_media``): what the
+    ``satellites.media`` push carries, never a caption or a thumbnail."""
+    rooms = (snapshot or {}).get("room_media") or {}
+    if not isinstance(rooms, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for room, m in rooms.items():
+        rid = m.get("id") if isinstance(m, dict) else m
+        if isinstance(rid, int) and not isinstance(rid, bool):
+            out[str(room)] = rid
+    return out
+
 
 
 async def _snapshot_acquisitions() -> list[dict[str, Any]]:
@@ -802,17 +848,26 @@ async def _snapshot_video_positions() -> dict[str, Any]:
     return {"count": int(row[0]), "latest": _isoformat(row[1])}
 
 
+# A secret of this process alone, so the chat digest below says "something
+# changed" and nothing else: not how many chats the house has, not when one
+# was last written (it can't be reversed or compared across devices).
+_CHAT_DIGEST_KEY = secrets.token_bytes(32)
+
+
 async def _snapshot_chat() -> dict[str, Any]:
-    """Thread count + newest thread ``updated_at``. Moves on every message
-    or thread mutation; the chat page refetches its thread list on the
-    event."""
+    """``{"changed": <opaque digest>}``: content-free (PRIVATE-CHATS.md
+    §2.4). It moves on every message or thread change, and every socket
+    gets it, so it carries no count, no time and no id: each client reads
+    its own list again (``GET /api/chat/threads``), which shows it only
+    the chats it may see."""
     async with session_scope() as s:
         row = (
             await s.execute(
-                text("SELECT COUNT(*)::bigint, MAX(updated_at) FROM chat_threads")
+                text("SELECT COUNT(*)::bigint, MAX(updated_at), MAX(id) FROM chat_threads")
             )
         ).one()
-    return {"threads": int(row[0]), "latest": _isoformat(row[1])}
+    raw = f"{int(row[0])}|{_isoformat(row[1])}|{row[2]}".encode()
+    return {"changed": hmac.new(_CHAT_DIGEST_KEY, raw, hashlib.sha256).hexdigest()[:16]}
 
 
 async def _snapshot_media_jobs() -> list[dict[str, Any]]:
@@ -1043,27 +1098,41 @@ def _fire_json(fire: dict[str, Any]) -> dict[str, Any]:
 
 HELP_DELIVERIES_PUSH_WINDOW_SEC = 3600
 HELP_DELIVERIES_PUSH_MAX = 20
+# What the push says in place of a "Photos: …" chat's title (the apps'
+# notification reads "Help: Photos from Domovoi" from it, as it read the
+# whole title before); any other delivery's title is "".
+HELP_DELIVERIES_PHOTOS_TITLE = "Photos from Domovoi"
 
 
 async def _snapshot_help_deliveries() -> list[dict[str, Any]]:
-    """Help steps sent by voice in the last hour, newest first
-    (``help_deliveries.changed``). ``[]`` when V035 is missing."""
+    """Results sent by voice to phones in the last hour, newest first
+    (``help_deliveries.changed``). ``[]`` when V035 is missing.
+
+    Every socket gets this, so it carries no chat title (PRIVATE-CHATS.md
+    §2.4): ``title`` is only the kind, :data:`HELP_DELIVERIES_PHOTOS_TITLE`
+    for a "Photos: …" chat, else ``""``. ``person_id`` and ``thread_id``
+    stay for the 1.4.x / 1.5.0 apps, which only post from a row that has
+    them; the receiving app reads the title, and only what it may see,
+    from ``GET /api/help/deliveries``."""
     try:
         async with session_scope() as s:
             rows = (
                 await s.execute(
                     text(
-                        "SELECT id, person_id, thread_id, title, created_at FROM help_deliveries "
+                        "SELECT id, person_id, thread_id, created_at, "
+                        "CASE WHEN title LIKE 'Photos:%' THEN :photos ELSE '' END AS kind_title "
+                        "FROM help_deliveries "
                         "WHERE created_at > now() - make_interval(secs => :w) ORDER BY id DESC LIMIT :n"
                     ),
-                    {"w": HELP_DELIVERIES_PUSH_WINDOW_SEC, "n": HELP_DELIVERIES_PUSH_MAX},
+                    {"w": HELP_DELIVERIES_PUSH_WINDOW_SEC, "n": HELP_DELIVERIES_PUSH_MAX,
+                     "photos": HELP_DELIVERIES_PHOTOS_TITLE},
                 )
             ).mappings().all()
     except Exception:  # noqa: BLE001 — table missing (run Flyway, V035)
         return []
     return [
         {"id": int(r["id"]), "person_id": int(r["person_id"]), "thread_id": int(r["thread_id"]),
-         "title": r["title"], "created_at": _isoformat(r["created_at"])}
+         "title": r["kind_title"], "created_at": _isoformat(r["created_at"])}
         for r in rows
     ]
 
@@ -1150,7 +1219,7 @@ StatePollLoop._CHANNEL_HELPERS = {
     # The container guard's open and recent incidents, the banner and the
     # freeze state (web/backend/api/containers.py: the household view).
     "containers": _snapshot_containers,
-    # Help steps sent by voice to a person's phones (V035).
+    # Results sent by voice to a person's phones (V035).
     "help_deliveries": _snapshot_help_deliveries,
     # Phone rooms' open low-battery warnings (V040).
     "room_battery": _snapshot_room_battery,

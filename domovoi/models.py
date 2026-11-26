@@ -165,6 +165,12 @@ class Context(BaseModel):
     # is not asked — an action must come from a fast path said first, not
     # from whatever the TV said after it. False everywhere else.
     capped_capture: bool = False
+    # The command at the START of such a capture (overheard.COMMAND; 1.5.0,
+    # noisy rooms, domovoi/loud_room.py): a fast path that only reads is
+    # answered after "It's loud in here. I heard: ..."; one that would
+    # change the house is asked about first ("Should I ...?") and runs
+    # only on a yes. False everywhere else.
+    loud_command: bool = False
     # "phone" for a push-to-talk turn from the app's chat mic
     # (domovoi/phone_voice.py); None for a satellite, /v1/intent and the
     # dashboard. A phone is its own device (owner decisions 2026-10-08):

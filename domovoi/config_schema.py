@@ -74,6 +74,8 @@ from domovoi.config import (
     ADMIN_RELOAD_WINDOW_MAX_MIN,
     HOME_PROBLEMS_VISIBILITY_CHOICES,
     QA_THINK_CHOICES,
+    STT_DENOISE_LABELS,
+    STT_DENOISE_MODES,
     MUSIC_LISTENS_KEEP_CHOICES,
     MUSIC_LISTENS_KEEP_LABELS,
     VOICE_HISTORY_KEEP_CHOICES,
@@ -274,6 +276,20 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "sees any. A shared screen never shows more than the summary line. "
         "Applies immediately.",
         "choice", tier="hot", choices=list(HOME_PROBLEMS_VISIBILITY_CHOICES),
+    ),
+
+    # ─── Updates ───────────────────────────────────────────────────────
+    # The About & updates card owns this checkbox (the Configuration list
+    # leaves the group out; Settings search lands on the card). 'hot': the
+    # update-notice worker and the notice read look at it every time.
+    FieldSpec(
+        "update_auto_check", "Check for updates by itself", "Updates",
+        "Look for a new signed Domovoi release once a day and when Domovoi "
+        "starts, and say so on Home and in About & updates. Only when the "
+        "house's internet setting is Yes. It never installs anything by "
+        "itself. Off = Domovoi looks only when someone presses Check for "
+        "updates. Applies immediately.",
+        "bool", tier="hot", keywords=("update", "updates", "release", "new version", "automatic"),
     ),
 
     # ─── Models (LLM role slots) ───────────────────────────────────────
@@ -526,8 +542,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
 
     # ─── Privacy ───────────────────────────────────────────────────────
-    # Also on Settings → Household → People → Voice history, beside
-    # "Delete all voice history"
+    # Edited in Settings → Privacy → Keep voice history (1.5.0); People →
+    # Voice history and System → Advanced → Privacy show it and link there
     # (domovoi/voice_history.py). 'reapply': a save prunes at once.
     FieldSpec(
         "voice_history_keep", "Keep voice history", "Privacy",
@@ -808,6 +824,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "(relays quieter audio); higher = stricter.",
         "float", min=-120.0, max=0.0, unit="dBFS", step=1, widget="slider",
         slider_labels=("relays everything", "relays only loud sound"),
+    ),
+
+    # ─── Rooms ─────────────────────────────────────────────────────────
+    FieldSpec(
+        "room_calibration_auto", "Tune speakers on their own", "Rooms",
+        "When a satellite joins or moves into a room with other speakers, "
+        "measure its speaker delay on its own (every speaker in the room "
+        "plays a short chirp), once the room is idle; in quiet hours it "
+        "waits for them to end. Off = only when you press Tune the speakers "
+        "in the room.",
+        "bool",
     ),
 
     # ─── News ──────────────────────────────────────────────────────────
@@ -1107,6 +1134,18 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "joke or a story keep their speed. "
         "Off routes the short-window text as it is.",
         "bool", section="advanced", tier="hot",
+    ),
+    FieldSpec(
+        "stt_denoise", "Clean up noise before transcribing (experiment)",
+        "Speech-to-text",
+        "Off by default. An experiment for noisy rooms: 'spectral' cleans "
+        "up a spoken command's audio with a built-in filter before Whisper "
+        "hears it. Wake words and voice recognition always hear the room "
+        "as it is, and any error uses the raw audio. In a test with "
+        "synthetic party noise it neither helped nor hurt, so leave it off "
+        "unless you are comparing. Applies on the next command.",
+        "choice", section="advanced", tier="hot",
+        choices=list(STT_DENOISE_MODES), choice_labels=dict(STT_DENOISE_LABELS),
     ),
     FieldSpec(
         "speculative_stt_enabled", "Start transcribing at the first pause",

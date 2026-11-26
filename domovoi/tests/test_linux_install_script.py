@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -103,7 +104,8 @@ def test_pass_through_lists_match_provision():
     so a new one can't be refused (or eat its value) by mistake."""
     value, flags = _provision_opts()
     own = _list("OWN_OPTS")
-    assert own == {"--repo-url", "--ref", "--track-branch"}
+    # --offline-kit: install.sh --kit passes it, from the kit it checked.
+    assert own == {"--repo-url", "--ref", "--track-branch", "--offline-kit"}
     # --internet and --timezone are this script's questions, passed on as answers.
     assert _list("PASS_VALUE_OPTS") == value - own - {"--internet", "--timezone"}
     assert _list("PASS_FLAG_OPTS") == flags
@@ -537,3 +539,294 @@ def test_harness_variables_are_refused_outside_the_harness(lab):
                           capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
     assert proc.returncode == 1
     assert "for this script's tests only" in proc.stderr
+
+
+# ─── install.sh --kit: from an offline kit ───────────────────────────────
+#
+# A kit made with the real writer (domovoi.offline_kit.write_kit) from a
+# throwaway release: its origin carries the real install.sh, the real
+# domovoi/offline_kit (the checker install.sh runs from the bundle) and the
+# provision.sh stub; the release's manifest is signed with the throwaway
+# key the harness hands install.sh as its release key.
+
+KIT_VERSION = "9.9.9"
+
+
+class KitLab(Lab):
+    def __init__(self, tmp: Path):
+        super().__init__(tmp)
+        # The kit's release: a commit on stable carrying what an install
+        # from a kit runs from the bundle.
+        _bash(f"{GIT} checkout -q stable", self.origin, self.env)
+        for rel in ("scripts/linux/install.sh", "domovoi/__init__.py"):
+            dest = self.origin / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes((REPO_ROOT / rel).read_bytes())
+        (self.origin / "domovoi" / "offline_kit").mkdir(parents=True, exist_ok=True)
+        for f in (REPO_ROOT / "domovoi" / "offline_kit").glob("*.py"):
+            (self.origin / "domovoi" / "offline_kit" / f.name).write_bytes(f.read_bytes())
+        stub = self.origin / "scripts" / "linux" / "provision.sh"
+        stub.write_bytes(STUB.encode() + b"# takes --offline-kit DIR\n")
+        _bash(f"{GIT} add -A && {GIT} commit -qm kit-release && {GIT} tag -f v{KIT_VERSION} && "
+              f"{GIT} checkout -q main", self.origin, self.env)
+        self.kit_sha = self.sha("stable")
+        self.kit = tmp / "DOMOVOIKIT"
+        self.make_kit()
+
+    def make_kit(self, *, key: str = "key", targets=("pc-x86_64",), manifest_commit: str | None = None):
+        import hashlib
+        import shutil
+
+        from domovoi.offline_kit import Component, Source, write_kit
+
+        if self.kit.exists():
+            shutil.rmtree(self.kit)
+        work = self.tmp / "kitsrc"
+        if work.exists():
+            shutil.rmtree(work)
+        work.mkdir()
+        _bash(f"git bundle create -q '{(work / 'domovoi.bundle').as_posix()}' --all", self.origin, self.env)
+        exe = b"stand-in DomovoiSetup.exe for the tests"
+        manifest = (
+            "{\n"
+            f'  "commit": "{manifest_commit or self.kit_sha}",\n'
+            '  "file": "DomovoiSetup.exe",\n'
+            '  "kind": "domovoi-windows-setup",\n'
+            '  "schema": 1,\n'
+            f'  "sha256": "{hashlib.sha256(exe).hexdigest()}",\n'
+            f'  "size": {len(exe)},\n'
+            f'  "tag": "v{KIT_VERSION}",\n'
+            f'  "version": "{KIT_VERSION}"\n'
+            "}\n"
+        ).encode()
+        (work / "DomovoiSetup.manifest.json").write_bytes(manifest)
+        _bash(f"ssh-keygen -q -Y sign -f '{(self.tmp / key).as_posix()}' -n domovoi-windows-setup-manifest "
+              "DomovoiSetup.manifest.json", work, self.env)
+        components = [
+            Component("release", "release", KIT_VERSION, "MIT", [
+                Source("release/DomovoiSetup.exe", exe),
+                Source("release/DomovoiSetup.manifest.json", work / "DomovoiSetup.manifest.json"),
+                Source("release/DomovoiSetup.manifest.json.sig", work / "DomovoiSetup.manifest.json.sig"),
+            ], pinned_by="release signature"),
+            Component("source", "domovoi", KIT_VERSION, "MIT",
+                      [Source("source/domovoi.bundle", work / "domovoi.bundle")], pinned_by="release signature"),
+            Component("linux-installer", "install.sh", KIT_VERSION, "MIT", [
+                Source("linux/install.sh", (REPO_ROOT / "scripts" / "linux" / "install.sh").read_bytes()),
+            ], pinned_by="release signature"),
+        ]
+        write_kit(self.kit, version=KIT_VERSION, commit=self.kit_sha, components=components,
+                  targets=list(targets), created_at="2026-11-22T10:15:00Z")
+
+    def run_kit(self, *args: str, script: Path | None = None, answers: str | None = None,
+                extra: dict | None = None):
+        global SCRIPT
+        env = {"DOMOVOI_INSTALL_PYTHON": Path(sys.executable).as_posix(), **(extra or {})}
+        saved = SCRIPT
+        try:
+            if script is not None:
+                SCRIPT = script
+            return self.run(*args, answers=answers, extra=env)
+        finally:
+            SCRIPT = saved
+
+
+@pytest.fixture
+def kitlab(tmp_path):
+    if BASH is None:
+        pytest.skip("no usable bash (Git Bash on Windows)")
+    probe = subprocess.run([BASH, "-c", "command -v ssh-keygen && command -v git && command -v sha256sum"],
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("needs ssh-keygen, git and sha256sum in bash")
+    return KitLab(tmp_path)
+
+
+def _kit(lab: KitLab) -> list[str]:
+    return ["--kit", lab.kit.as_posix()]
+
+
+def test_kit_install_checks_the_chain_and_passes_the_kit_on(kitlab):
+    proc = kitlab.run_kit(*_kit(kitlab), "--timezone", "Etc/UTC", "--yes", "--no-ai-models")
+    assert proc.returncode == 0, _out(proc)
+    out = _out(proc)
+    # The internet answer defaults to No from a kit; provision.sh gets the
+    # kit's commit (the signed manifest's) and the kit.
+    args = kitlab.args
+    assert args[:8] == ["--ref", kitlab.kit_sha, "--track-branch", "stable",
+                        "--internet", "never", "--timezone", "Etc/UTC"]
+    assert args[8] == "--offline-kit" and args[9].endswith("DOMOVOIKIT")
+    assert args[10:] == ["--no-ai-models"]
+    assert f"Checked: the kit is Domovoi {KIT_VERSION}" in out
+    assert "signed with Domovoi's release key" in out
+    assert f"The kit is fine: Domovoi {KIT_VERSION}" in out
+    assert "from the offline kit at" in out and "downloads nothing" in out
+    assert "Looking up the latest Domovoi release" not in out
+
+
+def test_kit_alone_finds_the_stick_beside_the_script(kitlab):
+    proc = kitlab.run_kit("--kit", "--yes", script=kitlab.kit / "linux" / "install.sh")
+    assert proc.returncode == 0, _out(proc)
+    assert kitlab.args[8] == "--offline-kit" and kitlab.args[9].endswith("DOMOVOIKIT")
+
+
+def test_kit_damaged_bundle_is_caught_by_the_checksums(kitlab):
+    b = kitlab.kit / "source" / "domovoi.bundle"
+    data = bytearray(b.read_bytes())
+    data[-1] ^= 1
+    b.write_bytes(bytes(data))
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes")
+    assert proc.returncode == 1
+    assert "This stick has a damaged file: source/domovoi.bundle" in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_signed_with_another_key_is_not_run(kitlab):
+    kitlab.make_kit(key="other")
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes")
+    assert proc.returncode == 1
+    assert "not a Domovoi release signed with Domovoi's release key" in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_whose_manifest_names_another_commit_is_not_run(kitlab):
+    kitlab.make_kit(manifest_commit=kitlab.release_sha)
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes")
+    assert proc.returncode == 1
+    assert "names another release or commit" in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_for_a_mac_only_is_refused(kitlab):
+    kitlab.make_kit(targets=("mac-arm64",))
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes")
+    assert proc.returncode == 1
+    assert "made for a Mac only" in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_from_a_newer_domovoi_is_refused(kitlab):
+    import hashlib
+    import json
+
+    kj = kitlab.kit / "kit.json"
+    doc = json.loads(kj.read_text(encoding="utf-8"))
+    doc["kit_format"] = 2
+    raw = (json.dumps(doc, indent=2) + "\n").encode()
+    kj.write_bytes(raw)
+    sums = kitlab.kit / "SHA256SUMS"
+    lines = [ln for ln in sums.read_text(encoding="utf-8").splitlines() if not ln.endswith("  kit.json")]
+    lines.append(f"{hashlib.sha256(raw).hexdigest()}  kit.json")
+    sums.write_bytes(("\n".join(sorted(lines, key=lambda ln: ln.split("  ", 1)[1])) + "\n").encode())
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes")
+    assert proc.returncode == 1
+    assert "made by a newer Domovoi (kit format 2)" in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_needs_ubuntu_26_04(kitlab):
+    kitlab.os_release("13", ident="debian", version_codename="trixie")
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes")
+    assert proc.returncode == 1
+    assert "an install from an offline kit needs Ubuntu 26.04" in proc.stderr
+    kitlab.os_release("24.04")
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes")
+    assert proc.returncode == 1
+    assert "needs Ubuntu 26.04" in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_with_another_installer_is_refused(kitlab):
+    other = kitlab.tmp / "install-other.sh"
+    other.write_bytes(SCRIPT.read_bytes() + b"# another release's installer\n")
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes", script=other)
+    assert proc.returncode == 1
+    assert "is not the one in the kit's release" in proc.stderr
+    assert "older or newer installer" in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_damage_past_the_trust_files_is_caught_by_the_checker(kitlab):
+    (kitlab.kit / "release" / "DomovoiSetup.exe").write_bytes(b"tampered")
+    (kitlab.kit / "stray.txt").write_bytes(b"not on the kit")
+    proc = kitlab.run_kit(*_kit(kitlab), "--yes")
+    assert proc.returncode == 1
+    out = _out(proc)
+    assert "release/DomovoiSetup.exe is the wrong size" in out
+    assert "stray.txt is not part of the kit" in out
+    assert "nothing was installed. Make the stick again." in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_options_that_dont_go_with_it(kitlab):
+    proc = kitlab.run_kit(*_kit(kitlab), "--channel", "main", "--yes")
+    assert proc.returncode == 2 and "--channel doesn't go with it" in proc.stderr
+    proc = kitlab.run_kit("--kit", (kitlab.tmp / "nowhere").as_posix(), "--yes")
+    assert proc.returncode == 2 and "is not a folder" in proc.stderr
+    proc = kitlab.run_kit("--internet", "never", "--yes", "--offline-kit", kitlab.kit.as_posix())
+    assert proc.returncode == 2 and "picks the release itself" in proc.stderr
+    assert not kitlab.ran
+
+
+def test_kit_asks_the_internet_question_with_no_as_its_default(kitlab):
+    proc = kitlab.run_kit(*_kit(kitlab), answers="\n\n\n")
+    assert proc.returncode == 0, _out(proc)
+    assert "Setup itself needs none: it installs from the kit" in proc.stderr
+    assert "Answer 1, 2 or 3 [3]:" in proc.stderr
+    assert kitlab.args[4:6] == ["--internet", "never"]
+
+
+# ─── M12: kit folder names in the apt source stanza ──────────────────────
+
+
+def _kit_apt_name(script: Path) -> str:
+    s = script.read_text(encoding="utf-8")
+    start = s.index("\nkit_apt_name() {\n") + 1
+    return s[start:s.index("\n}\n", start) + 3]
+
+
+@requires_bash
+@pytest.mark.parametrize("script", [SCRIPT, PROVISION], ids=["install.sh", "provision.sh"])
+@pytest.mark.parametrize("name,ok", [
+    ("noble", True), ("noble-updates", True), ("main", True), ("universe", True),
+    ("evil\nTrusted: yes", False), ("evil Trusted", False), ("../x", False),
+    ("Noble", False), ("-x", False), ("", False), ("a:b", False),
+])
+def test_a_hostile_kit_folder_name_is_refused(tmp_path: Path, script: Path, name: str, ok: bool) -> None:
+    """M12 (review 2026-11-23): a suite or component folder's name is
+    written into the apt source stanza, so one that could add a line of its
+    own (``Trusted: yes``) stops the install."""
+    d = tmp_path / "dists"
+    d.mkdir()
+    body = 'die() { echo "DIED: $*"; exit 1; }\n' + _kit_apt_name(script) + 'kit_apt_name "$1" "$2"\n'
+    r = subprocess.run([BASH, "-c", body, "x", name, str(d).replace("\\", "/") + "/"],
+                       capture_output=True, text=True, timeout=30)
+    assert (r.returncode == 0) is ok, (name, r.stdout, r.stderr)
+    if not ok:
+        assert "the stick was changed" in r.stdout
+
+
+@requires_bash
+@pytest.mark.parametrize("script", [SCRIPT, PROVISION], ids=["install.sh", "provision.sh"])
+def test_a_linked_kit_folder_is_refused(tmp_path: Path, script: Path) -> None:
+    import os
+
+    real = tmp_path / "noble"
+    real.mkdir()
+    link = tmp_path / "evil"
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system can't make a link here")
+    body = 'die() { echo "DIED: $*"; exit 1; }\n' + _kit_apt_name(script) + 'kit_apt_name "$1" "$2"\n'
+    r = subprocess.run([BASH, "-c", body, "x", "evil", str(link).replace("\\", "/") + "/"],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode != 0 and "DIED" in r.stdout
+
+
+@pytest.mark.parametrize("script", [SCRIPT, PROVISION], ids=["install.sh", "provision.sh"])
+def test_the_kit_apt_configuration_refuses_unsigned_sources(script: Path) -> None:
+    s = script.read_text(encoding="utf-8")
+    assert "Acquire::AllowInsecureRepositories=false" in s
+    assert "APT::Get::AllowUnauthenticated=false" in s
+    assert not re.search(r"printf '[^']*Trusted", s)
+    assert s.count('kit_apt_name "') >= 2

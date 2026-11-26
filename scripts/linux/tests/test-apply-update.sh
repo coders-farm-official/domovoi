@@ -827,6 +827,9 @@ run_update() {
   # Off unless a case asks (the cache_trim_* cases), so every other case's
   # step list stays as it is.
   gpu_env+=(DOMOVOI_MANAGE_CACHE_TRIM="${MANAGE_CACHE_TRIM:-0}")
+  # Off unless a case asks (the ollama_access_* cases): every other case
+  # would otherwise ask this machine's own getent about an ollama group.
+  gpu_env+=(DOMOVOI_MANAGE_OLLAMA_ACCESS="${MANAGE_OLLAMA_ACCESS:-0}")
   # Off unless a case asks (the fh_firewall_* cases), the same way.
   gpu_env+=(DOMOVOI_MANAGE_FH_FIREWALL="${MANAGE_FH_FIREWALL:-0}")
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
@@ -854,7 +857,8 @@ run_update() {
     -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
     -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS \
     -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE \
-    -u DOMOVOI_MANAGE_JOURNAL -u DOMOVOI_MANAGE_PACKAGES -u DOMOVOI_MANAGE_CACHE_TRIM PATH="$path" \
+    -u DOMOVOI_MANAGE_JOURNAL -u DOMOVOI_MANAGE_PACKAGES -u DOMOVOI_MANAGE_CACHE_TRIM \
+    -u DOMOVOI_MANAGE_OLLAMA_ACCESS -u DOMOVOI_OFFLINE_SOURCE PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     DOMOVOI_PROVISION_ROOT="$OSROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 \
     ${venv_env[@]+"${venv_env[@]}"} \
@@ -868,6 +872,7 @@ run_update() {
     DOMOVOI_UPDATE_RUN_DIR="$CASE/run" \
     DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
+    DOMOVOI_OFFLINE_KIT_DIR="${OFFLINE_KIT_DIR:-$CASE/no-offline-kit}" \
     DOMOVOI_USER=tester \
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
     DOMOVOI_CORE_DROPIN_DIR="$CASE/dropins" \
@@ -4298,8 +4303,8 @@ case_added_packages_installed_on_a_restart() {
   check "mode restart" eq "$(field mode)" '"restart"'
   check "a step of its own, after the search helper" eq "$(step_names)" "signature stop-services start-services health searxng added-packages"
   check "an ok step" step_is added-packages ok
-  check "it says what it installed" grep -qF '"detail": "installed xorriso tesseract-ocr tesseract-ocr-eng"' "$RESULT"
-  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso tesseract-ocr tesseract-ocr-eng"
+  check "it says what it installed" grep -qF '"detail": "installed xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools"' "$RESULT"
+  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools"
   check "installed after health" before "curl http://127.0.0.1:6369/api/health" "install -y --no-install-recommends xorriso"
   check "with the lists apt had: no update" not_called "DPkg::Lock::Timeout=20 -q update"
   check "not held" not_called "apt-mark"
@@ -4324,8 +4329,8 @@ case_added_packages_only_what_is_missing() {
   MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
   check "status ok" eq "$(field status)" '"ok"'
   check "an ok step" step_is added-packages ok
-  check "it says what it installed" grep -qF '"detail": "installed tesseract-ocr tesseract-ocr-eng"' "$RESULT"
-  check "only the missing ones" called "install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng"
+  check "it says what it installed" grep -qF '"detail": "installed tesseract-ocr tesseract-ocr-eng dosfstools mtools"' "$RESULT"
+  check "only the missing ones" called "install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng dosfstools mtools"
   check "not xorriso again" not_called "--no-install-recommends xorriso"
   end_case
 }
@@ -4342,7 +4347,7 @@ case_added_packages_on_an_update_and_never_under_never() {
   check "never: status ok" eq "$(field status)" '"ok"'
   check "never: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "never: no apt" not_called "apt-get"
-  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso tesseract-ocr tesseract-ocr-eng (USB sticks for old computers need xorriso; reading scans needs tesseract-ocr)" "$CASE/output.log"
+  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools (USB sticks for old computers need xorriso; reading scans and text in photos needs tesseract-ocr; offline kits need dosfstools and mtools)" "$CASE/output.log"
   printf 'print("b")\n' >"$REPO/domovoi/app.py"
   local sha_b; sha_b=$(commit_all "B: code")
   echo sometimes >"$STATE/internet-policy"
@@ -4353,6 +4358,91 @@ case_added_packages_on_an_update_and_never_under_never() {
   check "update: after the plugins check and the search helper" eq "$(step_names)" "signature preflight backup stop-services migrate start-services health plugins searxng added-packages"
   check "update: installed" grep -qx "xorriso=1" "$STATE/dpkg"
   check "update: applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# ─── the core reads Ollama's models (offline kit, 1.5.0) ────────────────
+
+# write_ollama_shims BIN: an ollama group and account whose home is
+# $CASE/ollama-home (0750 is what the step makes of useradd's 0700/0750);
+# `id -nG tester` answers from $STATE/groups, which the usermod shim
+# appends to.
+write_ollama_shims() {
+  mkdir -p "$1" "$CASE/ollama-home"
+  chmod 0700 "$CASE/ollama-home"
+  : >"$STATE/groups"
+  cat >"$1/getent" <<SH
+#!/usr/bin/env bash
+case "\${1-} \${2-}" in
+  "group ollama") [ -e "$STATE/no-ollama-group" ] && exit 2; echo "ollama:x:998:" ;;
+  "passwd ollama") echo "ollama:x:998:998::$CASE/ollama-home:/bin/false" ;;
+  "passwd tester") echo "tester:x:1000:1000::$CASE/home:/bin/bash" ;;
+  *) exit 2 ;;
+esac
+SH
+  cat >"$1/id" <<SH
+#!/usr/bin/env bash
+if [ "\${1-}" = -nG ]; then echo "tester \$(tr '\n' ' ' <"$STATE/groups")"; exit 0; fi
+exec /usr/bin/id "\$@"
+SH
+  cat >"$1/usermod" <<SH
+#!/usr/bin/env bash
+echo "usermod \$*" >>"$STATE/calls.log"
+[ -e "$STATE/usermod-fail" ] && exit 6
+[ "\${1-}" = -aG ] && echo "\$2" >>"$STATE/groups"
+exit 0
+SH
+  chmod +x "$1/getent" "$1/id" "$1/usermod"
+}
+
+# A box provisioned before 1.5.0: the next Restart puts the service user in
+# the ollama group and lets that group into Ollama's home, before the
+# services stop (so the core starts in the group); the Restart after that
+# changes nothing. Off: nothing.
+case_ollama_access_granted_once() {
+  new_case ollama_access_granted_once
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_ollama_shims "$CASE/olbin"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a step before the services stop" eq "$(step_names)" "signature ollama-access stop-services start-services health searxng"
+  check "an ok step" step_is ollama-access ok
+  check "it joined the group" called "usermod -aG ollama tester"
+  check "the home lets the group in" eq "$(stat -c %a "$CASE/ollama-home")" 750
+  check "it says what it did" grep -qF "tester joined the ollama group" "$RESULT"
+  : >"$STATE/calls.log"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "again: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "again: no usermod" not_called "usermod"
+  chmod 0700 "$CASE/ollama-home"
+  : >"$STATE/calls.log"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "a home closed again is opened to the group" eq "$(stat -c %a "$CASE/ollama-home")" 750
+  check "only the home this time" step_is ollama-access ok
+  check "no usermod this time" not_called "usermod"
+  chmod 0700 "$CASE/ollama-home"
+  MANAGE_OLLAMA_ACCESS=0 run_update "$CASE/olbin"
+  check "off: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "off: the home as it was" eq "$(stat -c %a "$CASE/ollama-home")" 700
+  end_case
+}
+
+# usermod fails: a warn step saying what it costs; the run stays ok.
+# No ollama group (a box that uses another machine's Ollama): nothing.
+case_ollama_access_failure_is_a_warning_and_no_group_is_nothing() {
+  new_case ollama_access_failure_is_a_warning_and_no_group_is_nothing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_ollama_shims "$CASE/olbin"
+  touch "$STATE/usermod-fail"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is ollama-access warn
+  check "it says what it costs" grep -qF "the offline kit downloads the models again instead of copying them" "$RESULT"
+  rm -f "$STATE/usermod-fail"
+  touch "$STATE/no-ollama-group"
+  chmod 0700 "$CASE/ollama-home"
+  MANAGE_OLLAMA_ACCESS=1 run_update "$CASE/olbin"
+  check "no group: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   end_case
 }
 
@@ -4370,7 +4460,7 @@ case_added_packages_failure_is_a_warning_and_opt_out_is_honoured() {
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "a warn step" step_is added-packages warn
-  check "its detail is ours" grep -qF '"detail": "not installed: xorriso tesseract-ocr tesseract-ocr-eng (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso; reading scans needs tesseract-ocr"' "$RESULT"
+  check "its detail is ours" grep -qF '"detail": "not installed: xorriso tesseract-ocr tesseract-ocr-eng dosfstools mtools (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso; reading scans and text in photos needs tesseract-ocr; offline kits need dosfstools and mtools"' "$RESULT"
   check "tried again with fresh lists" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q update"
   check "no error on the run" eq "$(field error)" null
   check "no rollback" not_called "reset --keep"
@@ -5844,6 +5934,8 @@ CASES=(
   case_added_packages_only_what_is_missing
   case_added_packages_on_an_update_and_never_under_never
   case_added_packages_failure_is_a_warning_and_opt_out_is_honoured
+  case_ollama_access_granted_once
+  case_ollama_access_failure_is_a_warning_and_no_group_is_nothing
   case_gpu_runtime_installed_while_the_services_are_stopped
   case_gpu_runtime_under_never_downloads_nothing
   case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database
@@ -5873,7 +5965,139 @@ CASES=(
   case_verifier_update_and_rollback_through_the_copy
   case_verifier_mirror_checks_every_object
   case_verifier_refuses_a_state_dir_others_can_write
+  case_offline_kit_deps_from_the_kit_under_never
+  case_offline_kit_request_for_another_commit_is_not_used
+  case_offline_kit_link_refuses_the_run
+  case_offline_kit_rollback_puts_the_venv_copy_back
+  case_offline_kit_rooms_go_in_after_a_good_update
 )
+
+# An update from an offline kit (1.5.0, P5): the core uploaded the kit into
+# its folder (DOMOVOI_OFFLINE_KIT_DIR here) and left a request naming HEAD.
+# Under never, a dependency change then installs from the lock with no
+# index, from root's copy of the kit's wheels; the venv is copied first and
+# the copy goes after a good update, and so does root's copy of the kit.
+offline_kit_folder() {  # SHA: a kit folder with one wheel and a request for SHA
+  local kit=$CASE/kit
+  mkdir -p "$kit/files/python/cp314-$(uname -m)"
+  printf 'wheel' >"$kit/files/python/cp314-$(uname -m)/numpy-2.4.7-cp314-cp314-manylinux_2_28_x86_64.whl"
+  printf 'commit=%s\n' "$1" >"$kit/request"
+  printf '%s' "$kit"
+}
+
+case_offline_kit_deps_from_the_kit_under_never() {
+  new_case offline_kit_deps_from_the_kit_under_never
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local sha_b kit; sha_b=$(commit_all "B: a new lock, from a kit")
+  kit=$(offline_kit_folder "$sha_b")
+  OFFLINE_KIT_DIR=$kit run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a dependency change" eq "$(field deps_changed)" true
+  check "the offline-kit step" grep -q '"name": "offline-kit", "status": "ok"' "$RESULT"
+  check "the pins with no index, from root's copy of the kit's wheels" \
+    called "$PIP_RUN --no-index --find-links $UPD/offline-kit/python/cp314-$(uname -m) --require-hashes --no-build-isolation -r $REPO/requirements-linux-py314.lock"
+  check "the build tools from the kit too" called "$PIP_RUN --no-index --find-links $UPD/offline-kit/python/cp314-$(uname -m) --require-hashes -r $UPD/build-tools."
+  check "never the resolver" not_called "install -e .["
+  check "the venv copy step" grep -q '"name": "venv-copy", "status": "ok"' "$RESULT"
+  check "the venv copy goes after a good update" test ! -e "$CASE/venv.before-offline-kit"
+  check "root's copy of the kit goes" test ! -e "$UPD/offline-kit"
+  check "the step says so" grep -qF "installed from requirements-linux-py314.lock and the offline kit's packages" "$RESULT"
+  check "the core's upload is left to the core" test -f "$kit/files/python/cp314-$(uname -m)/numpy-2.4.7-cp314-cp314-manylinux_2_28_x86_64.whl"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  check "a kit without rooms/ skips the rooms step" step_is rooms ok
+  check "with a plain note" grep -qF "the offline kit brought no rooms' files (rooms/)" "$RESULT"
+  check "and no kit_rooms" not_called "domovoi.kit_rooms"
+  end_case
+}
+
+# A kit made with Rooms ticked (P6): after the good update, the new
+# release's kit_rooms takes root's copy of the kit (its rooms/, kit.json,
+# the release's checksums and the wake models) as the service user.
+case_offline_kit_rooms_go_in_after_a_good_update() {
+  new_case offline_kit_rooms_go_in_after_a_good_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local sha_b kit; sha_b=$(commit_all "B: a new lock, from a kit with Rooms")
+  kit=$(offline_kit_folder "$sha_b")
+  mkdir -p "$kit/files/rooms/linux-wheels" "$kit/files/release" "$kit/files/wake"
+  printf 'w' >"$kit/files/rooms/linux-wheels/tqdm-4.67.1-py3-none-any.whl"
+  printf 'sums' >"$kit/files/release/SHA256SUMS"
+  printf 'vad' >"$kit/files/wake/silero_vad.onnx"
+  printf '{"domovoi_version": "1.5.0", "includes": ["rooms"]}' >"$kit/files/kit.json"
+  OFFLINE_KIT_DIR=$kit run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the rooms step" step_is rooms ok
+  check "kit_rooms on root's copy of the kit" called "python -m domovoi.kit_rooms install $UPD/offline-kit"
+  check "after the update is healthy" before "pip " "domovoi.kit_rooms"
+  check "root's copy of the kit goes" test ! -e "$UPD/offline-kit"
+  check "the core's upload is left to the core" test -f "$kit/files/rooms/linux-wheels/tqdm-4.67.1-py3-none-any.whl"
+  end_case
+}
+
+# A request for another commit (an earlier, failed try) is not used: under
+# never the dependency change is refused as before.
+case_offline_kit_request_for_another_commit_is_not_used() {
+  new_case offline_kit_request_for_another_commit_is_not_used
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local kit; commit_all "B: a new lock" >/dev/null
+  kit=$(offline_kit_folder "$SHA_A")
+  OFFLINE_KIT_DIR=$kit run_update
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "the internet refusal" eq "$(field error | grep -c 'internet access is turned off for this box')" 1
+  check "no offline-kit step" not grep -q '"name": "offline-kit"' "$RESULT"
+  check "no pip" not_called "pip "
+  end_case
+}
+
+# Root takes only files and folders out of the kit: a link refuses the run
+# before anything is touched.
+case_offline_kit_link_refuses_the_run() {
+  new_case offline_kit_link_refuses_the_run
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local sha_b kit; sha_b=$(commit_all "B: a new lock, from a kit")
+  kit=$(offline_kit_folder "$sha_b")
+  ln -s /etc/passwd "$kit/files/python/cp314-$(uname -m)/evil-1.0-py3-none-any.whl"
+  OFFLINE_KIT_DIR=$kit run_update
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "says the kit couldn't be used" eq "$(field error | grep -c "offline kit's files couldn't be used")" 1
+  check "nothing stopped" not_called "systemctl stop"
+  check "no backup" not_called "pg_dump"
+  check "no pip" not_called "pip "
+  check "root's copy goes" test ! -e "$UPD/offline-kit"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+# A failed update from a kit puts the venv copy back (the old packages
+# can't be fetched again offline), never a re-sync.
+case_offline_kit_rollback_puts_the_venv_copy_back() {
+  new_case offline_kit_rollback_puts_the_venv_copy_back
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b kit; sha_b=$(commit_all "B: a new lock and broken code, from a kit")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  kit=$(offline_kit_folder "$sha_b")
+  printf 'before' >"$CASE/venv/marker"
+  OFFLINE_KIT_DIR=$kit run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "the rollback put the copy back" grep -q '"name": "rollback-deps", "status": "ok"' "$RESULT"
+  check "the venv is the copy" file_is "$CASE/venv/marker" before
+  check "no copy left beside it" test ! -e "$CASE/venv.before-offline-kit"
+  check "one locked install only (no re-sync of A)" eq "$(grep -c -- '--no-build-isolation -r ' "$STATE/calls.log")" 1
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  end_case
+}
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite
 # runs them all.

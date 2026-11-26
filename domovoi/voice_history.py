@@ -39,6 +39,19 @@ somebody else said their name carries the speaker's id (or none) and
 stays: the text is never searched. The short-term conversation of every
 session they spoke in is cleared too (those entries aren't attributed).
 
+Plugins hear about each deletion (SDK 1.18, security review M8): the
+event ``core.voice_history_deleted`` ``{person_id}`` (None for a
+delete-all), the hook any plugin keeping person-linked data must honour.
+Each deletion writes a row to ``voice_history_forgets`` (V079) in its OWN
+transaction (:func:`record_forget`), and the core announces the rows and
+deletes them (:func:`announce_forgets`): right after the commit when it
+can (the "forget me" turn's commit, a delete-all job's finish, the web's
+nudge after People -> delete person), else at its next start or hourly
+tick. So the event only ever follows a committed deletion, and a forget
+made while the core is down is announced when it is back. Delivery is at
+least once. The daily trim announces nothing: plugins read
+``core_config.voice_history_keep`` and trim to it themselves.
+
 Not voice history, and kept by their own rules: memories already
 extracted, voice samples, voice notes, timers and their history, the
 music played ("Recently played", ``media_plays``), chat threads (a chat-mic
@@ -57,7 +70,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.config import (
@@ -307,7 +320,10 @@ async def delete_person_history(s: AsyncSession, person_id: int) -> dict[str, in
     caller's transaction, BEFORE the person row is deleted (that sets
     ``person_id`` to NULL on whatever is left, and their turns could no
     longer be found). A turn in which somebody else said their name is
-    not theirs and stays: nothing here reads the text."""
+    not theirs and stays: nothing here reads the text. Also records the
+    forget for plugins (:func:`record_forget`), in the same transaction;
+    the caller announces it once committed (:func:`announce_after_commit`
+    in the core, the web's nudge to the core)."""
     sids = [r[0] for r in (await s.execute(_PERSON_SESSIONS, {"pid": person_id})).all()]
     conv = await s.execute(
         text("DELETE FROM conversation_log WHERE person_id = :pid"), {"pid": person_id}
@@ -321,6 +337,7 @@ async def delete_person_history(s: AsyncSession, person_id: int) -> dict[str, in
             _CLEAR_SHORT_TERM, {"ids": [UUID(str(i)) for i in sids]}
         )
         cleared = res.rowcount or 0
+    await record_forget(s, person_id)
     counts = {
         "conversation_log": conv.rowcount or 0,
         "intents_log": intents.rowcount or 0,
@@ -332,6 +349,73 @@ async def delete_person_history(s: AsyncSession, person_id: int) -> dict[str, in
         person_id, counts["conversation_log"], counts["intents_log"], cleared,
     )
     return counts
+
+
+# ─── Telling plugins (V079 voice_history_forgets, SDK 1.18) ─────────────────
+
+FORGET_EVENT = "core.voice_history_deleted"
+
+
+async def record_forget(s: AsyncSession, person_id: int | None) -> None:
+    """Note, in the caller's transaction, that ``person_id``'s voice history
+    (None: everybody's) was deleted, for :func:`announce_forgets`. Rolled
+    back with the deletion, so a deletion that never happened is never
+    announced."""
+    await s.execute(
+        text("INSERT INTO voice_history_forgets (person_id) VALUES (:pid)"),
+        {"pid": person_id},
+    )
+
+
+_CLAIM_FORGETS = text(
+    "SELECT id, person_id FROM voice_history_forgets ORDER BY id "
+    "FOR UPDATE SKIP LOCKED"
+)
+
+
+async def announce_forgets() -> list[dict[str, Any]]:
+    """Emit ``core.voice_history_deleted`` for every recorded forget, oldest
+    first, and delete the rows. Core process only (the bus is in-process).
+    The rows are locked (another announcer skips them) and deleted in the
+    same transaction the events are emitted in: if that commit fails they
+    stay and are announced again, so delivery is at least once, never
+    lost. Returns the payloads emitted."""
+    from domovoi.events import EVENTS
+
+    payloads: list[dict[str, Any]] = []
+    async with session_scope() as s:
+        rows = (await s.execute(_CLAIM_FORGETS)).all()
+        if not rows:
+            return payloads
+        for row in rows:
+            payload = {"person_id": None if row[1] is None else int(row[1])}
+            EVENTS.emit(FORGET_EVENT, payload)
+            payloads.append(payload)
+        await s.execute(
+            text("DELETE FROM voice_history_forgets WHERE id = ANY(:ids)"),
+            {"ids": [int(r[0]) for r in rows]},
+        )
+    log.info("voice history: told plugins about %d deletion(s)", len(payloads))
+    return payloads
+
+
+def schedule_announce() -> asyncio.Task | None:
+    """Start :func:`announce_forgets` in the background."""
+    return _spawn(announce_forgets(), "voice-history-announce")
+
+
+def announce_after_commit(s: AsyncSession) -> None:
+    """Announce the forgets once ``s`` commits (a "forget me" runs inside
+    the router's turn transaction, which commits after the handler
+    returns). A rollback announces nothing: the rows went with it."""
+    event.listen(s.sync_session, "after_commit", lambda _sess: schedule_announce(), once=True)
+
+
+async def _announce_quietly() -> None:
+    try:
+        await announce_forgets()
+    except Exception as e:  # noqa: BLE001 — the rows stay; the next tick retries
+        log.warning("voice history: telling plugins failed (retried later): %s", e)
 
 
 # ─── Jobs (V030 voice_history_jobs) ────────────────────────────────────────
@@ -424,7 +508,9 @@ async def _set_progress(job_id: int, counts: dict[str, int]) -> None:
         )
 
 
-async def _run_job(job_id: int, cutoff: datetime, **prune_kw: Any) -> dict[str, int]:
+async def _run_job(
+    job_id: int, cutoff: datetime, *, forget: bool = False, **prune_kw: Any
+) -> dict[str, int]:
     async with session_scope() as s:
         await s.execute(
             text(
@@ -459,6 +545,10 @@ async def _run_job(job_id: int, cutoff: datetime, **prune_kw: Any) -> dict[str, 
             ),
             {"d": json.dumps(counts), "id": job_id},
         )
+        if forget:
+            # A delete-all: plugins forget everybody (person_id None),
+            # recorded with the job's finish so neither lands alone.
+            await record_forget(s, None)
     return counts
 
 
@@ -497,7 +587,9 @@ async def run_pending_jobs(**prune_kw: Any) -> list[dict[str, Any]]:
             job = _job(row)
             tried.add(job["id"])
             try:
-                job["deleted"] = await _run_job(job["id"], job["cutoff"], **prune_kw)
+                job["deleted"] = await _run_job(
+                    job["id"], job["cutoff"], forget=True, **prune_kw
+                )
                 job["state"] = "done"
                 log.info("voice history: delete-all job %d done: %s", job["id"], job["deleted"])
             except Exception as e:  # noqa: BLE001 — kept open, retried
@@ -506,6 +598,8 @@ async def run_pending_jobs(**prune_kw: Any) -> list[dict[str, Any]]:
             ran.append(job)
         if ran:
             await _trim_job_rows()
+    if any(j["state"] == "done" for j in ran):
+        await _announce_quietly()
     return ran
 
 

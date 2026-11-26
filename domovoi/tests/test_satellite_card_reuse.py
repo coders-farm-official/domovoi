@@ -84,9 +84,10 @@ def _bash() -> str:
     return bash
 
 
-def _payload(version: str) -> bytes:
+def _payload(version: str, system: bool = False) -> bytes:
     """A small payload.tar.gz shaped like the real one (one top directory,
-    stripped on extract)."""
+    stripped on extract). ``system`` adds the units, sudoers and root
+    helpers step 7 installs, from the real templates."""
     files = {
         "payload/satellite/__init__.py": "",
         "payload/satellite/VERSION": version,
@@ -97,6 +98,21 @@ def _payload(version: str) -> bytes:
     if version == "1":
         # A module the next payload drops.
         files["payload/satellite/old_only.py"] = ""
+    if system:
+        repo = Path(__file__).resolve().parents[2]
+        files.update({
+            "payload/satellite/tests/test_x.py": "",
+            "payload/bootstrap/stage2.sh": "#!/bin/bash\n",
+            "payload/system/domovoi-apply-payload": "#!/bin/sh\n",
+            "payload/system/domovoi-satellite.service": "[Service]\nUser=@USER@\n",
+            "payload/system/domovoi-bootstrap.service": "[Service]\n",
+            "payload/system/domovoi-provisioning.service": (
+                repo / "satellite" / "scripts" / "domovoi-provisioning.service"
+            ).read_text(encoding="utf-8"),
+            "payload/system/domovoi-xvf": (repo / "satellite" / "xvf_guard.py").read_text(
+                encoding="utf-8"),
+            "payload/system/sudoers": overlay.render_template("sudoers.tmpl", {}),
+        })
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for name, text in files.items():
@@ -123,8 +139,8 @@ class Card:
                   "usr/local/sbin", "var/log", "tmp"):
             (root / d).mkdir(parents=True, exist_ok=True)
 
-    def write_card(self, version: str, prep_epoch: float) -> None:
-        tar = _payload(version)
+    def write_card(self, version: str, prep_epoch: float, system: bool = False) -> None:
+        tar = _payload(version, system)
         d = self.boot / "domovoi"
         (d / "payload.tar.gz").write_bytes(tar)
         (d / "payload.sha256").write_text(
@@ -295,3 +311,46 @@ def test_a_fresh_card_does_not_start_over(card):
     assert "starting setup over" not in card.log()
     assert (card.state / "bootstrap-card").read_text().strip()
     assert not list((card.home / ".domovoi").glob("before-new-card-*"))
+
+
+# ─── root's own copy of the code (1.5.0, security review M1) ─────────────
+
+
+def test_stage_one_installs_roots_copy_the_wrapper_and_the_unit_that_runs_it(tmp_path):
+    """Step 7 on a new card: root's copy of the code from the root-owned
+    payload (tests left out) behind the root-code link, the XVF3800 wrapper,
+    the provisioning unit pointing at root's copy, and a sudoers that names
+    the wrapper, never xvf_host."""
+    _bash()
+    card = Card(tmp_path / "card")
+    card.write_card("1", prep_epoch=1_700_000_000, system=True)
+
+    card.boot_once()
+
+    root_copy = card.root / "usr" / "local" / "lib" / "domovoi" / "root-code" / "satellite"
+    assert (root_copy / "VERSION").read_text() == "1"
+    assert not (root_copy / "tests").exists()
+    assert (card.root / "usr" / "local" / "lib" / "domovoi" / "root-code.d" / "card").is_dir()
+    assert not (card.root / "usr" / "local" / "lib" / "domovoi" / "root-code.new").exists()
+    repo = Path(__file__).resolve().parents[2]
+    wrapper = card.root / "usr" / "local" / "sbin" / "domovoi-xvf"
+    assert wrapper.read_bytes() == (repo / "satellite" / "xvf_guard.py").read_bytes()
+    unit = (card.root / "etc" / "systemd" / "system" / "domovoi-provisioning.service").read_text()
+    assert "ExecStart=/usr/bin/python3 -E -s -m satellite.root_entry\n" in unit
+    assert "WorkingDirectory=/usr/local/lib/domovoi/root-code\n" in unit
+    assert f"Environment=DOMOVOI_SATELLITE_USER={USER}\n" in unit
+    sudoers = (card.root / "etc" / "sudoers.d" / "domovoi-satellite").read_text()
+    rules = [ln for ln in sudoers.splitlines() if ln and not ln.startswith("#")]
+    assert f"{USER} ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-xvf" in rules
+    assert not any("xvf_host" in r for r in rules)
+
+    # New card files on the same root: root's copy is replaced, not nested.
+    # Needs a real symlink for root-code (Git Bash's `ln -s` copies the
+    # folder, which `mv -T` cannot rename over), so Linux only (CI).
+    if sys.platform == "win32":
+        return
+    assert (card.root / "usr" / "local" / "lib" / "domovoi" / "root-code").is_symlink()
+    card.write_card("2", prep_epoch=1_700_100_000, system=True)
+    card.boot_once()
+    assert (root_copy / "VERSION").read_text() == "2"
+    assert not (root_copy / "satellite").exists()

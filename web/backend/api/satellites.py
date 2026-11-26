@@ -105,6 +105,7 @@ from web.backend.schemas import (
     RoomVoiceRequest,
     Satellite,
     SatelliteApproveRequest,
+    SatelliteDevice,
     SatelliteDisplay,
     SpareDeviceEnrolRequest,
     SatellitePairing,
@@ -530,8 +531,24 @@ async def _enrolment_for(body: SpareDeviceEnrolRequest, request: Request):
     if status != 200 or not isinstance(digest, dict) or not digest.get("sha256"):
         return bridge_response(status if status != 200 else 503, digest)
     core = (body.core or "").strip() or _advertised_core_http()
+    name = (body.room or "").strip()
+    in_room: str | None = None
+    if body.in_room:
+        # One more satellite for an existing room: the core picks a device
+        # name no other device has ("Kitchen 2") and remembers the
+        # invitation, so even an app that ignores `in=` lands in the room
+        # on approval (domovoi/room_invites.py).
+        status, made = await post_admin(
+            f"/v1/admin/rooms/{body.in_room}/invite", {"name": name or None},
+            headers=auth_forward_headers(request))
+        if status != 200 or not isinstance(made, dict) or not made.get("name"):
+            return bridge_response(status if status != 200 else 503, made)
+        name, in_room = made["name"], body.in_room
+    if not name:
+        raise HTTPException(status_code=422, detail={"reason": "missing_room",
+                                                     "message": "name the room"})
     try:
-        payload = enrolment.build(core, fingerprint, body.room)
+        payload = enrolment.build(core, fingerprint, name, in_room=in_room)
         parsed = enrolment.parse(payload)
     except enrolment.EnrolmentError as e:
         raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
@@ -570,6 +587,8 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         "join_url": enrolment.join_link(payload),
         "room": parsed.room,
         "room_id": parsed.room_id,
+        # The existing room it joins (`in=`), None for a room of its own.
+        "in_room": parsed.in_room,
         "core": parsed.core,
         "fingerprint": parsed.fp,
         "bundle_sha256": digest["sha256"],
@@ -581,7 +600,8 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         "android_app": await _android_app_for_a_phone(request),
         "linux_runtime": await _linux_runtime(request),
         "usb_stick": await _usb_stick_for_the_card(request),
-        "conflict": await _room_in_use(parsed.room_id),
+        # A fresh device name for an existing room is never in use.
+        "conflict": None if parsed.in_room else await _room_in_use(parsed.room_id),
     }
 
 
@@ -830,7 +850,8 @@ async def approve_satellite(
     return bridge_response(
         *await post_admin(
             f"/v1/admin/satellites/approvals/{room_id}/approve",
-            {"code": body.code},
+            {"code": body.code, "room_id": body.room_id,
+             "new_room_name": body.new_room_name},
             headers=auth_forward_headers(request),
         )
     )
@@ -910,6 +931,26 @@ async def get_satellite(room_id: str) -> Satellite:
                                 heard=heard, wake_phrases=await _wake_phrases_or_empty(),
                                 batteries=await _batteries_or_empty(room_id),
                                 wake_facts=await _room_wake_facts_or_empty(room_id))
+
+
+@router.get("/{room_id}/media", dependencies=READ)
+async def get_room_media(room_id: str, request: Request) -> dict[str, Any]:
+    """Photo and video results asked for by voice in this room, while its
+    screen shows them (1.5.0, domovoi/room_media.py): ``{"media": null |
+    {id, said, count, more, expires_in_ms, items: [{kind, thumb, caption,
+    date, at_s}]}}``. For the video satellite's kiosk page
+    (web/static/display.html); ``thumb`` is this dashboard's thumbnail or
+    poster route. Read from the Domovoi server's device-read
+    ``GET /v1/admin/room-media/{room_id}`` with the caller's credentials
+    (the open snapshot carries only which results are up); null when the
+    room shows none or the server isn't answering. A caption is a picture
+    model's words: draw it as text."""
+    from urllib.parse import quote
+
+    status, doc = await get_admin(f"/v1/admin/room-media/{quote(room_id, safe='')}",
+                                  headers=auth_forward_headers(request))
+    m = doc.get("media") if status == 200 and isinstance(doc, dict) else None
+    return {"media": m if isinstance(m, dict) else None}
 
 
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
@@ -1005,6 +1046,7 @@ async def list_conversations(
         )
         out: list[ConversationTurn] = []
         rows = rows.all()
+        heard = await _turn_devices(s, room_id, [int(r[0]) for r in rows])
         names = (await wake_default.word_names(s)
                  if with_word and any(r[13 + int(with_score)] for r in rows) else {})
         for r in rows:
@@ -1039,8 +1081,53 @@ async def list_conversations(
                 wake_word_name=(wake_default.word_name(fired, names)
                                 if isinstance(fired, str) and fired else None),
                 voice_match=heard_as,
+                **heard.get(int(r[0]), {}),
             ))
         return out
+
+
+# Whether conversation_log has V073's satellite_id / mic_satellite_id.
+_HAS_TURN_DEVICES: bool | None = None
+
+
+async def _turn_devices(s: Any, room_id: str, ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Per turn: which satellite owned it and whose mic was transcribed,
+    and, in a room with several satellites (or when the mic was another
+    device), the room's name and that mic's name for the drawer's
+    "Heard best by …" line."""
+    global _HAS_TURN_DEVICES
+    if not ids:
+        return {}
+    if _HAS_TURN_DEVICES is None:
+        row = (await s.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'conversation_log' AND column_name = 'mic_satellite_id'"
+        ))).first()
+        _HAS_TURN_DEVICES = row is not None
+    if not _HAS_TURN_DEVICES:
+        return {}
+    turns = (await s.execute(text(
+        "SELECT id, satellite_id, mic_satellite_id FROM conversation_log WHERE id = ANY(:ids)"
+    ), {"ids": ids})).all()
+    if not any(t[2] for t in turns):
+        return {t[0]: {"satellite_id": t[1]} for t in turns if t[1]}
+    room = (await s.execute(text("SELECT name FROM rooms WHERE room_id = :r"),
+                            {"r": room_id})).first()
+    room_name = room[0] if room is not None else room_id
+    sats = {r[0]: r[1] for r in (await s.execute(text(
+        "SELECT satellite_id, name FROM satellites WHERE room_id = :r "
+        "OR satellite_id = ANY(:m)"
+    ), {"r": room_id, "m": list({t[2] for t in turns if t[2]})})).all()}
+    in_room = (await s.execute(text(
+        "SELECT count(*) FROM satellites WHERE room_id = :r"), {"r": room_id})).scalar() or 0
+    out: dict[int, dict[str, Any]] = {}
+    for tid, owner, mic in turns:
+        d: dict[str, Any] = {"satellite_id": owner, "mic_satellite_id": mic}
+        if mic and (in_room > 1 or (owner and mic != owner)):
+            d["room_name"] = room_name
+            d["heard_by"] = sats.get(mic) or f"Satellite for the {room_name}"
+        out[tid] = d
+    return out
 
 
 # A pending turn older than this has outlived every limit the core puts on
@@ -1992,6 +2079,41 @@ async def get_satellite_logs(
     return bridge_response(status, payload)
 
 
+@router.post(
+    "/{room_id}/diagnostics",
+    # Admin tier at both hops: the read-only probes (domovoi/
+    # satellite_diagnostics.py) include the satellite's recent log lines.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def run_satellite_diagnostics(room_id: str, request: Request):
+    """Run every read-only diagnostics probe on a connected satellite that
+    declared ``diagnostics``. Passes the core's answer through (404 offline,
+    409 not declared, 429 rate-limited)."""
+    status, payload = await post_admin(
+        f"/v1/admin/satellite/{room_id}/diagnostics",
+        timeout=40.0,
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post(
+    "/{room_id}/diagnostics/{probe}",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def run_satellite_diagnostic(room_id: str, probe: str, request: Request):
+    """Run one probe by name (a name not in the core's allowlist is 404
+    there, and nothing reaches the satellite)."""
+    if not probe.replace("_", "").isalnum() or len(probe) > 32:
+        raise HTTPException(status_code=404, detail="unknown probe")
+    status, payload = await post_admin(
+        f"/v1/admin/satellite/{room_id}/diagnostics/{probe}",
+        timeout=40.0,
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
 @router.patch(
     "/{room_id}/config",
     # Security tier at both hops: /v1/admin/satellite/{room}/config
@@ -2127,10 +2249,10 @@ async def _list_rooms() -> list[dict[str, Any]]:
     but-never-connected ones (satellites rows only → null ports, rendered
     as `waiting`). Falls back to mpd_rooms alone when V003 isn't applied."""
     query_full = """
-        SELECT COALESCE(m.room_id, s.room_id) AS room_id,
+        SELECT COALESCE(m.room_id, s.satellite_id) AS room_id,
                m.control_port, m.http_port, m.last_connected_at
         FROM mpd_rooms m
-        FULL OUTER JOIN satellites s ON s.room_id = m.room_id
+        FULL OUTER JOIN satellites s ON s.satellite_id = m.room_id
         ORDER BY 1
         """
     query_legacy = """
@@ -2164,7 +2286,7 @@ async def _list_pairings() -> dict[str, dict[str, Any]]:
     async with session_scope() as s:
         rows = await s.execute(
             text(
-                "SELECT room_id, paired_at, last_seen_at FROM satellite_pairings"
+                "SELECT satellite_id, paired_at, last_seen_at FROM satellite_pairings"
             )
         )
     return {
@@ -2181,8 +2303,10 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
         async with session_scope() as s:
             rows = await s.execute(
                 text(
-                    "SELECT room_id, sat_type, room_label, hardware, board, "
-                    "mac, adopted_at, voice FROM satellites"
+                    "SELECT s.satellite_id, s.sat_type, NULLIF(r.name, r.room_id), "
+                    "s.hardware, s.board, s.mac, s.adopted_at, r.voice, s.support_allowed, "
+                    "s.support_key IS NOT NULL, s.room_id, s.name "
+                    "FROM satellites s JOIN rooms r ON r.room_id = s.room_id"
                 )
             )
         return {
@@ -2194,6 +2318,10 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
                 "mac": r[5],
                 "adopted_at": r[6],
                 "voice": r[7],
+                "support_allowed": bool(r[8]),
+                "support_key_pinned": bool(r[9]),
+                "room_id": r[10],
+                "name": r[11],
             }
             for r in rows.all()
         }
@@ -2211,11 +2339,12 @@ async def _last_heard_or_empty(room_id: str | None = None) -> dict[str, Any]:
         async with session_scope() as s:
             if room_id is None:
                 rows = await s.execute(text(
-                    "SELECT room_id, max(received_at) FROM satellite_health GROUP BY room_id"))
+                    "SELECT satellite_id, max(received_at) FROM satellite_health "
+                    "GROUP BY satellite_id"))
             else:
                 rows = await s.execute(text(
-                    "SELECT room_id, max(received_at) FROM satellite_health "
-                    "WHERE room_id = :r GROUP BY room_id"), {"r": room_id})
+                    "SELECT satellite_id, max(received_at) FROM satellite_health "
+                    "WHERE satellite_id = :r GROUP BY satellite_id"), {"r": room_id})
             return {r[0]: r[1] for r in rows.all() if r[1] is not None}
     except Exception as e:  # noqa: BLE001
         log.debug("satellite health times unavailable: %s", e)
@@ -2250,10 +2379,11 @@ async def _room_wake_facts_or_empty(room_id: str | None = None) -> dict[str, Any
         async with session_scope() as s:
             names = await wake_default.word_names(s)
             states = await wake_default.room_states(s, room_id)
-            where = "" if room_id is None else "WHERE room_id = :r "
+            where = "" if room_id is None else "WHERE satellite_id = :r "
             rows = (await s.execute(text(
-                "SELECT DISTINCT ON (room_id) room_id, sample->>'wake_word', received_at "
-                f"FROM satellite_health {where}ORDER BY room_id, received_at DESC"),
+                "SELECT DISTINCT ON (satellite_id) satellite_id, sample->>'wake_word', "
+                f"received_at FROM satellite_health {where}"
+                "ORDER BY satellite_id, received_at DESC"),
                 {} if room_id is None else {"r": room_id})).all()
         return {"names": names, "states": states,
                 "samples": {r[0]: (r[1], r[2]) for r in rows}}
@@ -2336,6 +2466,38 @@ def _battery_for(room_id: str, board: str | None, online: bool,
     )
 
 
+def _room_devices(room_id: str, online: bool, snapshot: dict[str, Any],
+                  meta: dict[str, dict[str, Any]] | None) -> list[SatelliteDevice]:
+    """The room's satellites from the inventory (``meta`` carries each
+    one's room), with what the snapshot says of each by its own id (1.5.0).
+    A snapshot from an older server has no ``active_satellites``: then the
+    device whose id is the room's counts as connected while the room is."""
+    sats = sorted(sid for sid, row in (meta or {}).items()
+                  if (row or {}).get("room_id") == room_id)
+    if "active_satellites" in snapshot:
+        live = set(snapshot.get("active_satellites") or ())
+    else:
+        live = {room_id} if online else set()
+    diag = set(snapshot.get("satellite_diagnostics") or ())
+    shell = set(snapshot.get("satellite_support_shell") or ())
+    changed = set(snapshot.get("satellite_support_key_changed") or ())
+    out = []
+    for sid in sats:
+        row = (meta or {}).get(sid) or {}
+        on = sid in live
+        out.append(SatelliteDevice(
+            satellite_id=sid,
+            name=row.get("name"),
+            connected=on,
+            diagnostics=on and sid in diag,
+            support_allowed=bool(row.get("support_allowed")),
+            support_shell=on and sid in shell,
+            support_key_pinned=bool(row.get("support_key_pinned")),
+            support_key_changed=on and sid in changed,
+        ))
+    return out
+
+
 async def _satellite_for(
     room: dict[str, Any],
     snapshot: dict[str, Any],
@@ -2354,6 +2516,14 @@ async def _satellite_for(
     wifi_dict = (snapshot.get("wifi_status") or {}).get(room_id) if snapshot else None
 
     online = room_id in active_rooms
+    # The room's connected XVF3800s (1.5.0): the snapshot names satellites,
+    # and a room may hold several, each with its own mic presets. A device
+    # from before 1.5.0 has its room's id.
+    mic_dsp_satellites = sorted(
+        sid for sid in (snapshot.get("satellite_mic_dsp") or ())
+        if sid == room_id or ((meta or {}).get(sid) or {}).get("room_id") == room_id
+    ) if online else []
+    devices = _room_devices(room_id, online, snapshot, meta)
     # Null ports = adopted but never connected ("waiting"): no MPD instance
     # exists yet, so there's nothing to read now-playing from.
     waiting = room["control_port"] is None or room["http_port"] is None
@@ -2499,7 +2669,17 @@ async def _satellite_for(
         timers_own_only=room_id in (own_only or {}),
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
-        mic_dsp=online and room_id in (snapshot.get("satellite_mic_dsp") or ()),
+        diagnostics=online and (
+            room_id in (snapshot.get("satellite_diagnostics") or ())
+            or any(d.diagnostics for d in devices)),
+        devices=devices,
+        mic_dsp=bool(mic_dsp_satellites),
+        mic_dsp_satellites=mic_dsp_satellites,
+        support_allowed=bool(meta_row.get("support_allowed")),
+        support_shell=online and room_id in (snapshot.get("satellite_support_shell") or ()),
+        support_key_pinned=bool(meta_row.get("support_key_pinned")),
+        support_key_changed=online and room_id in (
+            snapshot.get("satellite_support_key_changed") or ()),
         upgrade=upgrade,
         settings_ignored=ignored,
         wake_word=wake_word,

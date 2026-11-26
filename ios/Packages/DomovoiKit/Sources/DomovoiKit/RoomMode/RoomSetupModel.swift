@@ -24,7 +24,9 @@ public protocol RoomSetupPermissions: AnyObject {
 /// 1. the explainer, read to its end before **Start room mode** works;
 /// 2. the microphone (and the resume notification) asked for here;
 /// 3. the room code: scanned or pasted, shown back (server, key, room name,
-///    which can be changed), then **Become this room**.
+///    which can be changed), then **Become this room** — or, for a code
+///    from "Add a satellite to the Kitchen" (`in=`), **Join the Kitchen**:
+///    the name is then this phone's own ("Kitchen 2").
 ///
 /// A link or a scan only fills the form: nothing becomes a room until the
 /// person has read the explainer and pressed the buttons. The fourth screen —
@@ -143,6 +145,20 @@ public final class RoomSetupModel: ObservableObject {
 
     public var canBecome: Bool { roomID != nil }
 
+    /// `in=` (1.5.0): the existing room the code says this phone joins, by
+    /// name; nil: the phone becomes the room the code names. With it the
+    /// name field is this phone's own ("Kitchen 2").
+    public var joining: String? { enrolment?.inRoomName }
+
+    /// "This phone will join the Kitchen." while ``joining``.
+    public var joinLine: String? { joining.map(RoomStatusText.joinLine) }
+
+    /// The name field's label: this phone's name when joining, else the room's.
+    public var nameFieldLabel: String { joining == nil ? RoomModeStrings.roomName : RoomModeStrings.phoneName }
+
+    /// The button: "Join the Kitchen", or "Become this room".
+    public var confirmTitle: String { joining.map(RoomStatusText.joinButton) ?? RoomModeStrings.becomeThisRoom }
+
     public func scan() {
         problem = nil
         guard permissions.cameraAvailable else {
@@ -175,7 +191,11 @@ public final class RoomSetupModel: ObservableObject {
             problem = RoomModeStrings.micHeld(refusal)
             return false
         }
-        let chosen = RoomEnrolment(coreURL: e.coreURL, fingerprint: e.fingerprint, roomID: roomID, roomLabel: label)
+        // The code's `in=` goes with it: the room this phone asks to join.
+        let chosen = RoomEnrolment(
+            coreURL: e.coreURL, fingerprint: e.fingerprint, roomID: roomID, roomLabel: label,
+            inRoom: e.inRoom, inRoomName: e.inRoomName
+        )
         guard onBegin(chosen) else {
             problem = RoomModeStrings.keyNotKept
             return false

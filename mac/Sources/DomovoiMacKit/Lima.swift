@@ -65,18 +65,27 @@ public struct MediaMount: Equatable, Codable {
 
 /// `mac/vm/domovoi.yaml`, filled in.
 public enum LimaTemplate {
-    public static func render(template: String, size: VMSize, imagePath: String, imageSHA256: String, mounts: [MediaMount], ports: Ports) throws -> String {
+    /// `kitMount`: an offline kit's folder on the Mac (OfflineKit.swift),
+    /// shared into the VM read-only at KitNames.guestMount for provision.sh
+    /// --offline-kit. Only in kit mode: a mount whose folder is gone (the
+    /// stick taken out) would stop the VM from starting, so the install
+    /// takes it out of the VM again once provisioning ends
+    /// (Installer.releaseKit).
+    public static func render(template: String, size: VMSize, imagePath: String, imageSHA256: String, mounts: [MediaMount], ports: Ports,
+                              kitMount: String? = nil) throws -> String {
         for m in mounts {
             guard MediaMount.validName(m.name) else { throw HelperError("media folder name \(m.name) must be letters, digits, - or _") }
             guard m.hostPath.hasPrefix("/") else { throw HelperError("media folder \(m.hostPath) must be an absolute path") }
         }
         if Set(mounts.map { $0.name.lowercased() }).count != mounts.count { throw HelperError("two media folders have the same name") }
-        var block = "mounts: []"
-        if !mounts.isEmpty {
-            block = "mounts:\n" + mounts.map {
-                "- location: \(Template.yamlString($0.hostPath))\n  mountPoint: \(Template.yamlString($0.guestPath))\n  writable: true"
-            }.joined(separator: "\n")
+        if let k = kitMount, !k.hasPrefix("/") { throw HelperError("the offline kit's folder \(k) must be an absolute path") }
+        var entries = mounts.map {
+            "- location: \(Template.yamlString($0.hostPath))\n  mountPoint: \(Template.yamlString($0.guestPath))\n  writable: true"
         }
+        if let k = kitMount {
+            entries.append("- location: \(Template.yamlString(k))\n  mountPoint: \(Template.yamlString(KitNames.guestMount))\n  writable: false")
+        }
+        let block = entries.isEmpty ? "mounts: []" : "mounts:\n" + entries.joined(separator: "\n")
         return try Template.render(template, values: [
             "CPUS": String(size.cpus),
             "MEMORY": Template.yamlString("\(size.memoryGiB)GiB"),
@@ -164,6 +173,22 @@ public final class Lima {
 
     public func stop(_ instance: String, force: Bool = false) throws {
         try runner.check(command(["stop"] + (force ? ["--force"] : []) + [instance], timeout: 300), "limactl stop")
+    }
+
+    /// The yq expression `limactl edit --set` takes to put the offline
+    /// kit's read-only mount in (at `location`) or, with nil, take it out:
+    /// the instance's other mounts stay as they are.
+    public static func kitMountExpression(_ location: String?) -> String {
+        let keep = "((.mounts // []) | map(select(.mountPoint != \(Template.yamlString(KitNames.guestMount)))))"
+        guard let l = location else { return ".mounts = " + keep }
+        return ".mounts = \(keep) + [{\"location\": \(Template.yamlString(l)), \"mountPoint\": \(Template.yamlString(KitNames.guestMount)), \"writable\": false}]"
+    }
+
+    /// Puts the offline kit's mount into a stopped instance's settings, or
+    /// takes it out (nil). Lima refuses to edit a running instance; the
+    /// change takes effect when it next starts.
+    public func setKitMount(_ instance: String, location: String?) throws {
+        try runner.check(command(["edit", "--tty=false", "--set", Self.kitMountExpression(location), instance], timeout: 120), "limactl edit (the offline kit's mount)")
     }
 
     public func delete(_ instance: String) throws {

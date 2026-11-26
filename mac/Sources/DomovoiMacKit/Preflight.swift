@@ -55,6 +55,9 @@ public struct PreflightReport: Codable, Equatable {
     public var macOS: String
     public var chip: String
     public var asRoot: Bool
+    /// An offline kit plugged in, as the check found it (KitPreflight), or
+    /// nil: none. With one, the "Internet now" check isn't made.
+    public var kit: KitReport? = nil
 }
 
 /// Domovoi's ports (PLAN 5, step 2): dashboard, core, Postgres, the rooms'
@@ -93,7 +96,12 @@ public final class Preflight {
     public static let minMemoryBytes: UInt64 = 16 << 30
     public static let minFreeDisk: Int64 = 50_000_000_000
 
-    public func run(pins: Pins?, ollamaMinimum: OllamaVersion?) -> PreflightReport {
+    /// `kit`: an offline kit plugged in (KitPreflight.report). It takes the
+    /// place of the "Internet now" check, so a Mac installing from a kit
+    /// asks nothing of the internet: a kit that can be used is an ok row, one
+    /// that can't a failed one (on a repair a warning: Repair then goes on
+    /// without it).
+    public func run(pins: Pins?, ollamaMinimum: OllamaVersion?, kit: KitReport? = nil) -> PreflightReport {
         var checks: [PreflightCheck] = []
         let arm = sysctl("hw.optional.arm64") == "1"
         let chip = sysctl("machdep.cpu.brand_string") ?? (arm ? "Apple Silicon" : "Intel")
@@ -153,7 +161,10 @@ public final class Preflight {
                                 "/etc/pf.conf has been changed, so Setup can't add Domovoi's network rule: Domovoi will work on this Mac, but phones and room speakers won't reach it"))
         }
 
-        if let p = pins {
+        if let k = kit {
+            let detail = ([k.headline] + (k.ok ? k.notes : [])).joined(separator: " ")
+            checks.append(.init("kit", "Offline kit", k.ok ? "ok" : state == "installed" ? "warn" : "fail", detail))
+        } else if let p = pins {
             var hosts: [String] = []
             for u in [p.ollama.url, p.ubuntuImage.url] + Self.vmHosts { if !hosts.contains(u) { hosts.append(u) } }
             let failed = hosts.filter { !reachable($0) }
@@ -175,9 +186,9 @@ public final class Preflight {
         }
 
         return PreflightReport(ok: !checks.contains { $0.status == "fail" }, checks: checks, conflicts: conflicts, fileVault: fv,
-                               laptop: laptop, battery: battery, onAC: onAC, memoryGB: gb, tier: tier.rawValue, installState: state,
-                               lanIPv4: lanAddr?.ipv4, lanInterface: lanAddr?.interface, wifi: wifi, freeDiskGB: freeGB,
-                               macOS: ver, chip: chip, asRoot: isRoot)
+                               laptop: laptop, battery: battery, onAC: onAC, memoryGB: gb, tier: kit?.ok == true ? (kit?.tier ?? tier.rawValue) : tier.rawValue,
+                               installState: state, lanIPv4: lanAddr?.ipv4, lanInterface: lanAddr?.interface, wifi: wifi, freeDiskGB: freeGB,
+                               macOS: ver, chip: chip, asRoot: isRoot, kit: kit)
     }
 
     /// Where provision.sh downloads from inside the VM (arm64 Ubuntu comes
@@ -395,5 +406,29 @@ public final class Preflight {
             return (SCNetworkInterfaceGetInterfaceType(i) as String?) == (kSCNetworkInterfaceTypeIEEE80211 as String)
         }
         return nil
+    }
+}
+
+/// The setup pages' look at an offline kit (read-only, as the person who
+/// opened Setup): the kit plugged in, checked against this package
+/// (OfflineKit.check), or nil when there is none.
+public enum KitPreflight {
+    public static func report(share: URL, layout: Layout, volumes: URL = KitNames.volumes,
+                              trust: (URL) -> Bool = PinnedRelease.rootOnly, memoryBytes: UInt64 = Machine.memoryBytes()) -> KitReport? {
+        let build = try? BuildInfo.load(share)
+        guard let root = OfflineKit.locate(given: nil, volumes: volumes, commit: build?.commit) else { return nil }
+        let rec = (try? RecordStore.load(layout.installRecord)) ?? nil
+        let installed = rec != nil && rec?.uninstalledAt == nil
+        do {
+            var want = try KitSetup.expectation(share: share, tier: installed ? rec!.answers.tier : Tier.forMac(memoryBytes: memoryBytes), trust: trust)
+            want.repair = installed
+            if installed, rec?.answers.ollama.hasPrefix("existing") == true { want.ownOllama = false }
+            return OfflineKit.check(root: root, want: want, volumes: volumes).0
+        } catch {
+            let volumeRoot = root.deletingLastPathComponent().standardizedFileURL.path == volumes.standardizedFileURL.path
+            var r = KitReport(root: root.path, volume: volumeRoot ? root.lastPathComponent : nil)
+            r.problems = ["Setup can't check the offline kit: \(error)."]
+            return r
+        }
     }
 }

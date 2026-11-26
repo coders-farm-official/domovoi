@@ -103,7 +103,14 @@ MATRIX = [
      f"keeps recordings of the commands said here for 14 days. {ADMIN_VH}"),
     ("keep", R(BASE, voice_keep=None), "I can't check that right now."),
     ("keep", R(BASE, device=hf.WEB_CHAT),
-     "Yes. This chat is kept until someone deletes it, and everyone in the house can read it."),
+     "Yes. This chat is kept until someone deletes it. " + hf.CHATS_WHO),
+    # 1.5.0 private chats: who reads it follows the chat's own state.
+    ("keep", R(BASE, device=hf.WEB_CHAT, chat_state="private"),
+     "Yes. This chat is kept until someone deletes it. This chat is private to the phone or browser "
+     "that started it; the house's admins can read it too."),
+    ("keep", R(BASE, device=hf.WEB_CHAT, chat_state="shared"),
+     "Yes. This chat is kept until someone deletes it. This chat is shared with everyone in the house: "
+     "every paired phone and browser can read it."),
     # §5.10 / §9.8: the internet answer, all four
     ("internet", BASE,
      f"Yes. This house is set to use the internet when something needs it. {INET_CHANGE}"),
@@ -117,10 +124,10 @@ MATRIX = [
      "there. An admin can answer it in Settings → Privacy → Internet."),
     # §9.7 / §15.14 / §9.11 / §15.16
     ("chats", BASE,
-     "Everyone in this house: chats on this house's server can be read on every paired phone and "
-     "browser. A message you send to a friend's house is seen there too, and only that message."),
-    ("chats", R(BASE, friend_houses=False, friends=0),
-     "Everyone in this house: chats on this house's server can be read on every paired phone and browser."),
+     "A chat on this house's server is private to the phone or browser that started it, and the "
+     "house's admins can read it too. A chat shared with the household can be read on every paired "
+     "phone and browser. A message you send to a friend's house is seen there too, and only that message."),
+    ("chats", R(BASE, friend_houses=False, friends=0), hf.CHATS_WHO),
     # §15.15
     ("friend_houses", BASE,
      "No. A friend's house never hears this house and can't see who's in it. It only sees that this "
@@ -130,8 +137,13 @@ MATRIX = [
     # §15.17
     ("private", BASE,
      f"Not entirely: anyone in the room can hear us. I keep the text of what's said for 90 days. {NO_REC}"),
-    ("private", R(BASE, device=hf.WEB_CHAT),
+    ("private", R(BASE, device=hf.WEB_CHAT), hf.CHATS_WHO),
+    ("private", R(BASE, device=hf.WEB_CHAT, chat_state="private"),
+     "This chat is private to the phone or browser that started it; the house's admins can read it too."),
+    ("private", R(BASE, device=hf.WEB_CHAT, chat_state="shared"),
      "This chat is shared with everyone in the house: every paired phone and browser can read it."),
+    ("private", R(BASE, device=hf.WEB_CHAT, chat_state="household"), hf.CHAT_SHARED),
+    ("private", R(BASE, device=hf.WEB_CHAT, chat_state="admin-only"), hf.CHATS_WHO),
     # §9.12: online music suggestions on / off
     ("listening_history", R(BASE, music_suggestions=True),
      "No. It stays in this house; only people here can see it, on the dashboard. For music suggestions "
@@ -523,7 +535,10 @@ async def test_recordings_read_like_the_capture_code(db_session) -> None:
 @pytest.mark.asyncio
 async def test_device_kinds(db_session) -> None:
     await db_session.execute(text(
-        "INSERT INTO satellites (room_id, board) VALUES ('den', 'android_room'), ('hall', 'raspberry_pi_4')"))
+        "INSERT INTO rooms (room_id, name) VALUES ('den', 'den'), ('hall', 'hall') ON CONFLICT DO NOTHING"))
+    await db_session.execute(text(
+        "INSERT INTO satellites (satellite_id, room_id, board) VALUES ('den', 'den', 'android_room'), "
+        "('hall', 'hall', 'raspberry_pi_4')"))
     await db_session.commit()
     assert (await hf.read(room_id="den")).device == hf.ROOM_PHONE
     assert (await hf.read(room_id="hall")).device == hf.SATELLITE
@@ -794,7 +809,10 @@ def test_web_chat_answers_from_the_house(no_chat_model) -> None:
             "No. This is a typed chat, so there's nothing to record. The chat itself is kept until "
             "someone deletes it.")
         assert _send(c, t, "Can you order pizza?") == "No, I can't order food."
-        assert _send(c, t, "Who can see my chats?").startswith("Everyone in this house:")
+        # 1.5.0: a chat is private to its device unless shared.
+        assert _send(c, t, "Who can see my chats?").startswith(hf.CHATS_WHO)
+        # This chat (made with no device key) is the household's.
+        assert _send(c, t, "Is this chat private?") == hf.CHAT_SHARED
         msgs = c.get(f"/api/chat/threads/{t}/messages").json()["messages"]
         assert msgs[-1]["role"] == "assistant" and (msgs[-1]["stats"] or {}).get("model_role") == "house_facts"
 

@@ -34,6 +34,8 @@ final class HealthPanelStringsTests: XCTestCase {
     private static let kotlinFiles = [
         "ui/screens/containers/ContainersScreen.kt",
         "alerts/ContainerIncidents.kt",
+        // 1.5.0: the admin half's words (Health incidents as admin on the phone).
+        "ui/screens/containers/IncidentAdmin.kt",
     ]
 
     /// One Kotlin string literal, and whether the source joins it to the one
@@ -229,6 +231,21 @@ final class HealthPanelStringsTests: XCTestCase {
         assertWhole(HealthPanelStrings.pausesRiskyChanges)
         assertWhole(HealthPanelStrings.resolvedLabel, "the middle dot is U+00B7")
         assertWhole(HealthPanelStrings.adminClearsThese, "the arrow is U+2192")
+    }
+
+    /// 1.5.0: the admin half's words are the Kotlin's, but for Face ID
+    /// where Android says fingerprint or face.
+    func testTheAdminHalfSaysWhatAndroidSays() {
+        typealias W = HealthIncidentAdminWords
+        for s in [
+            W.dashboardOrPhone, W.detailsOrPhone, W.live, W.expected, W.found, W.acknowledge,
+            W.acknowledgeHint, W.clear, W.clearHint, W.clearTitle, W.clearBody, W.noteLabel,
+            W.clearConfirm, W.cancel, W.acknowledged,
+        ] {
+            assertWhole(s)
+        }
+        XCTAssertEqual("show details with Face ID", W.unlock)
+        XCTAssertTrue(W.dashboardOrPhone.hasSuffix(", or sign in as admin on this phone"))
     }
 
     func testTheDashboardFootAndItsButton() {

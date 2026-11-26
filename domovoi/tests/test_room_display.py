@@ -365,8 +365,14 @@ async def test_a_library_song(db_session, players, tmp_path, monkeypatch):
 
 @requires_db
 async def test_the_radio_has_no_art_and_no_skip(db_session, players):
+    from domovoi import player_relay
+    from domovoi.player_route import PlayerRoute
+
     stub = players.setdefault(ROOM, MPDStubClient())
-    url = "http://radio.example/jazz"
+    # An internet station plays through the core's relay (L20): the player
+    # is handed a relay URL, and the radio stamps that as its stream_url.
+    url = player_relay.mint(ROOM, "http://radio.example/jazz",
+                            PlayerRoute(host="172.17.0.1", peer="172.17.0.5"), kind="radio")
     await stub.play_url(url, title="Night Jazz")
     owner = "test-room-display"
     if "radio" not in NOW_PLAYING.sources():
@@ -386,6 +392,7 @@ async def test_the_radio_has_no_art_and_no_skip(db_session, players):
     finally:
         NOW_PLAYING.clear(ROOM)
         NOW_PLAYING.unregister_owner(owner)
+        player_relay.reset_for_tests()
 
 
 @requires_db

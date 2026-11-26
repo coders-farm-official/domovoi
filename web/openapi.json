@@ -262,6 +262,199 @@
         }
       }
     },
+    "/api/auth/phone-grant": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Phone Grant",
+        "description": "Issue this phone's grant for the rest of the day. Needs the\nhousehold token AND an admin Bearer whose session proved the password\nwithin the last five minutes (``signed_in_at``): a Bearer that was\nkept alive, resumed, stolen or minted from a grant is refused (403).\nOne grant per device id: a new one replaces the old, and ends the\nsessions the old one minted. The grant is in this answer and nowhere\nelse.",
+        "operationId": "auth_phone_grant_api_auth_phone_grant_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/phone-grant/exchange": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Phone Grant Exchange",
+        "description": "Swap a phone grant for a fresh admin session (``phone: <label>``,\nthe usual idle hour, NOT freshly signed in, so it cannot mint a grant).\nNeeds the household token, then sits behind the password login's own\nper-source backoff (the attempt is counted before the check; 429 with\n``Retry-After`` while throttled). 401 when the grant is wrong, belongs\nto another device id, or has expired (the expired row is deleted).",
+        "operationId": "auth_phone_grant_exchange_api_auth_phone_grant_exchange_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneGrantExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/phone-grant/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Phone Grant Revoke",
+        "description": "The phone's own sign-out: end the grant it holds, and the sessions\nit minted. No admin needed: holding the grant proves it is yours. The\nsame answer whether or not it existed.",
+        "operationId": "auth_phone_grant_revoke_api_auth_phone_grant_revoke_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneGrantRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Auth Phone Grant Revoke Api Auth Phone Grant Revoke Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/phone-grants": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Phone Grants",
+        "description": "The phone grants, for the dashboard list beside the sessions:\ndevice id, label, issued, until, last used, live. Never a secret or a\nhash. GET state: the cookie may render it.",
+        "operationId": "auth_phone_grants_api_auth_phone_grants_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Auth Phone Grants Api Auth Phone Grants Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/phone-grants/{grant_id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Revoke Phone Grant",
+        "description": "An admin revokes a phone's grant (and the sessions it minted).\nBearer-only; an admin action.",
+        "operationId": "auth_revoke_phone_grant_api_auth_phone_grants__grant_id__delete",
+        "parameters": [
+          {
+            "name": "grant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Grant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Auth Revoke Phone Grant Api Auth Phone Grants  Grant Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/device-token": {
       "get": {
         "tags": [
@@ -444,6 +637,46 @@
                   "type": "object",
                   "title": "Response List Installed Api Plugins Get"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/updates": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Updates",
+        "description": "Each GitHub-sourced plugin's update answer, from the core (open\nread, the list's tier): ``{plugins: {slug: {state, latest, notes, ...}}}``.\nRelease notes are plain text. A core that doesn't answer reads as an\nempty map, never as \"up to date\".",
+        "operationId": "updates_api_plugins_updates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plugins/updates/check": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Check Updates",
+        "description": "**Check now** \u2014 ``{}`` for every GitHub-installed plugin, or\n``{\"slug\": ...}`` for one. Admin-gated by the core.",
+        "operationId": "check_updates_api_plugins_updates_check_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -4181,9 +4414,1097 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "title": "Response Put Person Mix Api People  Person Id  Music Mix Put"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not this person's device, or {\"detail\", \"code\": \"claim_key_required\"} without its claim key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding": {
+      "get": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Get State",
+        "operationId": "get_state_api_media_understanding_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get State Api Media Understanding Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/settings": {
+      "put": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Put Settings",
+        "operationId": "put_settings_api_media_understanding_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Settings Api Media Understanding Settings Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/pause": {
+      "post": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Pause",
+        "operationId": "pause_api_media_understanding_pause_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Pause Api Media Understanding Pause Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/run-now": {
+      "post": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Run Now",
+        "operationId": "run_now_api_media_understanding_run_now_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Run Now Api Media Understanding Run Now Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/rescan": {
+      "post": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Rescan",
+        "operationId": "rescan_api_media_understanding_rescan_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "type": "object",
+                  "title": "Response Rescan Api Media Understanding Rescan Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media-understanding/excluded": {
+      "post": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Add Excluded",
+        "operationId": "add_excluded_api_media_understanding_excluded_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Put Person Mix Api People  Person Id  Music Mix Put"
+                  "title": "Response Add Excluded Api Media Understanding Excluded Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Remove Excluded",
+        "operationId": "remove_excluded_api_media_understanding_excluded_delete",
+        "parameters": [
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "title": "Library Id"
+            }
+          },
+          {
+            "name": "prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Prefix"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Remove Excluded Api Media Understanding Excluded Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/media/search": {
+      "get": {
+        "tags": [
+          "media-understanding"
+        ],
+        "summary": "Media Search",
+        "operationId": "media_search_api_media_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 300,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 40,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 8
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Media Search Api Media Search Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/status": {
+      "get": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Status",
+        "operationId": "status_api_faces_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Status Api Faces Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/people": {
+      "get": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "People",
+        "operationId": "people_api_faces_people_get",
+        "parameters": [
+          {
+            "name": "more",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "More"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response People Api Faces People Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/hidden": {
+      "get": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Hidden Groups",
+        "operationId": "hidden_groups_api_faces_hidden_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Hidden Groups Api Faces Hidden Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/groups/{group_id}": {
+      "get": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Group",
+        "operationId": "group_api_faces_groups__group_id__get",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Group Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Group Api Faces Groups  Group Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/people/{person_id}/items": {
+      "get": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Person Items",
+        "description": "``cursor`` (the ``next_cursor`` of the page before) stands in for\n``offset``: the dashboard's grid loads as it scrolls (usePagedList).",
+        "operationId": "person_items_api_faces_people__person_id__items_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          },
+          {
+            "name": "confirmed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Confirmed"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(image|video)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 8
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Person Items Api Faces People  Person Id  Items Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/groups/{group_id}/name": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Name Group",
+        "operationId": "name_group_api_faces_groups__group_id__name_post",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Name Group Api Faces Groups  Group Id  Name Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/groups/{group_id}/hide": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Hide Group",
+        "operationId": "hide_group_api_faces_groups__group_id__hide_post",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Hide Group Api Faces Groups  Group Id  Hide Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/face/{face_id}/confirm": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Confirm",
+        "description": "Confirm a face (its suggestion, or ``person_id``). Moving a face that\nis already someone's (suggested or confirmed, or in a named group) to a\ndifferent person, or confirming a face in a hidden group, is admin.",
+        "operationId": "confirm_api_faces_face__face_id__confirm_post",
+        "parameters": [
+          {
+            "name": "face_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Face Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Confirm Api Faces Face  Face Id  Confirm Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/face/{face_id}/not-this-person": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Not This Person",
+        "operationId": "not_this_person_api_faces_face__face_id__not_this_person_post",
+        "parameters": [
+          {
+            "name": "face_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Face Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Not This Person Api Faces Face  Face Id  Not This Person Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/merge": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Merge",
+        "operationId": "merge_api_faces_merge_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Merge Api Faces Merge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/split": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Split",
+        "operationId": "split_api_faces_split_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Split Api Faces Split Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/people/{person_id}/forget": {
+      "post": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Forget",
+        "description": "Forget one person's face: an admin, or that person's own claimed\nphone or browser (claim key, not a shared screen, claimed over 10\nminutes ago). Works with faces on or off (off, there is nothing left\nbut the denylist entry it adds when it can).",
+        "operationId": "forget_api_faces_people__person_id__forget_post",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Forget Api Faces People  Person Id  Forget Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/denylist": {
+      "get": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Denylist",
+        "description": "The \"forget my face\" entries (admin): ids and dates only, never the\nsignature. Each entry is one forgotten face, tied to nobody.",
+        "operationId": "denylist_api_faces_denylist_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Denylist Api Faces Denylist Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/faces/denylist/{entry_id}": {
+      "delete": {
+        "tags": [
+          "faces"
+        ],
+        "summary": "Delete Denylist Entry",
+        "description": "Undo a \"forget my face\" (admin): the face may be learned again from\nphotos analysed from now on (the photos it was forgotten from are\nlooked at again for faces).",
+        "operationId": "delete_denylist_entry_api_faces_denylist__entry_id__delete",
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Entry Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Denylist Entry Api Faces Denylist  Entry Id  Delete"
                 }
               }
             }
@@ -5752,7 +7073,7 @@
           "people"
         ],
         "summary": "Delete Person",
-        "description": "The same delete as the voice \"forget me\" path (which runs it only\nfor a voice that matches the person's own samples; this is the\nadmin's way), in one transaction:\n\n* what they said (owner, 2026-10-17): every ``conversation_log`` and\n  ``intents_log`` row voice identification attributed to them as the\n  speaker, and the short-term conversation of the sessions those turns\n  were in (``voice_history.delete_person_history``). A turn in which\n  someone else said their name is the other speaker's and stays;\n* then the person: their voice samples, memories, favorites,\n  preferences and listening history (``music_listens``, V051) go with\n  the row (FK cascades). What other tables keep of them (a chat-mic\n  message's speaker mark, an alias they taught, a phone or browser\n  claimed as theirs, a room's music being for them) lapses to NULL.",
+        "description": "The same delete as the voice \"forget me\" path (which runs it only\nfor a voice that matches the person's own samples; this is the\nadmin's way), in one transaction:\n\n* what they said (owner, 2026-10-17): every ``conversation_log`` and\n  ``intents_log`` row voice identification attributed to them as the\n  speaker, and the short-term conversation of the sessions those turns\n  were in (``voice_history.delete_person_history``). A turn in which\n  someone else said their name is the other speaker's and stays;\n* then the person: their voice samples, memories, favorites,\n  preferences and listening history (``music_listens``, V051) go with\n  the row (FK cascades). What other tables keep of them (a chat-mic\n  message's speaker mark, an alias they taught, a phone or browser\n  claimed as theirs, a room's music being for them) lapses to NULL.\n\nPlugins are told (SDK 1.18, ``core.voice_history_deleted``) by the\ncore, the process their event bus lives in: the forget is recorded in\nthis transaction, and after the commit this asks the core to announce\nit (``POST /v1/admin/voice-history/announce-forgets``). If the core is\ndown, the delete still succeeds and the core announces it when back.",
         "operationId": "delete_person_api_people__person_id__delete",
         "parameters": [
           {
@@ -7319,6 +8640,864 @@
         }
       }
     },
+    "/api/satellites/{satellite_id}/support/allow": {
+      "post": {
+        "summary": "Allow",
+        "description": "Turn \"Allow support sessions\" on: security tier and a password\nsign-in within five minutes, here and at the core.",
+        "operationId": "allow_api_satellites__satellite_id__support_allow_post",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{satellite_id}/support/disallow": {
+      "post": {
+        "summary": "Disallow",
+        "description": "Turn it off (any admin); an open session on it ends.",
+        "operationId": "disallow_api_satellites__satellite_id__support_disallow_post",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{satellite_id}/support/open": {
+      "post": {
+        "summary": "Open Session",
+        "description": "Open a session: the core checks the password typed again (with the\nlogin backoff, keyed on the forwarded address), the switch, the\nsatellite's declared ability. Answers the socket's ticket.",
+        "operationId": "open_session_api_satellites__satellite_id__support_open_post",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/{session_id}/end": {
+      "post": {
+        "summary": "End",
+        "description": "End a session: the admin, or any paired household device.",
+        "operationId": "end_api_support_sessions__session_id__end_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/active": {
+      "get": {
+        "summary": "Active",
+        "description": "The open sessions, for the banner (every household viewer).",
+        "operationId": "active_api_support_sessions_active_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions": {
+      "get": {
+        "summary": "List Sessions",
+        "operationId": "list_sessions_api_support_sessions_get",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete All",
+        "operationId": "delete_all_api_support_sessions_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/{session_id}/transcript": {
+      "get": {
+        "summary": "Transcript",
+        "description": "The transcript as JSON (``text`` is plain text: the page sets it as\ntext, never as HTML).",
+        "operationId": "transcript_api_support_sessions__session_id__transcript_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/{session_id}/transcript.cast": {
+      "get": {
+        "summary": "Transcript Download",
+        "description": "The asciicast file as a download: ``text/plain``, an attachment,\n``nosniff`` and the ``sandbox`` CSP, so it never renders as a page.",
+        "operationId": "transcript_download_api_support_sessions__session_id__transcript_cast_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support-sessions/{session_id}": {
+      "delete": {
+        "summary": "Delete One",
+        "operationId": "delete_one_api_support_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms": {
+      "get": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "List Rooms",
+        "description": "Every room with its satellites, and the merges on offer.",
+        "operationId": "list_rooms_api_rooms_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response List Rooms Api Rooms Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Create Room",
+        "operationId": "create_room_api_rooms_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Create Room Api Rooms Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}": {
+      "patch": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Rename Room",
+        "operationId": "rename_room_api_rooms__room_id__patch",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomName"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Rename Room Api Rooms  Room Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Delete Room",
+        "operationId": "delete_room_api_rooms__room_id__delete",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Delete Room Api Rooms  Room Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/merge": {
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Merge Rooms",
+        "operationId": "merge_rooms_api_rooms__room_id__merge_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRooms"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Merge Rooms Api Rooms  Room Id  Merge Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/links": {
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Link Rooms",
+        "description": "\"Rooms that can hear this one\": link two rooms into one wake group.",
+        "operationId": "link_rooms_api_rooms__room_id__links_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkRoom"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Link Rooms Api Rooms  Room Id  Links Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/links/{other_room_id}": {
+      "delete": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Unlink Rooms",
+        "operationId": "unlink_rooms_api_rooms__room_id__links__other_room_id__delete",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "other_room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Other Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Unlink Rooms Api Rooms  Room Id  Links  Other Room Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/links/{other_room_id}/dismiss": {
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Dismiss Link Suggestion",
+        "description": "\"Not now\" on the Rooms page's suggestion; remembered.",
+        "operationId": "dismiss_link_suggestion_api_rooms__room_id__links__other_room_id__dismiss_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "other_room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Other Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Dismiss Link Suggestion Api Rooms  Room Id  Links  Other Room Id  Dismiss Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{satellite_id}/room": {
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Move Satellite",
+        "operationId": "move_satellite_api_satellites__satellite_id__room_post",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomChoice"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Move Satellite Api Satellites  Satellite Id  Room Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{satellite_id}/name": {
+      "patch": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Name Satellite",
+        "operationId": "name_satellite_api_satellites__satellite_id__name_patch",
+        "parameters": [
+          {
+            "name": "satellite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Satellite Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SatelliteName"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Name Satellite Api Satellites  Satellite Id  Name Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/calibrate": {
+      "post": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Calibrate Room",
+        "description": "\"Tune the speakers\": a chirp from each speaker in turn, a few seconds\nper speaker; the answer says what was tuned and what kept its value.",
+        "operationId": "calibrate_room_api_rooms__room_id__calibrate_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Calibrate Room Api Rooms  Room Id  Calibrate Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites": {
       "get": {
         "tags": [
@@ -8021,6 +10200,51 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Satellite"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{room_id}/media": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Get Room Media",
+        "description": "Photo and video results asked for by voice in this room, while its\nscreen shows them (1.5.0, domovoi/room_media.py): ``{\"media\": null |\n{id, said, count, more, expires_in_ms, items: [{kind, thumb, caption,\ndate, at_s}]}}``. For the video satellite's kiosk page\n(web/static/display.html); ``thumb`` is this dashboard's thumbnail or\nposter route. Read from the Domovoi server's device-read\n``GET /v1/admin/room-media/{room_id}`` with the caller's credentials\n(the open snapshot carries only which results are up); null when the\nroom shows none or the server isn't answering. A caption is a picture\nmodel's words: draw it as text.",
+        "operationId": "get_room_media_api_satellites__room_id__media_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Room Media Api Satellites  Room Id  Media Get"
                 }
               }
             }
@@ -9209,6 +11433,97 @@
               "minimum": 1024,
               "default": 1048576,
               "title": "Max Bytes"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{room_id}/diagnostics": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Run Satellite Diagnostics",
+        "description": "Run every read-only diagnostics probe on a connected satellite that\ndeclared ``diagnostics``. Passes the core's answer through (404 offline,\n409 not declared, 429 rate-limited).",
+        "operationId": "run_satellite_diagnostics_api_satellites__room_id__diagnostics_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{room_id}/diagnostics/{probe}": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Run Satellite Diagnostic",
+        "description": "Run one probe by name (a name not in the core's allowlist is 404\nthere, and nothing reaches the satellite).",
+        "operationId": "run_satellite_diagnostic_api_satellites__room_id__diagnostics__probe__post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "probe",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Probe"
             }
           }
         ],
@@ -10936,6 +13251,66 @@
         "summary": "Get Server Identity",
         "description": "This server's fingerprint \u2014 the string a satellite is prepared with.\n\nShown under Settings \u2192 About so a person can read it off the screen\nand compare it with the one printed on a prepared card, which is the\nwhole point of a fingerprint: it turns \"is this the right server?\"\ninto something a human can answer. Read-only proxy of the core's\n``/v1/health`` identity block; the public key never implies anything\nthe core did not already publish there.",
         "operationId": "get_server_identity_api_config_server_identity_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/server-identity/backup": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Download Identity Backup",
+        "description": "The house identity backup (1.5.0, S3-4): this server's private key,\nfor a reinstall to be given so the rooms keep trusting it. The security\ntier and a password sign-in within five minutes here, and both again\nat the core (``/v1/admin/server-identity/backup``), which also checks\nthe password typed again behind the login backoff. The file is relayed\nto the admin who asked, never kept, never logged.",
+        "operationId": "download_identity_backup_api_config_server_identity_backup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityBackupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/updates/notice": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Updates Notice",
+        "description": "Home's update row (1.5.0): ``{available, version, highlights,\nfound_by, found_at, updating}``, or ``{available: false, updating:\nfalse}``. Proxy of the core's ``GET /v1/updates/notice``: only a signed\nrelease makes a notice, never a commit on main; nothing here installs.",
+        "operationId": "updates_notice_api_updates_notice_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -17267,6 +19642,467 @@
         }
       }
     },
+    "/api/offline-kit": {
+      "get": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Status",
+        "description": "The card for the boxes ticked: sizes, the fit check, the refusal or\nwarning, the job and the finished kit.",
+        "operationId": "offline_kit_status_api_offline_kit_get",
+        "parameters": [
+          {
+            "name": "targets",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Targets"
+            }
+          },
+          {
+            "name": "includes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Includes"
+            }
+          },
+          {
+            "name": "household",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Household"
+            }
+          },
+          {
+            "name": "stick_gb",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stick Gb"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Make",
+        "description": "Start making the kit. 409 ``{reason, message}`` when it can't\n(``behind``: send again with ``force`` for \"Make it anyway\").",
+        "operationId": "offline_kit_make_api_offline_kit_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineKitBuild"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/cancel": {
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Cancel",
+        "description": "Stop the kit being made; nothing it made is kept.",
+        "operationId": "offline_kit_cancel_api_offline_kit_cancel_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/update": {
+      "get": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update Status",
+        "description": "The update from a kit: what was sent, its state, the last error.",
+        "operationId": "offline_kit_update_status_api_offline_kit_update_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update Begin",
+        "description": "The body is the kit's kit.json. 409/422 ``{reason, message}`` when\nthe kit can't update this server; else the files to send.",
+        "operationId": "offline_kit_update_begin_api_offline_kit_update_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update Cancel",
+        "description": "Stop the update from a kit and remove what was uploaded.",
+        "operationId": "offline_kit_update_cancel_api_offline_kit_update_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/update/{sid}/file": {
+      "put": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update File",
+        "description": "One chunk of one kit file at ``offset`` (the raw body).",
+        "operationId": "offline_kit_update_file_api_offline_kit_update__sid__file_put",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "title": "Path"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/update/{sid}/apply": {
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Update Apply",
+        "description": "Check the release, move to it and start the update.",
+        "operationId": "offline_kit_update_apply_api_offline_kit_update__sid__apply_post",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/{build_id}/ticket": {
+      "post": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Ticket",
+        "description": "A single-use download ticket for the kit's image (5 minutes), and\nthe dashboard link that uses it.",
+        "operationId": "offline_kit_ticket_api_offline_kit__build_id__ticket_post",
+        "parameters": [
+          {
+            "name": "build_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Build Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/{build_id}/{name}": {
+      "get": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Download",
+        "description": "A finished kit's image, streamed from the core to the browser's\ndownload: how the card downloads a kit that carries household items,\nwith the ``ticket`` the admin minted (or the caller's own Bearer). The\ncore checks either; this route adds no credential.",
+        "operationId": "offline_kit_download_api_offline_kit__build_id___name__get",
+        "parameters": [
+          {
+            "name": "build_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Build Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "ticket",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ticket"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/offline-kit/{build_id}": {
+      "delete": {
+        "tags": [
+          "offline-kit"
+        ],
+        "summary": "Offline Kit Delete",
+        "description": "Remove a finished kit image from the server.",
+        "operationId": "offline_kit_delete_api_offline_kit__build_id__delete",
+        "parameters": [
+          {
+            "name": "build_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Build Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/friend-houses": {
       "get": {
         "tags": [
@@ -17730,6 +20566,201 @@
             "schema": {
               "type": "string",
               "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/apps/notices": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses App Notices",
+        "operationId": "friend_houses_app_notices_api_friend_houses_apps_notices_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/apps": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Apps",
+        "operationId": "friend_houses_apps_api_friend_houses_friends__friend_id__apps_get",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Set Apps",
+        "operationId": "friend_houses_set_apps_api_friend_houses_friends__friend_id__apps_put",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/apps/{slug}": {
+      "put": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Set App",
+        "operationId": "friend_houses_set_app_api_friend_houses_friends__friend_id__apps__slug__put",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/friends/{friend_id}/apps/{slug}/resume": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Resume App",
+        "operationId": "friend_houses_resume_app_api_friend_houses_friends__friend_id__apps__slug__resume_post",
+        "parameters": [
+          {
+            "name": "friend_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Friend Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
             }
           }
         ],
@@ -20354,6 +23385,7 @@
           "chat"
         ],
         "summary": "List Threads",
+        "description": "The threads this caller may see (domovoi/chat_access.py), newest\nfirst, each with ``shared``, ``mine``, ``can_write``, ``can_share``,\n``can_delete``, ``admin_view`` and ``owner_name`` (the owning device's\nname, for an admin; else null).",
         "operationId": "list_threads_api_chat_threads_get",
         "parameters": [
           {
@@ -20392,6 +23424,22 @@
               "title": "Q"
             },
             "description": "Search: threads whose title or any message contains this (case ignored), newest first, at most 100, each with `match_snippet` (the words around the first match in a message)."
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "mine",
+                "all"
+              ],
+              "type": "string",
+              "description": "mine (the default, for everyone): this device's chats and the shared ones. all: every chat in the house, for an admin only (403 `admin_required` otherwise).",
+              "default": "mine",
+              "title": "Scope"
+            },
+            "description": "mine (the default, for everyone): this device's chats and the shared ones. all: every chat in the house, for an admin only (403 `admin_required` otherwise)."
           }
         ],
         "responses": {
@@ -20467,7 +23515,7 @@
           "chat"
         ],
         "summary": "Patch Thread",
-        "description": "Rename and/or archive a thread. A title set here is the person's\n(``title_by_user``): the model's title job never writes over it. A\nblank title is refused (400).",
+        "description": "Rename and/or archive a thread, its internet chip, or share it with\nthe household (``shared``). A title set here is the person's\n(``title_by_user``): the model's title job never writes over it. A\nblank title is refused (400). Answers the thread as the list gives it.\n\nSharing is the owning device's or an admin's (403 ``not_yours``);\nrenaming, archiving and the chip are a write (an admin can't write in\nanother device's private chat: 403 ``admin_read_only``); 404 for a\nchat the caller can't see, the body a missing one gets. A shared\nscreen's chats stay shared (409 ``shared_screen``). The switch waits\nfor a send that started before it (chat_access: the row lock).",
         "operationId": "patch_thread_api_chat_threads__thread_id__patch",
         "parameters": [
           {
@@ -20565,6 +23613,7 @@
           "chat"
         ],
         "summary": "List Messages",
+        "description": "The thread's messages, oldest first, and ``thread``: the thread as\nthe list gives it (its access fields: ``can_write``, ``admin_view``\u2026).\nNo device ids: a user row says ``mine`` (sent from this caller's\ndevice, by its device key) and ``device_name``.",
         "operationId": "list_messages_api_chat_threads__thread_id__messages_get",
         "parameters": [
           {
@@ -21330,7 +24379,7 @@
           "chat"
         ],
         "summary": "List All Drafts",
-        "description": "Every chat's drafts, newest first (the Chat page lists them even with\nAI features off, so a draft can still be saved).",
+        "description": "The drafts of every chat the caller can see, newest first (the Chat\npage lists them even with AI features off, so a draft can still be\nsaved).",
         "operationId": "list_all_drafts_api_chat_drafts_get",
         "parameters": [
           {
@@ -21422,7 +24471,7 @@
           "chat"
         ],
         "summary": "Get Draft",
-        "description": "The draft and every version (oldest first): its markdown, the plain\ntext the changes view shows (``display``), and ``changes`` against the\nversion before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``\nremoved; null for v1).",
+        "description": "The draft and every version (oldest first): its markdown, the plain\ntext the changes view shows (``display``), and ``changes`` against the\nversion before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``\nremoved; null for v1). No device ids: each version says ``mine``\n(made on this caller's device, by its device key) and ``device_name``.",
         "operationId": "get_draft_api_chat_drafts__draft_id__get",
         "parameters": [
           {
@@ -22605,7 +25654,7 @@
           "help"
         ],
         "summary": "Deliveries",
-        "description": "Help steps sent by voice (V035): newest first, or after ``since_id``\noldest first. The app reads its owner's on start and after a\n``help_deliveries.changed`` event.",
+        "description": "Results sent by voice to a person's phones (V035; a voice photo\nsearch's since 1.5.0): newest first, or after ``since_id`` oldest\nfirst. The app reads its owner's on start and after a\n``help_deliveries.changed`` event. A delivery made to one phone (1.5.0,\nV086) is listed only to that phone (by its device key) and to admins.",
         "operationId": "deliveries_api_help_deliveries_get",
         "parameters": [
           {
@@ -26046,6 +29095,50 @@
                 "type": "null"
               }
             ]
+          },
+          "satellite_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Satellite Id"
+          },
+          "mic_satellite_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mic Satellite Id"
+          },
+          "room_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Name"
+          },
+          "heard_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heard By"
           }
         },
         "type": "object",
@@ -26253,6 +29346,28 @@
               }
             ],
             "title": "Claim Key"
+          },
+          "device_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Key"
+          },
+          "device_key_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Key Ok"
           }
         },
         "type": "object",
@@ -26335,6 +29450,11 @@
               }
             ],
             "title": "Owner Person Id"
+          },
+          "want_device_key": {
+            "type": "boolean",
+            "title": "Want Device Key",
+            "default": false
           }
         },
         "type": "object",
@@ -27091,6 +30211,17 @@
             "maxLength": 4096,
             "minLength": 1,
             "title": "Rel Path"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
           }
         },
         "type": "object",
@@ -27910,6 +31041,17 @@
         ],
         "title": "HouseholdListItem"
       },
+      "IdentityBackupRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "IdentityBackupRequest"
+      },
       "ImportRequest": {
         "properties": {
           "source_library_id": {
@@ -28577,6 +31719,21 @@
         },
         "type": "object",
         "title": "LimitsBody"
+      },
+      "LinkRoom": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Room Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id"
+        ],
+        "title": "LinkRoom"
       },
       "ListCreate": {
         "properties": {
@@ -29457,6 +32614,24 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MergeRooms": {
+        "properties": {
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Rooms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rooms"
+        ],
+        "title": "MergeRooms"
+      },
       "MicDspMarkRequest": {
         "properties": {
           "text": {
@@ -30170,6 +33345,73 @@
         ],
         "title": "NowPlayingSong"
       },
+      "OfflineKitBuild": {
+        "properties": {
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Targets"
+          },
+          "includes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Includes"
+          },
+          "household": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Household"
+          },
+          "stick_gb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stick Gb"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "OfflineKitBuild"
+      },
+      "OpenRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password",
+            "default": ""
+          },
+          "cols": {
+            "type": "integer",
+            "title": "Cols",
+            "default": 100
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows",
+            "default": 30
+          }
+        },
+        "type": "object",
+        "title": "OpenRequest"
+      },
       "OverrideIn": {
         "properties": {
           "discovery_favorites": {
@@ -30752,6 +33994,59 @@
           "events"
         ],
         "title": "PhoneCalendarStored"
+      },
+      "PhoneGrantExchangeRequest": {
+        "properties": {
+          "grant": {
+            "type": "string",
+            "title": "Grant"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grant",
+          "device_id"
+        ],
+        "title": "PhoneGrantExchangeRequest"
+      },
+      "PhoneGrantRequest": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "label"
+        ],
+        "title": "PhoneGrantRequest"
+      },
+      "PhoneGrantRevokeRequest": {
+        "properties": {
+          "grant": {
+            "type": "string",
+            "title": "Grant"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grant"
+        ],
+        "title": "PhoneGrantRevokeRequest"
       },
       "PhoneLookupBody": {
         "properties": {
@@ -32478,6 +35773,37 @@
         ],
         "title": "RoomBody"
       },
+      "RoomChoice": {
+        "properties": {
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "new_room_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Room Name"
+          }
+        },
+        "type": "object",
+        "title": "RoomChoice",
+        "description": "An existing room's id OR a name for a new room."
+      },
       "RoomLabelRequest": {
         "properties": {
           "room_label": {
@@ -32580,6 +35906,21 @@
         ],
         "title": "RoomLyrics",
         "description": "``GET /api/music/now-playing/{room_id}/lyrics`` \u2014 the room's song,\nwhere it is, and its lyrics in one read. ``read_at`` is the server's\nclock right after the MPD read (informational: a client anchors its own\ninterpolation on when IT received the answer). ``line_index`` is the\nlast timed line at ``elapsed_sec`` (-1 before the first), only for\n``synced`` lyrics. ``track_id`` / ``lyrics`` are null when nothing plays\nor the song is not a library track."
+      },
+      "RoomName": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "RoomName"
       },
       "RoomQueue": {
         "properties": {
@@ -33210,10 +36551,49 @@
             ],
             "title": "Supports"
           },
+          "diagnostics": {
+            "type": "boolean",
+            "title": "Diagnostics",
+            "default": false
+          },
+          "support_allowed": {
+            "type": "boolean",
+            "title": "Support Allowed",
+            "default": false
+          },
+          "support_shell": {
+            "type": "boolean",
+            "title": "Support Shell",
+            "default": false
+          },
+          "support_key_pinned": {
+            "type": "boolean",
+            "title": "Support Key Pinned",
+            "default": false
+          },
+          "support_key_changed": {
+            "type": "boolean",
+            "title": "Support Key Changed",
+            "default": false
+          },
           "mic_dsp": {
             "type": "boolean",
             "title": "Mic Dsp",
             "default": false
+          },
+          "mic_dsp_satellites": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mic Dsp Satellites"
+          },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/SatelliteDevice"
+            },
+            "type": "array",
+            "title": "Devices"
           },
           "upgrade": {
             "anyOf": [
@@ -33297,6 +36677,30 @@
             "minLength": 1,
             "pattern": "^[0-9]+$",
             "title": "Code"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "new_room_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Room Name"
           }
         },
         "type": "object",
@@ -33305,6 +36709,61 @@
         ],
         "title": "SatelliteApproveRequest",
         "description": "Approve a parked satellite by the code it is showing and saying.\n\nThe dashboard never renders the code, so this is the operator copying\nit off the device in the room \u2014 which is what makes the approval a\nstatement about a device rather than about a room name. The core\ncompares it in constant time and counts the attempt."
+      },
+      "SatelliteDevice": {
+        "properties": {
+          "satellite_id": {
+            "type": "string",
+            "title": "Satellite Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "connected": {
+            "type": "boolean",
+            "title": "Connected",
+            "default": false
+          },
+          "diagnostics": {
+            "type": "boolean",
+            "title": "Diagnostics",
+            "default": false
+          },
+          "support_allowed": {
+            "type": "boolean",
+            "title": "Support Allowed",
+            "default": false
+          },
+          "support_shell": {
+            "type": "boolean",
+            "title": "Support Shell",
+            "default": false
+          },
+          "support_key_pinned": {
+            "type": "boolean",
+            "title": "Support Key Pinned",
+            "default": false
+          },
+          "support_key_changed": {
+            "type": "boolean",
+            "title": "Support Key Changed",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "satellite_id"
+        ],
+        "title": "SatelliteDevice",
+        "description": "One satellite of a room (1.5.0: a room may hold several), for the\ndrawer's device picker: its Diagnostics checks and support session are\naddressed to it by ``satellite_id``. Every field but the id and name is\nabout the CONNECTED device (false while it is offline), except\n``support_allowed`` / ``support_key_pinned``, which are stored."
       },
       "SatelliteDisplay": {
         "properties": {
@@ -33356,6 +36815,24 @@
         "type": "object",
         "title": "SatelliteDisplay",
         "description": "Screen/kiosk state a video satellite reports via display_status:\npanel power, kiosk-browser liveness, backlight percent (null when the\nhardware exposes none \u2014 HDMI monitors typically don't), and the\nconfigured idle behavior. Null field-wise until the device reports."
+      },
+      "SatelliteName": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "title": "SatelliteName"
       },
       "SatellitePairing": {
         "properties": {
@@ -34028,9 +37505,15 @@
       "SpareDeviceEnrolRequest": {
         "properties": {
           "room": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Room"
           },
           "core": {
@@ -34044,12 +37527,21 @@
               }
             ],
             "title": "Core"
+          },
+          "in_room": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Room"
           }
         },
         "type": "object",
-        "required": [
-          "room"
-        ],
         "title": "SpareDeviceEnrolRequest",
         "description": "Settings \u2192 Rooms \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
       },
@@ -34252,6 +37744,17 @@
               }
             ],
             "title": "Title"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
           }
         },
         "type": "object",
@@ -34292,6 +37795,17 @@
               }
             ],
             "title": "Internet Allowed"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
           }
         },
         "type": "object",

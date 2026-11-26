@@ -93,6 +93,8 @@ NEVER_CONTACTED = frozenset({
     "www.geonames.org",        # the GeoNames credit under Settings → Household → Home location
     # Licence, model-card and attribution links, and comments
     "creativecommons.org",
+    "launchpad.net",        # the offline kit's licences/README.txt: where Ubuntu's sources are
+    "sources.debian.org",   # the same note, for Debian's
     "learn.microsoft.com",
     "docs.docker.com",
     "docs.nvidia.com",

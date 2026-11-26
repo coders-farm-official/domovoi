@@ -363,6 +363,54 @@ SCENARIOS["unpaired_fh_unread"] = scenario(
                                      "__body": {"detail": "X-Device-Token or admin session required"}}}),
     SNAP,
 )
+# Update notices (1.5.0): a new signed release, for paired browsers, phones
+# and admins (GET /api/updates/notice, the device tier's read), never an
+# unpaired guest. Only an admin off a shared screen gets Update.
+NOTICE = {"available": True, "version": "1.5.0", "highlights": ["a", "b", "c"], "found_by": "auto",
+          "found_at": iso(NOW - 60 * MIN), "updating": False}
+SCENARIOS["paired_update"] = scenario(house(**{"GET /api/updates/notice": NOTICE}), SNAP, ls=PAIRED_LS)
+SCENARIOS["shared_update"] = scenario(house(**{"GET /api/updates/notice": NOTICE}), SNAP, ls=SHARED_LS)
+SCENARIOS["admin_update"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN, "GET /api/updates/notice": NOTICE}),
+    "const before = w.__snap(h);"
+    "await h.click({ type: 'button', text: 'Update' });"
+    "return { before, hash: w.location.hash };",
+    ls=PAIRED_LS,
+)
+SCENARIOS["admin_summary_update"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_CLAIMED, "GET /api/config": cfg("summary"),
+             "GET /api/updates/notice": NOTICE}), SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["updating_notice"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN, "GET /api/updates/notice": {**NOTICE, "updating": True}}),
+    SNAP, ls=PAIRED_LS,
+)
+# An update under way with no notice stored (a house on main, an update
+# started by hand): `updating` is the real update state on its own.
+SCENARIOS["updating_without_notice"] = scenario(
+    house(**{"GET /api/auth/status": STATUS_ADMIN,
+             "GET /api/updates/notice": {"available": False, "updating": True}}), SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["member_updating_without_notice"] = scenario(
+    house(**{"GET /api/updates/notice": {"available": False, "updating": True}}), SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["no_notice"] = scenario(
+    house(**{"GET /api/updates/notice": {"available": False, "updating": False}}), SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["bad_version_notice"] = scenario(
+    house(**{"GET /api/updates/notice": {**NOTICE, "version": "<b>9</b> 1.5.0 and a very long line"}}),
+    SNAP, ls=PAIRED_LS,
+)
+SCENARIOS["unpaired_update"] = scenario(
+    house(**{"GET /api/updates/notice": NOTICE,
+             "GET /api/satellites": {"__status": 401,
+                                     "__body": {"detail": "X-Device-Token or admin session required"}}}),
+    SNAP,
+)
+SCENARIOS["paired_notice_refused"] = scenario(
+    house(**{"GET /api/updates/notice": {"__status": 401, "__body": {"detail": "X-Device-Token required"}}}),
+    SNAP, ls=PAIRED_LS,
+)
 SCENARIOS["admin"] = scenario(
     house(**{
         "GET /api/auth/status": STATUS_ADMIN,
@@ -492,6 +540,24 @@ SCENARIOS["stop_all"] = scenario(
     ls=PAIRED_LS,
 )
 SCENARIOS["one_playing_no_stop_all"] = scenario(house(), SNAP, ls=PAIRED_LS)
+
+# Photos and videos: the backlog chip (1.5.0) -------------------------------
+def _mu(enabled: bool = True, photos_left: int = 7, videos_total: int = 2, paused: bool = False) -> dict:
+    return {"settings": {"enabled": enabled, "paused": paused},
+            "progress": {"photos": {"total": 3000, "done": 3000 - photos_left, "left": photos_left, "failed": 0},
+                         "videos": {"total": videos_total, "done": videos_total, "left": 0, "failed": 0}}}
+
+
+SCENARIOS["media_backlog"] = scenario(
+    house(**{"GET /api/media-understanding": _mu()}), SNAP, ls=PAIRED_LS)
+SCENARIOS["media_backlog_photos_paused"] = scenario(
+    house(**{"GET /api/media-understanding": _mu(videos_total=0, paused=True)}), SNAP, ls=PAIRED_LS)
+SCENARIOS["media_done"] = scenario(
+    house(**{"GET /api/media-understanding": _mu(photos_left=0)}), SNAP, ls=PAIRED_LS)
+SCENARIOS["media_off"] = scenario(
+    house(**{"GET /api/media-understanding": _mu(enabled=False)}), SNAP, ls=PAIRED_LS)
+SCENARIOS["media_shared"] = scenario(
+    house(**{"GET /api/media-understanding": _mu()}), SNAP, ls=SHARED_LS)
 SCENARIOS["core_down"] = scenario(
     house(**{"GET /api/auth/status": STATUS_ADMIN,
              "GET /api/health": {"status": "degraded", "db_reachable": True,
@@ -952,6 +1018,39 @@ SCENARIOS["tick_rereads_the_setting"] = scenario(
     ls=PAIRED_LS,
 )
 
+# Plugin cards (SDK 1.15): the registry, the quiet slot ----------------------
+_CARD_MANIFEST = {"plugins": [
+    {"slug": "wx", "status": "ok", "home_cards": [
+        {"id": "today", "title": "Today", "component": "TodayCard", "default_on": True, "order": 20},
+        {"id": "boom", "title": "Boom", "component": "BrokenCard", "default_on": True, "order": 10},
+        {"id": "none", "title": "None", "component": "EmptyCard", "default_on": True, "order": 30},
+        {"id": "gone", "title": "Gone", "component": "NotRegistered", "default_on": True, "order": 40},
+        {"id": "off", "title": "Off", "component": "OffCard", "default_on": False, "order": 50}]},
+    {"slug": "dead", "status": "disabled", "home_cards": [
+        {"id": "x", "title": "X", "component": "DeadCard", "default_on": True, "order": 1}]},
+]}
+_CARD_SETUP = (
+    "const w = h.global('window'); const R = h.global('React');"
+    "w.DomovoiPlugins = { wx: { homeCards: {"
+    " TodayCard: (p) => R.createElement('div', { className: 'wx-card', 'data-quiet': String(p.quiet) },"
+    "   'sunny ' + p.title),"
+    " BrokenCard: () => { throw new Error('boom'); },"
+    " EmptyCard: () => null,"
+    " OffCard: () => R.createElement('div', { className: 'wx-off' }, 'off') } },"
+    " dead: { homeCards: { DeadCard: () => R.createElement('div', { className: 'dead-card' }, 'dead') } } };"
+    "h.render(); await w.__flush(h);"
+    "return { cards: h.findAll((e) => w.__cls(e).includes('wx-card')).map((e) => ({ text: w.__deepText(e), quiet: e.props['data-quiet'] })),"
+    " off: h.findAll((e) => w.__cls(e).includes('wx-off')).length,"
+    " dead: h.findAll((e) => w.__cls(e).includes('dead-card')).length,"
+    " slot: h.findAll((e) => w.__cls(e).includes('home-plugin-cards')).length,"
+    " snap: w.__snap(h) };"
+)
+SCENARIOS["plugin_cards"] = {**scenario(house(), "", ls=PAIRED_LS, manifest=_CARD_MANIFEST),
+                             "script": _CARD_SETUP}
+SCENARIOS["plugin_cards_none"] = scenario(
+    house(), "return { slot: h.findAll((e) => w.__cls(e).includes('home-plugin-cards')).length };",
+    ls=PAIRED_LS)
+
 
 # ─── run ─────────────────────────────────────────────────────────────────
 
@@ -1056,6 +1155,66 @@ def test_a_household_member_sees_unread_friend_messages_linking_to_messages(driv
     unpaired = driven["unpaired_fh_unread"]
     assert "GET /api/friend-houses/unread" not in unpaired["fetches"]
     assert "fh-unread" not in {r["key"] for r in unpaired["attention"]}
+
+
+def _update_row(snap: dict) -> dict | None:
+    return next((r for r in snap["attention"] if r["key"] == "update-available"), None)
+
+
+def test_a_household_member_reads_the_update_notice_without_a_button(driven) -> None:
+    snap = driven["paired_update"]
+    row = _update_row(snap)
+    assert row and row["text"] == "Domovoi 1.5.0 is availableAn admin can install it."
+    assert row["href"] is None
+    assert not any(b["text"] == "Update" for b in snap["buttons"])
+    assert "/api/updates/notice" in _fetched(snap)
+    assert snap["modal"] is False and snap["pair"] is False
+
+
+def test_a_shared_screen_gets_the_line_not_the_button(driven) -> None:
+    snap = driven["shared_update"]
+    assert _update_row(snap)["text"].endswith("An admin can install it.")
+    assert not any(b["text"] == "Update" for b in snap["buttons"])
+
+
+def test_an_admin_gets_update_which_opens_the_about_card_s_own_action(driven) -> None:
+    out = driven["admin_update"]
+    row = _update_row(out["before"])
+    assert row["text"] == "Domovoi 1.5.0 is availableUpdate", "the words, then the button"
+    assert any(b["text"] == "Update" for b in out["before"]["buttons"])
+    assert out["hash"] == "#settings/about/update-now"
+
+
+def test_the_update_row_shows_under_a_summary_line_too(driven) -> None:
+    snap = driven["admin_summary_update"]
+    assert _update_row(snap)["text"].startswith("Domovoi 1.5.0 is available")
+
+
+def test_while_updating_anyone_reads_updating_and_no_button(driven) -> None:
+    snap = driven["updating_notice"]
+    assert _update_row(snap)["text"] == "Domovoi is restarting…"
+    assert not any(b["text"] == "Update" for b in snap["buttons"])
+
+
+def test_any_update_under_way_reads_updating_even_without_a_notice(driven) -> None:
+    for name in ("updating_without_notice", "member_updating_without_notice"):
+        snap = driven[name]
+        assert _update_row(snap)["text"] == "Domovoi is restarting…", name
+        assert not any(b["text"] == "Update" for b in snap["buttons"]), name
+
+
+def test_no_notice_no_row_and_a_refusal_is_quiet(driven) -> None:
+    for name in ("no_notice", "paired_notice_refused", "bad_version_notice"):
+        snap = driven[name]
+        assert _update_row(snap) is None, name
+        assert snap["modal"] is False and snap["pair"] is False, name
+        assert "couldn't check" not in snap["text"], name
+
+
+def test_an_unpaired_guest_never_asks_for_the_notice(driven) -> None:
+    snap = driven["unpaired_update"]
+    assert "/api/updates/notice" not in _fetched(snap)
+    assert _update_row(snap) is None
 
 
 def test_admin_gets_the_admin_rows_from_admin_reads(driven) -> None:
@@ -1793,3 +1952,47 @@ def test_a_guests_refused_calendar_says_how_to_connect(driven) -> None:
     assert guest["modal"] is False and guest["pair"] is False
     # A household reader's failed read is still "unavailable".
     assert "calendar unavailable" in driven["paired_calendar_failed"]["text"]
+
+
+# ─── plugin cards ────────────────────────────────────────────────────────
+
+
+def test_a_registered_enabled_card_renders_with_quiet_and_in_order(driven) -> None:
+    out = driven["plugin_cards"]
+    assert out["cards"] == [{"text": "sunny Today", "quiet": "true"}]
+
+
+def test_failing_empty_unregistered_off_and_disabled_cards_stay_silent(driven) -> None:
+    out = driven["plugin_cards"]
+    assert out["off"] == 0 and out["dead"] == 0
+    blob = out["snap"]["blob"].lower()
+    assert "boom" not in blob and "error" not in blob and "failed" not in blob
+    # the rest of Home is untouched by the broken card
+    assert out["snap"]["rooms"]
+
+
+def test_no_plugin_cards_means_no_slot(driven) -> None:
+    assert driven["plugin_cards_none"]["slot"] == 0
+
+
+# ─── photos and videos: the backlog chip ─────────────────────────────────
+
+
+def test_the_photos_chip_shows_while_a_backlog_runs_and_links_to_settings(driven) -> None:
+    snap = driven["media_backlog"]
+    assert "/api/media-understanding" in _fetched(snap)
+    said = " ".join(snap["text"])
+    assert "Understanding your photos and videos: " in said and "2,995" in said and "3,002" in said
+    assert "#settings/photos-and-videos" in snap["blob"]
+    paused = driven["media_backlog_photos_paused"]
+    said = " ".join(paused["text"])
+    assert "Understanding your photos: " in said and "2,993" in said and "paused" in said
+
+
+def test_no_photos_chip_when_done_off_shared_or_for_a_guest(driven) -> None:
+    for name in ("media_done", "media_off"):
+        assert "Understanding your" not in "".join(driven[name]["text"]), name
+    shared = driven["media_shared"]
+    assert "Understanding your" not in "".join(shared["text"])
+    assert "/api/media-understanding" not in _fetched(shared)
+    assert "/api/media-understanding" not in _fetched(driven["unpaired"]["before"])

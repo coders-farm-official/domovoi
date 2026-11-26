@@ -70,11 +70,16 @@ def test_the_windows_profile_is_a_plain_pc_with_board_windows_pc():
 def test_the_windows_hello_is_the_fixtures_windows_pc_hello():
     want = FIXTURES["devices"]["windows_pc"]["hello"]
     got = client.Satellite(win_cfg())._hello_frame()
-    assert set(got) == set(want)
+    # 1.5.0 also names the device (the fixtures' `rooms` hello_adds).
+    assert set(got) == set(want) | set(FIXTURES["rooms"]["hello_adds"])
+    assert got["satellite_id"] == got["room_id"]
     for key in ("type", "sat_type", "mic_enabled", "speech_pause", "capture_control",
-                "announce_after_session_end", "board", "supports_full_duplex", "supports"):
+                "announce_after_session_end", "board", "supports_full_duplex"):
         assert got[key] == want[key], key
-    assert not set(got["supports"]) & set(FIXTURES["devices"]["windows_pc"]["expect"]["not_allowed"])
+    # 1.5.0 adds wake_claim to the fixtures' (pre-1.5.0) laptop.
+    adds = FIXTURES["room_turns"]["hello_supports_adds"]
+    assert got["supports"] == [*want["supports"], adds]
+    assert not set(got["supports"]) & (set(FIXTURES["devices"]["windows_pc"]["expect"]["not_allowed"]) - {adds})
     assert not set(got["supports"]) & {"plugin_payloads", "wifi", "leds", "mic_gain", "time_sync", "display"}
 
 

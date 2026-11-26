@@ -41,7 +41,18 @@ struct AudiobookDetailView: View {
     /// also why there is one: ``SaveToDeviceModel`` is one transfer at a time.
     var saves: SaveToDeviceModel?
 
+    /// The shell, for admin on this phone ("remove from server"); nil draws none.
+    var shell: ShellModel?
+
     @Environment(\.dynamicTypeSize) private var typeSize
+
+    @State private var deletes: AdminDeletesModel?
+    @State private var askingRemove = false
+
+    private var adminHeld: Bool {
+        guard let shell else { return false }
+        return deletesAdminHeld(shell.admin.state, sharedScreen: shell.visibility.sharedScreen)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -52,6 +63,7 @@ struct AudiobookDetailView: View {
                         head(book)
                         actions
                         chapters
+                        removeFromServer(book)
                     } else if detail.read.loading {
                         ProgressView()
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -70,7 +82,10 @@ struct AudiobookDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .task { detail.start() }
+        .task {
+            detail.start()
+            if deletes == nil, let shell { deletes = AdminDeletesModel(admin: shell.container.admin) }
+        }
         .onDisappear { detail.stop() }
         // The place is re-read when a plan is answered, which is Android's
         // `produceState(null, bookId, playing, plan)` (`:96-98`) minus the
@@ -358,5 +373,44 @@ struct AudiobookChapterRow: View {
             in: RoundedRectangle(cornerRadius: 6)
         )
         .contentShape(.rect)
+    }
+}
+
+// MARK: - remove from server (admin on this phone)
+
+extension AudiobookDetailView {
+
+    /// "remove from server": admin, only while this phone holds it, and only
+    /// for a path the phone may ask the server to delete
+    /// (``BookRules/safeLibraryPath(_:)``). The same delete the Files page
+    /// makes, in `core:audiobooks`, through the session; Android's words.
+    @ViewBuilder
+    func removeFromServer(_ book: AudiobookRow) -> some View {
+        if adminHeld, let path = BookRules.safeLibraryPath(book.libraryPath) {
+            Button(AdminDeleteWords.removeFromServer) { askingRemove = true }
+                .buttonStyle(InkOutlineButtonStyle(ink: .errInk))
+                .font(.subheadline)
+                .padding(.top, 16)
+                .disabled(deletes?.busy == true)
+                .alert(
+                    Text(verbatim: AdminDeleteWords.removeTitle(book.displayTitle)),
+                    isPresented: $askingRemove
+                ) {
+                    Button(AdminDeleteWords.remove, role: .destructive) {
+                        guard let deletes else { return }
+                        Task { @MainActor in
+                            let out = await deletes.removeBook(path: path, isFolder: book.isFolder, title: book.displayTitle)
+                            library.setToast(out.said)
+                            if out.ok {
+                                library.bookRemoved()
+                                onBack()
+                            }
+                        }
+                    }
+                    Button(AdminDeleteWords.cancel, role: .cancel) {}
+                } message: {
+                    Text(verbatim: AdminDeleteWords.removeBody)
+                }
+        }
     }
 }

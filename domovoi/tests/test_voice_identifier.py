@@ -484,7 +484,8 @@ def store(monkeypatch) -> _Store:
         async def room_samples(self, person_id, room_id, model):
             return [(i, s) for i, p, _e, r, s in self._rows(model) if p == person_id and r == room_id]
 
-        async def add(self, *, person_id, embedding, model, room_id, sample_seconds, claim_of=None):
+        async def add(self, *, person_id, embedding, model, room_id, sample_seconds, claim_of=None,
+                      satellite_id=None, learned=False):
             rows = self._rows(model)
             rows.append((len(st.profiles) + len(st.old) + 1, person_id, embedding, room_id, sample_seconds))
             return rows[-1][0]

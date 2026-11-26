@@ -133,6 +133,12 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
               {"keep_messages": False, "new_address": True}),
     "blocked": ("GET", "/api/friend-houses/blocked", None),
     "unblock": ("DELETE", f"/api/friend-houses/blocked/{HOUSE}", None),
+    # Apps with friends (SDK 1.19): admin only, at both hops
+    "apps": ("GET", "/api/friend-houses/friends/fr0123abcd/apps", None),
+    "set-apps": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps", {"on": True, "apps": ["games"]}),
+    "set-app": ("PUT", "/api/friend-houses/friends/fr0123abcd/apps/games", {"allowed": False}),
+    "resume-app": ("POST", "/api/friend-houses/friends/fr0123abcd/apps/games/resume", None),
+    "app-notices": ("GET", "/api/friend-houses/apps/notices", None),
 }
 _IDS = sorted(ROUTES)
 
@@ -152,6 +158,14 @@ HOUSEHOLD_ROUTES = {
     ("POST", "/api/friend-houses/shared-lists/{space_id}/decline"),
     ("DELETE", "/api/friend-houses/shared-lists/{space_id}"),
 }
+#: The dashboard mirrors the plugin mail service added (design note §6.11).
+FRIEND_APPS_ROUTES = {
+    ("GET", "/api/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/api/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/api/friend-houses/friends/{friend_id}/apps/{slug}"),
+    ("POST", "/api/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
+    ("GET", "/api/friend-houses/apps/notices"),
+}
 # What stays admin, named so a move is a decision, not a slip.
 ADMIN_ROUTES = {
     ("DELETE", "/api/friend-houses/notice"), ("PUT", "/api/friend-houses/settings"),
@@ -167,6 +181,7 @@ ADMIN_ROUTES = {
     ("POST", "/api/friend-houses/shared-lists"),
     ("POST", "/api/friend-houses/friends/{friend_id}/block"), ("GET", "/api/friend-houses/blocked"),
     ("DELETE", "/api/friend-houses/blocked/{house}"),
+    *FRIEND_APPS_ROUTES,
 }
 
 
@@ -785,4 +800,38 @@ async def test_an_unblock_needs_a_house_key(monkeypatch, forwarded) -> None:
         for bad in ("ab" * 31, "AB" * 32, "zz" * 32, "ab" * 33, "fr0123abcd"):
             r = await c.delete(f"/api/friend-houses/blocked/{bad}")
             assert r.status_code == 404, (bad, r.status_code)
+    assert forwarded == []
+
+
+# ─── apps with friends (SDK 1.19): admin only, once the routes exist ─────
+
+FRIEND_APPS_PLANNED = sorted(FRIEND_APPS_ROUTES)
+
+
+def test_the_apps_routes_exist_on_the_security_tier() -> None:
+    assert set(_apps_routes()) == FRIEND_APPS_ROUTES
+
+
+def test_no_apps_route_is_on_the_household_tier() -> None:
+    assert not [r for r in HOUSEHOLD_ROUTES if "/apps" in r[1]]
+    assert not set(FRIEND_APPS_PLANNED) & HOUSEHOLD_ROUTES
+
+
+def _apps_routes() -> list[tuple[str, str]]:
+    return sorted({(m, r.path) for r in iter_route_contexts(web_app.routes)
+                   if getattr(r, "path", "").startswith("/api/friend-houses") and "/apps" in r.path
+                   for m in r.methods})
+
+
+@pytest.mark.asyncio
+async def test_the_household_token_is_refused_on_every_apps_route(monkeypatch, forwarded) -> None:
+    # None exist before the plugin mail service; each one it adds is tried
+    # here with a household phone's token, and must be refused unforwarded.
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=HOUSEHOLD_TOKEN)
+    async with _client({admin_auth.DEVICE_TOKEN_HEADER: HOUSEHOLD_TOKEN}) as c:
+        for method, path in _apps_routes():
+            url = path.replace("{friend_id}", "f1").replace("{slug}", "games")
+            body = {} if method in ("PUT", "POST") else None
+            r = await (c.request(method, url, json=body) if body is not None else c.request(method, url))
+            assert r.status_code in (401, 403), (method, path, r.status_code)
     assert forwarded == []

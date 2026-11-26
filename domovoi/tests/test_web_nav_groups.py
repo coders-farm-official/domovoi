@@ -3,7 +3,8 @@
 Owner design:
 
 * the desktop sidebar is Home (the brand row) · Chat · **Media ▸** (Music,
-  Podcasts, Audiobooks, Videos, and plugin pages that ask for it, such as
+  Podcasts, Audiobooks, Videos, Photos, Faces while faces are on (never on
+  a shared screen), and plugin pages that ask for it, such as
   the radio plugin's Stations) · **Tools ▸** (News, Calendar, Lists, Files) ·
   Plugins; a plugin page with no group is a top-level row, as before
   (Lists joined Tools on 2026-11-11);
@@ -119,14 +120,14 @@ def _toggle(group):
             " h.rerender();")
 
 
-def _resolve(plugins, override, *, shared=False):
+def _resolve(plugins, override, *, shared=False, faces=False):
     return {
         "files": [COMPONENTS], "component": "Sidebar",
         "props": {"route": "home", "counts": {}, "manifest": {"plugins": []}, "badges": {}},
         "fnProps": ["setRoute"], "setup": _setup(shared=shared),
         "script": (
             "const w = h.global('window');"
-            f" const items = w.navItemsFor({json.dumps({'plugins': list(plugins)})}, {{ shared: {json.dumps(shared)}, ai: true }});"
+            f" const items = w.navItemsFor({json.dumps({'plugins': list(plugins)})}, {{ shared: {json.dumps(shared)}, ai: true, faces: {json.dumps(faces)} }});"
             f" return w.resolveNavTree(items, {json.dumps(override)}).map((e) => e.kind === 'item'"
             " ? e.item.route : { group: e.id, label: e.label, open: e.open, items: e.items.map((i) => i.route) });"
         ),
@@ -138,6 +139,8 @@ SCENARIOS = {
     "r_default": _resolve([], None),
     "r_plugins": _resolve([_STATIONS, _IMAGES, _LOOSE], None),
     "r_shared": _resolve([_STATIONS], None, shared=True),
+    "r_faces_on": _resolve([], None, faces=True),
+    "r_shared_faces_on": _resolve([_STATIONS], None, shared=True, faces=True),
     "r_shared_one_tool": _resolve([_STATIONS], {
         "groups": [{"id": "media", "label": "Media", "items": []},
                    {"id": "tools", "label": "Tools", "items": []}],
@@ -264,7 +267,7 @@ def test_one_table_names_the_groups_and_the_manifest_allows_the_same_ids() -> No
     block = block[:block.index("];")]
     assert re.findall(r"id: '(\w+)'", block) == list(NAV_GROUPS) == ["media", "tools"]
     assert re.findall(r"label: '([^']+)'", block) == ["Media", "Tools"]
-    assert "routes: ['music', 'podcasts', 'audiobooks', 'videos']" in block
+    assert "routes: ['music', 'podcasts', 'audiobooks', 'videos', 'photos', 'faces']" in block
     assert "routes: ['news', 'calendar', 'lists', 'files']" in block
     # Media starts open, so Music is one click from a cold load.
     assert re.search(r"id: 'media'[^}]*open: true", block)
@@ -274,8 +277,10 @@ def test_one_table_names_the_groups_and_the_manifest_allows_the_same_ids() -> No
 
 # ─── the resolver ────────────────────────────────────────────────────────
 
+# Photos (1.5.0) is in Media; Faces only while faces are on, which they
+# aren't unless a scenario says so.
 MEDIA = {"group": "media", "label": "Media", "open": True,
-         "items": ["music", "podcasts", "audiobooks", "videos"]}
+         "items": ["music", "podcasts", "audiobooks", "videos", "photos"]}
 TOOLS = {"group": "tools", "label": "Tools", "open": False, "items": ["news", "calendar", "lists", "files"]}
 
 
@@ -284,12 +289,23 @@ def test_the_defaults(driven) -> None:
 
 
 def test_plugin_pages_join_their_group_or_stay_top_level(driven) -> None:
-    media = {**MEDIA, "items": ["music", "podcasts", "audiobooks", "videos", "images", "stations"]}
+    media = {**MEDIA, "items": ["music", "podcasts", "audiobooks", "videos", "images", "photos", "stations"]}
     assert driven["r_plugins"] == ["chat", media, TOOLS, "loose", "plugins"]
 
 
 def test_an_unknown_group_is_top_level(driven) -> None:
     assert driven["r_lone_plugin_group"] == ["chat", MEDIA, TOOLS, "games", "plugins"]
+
+
+def test_faces_joins_media_while_faces_are_on(driven) -> None:
+    media = {**MEDIA, "items": MEDIA["items"] + ["faces"]}
+    assert driven["r_faces_on"] == ["chat", media, TOOLS, "plugins"]
+
+
+def test_a_shared_screen_never_lists_faces(driven) -> None:
+    # Photos stays (search there drops people and places); Faces doesn't.
+    media = {**MEDIA, "items": MEDIA["items"] + ["stations"]}
+    assert driven["r_shared_faces_on"][0] == media
 
 
 def test_a_shared_screen_keeps_calendar_and_lists_in_tools(driven) -> None:
@@ -310,7 +326,7 @@ def test_an_override_renames_a_group_and_moves_a_page_into_it(driven) -> None:
     out = driven["r_rename_and_move"]
     assert out == ["chat",
                    {"group": "media", "label": "Watch & listen", "open": True,
-                    "items": ["files", "music", "podcasts", "audiobooks", "videos", "stations"]},
+                    "items": ["files", "music", "podcasts", "audiobooks", "videos", "photos", "stations"]},
                    {"group": "tools", "label": "Tools", "open": False, "items": ["news", "calendar", "lists"]},
                    "plugins"]
 
@@ -319,7 +335,7 @@ def test_an_override_makes_a_group_ignores_unknown_routes_and_lifts_one_to_the_t
     out = driven["r_new_group"]
     assert out == ["chat",
                    {"group": "media", "label": "Media", "open": True,
-                    "items": ["music", "podcasts", "audiobooks"]},
+                    "items": ["music", "podcasts", "audiobooks", "photos"]},
                    {"group": "kids", "label": "Kids", "open": False, "items": ["videos", "stations"]},
                    {"group": "tools", "label": "Tools", "open": False, "items": ["news", "lists", "files"]},
                    "calendar", "plugins"]
@@ -348,11 +364,11 @@ def _heads(o):
 def test_the_sidebar_order_and_where_each_page_sits(driven) -> None:
     o = driven["s_cold_music"]
     order = [r["route"] for r in o["rows"]]
-    assert order == ["home", "chat", "music", "podcasts", "audiobooks", "videos", "stations",
+    assert order == ["home", "chat", "music", "podcasts", "audiobooks", "videos", "photos", "stations",
                      "news", "calendar", "lists", "files", "plugins"]
     rows = _rows(o)
     assert {r for r, v in rows.items() if v["group"] == "media"} == {
-        "music", "podcasts", "audiobooks", "videos", "stations"}
+        "music", "podcasts", "audiobooks", "videos", "photos", "stations"}
     assert {r for r, v in rows.items() if v["group"] == "tools"} == {"news", "calendar", "lists", "files"}
     assert rows["chat"]["group"] is None and rows["plugins"]["group"] is None
     # People is in Settings now: no row.
@@ -441,7 +457,7 @@ def test_the_css_folds_groups_on_a_desktop_and_dissolves_them_on_a_phone() -> No
 def test_the_grid_has_the_same_groups(driven) -> None:
     blocks = driven["grid"]
     assert blocks == [
-        {"head": "media", "tiles": ["#podcasts", "#audiobooks", "#stations"]},
+        {"head": "media", "tiles": ["#podcasts", "#audiobooks", "#photos", "#stations"]},
         {"head": "tools", "tiles": ["#news", "#calendar", "#lists", "#files"]},
         {"head": None, "tiles": ["#plugins", "#settings", "#manual"]},
     ]

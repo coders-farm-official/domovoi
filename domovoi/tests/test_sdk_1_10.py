@@ -74,7 +74,7 @@ async def test_ensure_room_knows_only_the_houses_rooms(db_session) -> None:
     from domovoi.sdk.playback import PlaybackAPI
 
     await db_session.execute(text(
-        "INSERT INTO satellites (room_id) VALUES ('kitchen') ON CONFLICT DO NOTHING"))
+        "INSERT INTO rooms (room_id, name) VALUES ('kitchen', 'kitchen') ON CONFLICT DO NOTHING"))
     await db_session.commit()
     api = PlaybackAPI("demo")
     assert await api.ensure_room("kitchen") is True

@@ -192,9 +192,11 @@ public final class HelperUpdate {
                                 error: "the package installed, but the Mac side says \(after?.version ?? "nothing"), not \(version ?? "?")", linux: linux)
         }
         // 3. The new helper's repair: every step again with the saved answers.
+        // Never from an offline kit (--no-kit): this update came by the
+        // internet, and a stick left plugged in is not part of it.
         var lastFail: String?
         do {
-            let r = try runner.run(Command(layout.helperProgram.path, ["install", "--system", "--repair"], timeout: 3 * 3600, currentDirectory: "/")) { [weak self] line in
+            let r = try runner.run(Command(layout.helperProgram.path, ["install", "--system", "--repair", "--no-kit"], timeout: 3 * 3600, currentDirectory: "/")) { [weak self] line in
                 if line.hasPrefix(StdProgress.prefix),
                    let o = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(StdProgress.prefix.count).utf8)) as? [String: Any],
                    o["state"] as? String == "fail" {

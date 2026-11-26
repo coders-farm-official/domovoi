@@ -48,6 +48,7 @@ from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
 from web.backend.api import fonts as fonts_api
 from web.backend.api import friend_houses as friend_houses_api
+from web.backend.api import offline_kit as offline_kit_api
 from web.backend.api import printers as printers_api
 from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
@@ -73,10 +74,15 @@ from web.backend.api import podcasts as podcasts_api
 from web.backend.api import plugins as plugins_api
 from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import short_address as short_address_api
+from web.backend.api import rooms as rooms_api
 from web.backend.api import satellites as satellites_api
+from web.backend.api import support_sessions as support_sessions_api
 from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
 from web.backend.api import up_next_history as up_next_history_api
+from web.backend.api import media_search as media_search_api
+from web.backend.api import media_understanding as media_understanding_api
+from web.backend.api import faces as faces_api
 from web.backend.api import music_mix as music_mix_api
 from web.backend.api import home_location as home_location_api
 from web.backend.api import videos as videos_api
@@ -449,6 +455,11 @@ app.include_router(up_next_api.router)
 # what Up next picked and why; read-only, its own literal prefix.
 app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)
+app.include_router(media_understanding_api.router)
+app.include_router(media_search_api.router)
+# Faces and people (1.5.0): household views and trains, admin merges named
+# people; guests and shared screens get nothing.
+app.include_router(faces_api.router)
 app.include_router(home_location_api.router)
 # Groups (V060): /api/music/groups — named sets of rooms and the shared
 # queues; its own literal prefix, proxied to the core.
@@ -476,6 +487,11 @@ app.include_router(satellite_media_api.router)
 app.include_router(satellite_media_api.claim_router)
 # The container guard: the banner's reads and the admin actions (docs/CONTAINER_GUARD.md).
 app.include_router(containers_api.router)
+# Satellite support sessions (1.5.0): literal /support paths and the
+# /api/support-sessions prefix, ahead of the /{room_id} matchers.
+app.include_router(support_sessions_api.router)
+# Rooms and their satellites (1.5.0): the room drawer, proxied to the core.
+app.include_router(rooms_api.router)
 app.include_router(satellites_api.router)
 app.include_router(satellites_api.timers_router)
 app.include_router(calendar_api.router)
@@ -499,6 +515,7 @@ app.include_router(files_api.blocks_router)
 app.include_router(fonts_api.router)
 # Printers, printing and scanning: proxies to the core's /v1/printers, /v1/print, /v1/scan.
 app.include_router(printers_api.router)
+app.include_router(offline_kit_api.router)
 # Friend Houses: proxies to the core's /v1/admin/friend-houses (security tier at both hops).
 app.include_router(friend_houses_api.router)
 app.include_router(podcasts_api.router)
@@ -506,6 +523,19 @@ app.include_router(audiobooks_api.router)
 app.include_router(videos_api.router)
 app.include_router(images_api.router)
 app.include_router(chat_api.router)
+
+
+# A chat the caller can see but may not do this to (domovoi/chat_access.py):
+# 403/409 as {"detail", "code"}, the shape the apps branch on.
+async def _chat_access_refused(request, exc):  # noqa: ANN001 — FastAPI's handler signature
+    from domovoi import chat_access as _chat_access
+
+    return _chat_access.refusal_response(exc)
+
+
+from domovoi.chat_access import ChatAccessRefused as _ChatAccessRefused  # noqa: E402
+
+app.add_exception_handler(_ChatAccessRefused, _chat_access_refused)
 app.include_router(help_api.router)
 app.include_router(models_api.router)
 app.include_router(news_api.router)

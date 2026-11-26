@@ -25,6 +25,7 @@ import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +39,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.domovoi.app.LocalApp
+import com.domovoi.app.net.LocalSharedScreen
 import com.domovoi.app.ui.components.AvatarBubble
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.Pill
@@ -53,10 +56,10 @@ import com.domovoi.app.ui.theme.Domovoi
  * person: Profile / Memory / Sessions / Conversations tabs.
  *
  * Renaming and forgetting someone are admin on the server (PATCH and DELETE
- * /api/people/{id}), and a phone has no admin session, so neither is offered:
- * both 401'd from every phone (the phone admin audit, 22 Nov 2026). The
- * profile says where they are ([PEOPLE_EDIT_ON_DASHBOARD]). Someone who
- * shares a name with another person is flagged ([namesakeNote]).
+ * /api/people/{id}): offered only while this phone holds admin and the
+ * screen is not a shared one (PeopleAdmin.kt); otherwise the profile says
+ * where they are ([peopleEditLine]). Someone who shares a name with another
+ * person is flagged ([namesakeNote]).
  */
 @Composable
 internal fun PersonDetail(
@@ -67,6 +70,8 @@ internal fun PersonDetail(
     onRenamed: () -> Unit = {},
     /** Voice ID's state, read with the People list; null when unknown. */
     voiceId: VoiceIdStatus? = null,
+    /** They were forgotten (admin on this phone): close the profile. */
+    onForgotten: () -> Unit = {},
 ) {
     val detail = rememberPersonDetail(person.id, person.voice_profile_count)
     var tab by remember(person.id) { mutableIntStateOf(0) }
@@ -138,6 +143,9 @@ internal fun PersonDetail(
                     voiceRooms = detail.voiceRooms,
                     voiceId = voiceId,
                     onPeopleChanged = onRenamed,
+                    sessionCount = detail.sessions.size,
+                    turnCount = detail.conversations.size,
+                    onForgotten = onForgotten,
                 )
                 1 -> MemoryTab(person, detail)
                 2 -> SessionsTab(person, detail)
@@ -158,7 +166,13 @@ private fun ProfileTab(
     voiceRooms: List<VoiceRoom>,
     voiceId: VoiceIdStatus?,
     onPeopleChanged: () -> Unit,
+    sessionCount: Int,
+    turnCount: Int,
+    onForgotten: () -> Unit,
 ) {
+    val adminState by LocalApp.current.admin.state.collectAsState()
+    val shared = LocalSharedScreen.current
+    val held = peopleAdminHeld(adminState, shared)
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -181,6 +195,7 @@ private fun ProfileTab(
                     if (isLive(person.last_seen_at)) Pill("live", Tone.Ok, live = true)
                     if (person.namesakes > 0) Pill("same name", Tone.Warn)
                 }
+                if (held) PersonRename(person, onPeopleChanged)
                 Text(
                     "person · #${person.id} · added ${relTime(person.created_at)}",
                     style = MaterialTheme.typography.labelSmall,
@@ -237,11 +252,13 @@ private fun ProfileTab(
         com.domovoi.app.ui.screens.settings.PersonMusicMixSection(person.id, person.name)
 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
-        Text(
-            PEOPLE_EDIT_ON_DASHBOARD,
-            style = MaterialTheme.typography.bodySmall,
-            color = Domovoi.colors.fgMuted,
-        )
+        if (held) {
+            PersonForget(person, sessionCount, turnCount, onForgotten)
+        } else {
+            peopleEditLine(adminState, shared)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+            }
+        }
     }
 }
 

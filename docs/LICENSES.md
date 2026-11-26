@@ -70,7 +70,19 @@ a server fetches and when.
 | openWakeWord's pre-trained wake words: `hey_jarvis` (an older install's default, and every room's word until its server gives it one), `alexa`, `hey_mycroft`, `hey_rhasspy`, `timer`, `weather` | The wake word on satellites, spare computers and phones in room mode | David Scripka, from [openWakeWord's v0.5.1 release](https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1) on GitHub | [CC BY-NC-SA 4.0](https://github.com/dscripka/openWakeWord#license) | When the satellite media cache is refreshed; a spare computer's installer fetches the ones it needs itself |
 | openWakeWord's feature models: `embedding_model`, `melspectrogram` | The front end of every wake word, trained ones included | The same release. The embedding model is Google's speech embedding model | The embedding model: Apache-2.0 (Google's, says openWakeWord). The melspectrogram: no licence of its own; it ships in a release whose pre-trained models are CC BY-NC-SA 4.0 | The same |
 | Silero VAD v4 (`silero_vad.onnx`) | Hears where speech starts and stops, on satellites | Silero, from the same openWakeWord release | [MIT](https://github.com/snakers4/silero-vad) | The same |
+| OpenCV Zoo **YuNet**, `face_detection_yunet_2023mar.onnx` (232,589 bytes, SHA-256 `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`) | Finds faces and five landmarks in photos and video frames, if an admin turns faces on (off by default; 1.5.0) | Shiqi Yu and contributors, from the [OpenCV Zoo](https://github.com/opencv/opencv_zoo/tree/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_detection_yunet), pinned to commit `48b10fa5`, by size and SHA-256 (the file's Git LFS object id) | [MIT](https://github.com/opencv/opencv_zoo/blob/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_detection_yunet/LICENSE), "Copyright (c) 2020 Shiqi Yu", covering every file in the model's directory, the weights included | Only when an admin turns on "Recognize faces"; never under internet access "never". Never shipped with Domovoi |
+| OpenCV Zoo **SFace**, `face_recognition_sface_2021dec.onnx` (38,696,353 bytes, SHA-256 `0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79`) | Turns each face into 128 numbers, so the same person's faces can be grouped and named | Yaoyao Zhong (the SFace loss, a MobileFaceNet), converted to ONNX by Chengrui Wang, from the [OpenCV Zoo](https://github.com/opencv/opencv_zoo/tree/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_recognition_sface), the same commit; pinned the same way | [Apache-2.0](https://github.com/opencv/opencv_zoo/blob/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_recognition_sface/LICENSE), covering every file in the model's directory, the weights included. **Its model card does not say what faces it was trained on**; the owner accepted that on 2026-11-22. If it ever proves unacceptable, the fallback is dlib's public-domain weights, not InsightFace | The same |
+| GeoNames town list: `cities1000.zip` (11,096,946 bytes, SHA-256 `46a35f52226f34dd56b64d57b4e9bb380a8ad06605354f8095ea9cdc561aba2c`), `admin1CodesASCII.txt` (151,571 bytes, `2e4867f5397acb056ea26377601b57af37cb4c81399770225018e9e439e91ad3`) and `countryInfo.txt` (32,112 bytes, `79f8f59ea01cbb40438bf1856dd6c2ff201f03f8fc72d0530b2646aaf603ef04`) | Names the town a photo was taken in, on the server, if an admin turns on "Use photo locations" (off by default; 1.5.0). No position is sent anywhere | [GeoNames](https://www.geonames.org/) (every town over 1,000 people, state and region names, country names), from the Internet Archive's snapshots of GeoNames' daily files (2026-11-07 to 2026-11-17), pinned by size and SHA-256 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): free to use and pass on, crediting GeoNames; the Photos and videos settings card credits it under the switch | Only when an admin turns on "Use photo locations"; never under internet access "never". Never shipped with Domovoi |
 | NVIDIA NeMo streaming FastConformer (80 ms, int8) | The fast lane, if you turn it on (off by default) | NVIDIA, converted by sherpa-onnx, from [its `asr-models` release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | Only when the fast lane is turned on |
+
+**Face models Domovoi does not use.** InsightFace's pretrained packs
+(`buffalo_l`, `antelopev2` and the other ArcFace weights) are for
+non-commercial research only, so Domovoi never downloads them, nor
+anything built on them. Neither face model is in the repository or an
+installer: the server fetches both from the pinned URLs only after an
+admin opts in, and a file that doesn't match its size and SHA-256 is never
+used. What is stored about faces, and who sees it:
+[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#faces-and-people).
 
 A Piper voice you set by name, other than these three, comes with its own
 licence (the `MODEL_CARD` beside it in `rhasspy/piper-voices`). Several
@@ -247,6 +259,11 @@ those voices shaped it; **Synthetic voices only** avoids that.
   GPL-3.0, used under MIT; with pako under MIT and Zlib), lop, option and
   dingbat-to-unicode (BSD-2-Clause), and @xmldom/xmldom, underscore,
   xmlbuilder, base64-js, lie, immediate and setimmediate (MIT).
+- **The support-session terminal** (`web/static/vendor/xterm/`, 1.5.0):
+  xterm.js 5.5.0 (`@xterm/xterm`, MIT) and its fit add-on 0.10.0
+  (`@xterm/addon-fit`, MIT), copied from the npm packages, licence texts
+  in `licenses/` and versions in `THIRD-PARTY.json`. Loaded only by the
+  admin's terminal for a satellite support session.
 - **Co-editing** (several people editing one document at once): on the
   server, pycrdt 0.14.10 (MIT), installed with it; in the dashboard and
   the app's editors, the one Yjs bundle in `web/static/vendor/yjs/` listed

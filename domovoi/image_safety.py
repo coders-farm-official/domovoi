@@ -63,10 +63,14 @@ def _available(formats: Iterable[str]) -> list[str]:
     return [f for f in (x.upper() for x in formats) if f in Image.OPEN]
 
 
-def open_image(src: str | os.PathLike[str] | IO[bytes], formats: Iterable[str]) -> Any:
+def open_image(src: str | os.PathLike[str] | IO[bytes], formats: Iterable[str],
+               *, max_pixels: int | None = None) -> Any:
     """``PIL.Image.open(src)``, trying only ``formats`` (those this Pillow
-    has), refused past :data:`MAX_IMAGE_PIXELS` before decoding. The image
-    is lazy, as Pillow's always is: close it (``with``) when done.
+    has), refused past :data:`MAX_IMAGE_PIXELS` (or the smaller
+    ``max_pixels``) before decoding. The image is lazy, as Pillow's always
+    is: close it (``with``) when done. (A plugin's decode-only container
+    runs this file too, with a cap sized to the container:
+    ``domovoi/plugins_runtime/isolated_helper.py``.)
 
     Raises :class:`PictureRefused` for a file that isn't one of
     ``formats`` (whatever its name says), is broken in its header, or is
@@ -93,11 +97,12 @@ def open_image(src: str | os.PathLike[str] | IO[bytes], formats: Iterable[str]) 
     except (SyntaxError, ValueError, EOFError) as e:
         raise PictureRefused(f"a broken picture ({type(e).__name__})") from e
     width, height = im.size
-    if width * height > MAX_IMAGE_PIXELS:
+    cap = MAX_IMAGE_PIXELS if max_pixels is None else min(max_pixels, MAX_IMAGE_PIXELS)
+    if width * height > cap:
         im.close()
         raise PictureRefused(
             f"{width} x {height} is {width * height / 1e6:.0f} megapixels; at most "
-            f"{MAX_IMAGE_PIXELS / 1e6:.0f} are decoded",
+            f"{cap / 1e6:.0f} are decoded",
             too_large=True,
         )
     return im

@@ -101,6 +101,8 @@ class DismissHandler(Handler):
     # so a real "I'm Sarah" still falls straight through to enrollment. It
     # never matches a bare "stop" (owned by music/radio/chat-exit).
     priority_band = 100
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Dismiss", tone="neutral")
     example_phrases = ("never mind",)
     requires_network = "no"

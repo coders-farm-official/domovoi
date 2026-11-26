@@ -21,8 +21,13 @@ from fastapi import HTTPException, Request
 ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}\Z")
 
 # A superset of ROOM_ID_RE: the portal's slugs may start with a digit and
-# carry dashes.
-_ACCEPTED_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}\Z")
+# carry dashes. The ONE rule for a room id that comes in from outside: a
+# path, a body, a hello's `requested_room`, an enrolment's `in=`. The Pi and
+# PC (satellite/enrolment.py IN_ROOM_RE), the dashboard's enrolment request
+# (web/backend/schemas.py) and the phone apps (RoomEnrolment.isRoomId,
+# RoomEnrolmentParser.isRoomID) mirror it; the Pi's and the dashboard's
+# tests pin theirs to this one.
+ACCEPTED_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}\Z")
 
 # A room paired before the rule above (capitals, spaces) is refused at the
 # socket, but the dashboard must still be able to remove it: a DELETE takes
@@ -32,7 +37,7 @@ _REMOVABLE_RE = re.compile(r"^[^\x00-\x1f\x7f/\\]{1,64}\Z")
 
 def is_room_id(value: Any) -> bool:
     """True when ``value`` is a room id the house can have."""
-    return isinstance(value, str) and _ACCEPTED_RE.fullmatch(value) is not None
+    return isinstance(value, str) and ACCEPTED_RE.fullmatch(value) is not None
 
 
 async def require_room_id_path(request: Request) -> None:

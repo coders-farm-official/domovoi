@@ -595,6 +595,7 @@ class _StubPeopleRepo:
     told to blow up the way a real DB error would."""
 
     deleted: list[int] = []
+    announced: list = []
     fail_delete = False
 
     def __init__(self, session) -> None:
@@ -631,6 +632,13 @@ def stub_people_repo(monkeypatch):
         return {"conversation_log": 0, "intents_log": 0, "sessions_cleared": 0}
 
     monkeypatch.setattr("domovoi.voice_history.delete_person_history", _history)
+
+    # Plugins hear about it after the turn commits (SDK 1.18); the
+    # listener on a real session has its own tests
+    # (test_voice_history_forget_event.py).
+    _StubPeopleRepo.announced = []
+    monkeypatch.setattr("domovoi.voice_history.announce_after_commit",
+                        lambda session: _StubPeopleRepo.announced.append(session))
     return _StubPeopleRepo
 
 
@@ -652,6 +660,7 @@ async def test_forget_me_clears_identity_from_context(stub_people_repo) -> None:
     assert "forgotten" in response.text.lower()
     assert "guy" in response.text.lower()
     assert stub_people_repo.deleted == [2]
+    assert len(stub_people_repo.announced) == 1
     # The load-bearing assertions: nothing written after this point may
     # reference the deleted person.
     assert ctx.person_id is None
@@ -675,6 +684,7 @@ async def test_forget_me_keeps_identity_when_delete_fails(stub_people_repo) -> N
     response = await handler._forget_person(2, "Guy", ctx, object())
 
     assert "still there" in response.text.lower()
+    assert stub_people_repo.announced == []
     assert ctx.person_id == 2
     assert ctx.presence_tier == "low"
 

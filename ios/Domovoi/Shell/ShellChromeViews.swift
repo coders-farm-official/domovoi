@@ -478,6 +478,13 @@ struct ShellScrollAwayChrome: ViewModifier {
     /// control at AX5 and the bisect lost it (review 1, N5).
     var drawn = true
 
+    /// Admin on this phone (1.5.0): the badge the bar draws beside the pill
+    /// (``AdminBadgeView``), drawn here beside the toolbar pill when the
+    /// header is in the bar. Nil: no badge (signed out, a shared screen, the
+    /// local shell).
+    var admin: AdminBadge?
+    var onAdmin: () -> Void = {}
+
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// Both halves of answer 29 are one rule in ``ShellHeaderFold``, read
@@ -670,7 +677,14 @@ struct ShellScrollAwayChrome: ViewModifier {
                     // was widened to require it rather than ban it, and says
                     // so where it reads this gate.
                     if title != nil, let pill {
-                        ShellPillToolbarButton(pill: pill, onTap: onPill)
+                        HStack(spacing: 0) {
+                            ShellPillToolbarButton(pill: pill, onTap: onPill)
+                            // After the pill, so the pill's own gate stays the
+                            // `if` nearest it (`ShellFoldViewBodyTests`).
+                            if let admin {
+                                AdminBadgeButton(badge: admin, onTap: onAdmin)
+                            }
+                        }
                     }
                 }
             }
@@ -685,10 +699,14 @@ extension View {
         crumb: String,
         pill: ShellPill?,
         onPill: @escaping () -> Void,
-        drawn: Bool = true
+        drawn: Bool = true,
+        admin: AdminBadge? = nil,
+        onAdmin: @escaping () -> Void = {}
     ) -> some View {
         modifier(
-            ShellScrollAwayChrome(crumb: crumb, pill: pill, onPill: onPill, drawn: drawn)
+            ShellScrollAwayChrome(
+                crumb: crumb, pill: pill, onPill: onPill, drawn: drawn, admin: admin, onAdmin: onAdmin
+            )
         )
     }
 }

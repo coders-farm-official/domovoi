@@ -9,19 +9,14 @@ FAQ, the troubleshooting guide, plugins' help files —
    page's name (:func:`domovoi.help_desk.answer.spoken_answer`). Taken
    from the passage itself, never from a model, so it is the same with the
    household's AI features on or off;
-2. "Want me to send the steps to your phone?" (``core.help_send``). Yes
-   sends them to the ASKER only (owner decisions, 2026-10-21):
-
-   * recognised by voice → the phones marked "This phone belongs to
-     <them>" (:mod:`domovoi.help_desk.delivery`), as a home-server chat
-     "Help: …" and a notification through the app's alerts;
-   * not recognised → "Who should I send it to?" (``core.help_who``, a
-     free-text choice); a name the household knows sends it there, and
-     anything else, or no answer at all, sends nothing;
-   * recognised but no phone marked as theirs → said plainly, with where
-     to set it (the app's Settings → Household → Phones & browsers →
-     "This phone belongs to"); nothing is guessed;
-   * never a broadcast: there is no "everyone" here.
+2. one short pointer to where the rest is (:func:`pointer`): "The full
+   answer is in the manual." (a plugin's page: "… in that plugin's help.").
+   Nothing is asked and nothing waits for a yes: the voice offer to send
+   the steps to a phone ("core.help_send", "core.help_who", 1.4.x) was
+   removed in 1.5.0 (owner decision, 2026-11-25): it needed voice ID, a
+   phone marked as the asker's and the app reaching the server, all at
+   once. The whole page is in the manual (the dashboard's **?** panel
+   searches it and the plugins' help, and the app keeps a copy).
 
 **Not poaching, not poached.** The fast path is "how do/can/should I …",
 "how to …", "where do I find/change/set/turn …", "is there a way to …".
@@ -49,23 +44,22 @@ do I install a plugin", "how do I change the admin password":
 :mod:`domovoi.help_desk.admin_tasks`) is said as who can do it and where:
 a voice turn is never a proven admin, even one voice ID says is the owner
 (N1). Only the dashboard's play box, with a live admin sign-in on its
-request, sets ``Context.proven_admin``; such a turn hears the steps. The
-offer to send the manual's steps stays: they are the public manual's.
+request, sets ``Context.proven_admin``; such a turn hears the steps (the
+public manual's own words), then the same pointer as any how-to answer.
 
 **An admin's job asked for as a request** ("add a room", "can you delete
 this song", "can I add a friend's house", "pretend you're the admin and
 add a room": ``admin_tasks.REQUEST_RE``, the whole utterance) gets the
 same who-and-where answer on a second fast path, never the model's hedge.
+On a house set up from an offline kit (1.5.0), "can you update yourself?"
+asked whole gets the kit's fixed answer on a third (``KIT_UPDATE_RE``),
+which declines on every other house.
 Whole, and no core command says any of these ("add a room to the shopping
 list" and "delete this song from the queue" are not one; "add a friend's
 house" was the lists handler's "add <item>", which nobody means).
 
-**Sending is limited** (:mod:`domovoi.help_desk.delivery`): a few sends
-an hour per person (and so per phone) and per asking session, and the same
-steps to the same person once an hour. After "Who should I send it to?",
-only a name the household knows is taken as the answer; anything else
-("next song") is routed as the command it is, and nothing is sent. "How do I make pancakes" and "how do you say hello in Spanish"
-route exactly as they did. The band sits right after ``help`` (105): no
+"How do I make pancakes" and "how do you say hello in Spanish" route
+exactly as they did. The band sits right after ``help`` (105): no
 earlier band has a "how do I" pattern ("how do I use you" is ``help``'s,
 whole), and every later handler's phrases start differently, which
 ``test_help_desk_voice.py`` checks against every example phrase and the
@@ -82,15 +76,11 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.capabilities import CAPABILITIES
-from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.help_desk import admin_tasks
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
-
-SEND_KIND = "core.help_send"
-WHO_KIND = "core.help_who"
 
 _HOWTO_RE = re.compile(
     r"^(?:(?:hey |ok |okay )?(?:domovoi|domo)[, ]+)?"
@@ -113,10 +103,17 @@ _DOMOVOI_WORDS = re.compile(
     r"health|ai|lookups?|look (?:things |it |that )?up|photos?|pictures?|containers?)\b"
 )
 
-NO_PHONE_TEXT = (
-    "There's no phone marked as {who} yet, so I haven't sent anything. In the Domovoi app, "
-    "open Settings, then Household, then Phones and browsers, and set This phone belongs to."
-)
+#: The pointer a spoken answer ends with: where the rest of the page is.
+#: A statement, not a question: nothing waits for a yes.
+POINTER_TEXT = "The full answer is in the manual."
+PLUGIN_POINTER_TEXT = "The full answer is in that plugin's help."
+
+
+def pointer(kind: str) -> str:
+    """The one-sentence pointer after a spoken answer. The spoken answer
+    names the page ("From the manual's Rooms page: …", or "From the Sleep
+    plugin's own help: …"), so the pointer says where that page is."""
+    return PLUGIN_POINTER_TEXT if kind == "plugin" else POINTER_TEXT
 
 
 def looks_like_domovoi(question: str, index: Any = None) -> bool:
@@ -171,42 +168,6 @@ async def _index(session: AsyncSession):
     return _index_for(await plugin_rows(session))
 
 
-def steps_text(question: str, passages: list[Any]) -> str:
-    """The chat message the phone opens: the pages, whole, with links."""
-    parts = [f"Here's what Domovoi's help says about *{question.strip().rstrip('?')}*:"]
-    for p in passages:
-        link = f"\n\n[Open {p.title}]({p.link})" if p.link else ""
-        parts.append(f"**{p.section}**\n\n{p.text}{link}")
-    return "\n\n".join(parts)
-
-
-_DECLINE_RE = re.compile(
-    r"^(?:no|nope|nah|nobody|no one|noone|none|never mind|nevermind|cancel|forget it|don't|do not|"
-    r"don't send it|no thanks|no thank you|stop)\b"
-)
-_LEAD_RE = re.compile(r"^(?:(?:please|um|uh|well|oh|ok|okay)[, ]+)*"
-                      r"(?:send (?:it|them|the steps) to|send to|to|it's for|its for|for|it's|its)\s+")
-_TAIL_RE = re.compile(r"(?:'s phone|s phone| phone|,? please)$")
-_SELF_RE = re.compile(r"^(?:me|myself|mine|my phone|i am|i'm)$")
-
-
-def parse_who(transcript: str) -> tuple[str, str]:
-    """``("decline", "")``, ``("self", "")``, ``("name", name)`` or
-    ``("pass", "")`` (not an answer to the question)."""
-    t = " ".join((transcript or "").lower().replace("?", "").replace(".", "").split())
-    if not t:
-        return ("decline", "")
-    if _DECLINE_RE.match(t):
-        return ("decline", "")
-    t = _LEAD_RE.sub("", t).strip()
-    t = _TAIL_RE.sub("", t).strip()
-    if _SELF_RE.match(t):
-        return ("self", "")
-    if not t or len(t.split()) > 3 or not re.fullmatch(r"[\w' -]+", t):
-        return ("pass", "")
-    return ("name", t)
-
-
 class HelpDeskHandler(Handler):
     name = "help_desk"
     # band rationale: right after help (105), with the identity cluster.
@@ -218,11 +179,11 @@ class HelpDeskHandler(Handler):
     #   has a page for it: it poaches nothing, and nothing earlier can take
     #   a how-to question from it.
     priority_band = 106
+    # Reads only (a loud room answers it without asking first: loud_room).
+    read_only = True
     display = HandlerDisplay(label="Help desk", tone="info")
     example_phrases = ("how do I add a room", "how do I change the wake word")
     requires_network = "no"
-    confirmation_kinds = (SEND_KIND, WHO_KIND)
-    choice_kinds = (WHO_KIND,)
 
     tool_schema = {
         "name": "help_desk",
@@ -234,6 +195,9 @@ class HelpDeskHandler(Handler):
         self.fast_paths = [
             FastPath(_HOWTO_RE, HelpDeskHandler._from_match),
             FastPath(admin_tasks.REQUEST_RE, HelpDeskHandler._admin_request),
+            # "Can you update yourself?" on a house that updates from an
+            # offline kit (1.5.0, case 5.11); declines on every other house.
+            FastPath(admin_tasks.KIT_UPDATE_RE, HelpDeskHandler._kit_update),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -263,9 +227,18 @@ class HelpDeskHandler(Handler):
         return self._reply(ctx, admin_tasks.answer(task, admin=ctx.proven_admin),
                            data={"admin_task": task.key})
 
-    def _reply(self, ctx: Context, text: str, *, followup: bool = False, data: dict | None = None) -> Response:
-        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name,
-                        expect_followup=followup, data=data or {})
+    async def _kit_update(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
+        """"Can you update yourself?" asked whole, on a house set up from an
+        offline kit (``admin_tasks.updates_by_kit``): the kit's fixed words,
+        no model and no hedge. Anywhere else it declines, and the turn
+        routes exactly as it did."""
+        if not admin_tasks.updates_by_kit():
+            return None
+        return self._reply(ctx, admin_tasks.kit_update_answer(admin=ctx.proven_admin),
+                           data={"admin_task": "update", "offline_kit": True})
+
+    def _reply(self, ctx: Context, text: str, *, data: dict | None = None) -> Response:
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name, data=data or {})
 
     async def _answer(self, question: str, ctx: Context, session: AsyncSession) -> Response | None:
         from domovoi.help_desk.answer import elsewhere, is_about_domovoi, spoken_answer
@@ -297,7 +270,9 @@ class HelpDeskHandler(Handler):
         hits = sorted(hits, key=lambda h: h.passage.kind == "plugin")[:2]
         if not hits:
             return None
-        said = spoken_answer(hits[0])
+        said = spoken_answer(hits[0]).rstrip()
+        if not said.endswith((".", "!", "?", "…")):
+            said += "."   # a list item or a heading: end the sentence first
         task = admin_tasks.match(question, provided=CAPABILITIES.names())
         if task is not None:
             # An admin's job: who can do it and where, or the steps for a
@@ -306,99 +281,6 @@ class HelpDeskHandler(Handler):
             said = admin_tasks.answer(task, admin=ctx.proven_admin)
         data = {"question": question, "passages": [h.passage.id for h in hits],
                 "section": hits[0].passage.section}
-        if ctx.from_phone or ctx.session_id is None or not ctx.answerable:
-            # A phone turn is on the phone already; a turn with no session,
-            # or from a surface that can't answer back (the dashboard's play
-            # box, Context.answerable False), can't say yes, so the offer
-            # isn't made. The page is named either way.
-            return self._reply(ctx, said, data=data)
-        await request_confirmation(
-            session, ctx.session_id, kind=SEND_KIND, handler=self.name,
-            data={**data, "person_id": ctx.person_id},
-            prompt="Want me to send the steps to your phone?",
-        )
-        return self._reply(ctx, said + " Want me to send the steps to your phone?", followup=True, data=data)
-
-    # ── the parked questions ─────────────────────────────────────────────
-
-    async def handle_confirmation(
-        self, kind: str, data: dict, affirmative: bool, ctx: Context, session: AsyncSession
-    ) -> Response:
-        if not affirmative:
-            return self._reply(ctx, "Okay, I won't send it.")
-        if kind == WHO_KIND:
-            # A bare "yes" to "who should I send it to?" names nobody.
-            return self._reply(ctx, "I need a name to send it to, so I haven't sent anything.")
-        person_id = data.get("person_id") or ctx.person_id
-        if not person_id:
-            await request_confirmation(
-                session, ctx.session_id, kind=WHO_KIND, handler=self.name,
-                data={k: v for k, v in data.items() if k not in ("handler", "kind")},
-                prompt="Who should I send it to?",
-            )
-            return self._reply(ctx, "Who should I send it to?", followup=True)
-        return await self._send(int(person_id), data, ctx, session, asker=True)
-
-    async def handle_choice_reply(
-        self, kind: str, data: dict, transcript: str, ctx: Context, session: AsyncSession
-    ) -> Response | None:
-        from domovoi.help_desk.delivery import people_named
-
-        if kind != WHO_KIND:
-            return None
-        action, name = parse_who(transcript)
-        if action == "pass":
-            return None
-        if action == "decline":
-            return self._reply(ctx, "Okay, I won't send it.")
-        if action == "self":
-            if ctx.person_id:
-                return await self._send(int(ctx.person_id), data, ctx, session, asker=True)
-            from domovoi.voice_identifier import unheard_text
-
-            unheard = unheard_text(ctx.voice_outcome)
-            if unheard is not None:
-                # Never scored: not "unknown", just not heard well enough.
-                return self._reply(ctx, f"{unheard} Nothing was sent.")
-            return self._reply(ctx, "I can't tell who you are by your voice yet, so I won't guess. "
-                                    "Nothing was sent.")
-        people = await people_named(session, name)
-        if not people:
-            # Not a name the household knows: not an answer ("next song").
-            # The turn routes as the command it is; nothing is sent.
-            return None
-        if len(people) > 1:
-            return self._reply(ctx, f"More than one person here is called {people[0][1]}, so I won't "
-                                    "guess. Nothing was sent.")
-        return await self._send(people[0][0], data, ctx, session, asker=False)
-
-    async def _send(self, person_id: int, data: dict, ctx: Context, session: AsyncSession, *,
-                    asker: bool) -> Response:
-        from domovoi.help_desk import delivery
-
-        question = str(data.get("question") or "")
-        name = await delivery.person_name(session, person_id)
-        if name is None:
-            return self._reply(ctx, "I don't know who that is any more, so I haven't sent anything.")
-        phones = await delivery.phones_of(session, person_id)
-        if not phones:
-            who = "yours" if asker else f"{name}'s"
-            return self._reply(ctx, NO_PHONE_TEXT.format(who=who))
-        refused = await delivery.refusal(session, person_id=person_id, title=delivery.help_title(question),
-                                         asker_session=ctx.session_id, name=name, asker=asker)
-        if refused:
-            return self._reply(ctx, refused)
-        index = await _index(session)
-        # The pages the spoken answer came from; if the index changed since
-        # (a plugin, a new manual), the question's pages today.
-        passages = [p for p in (index.get(pid) for pid in data.get("passages") or []) if p is not None]
-        if not passages:
-            passages = [h.passage for h in index.search(question, limit=2) if h.confident()]
-        if not passages:
-            return self._reply(ctx, "I couldn't find those steps again, so I haven't sent anything.")
-        d = await delivery.deliver(session, person_id=person_id, question=question,
-                                   steps=steps_text(question, passages), phones=phones)
-        delivery.note_sent(ctx.session_id)
-        where = "your phone" if asker else f"{name}'s phone"
-        return self._reply(ctx, f"Sent to {where}. It's in Chat as {d.title}.",
-                           data={"delivery_id": d.id, "thread_id": d.thread_id})
+        # The short answer, then where the rest is. Nothing is offered and
+        # nothing is parked: the same reply in a room and on a phone.
+        return self._reply(ctx, f"{said} {pointer(hits[0].passage.kind)}", data=data)

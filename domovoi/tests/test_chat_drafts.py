@@ -20,9 +20,10 @@ from fastapi.testclient import TestClient
 
 import web.backend.api.chat as chat_api
 import web.backend.api.chat_drafts as drafts_api
-from domovoi import ai_features
+from domovoi import ai_features, chat_access
 from domovoi.config import settings as core_settings
 from domovoi.drafts import ats, prompts
+from domovoi.tests.chat_devices import DeviceTestClient
 from domovoi.tests.conftest import requires_db
 from web.backend.main import app
 
@@ -53,7 +54,8 @@ FORMAL = SHORTER.replace("I'm writing", "I am writing")
 
 
 def _client():
-    return TestClient(app, headers={"X-Requested-With": "domovoi-tests"})
+    # A device of its own: its chats are private to it (chat_access, V086).
+    return DeviceTestClient(app)
 
 
 @pytest.fixture(autouse=True)
@@ -558,18 +560,31 @@ def test_xml_illegal_characters_are_stripped_and_the_docx_saves(model, documents
 
 @requires_db
 def test_each_version_records_the_device_that_made_it(model):
-    with _client() as c:
-        tid = _thread(c)
+    """Each version records the device its KEY names (1.5.0): a body's
+    device_id is ignored. Reads say ``mine`` and never return the ids."""
+    with _client() as a, _client() as b:
+        # Named, so a read can show the name without ever showing the id.
+        assert a.patch(f"/api/devices/{a.device_id}", json={"name": "Phone A"}).status_code == 200
+        assert b.patch(f"/api/devices/{b.device_id}", json={"name": "Phone B"}).status_code == 200
+        tid = a.post("/api/chat/threads", json={"shared": True}).json()["id"]
         model.replies = [LETTER]
-        r = c.post(f"/api/chat/threads/{tid}/messages",
-                   json={"content": "write a cover letter for Acme", "device_id": "browser-aaaa"})
+        r = a.post(f"/api/chat/threads/{tid}/messages",
+                   json={"content": "write a cover letter for Acme", "device_id": b.device_id})
         did = next(d for ev, d in _sse(r.text) if ev == "done")["draft"]["id"]
-        e = c.post(f"/api/chat/drafts/{did}/versions",
-                   json={"text": "Dear Sam,\n\nHi.", "base_version": 1, "device_id": "android-bbbb"})
+        e = b.post(f"/api/chat/drafts/{did}/versions",
+                   json={"text": "Dear Sam,\n\nHi.", "base_version": 1, "device_id": a.device_id})
         assert e.status_code == 200
-        vs = c.get(f"/api/chat/drafts/{did}").json()["versions"]
-        assert [v["device_id"] for v in vs] == ["browser-aaaa", "android-bbbb"]
-        assert "device_name" in vs[1]
+        vs = a.get(f"/api/chat/drafts/{did}", headers={"X-Device-Id": b.device_id}).json()["versions"]
+        assert [v["mine"] for v in vs] == [True, False]
+        assert all("device_id" not in v for v in vs)
+        assert vs[1]["device_name"] == "Phone B"
+        vs = b.get(f"/api/chat/drafts/{did}").json()["versions"]
+        assert [v["mine"] for v in vs] == [False, True]
+        with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as keyless:
+            bare = keyless.get(f"/api/chat/drafts/{did}")
+        assert [v["mine"] for v in bare.json()["versions"]] == [False, False]
+        assert a.device_id not in bare.text and b.device_id not in bare.text
+        assert e.json()["version"]["mine"] is True and "device_id" not in e.json()["version"]
 
 
 @requires_db
@@ -585,10 +600,18 @@ async def test_a_version_names_its_device_and_the_person_whose_device_it_is():
         await s.commit()
     try:
         tid, did = await _new_draft()
+        # The device is the caller's (its key, here handed in as the
+        # resolved viewer; system: the test's thread has no owner), never
+        # the body's.
         await drafts_api.edit_draft(did, drafts_api.EditBody(text=LETTER + "\nMine.\n", base_version=1,
-                                                             device_id="android-d4own"))
+                                                             device_id="android-other"),
+                                    viewer=chat_access.Viewer(device_id="android-d4own", system=True))
         v = (await _all_versions(did))[1]
-        assert (v["device_id"], v["device_name"], v["person_id"]) == ("android-d4own", "Sam's phone", pid)
+        assert (v["device_name"], v["person_id"]) == ("Sam's phone", pid)
+        assert "device_id" not in v and v["mine"] is False
+        async with session_scope() as s:
+            mine = (await drafts_api._versions(s, did, "android-d4own"))[1]
+        assert mine["mine"] is True
     finally:
         async with session_scope() as s:
             await s.execute(sql("DELETE FROM devices WHERE device_id = 'android-d4own'"))

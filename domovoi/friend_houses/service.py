@@ -14,7 +14,10 @@ setting, the internet answer, the friend list, and once at boot. It:
    Friend Houses is on, the internet answer isn't "never" and there's a
    friend or an open friend file. "Never" **stops the container**, not just
    this module's calls (threat-model finding 26);
-2. writes the daemon's config and key files from the friend list;
+2. writes the daemon's config and key files from the friend list, and
+   the listener's files through :func:`write_listener_files`, their only
+   writer (M2: it reads the database under its own lock each time, so a
+   reconcile in flight can't put back an older friend list);
 3. starts, stops, restarts or reloads the container
    (:mod:`domovoi.friend_houses.tor_runtime`), reloads at most once a
    minute (spike S1: each one briefly interrupts the onion);
@@ -214,6 +217,9 @@ class _Peer:
     session_key: bytes
     house_key: bytes
     pending: bool
+    # The plugins this friend may mail (its "apps" in friends.json): set by
+    # write_listener_files from the toggle and the allowed pairs.
+    apps: tuple[str, ...] = ()
 
 
 async def _inputs() -> tuple[list[_Peer], dict[str, float]]:
@@ -275,7 +281,8 @@ async def _reconcile() -> None:
                       detail=None if not enabled else _why_stopped(policy, len(peers)))
         return
 
-    keys = fid.load() or fid.create()
+    if fid.load() is None:
+        fid.create()
     folder = _folder()
     folder.ensure()
     if before is not None and before.pairing_onion and not w.pairing_onion:
@@ -291,8 +298,9 @@ async def _reconcile() -> None:
             action = "restart"
     # The listener's lists first: a removed friend is refused from its next
     # connection however long Tor takes, or if Tor fails (audit R6 FH-10).
-    _write_friend_list(peers)
-    _write_invites(invites)
+    # Read fresh from the database by the one writer (M2), never from the
+    # snapshot above.
+    await write_listener_files()
     folder.write_torrc(w)
     _sync_key_files(folder, peers)
 
@@ -324,7 +332,7 @@ async def _reconcile() -> None:
     onion = await _wait_for_onion(folder, "hs-main") if w.main_onion else None
     _STATE["onion"] = onion
     _STATE["pairing"] = await _wait_for_onion(folder, "hs-pairing") if w.pairing_onion else None
-    await _write_listener_files(keys, onion, peers)
+    await write_listener_files(onion=onion)
     await _ensure_listener(folder)
     _start_retries()
     came_online = onion is not None and not _STATE.get("was_on")
@@ -388,9 +396,22 @@ async def _wait_for_onion(folder: tc.TorFolder, service: str = "hs-main") -> byt
     raise RuntimeError("the private connection didn't create this house's address in time")
 
 
+#: The listener files' own lock (M2). current_epoch() runs under it too.
+_FILES_LOCK = asyncio.Lock()
+_KEEP = object()
+
+
 async def current_epoch() -> bytes:
     """This run's sending epoch, starting a new one after a rollback
-    (identity.resolve_epoch)."""
+    (identity.resolve_epoch). Under the listener-file lock, so it is never
+    an unlocked read-then-write (M1)."""
+    async with _FILES_LOCK:
+        return await _current_epoch_locked()
+
+
+async def _current_epoch_locked(*, fresh_marker: bool = False) -> bytes:
+    import secrets
+
     from domovoi.db.session import session_scope
     from domovoi.friend_houses import store
 
@@ -404,38 +425,94 @@ async def current_epoch() -> bytes:
         epoch, marker, changed = fid.resolve_epoch(db_epoch, db_marker, file_marker)
         if changed:
             await store.set_epoch(s, epoch, marker)
-    if changed:
+        elif fresh_marker:
+            # M1: a fresh marker at every core start, database first, then
+            # the file. A dump restored later carries an older marker than
+            # the file, so it starts a new epoch; a crash between the two
+            # writes does too, which is safe.
+            marker = secrets.token_hex(16)
+            await store.set_marker(s, marker)
+    if changed or fresh_marker:
+        path.parent.mkdir(parents=True, exist_ok=True)
         tc._write_private(path, marker + "\n")
+    if changed:
         log.info("Friend Houses: started a new sending epoch")
+        await _epoch_changed()
     return epoch
+
+
+async def _epoch_changed() -> None:
+    """This house's epoch changed: every friend with apps on is told again."""
+    try:
+        from domovoi.db.session import session_scope
+        from domovoi.friend_houses import plugin_mail
+
+        async with session_scope() as s:
+            await plugin_mail.set_caps_needed(s, all_apps_on=True)
+    except Exception:  # noqa: BLE001 — the 3-hour refresh tells them anyway
+        log.exception("Friend Houses: marking friends for a new CAPS failed")
+
+
+async def refresh_marker() -> None:
+    """Core start (M1): resolve the epoch, then write a fresh restore marker
+    (database, then file). Only on a house that set Friend Houses up."""
+    if sys.platform == "win32" or fid.load() is None:
+        return
+    try:
+        async with _FILES_LOCK:
+            await _current_epoch_locked(fresh_marker=True)
+    except Exception:  # noqa: BLE001 — the next start tries again
+        log.exception("Friend Houses: writing the restore marker failed")
 
 
 def _write_friend_list(peers: list[_Peer]) -> Path:
     """The listener's friend list. Friends are written over houses this
     one only asked, so an asked house can never take a friend's entry
-    (audit R6 FH-11)."""
+    (audit R6 FH-11). Called only by :func:`write_listener_files`."""
     folder = _listener_folder()
     folder.mkdir(parents=True, exist_ok=True)
     tc._chmod(folder, 0o700)
     doc: dict[str, dict] = {}
     for p in sorted(peers, key=lambda p: not p.pending):  # pending first, friends last
-        doc[p.session_key.hex()] = {"house": p.house_key.hex(), "pending": p.pending}
+        doc[p.session_key.hex()] = {"house": p.house_key.hex(), "pending": p.pending,
+                                    "apps": [] if p.pending else sorted(set(p.apps))}
     tc._write_private(folder / fl.FRIENDS_FILE, json.dumps(doc))
     return folder
 
 
-async def _write_listener_files(keys: fid.HouseKeys, onion: bytes | None, peers: list[_Peer]) -> None:
-    """The friend list (friends, and houses this one asked: those may only
-    deliver an accept) and this house's hello, for the listener."""
-    folder = _write_friend_list(peers)
-    path = folder / fl.HELLO_FILE
-    if onion is None:
-        path.unlink(missing_ok=True)
-        _STATE["hello"] = None
-        return
-    hello = fs.Hello(keys.address_statement(onion, int(time.time())), await current_epoch())
-    _STATE["hello"] = hello
-    tc._write_private(path, hello.to_bytes())
+async def write_listener_files(*, onion: Any = _KEEP) -> None:
+    """The ONLY writer of the listener's files (M2): the friend list with
+    each friend's ``apps``, the houses this one asked (they may only deliver
+    an accept), the open friend files, and, when ``onion`` is given, this
+    house's hello. It takes its own lock and reads the database inside it
+    every time, so a reconcile in flight can't overwrite a newer state
+    with the friend list it read minutes earlier. Each friend's ``apps``
+    is part of what the listener compares on every frame, so a change
+    closes that friend's inbound connection."""
+    from domovoi.db.session import session_scope
+    from domovoi.friend_houses import plugin_mail
+
+    async with _FILES_LOCK:
+        peers, invites = await _inputs()
+        async with session_scope() as s:
+            apps = await plugin_mail.listener_apps(s)
+        peers = [_Peer(p.id, p.reach_public, p.reach_private, p.onion_key, p.session_key, p.house_key,
+                       p.pending, tuple(apps.get(p.id, ())) if not p.pending else ()) for p in peers]
+        folder = _write_friend_list(peers)
+        _write_invites(invites)
+        if onion is _KEEP:
+            return
+        path = folder / fl.HELLO_FILE
+        if onion is None:
+            path.unlink(missing_ok=True)
+            _STATE["hello"] = None
+            return
+        keys = fid.load()
+        if keys is None:
+            return
+        hello = fs.Hello(keys.address_statement(onion, int(time.time())), await _current_epoch_locked())
+        _STATE["hello"] = hello
+        tc._write_private(path, hello.to_bytes())
 
 
 async def my_hello() -> fs.Hello | None:
@@ -563,12 +640,14 @@ async def _read_events(proc: asyncio.subprocess.Process) -> None:
                 event = json.loads(raw)
             except ValueError:
                 continue
+            if not isinstance(event, dict):
+                continue
             try:
                 handle_event(event)
             except Exception:
                 log.exception("Friend Houses: an event from the listener failed")
-    except (ValueError, asyncio.LimitOverrunError, ConnectionError) as e:
-        log.warning("Friend Houses: the listener's events stopped (%s); restarting it", e)
+    except Exception as e:  # noqa: BLE001 — L15: a RecursionError too; never a reader-less listener
+        log.warning("Friend Houses: the listener's events stopped (%s); restarting it", type(e).__name__)
         if proc.returncode is None:
             proc.kill()
 
@@ -591,6 +670,29 @@ def handle_event(event: dict) -> None:
     if kind in ("listening", "connected", "im_back"):
         house = str(event.get("house", ""))[:16]
         log.info("Friend Houses: %s%s", kind, f" ({house}…)" if house else "")
+    if kind == "plugin_mail":
+        # Its own lane, never the message path, never the event pool (D7,
+        # D12): plugin mail never reaches people's messages.
+        from domovoi.friend_houses import plugin_mail
+
+        plugin_mail.on_event(event)
+        return
+    if kind == "caps":
+        _on_caps(event)
+        return
+    if kind == "connected":
+        try:
+            house_key, epoch = bytes.fromhex(str(event.get("house", ""))), \
+                bytes.fromhex(str(event.get("epoch", "")))
+        except ValueError:
+            house_key, epoch = b"", b""
+        if len(house_key) == 32 and len(epoch) == fid.EPOCH_BYTES:
+            from domovoi.friend_houses import plugin_wire
+
+            plugin_wire.KNOWN.saw_epoch(house_key, epoch)  # a restore forgets its apps
+            from domovoi.friend_houses import plugin_mail
+
+            plugin_mail.on_connected(house_key, epoch)  # the friend's epoch, persisted (L3)
     if kind in ("connected", "im_back"):
         # Presence, and a friend's newer address (presence.py).
         from domovoi.friend_houses import presence
@@ -629,14 +731,49 @@ async def _store_and_answer(event: dict) -> None:
     except Exception:  # noqa: BLE001 — not acknowledged: the sender keeps it
         log.exception("Friend Houses: storing a message failed")
     msg_id = _msg_id_of(event)
+    if msg_id:
+        await _answer_listener(f"{'stored' if stored else 'refused'} {msg_id}")
+
+
+#: How long one answer to the listener may take to write (review D4).
+PIPE_WRITE_SEC = 5.0
+
+
+async def _answer_listener(line: str) -> None:
+    """One ASCII line to the listener's stdin, with a deadline: a listener
+    that stops reading can't hold a core task for ever."""
     proc = _LISTENER["proc"]
-    if msg_id and proc is not None and proc.stdin is not None and proc.returncode is None:
-        try:
-            answer = "stored" if stored else "refused"
-            proc.stdin.write((f"{answer} {msg_id}" + chr(10)).encode("ascii"))
-            await proc.stdin.drain()
-        except (ConnectionError, RuntimeError):
-            pass
+    if proc is None or proc.stdin is None or proc.returncode is not None:
+        return
+    try:
+        proc.stdin.write((line[:80] + chr(10)).encode("ascii"))
+        await asyncio.wait_for(proc.stdin.drain(), PIPE_WRITE_SEC)
+    except (ConnectionError, RuntimeError, asyncio.TimeoutError):
+        pass
+
+
+def _on_caps(event: dict) -> None:
+    """A friend's CAPS (the listener parsed it; checked again here)."""
+    from domovoi.friend_houses import envelope as fe
+    from domovoi.friend_houses import plugin_wire
+
+    try:
+        house = bytes.fromhex(str(event.get("house", "")))
+        epoch = bytes.fromhex(str(event.get("epoch", "")))
+        proto = int(str(event.get("proto", "")))
+        raw = str(event.get("apps", ""))
+        slugs = tuple(raw.split(",")) if raw else ()
+    except ValueError:
+        return
+    if (len(house) != 32 or len(epoch) != fid.EPOCH_BYTES or not fs.PROTO <= proto <= 0xFFFF
+            or len(slugs) > plugin_wire.MAX_SLUGS or not all(fe.valid_slug(s) for s in slugs)
+            or list(slugs) != sorted(set(slugs))):
+        log.warning("Friend Houses: a CAPS event failed its checks and was dropped")
+        return
+    plugin_wire.KNOWN.caps(house, plugin_wire.Caps(proto, slugs), epoch)
+    from domovoi.friend_houses import plugin_mail
+
+    plugin_mail.on_caps_event(house, proto, slugs, epoch)  # persisted: peer_proto, peer_caps (L8)
 
 
 def _msg_id_of(event: dict) -> str | None:
@@ -759,6 +896,11 @@ def _stop_retries() -> None:
         if task is not None and not task.done():
             task.cancel()
         _RETRY[key] = None
+    # The plugin mail senders stop too, and each closes its own held
+    # connection (row 8 of the slice-4 re-check: nothing else would).
+    from domovoi.friend_houses import plugin_sender
+
+    plugin_sender.stop_all()
 
 
 async def _stop_listener() -> None:
@@ -797,4 +939,10 @@ async def shutdown() -> None:
     """Core teardown: stop the listener. The Tor container keeps running so
     a core restart doesn't take the house offline; boot reconciles it."""
     _stop_retries()
+    from domovoi.friend_houses import plugin_mail
+
+    try:
+        await plugin_mail.shutdown()  # clean: in-flight rows go back uncharged (H1)
+    except Exception:  # noqa: BLE001 — the listener still stops
+        log.exception("Friend Houses: stopping plugin mail failed")
     await _stop_listener()

@@ -18,6 +18,34 @@ const PERMISSION_LABELS = {
   subprocess: 'spawns external processes on your machine',
   hardware: 'touches USB / audio hardware',
   filesystem_outside_data: 'writes files outside its own data directory',
+  friend_houses: 'talks to friend houses (apps with friends)',
+};
+
+/* The trust screen's lines for a friend_houses plugin (SDK 1.19, design
+ * FRIEND-HOUSES-PLUGINS §9), and its flag for one with open routes
+ * (review D13). */
+const FRIEND_APPS_TRUST = [
+  'It talks only with friend houses an admin turns “Apps with this friend” on for, and only once an admin allows this app for them.',
+  'Those friends’ houses see that this app is installed here.',
+  'What a friend sends is decoded in a locked-down container first, and a friend’s words are filtered before a room says them; the chat history never keeps them.',
+];
+const FRIEND_APPS_OPEN_ROUTES = 'It also has endpoints anyone on your network can call without signing in. Those must never reach friend houses; check that you trust the publisher.';
+
+/* An update's trust screen against the plugin it replaces (M6, review
+ * 2026-11-23): what the new package says that the installed one didn't.
+ * Empty when nothing changed, or for a first install. */
+const changesFromInstalled = (installed, p) => {
+  if (!installed) return [];
+  const out = [];
+  if ((installed.publisher || '') !== (p.publisher || '')) {
+    out.push(`publisher: was ${installed.publisher || '(none)'}, now ${p.publisher || '(none)'}`);
+  }
+  const was = installed.permissions || {};
+  const now = p.permissions || {};
+  Object.entries(PERMISSION_LABELS).forEach(([k, label]) => {
+    if (now[k] && !was[k]) out.push(`new: ${label}`);
+  });
+  return out;
 };
 
 const STATUS_PILL = {
@@ -72,7 +100,7 @@ const ConfirmError = ({ err }) => (
  * requirements AND the resolved transitive tree with each dist's
  * origin, handlers + bands, publisher/license, and (github installs)
  * the source URL verbatim. */
-const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCancel, fire }) => {
+const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, installed = null, onDone, onCancel, fire }) => {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
   const p = preview || {};
@@ -143,6 +171,18 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
             using it — a signed-in admin session and the household token included. Only
             install plugins from publishers you trust.
           </div>
+
+          {installed && changesFromInstalled(installed, p).length > 0 && (
+            <div className="plugin-update-changes" style={{ border: '1px solid var(--warn)', background: 'var(--err-soft)',
+                          borderRadius: 'var(--r-sm)', padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+              <strong>Changed from the installed version {installed.version || ''}</strong>
+              {changesFromInstalled(installed, p).map((c, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0' }}>
+                  <Icon name="alert-triangle" size={13}/> {c}
+                </div>
+              ))}
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 6, fontSize: 12 }}>
             <div className="label">publisher</div><div>{p.publisher || '—'}</div>
@@ -222,6 +262,21 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
             <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
               This plugin runs Docker containers but doesn't declare them, so the container guard
               won't watch them.
+            </div>
+          )}
+
+          {perms.friend_houses && (
+            <div className="plugin-friend-apps" style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)',
+                          padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, marginBottom: 4 }}>
+                <Icon name="users" size={13}/> apps with friends
+              </div>
+              {FRIEND_APPS_TRUST.map((line, i) => <div key={i}>{line}</div>)}
+              {p.friend_houses_open_routes && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--warn-ink)', paddingTop: 4 }}>
+                  <Icon name="alert-triangle" size={13}/> {FRIEND_APPS_OPEN_ROUTES}
+                </div>
+              )}
             </div>
           )}
 
@@ -404,7 +459,9 @@ const UninstallModal = ({ plugin, onClose, onDone, fire }) => {
  * dismisses it. Without the key the failure stacked under a progress toast
  * that still said it was validating (2026-11-02). */
 const STAGE_TOAST = 'plugin-stage';
-const useInstallFlow = (fire, refresh, dismissToast) => {
+const useInstallFlow = (fire, refresh, dismissToast, plugins = []) => {
+  // The plugin an upgrade replaces, for the trust screen's comparison.
+  const installedOf = (slug) => (slug && (plugins || []).find((x) => x.slug === slug)) || null;
   const [staged, setStaged] = React.useState(null);  // {stagedId, preview, sourceLabel, verb}
   const fileInputRef = React.useRef(null);
   const upgradeSlugRef = React.useRef(null);
@@ -429,6 +486,7 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
       setStaged({
         stagedId: res.staged_id, preview: res.preview,
         sourceLabel: file.name, verb: slug ? 'upgrade' : 'install',
+        installed: installedOf(slug),
       });
     } catch (e) {
       if (_wasSignInDismissed(e)) return;
@@ -446,15 +504,24 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
     }
   };
 
-  const stageGithub = async (url, slug) => {
+  /* `extra`: {release_asset: true} for an update from the Plugins page —
+   * the release's zip checked against its SHA256SUMS, or the tag's source
+   * when the release doesn't attach both (the answer's `download` says
+   * which, and the trust screen's source line repeats it). */
+  const stageGithub = async (url, slug, extra = {}) => {
     const path = slug ? `/api/plugins/${slug}/upgrade` : '/api/plugins/install';
     try {
       fire('downloading + validating…', { key: STAGE_TOAST });
-      const res = await apiPost(path, { github_url: url });
+      const res = await apiPost(path, { github_url: url, ...extra });
       dismissToast(STAGE_TOAST);
+      const dl = res.download;
+      const how = !dl ? ''
+        : dl.from === 'release_asset' ? ` · release file ${dl.asset}, SHA-256 matches the release's SHA256SUMS`
+        : ` · the tag's source (no release zip + SHA256SUMS to check against)`;
       setStaged({
         stagedId: res.staged_id, preview: res.preview,
-        sourceLabel: url, verb: slug ? 'upgrade' : 'install',
+        sourceLabel: url + how, verb: slug ? 'upgrade' : 'install',
+        installed: installedOf(slug),
       });
     } catch (e) {
       if (_wasSignInDismissed(e)) return;
@@ -469,20 +536,33 @@ const useInstallFlow = (fire, refresh, dismissToast) => {
 
   const onFilePicked = (fileList) => {
     const file = fileList && fileList[0];
-    if (file) stageZip(file, upgradeSlugRef.current);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (!file) return;
+    // The picker takes any binary (accept below), so a file that isn't a
+    // zip is turned away here, plainly; the server checks the rest.
+    if (!/\.zip$/i.test(file.name || '')) {
+      fire("That isn't a plugin zip. Pick the plugin's .zip file.");
+      return;
+    }
+    stageZip(file, upgradeSlugRef.current);
   };
 
   const modal = staged && (
     <TrustConfirmModal
       stagedId={staged.stagedId} preview={staged.preview}
       sourceLabel={staged.sourceLabel} verb={staged.verb}
+      installed={staged.installed || null}
       fire={fire}
       onCancel={() => setStaged(null)}
       onDone={() => { setStaged(null); refresh(); }}/>
   );
   const fileInput = (
-    <input ref={fileInputRef} type="file" accept=".zip,application/zip"
+    // Android's picker filters by MIME type, and a zip saved on a phone is
+    // often application/x-zip-compressed, application/x-zip or
+    // application/octet-stream: accepting only application/zip greyed it
+    // out, so a plugin couldn't be installed from a phone.
+    <input ref={fileInputRef} type="file"
+           accept=".zip,application/zip,application/x-zip-compressed,application/x-zip,application/octet-stream"
            style={{ display: 'none' }} onChange={(e) => onFilePicked(e.target.files)}/>
   );
   return { pickZip, stageGithub, modal, fileInput };
@@ -594,9 +674,83 @@ const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl, internetOff = fa
   );
 };
 
+/* ---- Update checks (GET /api/plugins/updates) ------------------ */
+/* The core asks each GitHub-installed plugin's repo for a newer vX.Y.Z
+ * once a day (api.github.com only, never with the internet off). A zip
+ * install whose homepage is a GitHub repo is checked only when asked.
+ * "Update to X.Y.Z" is the ordinary GitHub upgrade at that tag: the same
+ * download, checks and trust screen, nothing installs by itself.
+ * Release notes are plain text from the server, rendered as a text node
+ * (never as HTML). A repo that can't be read is never called up to date. */
+const checkedAgo = (sec) => (typeof sec === 'number' ? relTime(new Date(sec * 1000)) : null);
+
+const UpdateBadge = ({ u }) => {
+  if (!u || u.state !== 'update_available') return null;
+  return <Pill tone="warn">update {u.latest}</Pill>;
+};
+
+const PluginUpdatePanel = ({ p, u, onUpdate, onCheck, checking = false, internetOff = false }) => {
+  if (!u || p.status === 'uninstalled' || p.bundled || p.install_source === 'dev') return null;
+  const ago = checkedAgo(u.checked_at);
+  const line = (text, tone) => (
+    <div className="meta plugin-update-state" style={tone ? { color: `var(--${tone}-ink)` } : undefined}>{text}</div>
+  );
+  if (u.state === 'update_available') {
+    return (
+      <div className="plugin-update" style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 640 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Button variant="primary" icon="arrow-up-circle" disabled={internetOff}
+                  title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+                  onClick={() => onUpdate(p.slug, u.github_url)}>
+            Update to {u.latest}
+          </Button>
+          <span className="meta mono">{u.repo} · {u.tag}{ago ? ` · checked ${ago}` : ''}</span>
+          {internetOff && <NeedsInternetNote compact/>}
+        </div>
+        <div className="meta plugin-update-source">
+          {u.install_from === 'release_asset'
+            ? `installs the release's ${u.asset}, checked against its SHA256SUMS · you confirm on the trust screen`
+            : "installs from the tag's source: this release has no zip and SHA256SUMS to check against · you confirm on the trust screen"}
+        </div>
+        {u.notes
+          ? <div className="plugin-release-notes" style={{
+                whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 12, maxHeight: 220,
+                overflowY: 'auto', padding: '8px 10px', borderRadius: 'var(--r-sm)',
+                border: '1px solid var(--border-soft)', background: 'var(--raised)', color: 'var(--fg)' }}>
+              {String(u.notes)}
+            </div>
+          : line('no release notes')}
+      </div>
+    );
+  }
+  if (u.state === 'up_to_date') return line(`up to date · ${u.repo}${ago ? ` · checked ${ago}` : ''}`);
+  // Calm on purpose: a private repo is normal (the check sends no
+  // credentials), and nothing is offered that can't work.
+  if (u.state === 'unreachable') return line(`can't check for updates (private or unreachable) · ${u.repo}`);
+  // M6: the address now answers for another repository; nothing is offered.
+  if (u.state === 'repo_changed') return line(`the repository moved or changed owner · ${u.repo} · no update is offered: reinstall from its new address if you trust it`, 'warn');
+  if (u.state === 'rate_limited') return line("can't check for updates right now (GitHub's limit) · it tries again later", 'warn');
+  if (u.state === 'internet_off') return line(`can't check for updates · ${NEEDS_INTERNET_TEXT}`);
+  // not_checked: a GitHub install waits for the daily check; a zip install
+  // with a GitHub homepage is checked only when someone asks.
+  if (u.origin === 'homepage') {
+    return (
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Button icon="github" disabled={internetOff || checking}
+                title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+                onClick={() => onCheck(p.slug)}>
+          {checking ? 'checking…' : 'check GitHub for updates'}
+        </Button>
+        <span className="meta mono">{u.repo}</span>
+      </div>
+    );
+  }
+  return line(`not checked for updates yet · ${u.repo}`);
+};
+
 /* ---- One installed-plugin row --------------------------------- */
 const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl, internetOff = false,
-                     focused = false }) => {
+                     focused = false, update = null, onCheckUpdate, onUpdateRelease, checking = false }) => {
   // `focused`: the address named this plugin (#plugins/<slug>, the plugin
   // frame's "manage" link): its row opens and scrolls into view.
   const [open, setOpen] = React.useState(focused);
@@ -625,6 +779,7 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
             <Pill tone={pill.tone}>{pill.label}</Pill>
             {!p.enabled && p.status !== 'uninstalled' && <Pill tone="idle">disabled</Pill>}
             {restartPending && <Pill tone="warn">restart to finish the upgrade</Pill>}
+            {!restartPending && <UpdateBadge u={update}/>}
             {p.containers_unwatched && p.status !== 'uninstalled' && (
               <span title="it runs Docker containers but declares none (SDK 1.5 [[containers]]), so the container guard can't watch them">
                 <Pill tone="idle">containers not watched</Pill>
@@ -721,6 +876,8 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
               ))}
             </div>
           )}
+          <PluginUpdatePanel p={p} u={update} onUpdate={onUpdateRelease} onCheck={onCheckUpdate}
+                             checking={checking} internetOff={internetOff}/>
           <PluginUpgradeControls p={p} onUpgradeZip={onUpgradeZip} onUpgradeUrl={onUpgradeUrl}
                                  internetOff={internetOff}/>
         </div>
@@ -741,9 +898,15 @@ const PluginsPage = () => {
     '/api/config/version', { eventTypes: ['plugins.changed'], quiet: true });
   const waiting = pendingRestart(version).plugins;
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
+  // Update checks (open read; the core does the asking).
+  const { data: updData, refresh: refreshUpdates } = useApiObject(
+    '/api/plugins/updates', { eventTypes: ['plugins.changed'], quiet: true });
+  const updates = (updData && updData.plugins) || {};
+  const hasAutoChecked = Object.values(updates).some((u) => u && u.origin === 'github');
+  const [checking, setChecking] = React.useState(null);  // null | '*' | slug
   // Returns the re-reads, so the restart card can wait for them (onSettled).
-  const refresh = () => Promise.all([refreshList(), refreshVersion()]);
-  const flow = useInstallFlow(fire, refresh, dismissToast);
+  const refresh = () => Promise.all([refreshList(), refreshVersion(), refreshUpdates()]);
+  const flow = useInstallFlow(fire, refresh, dismissToast, plugins);
   const [ghUrl, setGhUrl] = React.useState('');
   // Installing from GitHub downloads; a zip install stays available.
   // The internet answer, read once for the page (the GET /api/config the
@@ -776,6 +939,18 @@ const PluginsPage = () => {
       refresh();
     }
     catch (e) { reportMutationFailure(fire, 'enable', e); }
+  };
+  // "check now" (admin, gated by the core): every GitHub install, or one plugin.
+  const onCheckUpdates = async (slug = null) => {
+    setChecking(slug || '*');
+    try {
+      const res = await apiPost('/api/plugins/updates/check', slug ? { slug } : {});
+      const found = Object.values((res && res.plugins) || {}).filter((u) => u.state === 'update_available');
+      fire(found.length ? `${found.length} update${found.length === 1 ? '' : 's'} available` : 'checked for updates');
+      refreshUpdates();
+    }
+    catch (e) { reportMutationFailure(fire, 'update check', e); }
+    finally { setChecking(null); }
   };
   const onDisable = async (p) => {
     try { await apiPost(`/api/plugins/${p.slug}/disable`); fire(`disabled ${p.name}`); refresh(); }
@@ -820,7 +995,14 @@ const PluginsPage = () => {
         </div>
       </Card>
 
-      <Card title="installed" sub={`${plugins.length} plugin${plugins.length === 1 ? '' : 's'} registered`}>
+      <Card title="installed" sub={`${plugins.length} plugin${plugins.length === 1 ? '' : 's'} registered`}
+            action={hasAutoChecked && (
+              <Button icon="refresh-cw" disabled={internetOff || checking !== null}
+                      title={internetOff ? NEEDS_INTERNET_TEXT : 'ask GitHub now (it also checks once a day)'}
+                      onClick={() => onCheckUpdates(null)}>
+                {checking === '*' ? 'checking…' : 'check for updates'}
+              </Button>
+            )}>
         {plugins.length === 0 ? (
           <Empty title="no plugins installed"
                  sub="install one from a zip or a GitHub URL — bundled plugins appear here automatically on first boot"/>
@@ -833,7 +1015,11 @@ const PluginsPage = () => {
                          onUninstall={setUninstalling}
                          onUpgradeZip={(slug) => flow.pickZip(slug)}
                          onUpgradeUrl={(slug, url) => flow.stageGithub(url, slug)}
-                         internetOff={internetOff}/>
+                         internetOff={internetOff}
+                         update={updates[p.slug] || null}
+                         onCheckUpdate={onCheckUpdates}
+                         onUpdateRelease={(slug, url) => flow.stageGithub(url, slug, { release_asset: true })}
+                         checking={checking === p.slug}/>
             ))}
           </div>
         )}

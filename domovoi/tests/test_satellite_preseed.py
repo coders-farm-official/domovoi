@@ -38,13 +38,13 @@ async def _clean(tmp_path, monkeypatch):
     admin_auth.LOGIN_BACKOFF.reset()
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE satellite_pairings, satellites, admin_auth, admin_sessions CASCADE")
+            text("TRUNCATE satellite_pairings, satellites, rooms, admin_auth, admin_sessions CASCADE")
         )
     yield
     admin_auth.LOGIN_BACKOFF.reset()
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE satellite_pairings, satellites, admin_auth, admin_sessions CASCADE")
+            text("TRUNCATE satellite_pairings, satellites, rooms, admin_auth, admin_sessions CASCADE")
         )
 
 
@@ -95,13 +95,14 @@ async def test_preseed_creates_rows_and_token_authenticates() -> None:
 
     async with session_scope() as s:
         pair = (
-            await s.execute(text("SELECT token_hash FROM satellite_pairings WHERE room_id='den'"))
+            await s.execute(text("SELECT token_hash FROM satellite_pairings WHERE satellite_id='den'"))
         ).first()
         meta = (
             await s.execute(
                 text(
-                    "SELECT sat_type, hardware, mac, room_label, adopted_via, adopted_at "
-                    "FROM satellites WHERE room_id='den'"
+                    "SELECT s.sat_type, s.hardware, s.mac, NULLIF(r.name, r.room_id), "
+                    "s.adopted_via, s.adopted_at FROM satellites s JOIN rooms r ON r.room_id = s.room_id "
+                    "WHERE s.satellite_id='den'"
                 )
             )
         ).first()
@@ -180,7 +181,7 @@ async def test_delete_satellite_and_provisioned_guard() -> None:
                     await s.execute(
                         text(
                             "SELECT (SELECT count(*) FROM satellites WHERE room_id='den') + "
-                            "(SELECT count(*) FROM satellite_pairings WHERE room_id='den')"
+                            "(SELECT count(*) FROM satellite_pairings WHERE satellite_id='den')"
                         )
                     )
                 ).scalar()
@@ -225,7 +226,7 @@ async def test_room_label_set_and_clear() -> None:
     async with session_scope() as s:
         row = (
             await s.execute(
-                text("SELECT room_label FROM satellites WHERE room_id='kitchen'")
+                text("SELECT NULLIF(name, room_id) FROM rooms WHERE room_id='kitchen'")
             )
         ).first()
     assert row is not None and row[0] is None

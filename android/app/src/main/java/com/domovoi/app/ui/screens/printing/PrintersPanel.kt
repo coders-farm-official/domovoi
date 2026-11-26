@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +75,8 @@ internal fun toneOf(tone: String): Tone = when (tone) {
 @Composable
 internal fun PrintersPanel() {
     val app = LocalApp.current
+    val adminState by app.admin.state.collectAsState()
+    val sharedScreen = com.domovoi.app.net.LocalSharedScreen.current
     val toast = LocalToast.current
     val io = remember(app) { PrintIo(app.api) }
     val scope = rememberCoroutineScope()
@@ -155,10 +158,14 @@ internal fun PrintersPanel() {
                         onRooms = { rooms -> change("set rooms", { io.setRooms(p.id, rooms) }) { reload++ } },
                         onTwoSided = { v -> change("set two-sided", { io.setTwoSidedDefault(p.id, v) }) },
                         onColor = { v -> change("set colour", { io.setColorDefault(p.id, v) }) },
+                        onAdminChanged = { reload++ },
                     )
                 }
-                item {
-                    Text(ADMIN_ONLY_LINE, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgSubtle)
+                // Rename and remove: admin on this phone (PrinterAdmin.kt).
+                printersAdminLine(adminState, sharedScreen)?.let { line ->
+                    item {
+                        Text(line, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgSubtle)
+                    }
                 }
             }
         }
@@ -297,7 +304,10 @@ private fun PrinterCard(
     onRooms: (List<String>) -> Unit,
     onTwoSided: (Boolean?) -> Unit,
     onColor: (Boolean?) -> Unit,
+    onAdminChanged: () -> Unit = {},
 ) {
+    val adminState by com.domovoi.app.LocalApp.current.admin.state.collectAsState()
+    val adminHeld = printersAdminHeld(adminState, com.domovoi.app.net.LocalSharedScreen.current)
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -317,6 +327,7 @@ private fun PrinterCard(
                 }
             }
             p.status.words.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted) }
+            if (adminHeld) PrinterAdminRow(p, onAdminChanged)
             if (p.status.message.isNotBlank()) {
                 Text("printer says: ${p.status.message}", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgSubtle)
             }

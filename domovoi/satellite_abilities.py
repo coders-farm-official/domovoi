@@ -72,7 +72,11 @@ ABILITIES: dict[str, str] = {
     "capture_control": "`end_capture` (early commit; also needs speech_pause)",
     "turn_progress": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
     "dropin_ready": "a drop-in call's audio (its start chime and the peer's relay) waits for the device's `dropin_ready`: it finishes the reply it is still playing (\"Dropping in on the kitchen\") before it opens the call",
+    "room_audio": "the device plays the room's synced sound from `/v1/room-audio/{satellite_id}` (1.5.0, docs/ROOM_AUDIO_PROTOCOL.md), so the room's music, replies and timers go to it there",
+    "diagnostics": "the `diag_request` frame (one read-only probe by name, answered by `diag_result`) and the room drawer's Diagnostics tab (1.5.0, domovoi/satellite_diagnostics.py)",
     "mic_dsp": "`set_mic_dsp` and `mic_dsp_mark` (an XVF3800's DSP presets, picked by name from a fixed table; admin only, domovoi/mic_dsp.py)",
+    "support_shell": "the `support_open` / `support_input` / `support_resize` / `support_close` frames (an admin's support session: a shell as the satellite's service account, 1.5.0, domovoi/support_sessions.py); sent only by a Pi on a prepared card whose account is not in sudo",
+    "wake_claim": "1.5.0: the device claims each wake in a room whose `claim` is true (`wake_claim`), and takes `wake_grant`, `capture_keep` and the `claim` form of `end_capture` (one turn per wake word, domovoi/wake_claims.py)",
     "room_display": "the `room_display` frame (this room's music, timers and alarms, and one going off, for a screen in the room) and the `room_control` frame back (pause, resume, skip, previous, stop ringing); a paired room only (domovoi/room_display.py)",
 }
 
@@ -83,13 +87,16 @@ BOOLEAN_KEYS: dict[str, str] = {
     "capture_control": "capture_control",
     "announce_after_session_end": "announce_after_session_end",
     "dropin_ready": "dropin_ready",
+    "room_audio": "room_audio",
+    "diagnostics": "diagnostics",
     "mic_dsp": "mic_dsp",
+    "support_shell": "support_shell",
 }
 
 #: Behaviours negotiated per connection by their boolean key, with or
 #: without ``supports``: never assumed.
 NEGOTIATED: frozenset[str] = frozenset(
-    {"full_duplex", "speech_pause", "capture_control", "dropin_ready"}
+    {"full_duplex", "speech_pause", "capture_control", "dropin_ready", "room_audio", "diagnostics"}
 )
 
 #: Abilities only a device that LISTS them gets (1.4.0): newer than every
@@ -97,7 +104,11 @@ NEGOTIATED: frozenset[str] = frozenset(
 #: boolean hello key either. ``room_display``: a Pi has no screen.
 #: ``mic_dsp`` (1.4.1) does have one (``"mic_dsp": true``), sent only by
 #: an XVF3800 with ``xvf_host``: never assumed, so an older Pi never sees it.
-DECLARED_ONLY: frozenset[str] = frozenset({"room_display", "mic_dsp"})
+#: ``support_shell`` (1.5.0) likewise (``"support_shell": true``), sent only
+#: by a Pi on a prepared card where ``sudo -n true`` fails: a support
+#: session is offered only to a device that said so (docs/SECURITY_PRIVACY.md,
+#: "Support sessions").
+DECLARED_ONLY: frozenset[str] = frozenset({"room_display", "mic_dsp", "support_shell", "wake_claim"})
 
 #: What a hello WITHOUT ``supports`` (every Pi in the field) is taken to
 #: have: everything the core has always pushed to a satellite. Out-of-turn

@@ -43,6 +43,11 @@ def test_builds_every_committed_abi_with_the_no_docker_recipe() -> None:
     assert f"bash {FOLDER}/build-native.sh" in runs
     assert "docker" not in runs.lower()
     assert "sha256sum -c" in runs, "the NDK zip is checked against build-native.sh's pin"
+    # The sources from the submodules (F-Droid's way); build.sh's container
+    # build keeps cloning by pin, so the two ways are held to the same bytes.
+    checkout = next(s for s in jobs["build"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout@"))
+    assert checkout["with"]["submodules"] is True
+    assert "SHERPA_SUBMODULES" not in runs and "SHERPA_SRC" not in runs
 
 
 def test_compare_runs_after_failed_builds_and_reads_sha256sums() -> None:

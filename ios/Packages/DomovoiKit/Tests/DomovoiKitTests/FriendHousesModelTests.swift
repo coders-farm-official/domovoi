@@ -212,8 +212,10 @@ final class FriendHousesModelTests: XCTestCase {
         XCTAssertEqual([activeId], sections.current.map(\.id), "then what is shared now")
         XCTAssertEqual(15_000, FriendHousesModel.inboxPollMs)
         // 1.4.1: Messages, then Shared lists; the friends are the admin
-        // zone's, hidden on the phone, and not even read.
-        XCTAssertEqual([.messages, .shared], FhTab.allCases)
+        // zone's, hidden from a phone without admin, and not even read.
+        let out = fhTabsFor(.signedOut, sharedScreen: false)
+        XCTAssertEqual([.messages, .shared], out)
+        XCTAssertEqual(["messages", "shared lists"], out.map(\.label))
         XCTAssertEqual(
             ["GET /api/friend-houses/conversations", "GET /api/friend-houses/shared-lists"],
             fh.seen.current

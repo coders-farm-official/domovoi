@@ -10,15 +10,23 @@
 # Root on purpose: configfs gadget composition, mkfs.vfat, nmcli,
 # timedatectl, and the post-provision reboot all need it. Not sandboxed:
 # it edits /etc/wpa_supplicant, /boot/firmware and /sys/kernel/config, the
-# very places a sandbox would close. It starts from the satellite
-# account's venv and code tree, which docs/SECURITY_PRIVACY.md names as
-# the remaining root-runs-user-editable-code path.
+# very places a sandbox would close.
 #
-# Install (the media-prep pipeline does this; manual form):
-#   sudo sed -e "s|@USER@|$USER|g" -e "s|@HOME@|$HOME|g" \
-#     ~/domovoi/satellite/scripts/domovoi-provisioning.service \
-#     | sudo tee /etc/systemd/system/domovoi-provisioning.service >/dev/null
-#   sudo systemctl daemon-reload && sudo systemctl enable domovoi-provisioning
+# It runs ROOT'S OWN COPY of the code (since 1.5.0): the system Python,
+# from /usr/local/lib/domovoi/root-code (root's, writable by nobody else;
+# satellite/root_code.py), never the service account's venv or ~/domovoi
+# tree. It names the account, never a path in its home. At every boot root
+# first brings its copy up to the code the client synced, after checking
+# the server's signature on it against the root-owned pin
+# (satellite/root_entry.py). A card prepared before 1.5.0 switches to this
+# unit by itself at a boot after the satellite update.
+#
+# Install (the media-prep pipeline does this): stage 1 installs root's copy
+# from the card and renders @USER@. On a hand-built satellite, from the
+# checkout's root, as root:
+#   sudo /usr/bin/python3 -E -s -m satellite.root_code switch "$USER"
+# which installs root's copy, the XVF3800 wrapper and this unit, then
+#   sudo systemctl enable domovoi-provisioning
 
 [Unit]
 Description=Domovoi satellite USB adoption mode
@@ -28,9 +36,9 @@ After=local-fs.target
 [Service]
 Type=simple
 User=root
-Environment=HOME=@HOME@
-ExecStart=@HOME@/satellite-venv/bin/python -m satellite.provisioning_mode
-WorkingDirectory=@HOME@/domovoi
+Environment=DOMOVOI_SATELLITE_USER=@USER@
+WorkingDirectory=/usr/local/lib/domovoi/root-code
+ExecStart=/usr/bin/python3 -E -s -m satellite.root_entry
 Restart=on-failure
 RestartSec=5
 # Exit 3: setup can never start on this card (provisioning_mode

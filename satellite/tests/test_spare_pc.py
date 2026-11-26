@@ -94,13 +94,17 @@ def test_full_duplex_is_an_owner_s_override_on_a_laptop_only():
 def test_the_laptop_hello_is_the_fixtures_linux_pc_hello():
     want = FIXTURES["devices"]["linux_pc"]["hello"]
     got = pc_sat()._hello_frame()
-    assert set(got) == set(want)
+    # 1.5.0 also names the device (the fixtures' `rooms` hello_adds).
+    assert set(got) == set(want) | set(FIXTURES["rooms"]["hello_adds"])
+    assert got["satellite_id"] == got["room_id"]
     for key in ("type", "sat_type", "mic_enabled", "speech_pause", "capture_control",
                 "announce_after_session_end", "board", "supports_full_duplex"):
         assert got[key] == want[key], key
-    assert got["supports"] == want["supports"]
+    # 1.5.0 adds one ability to the fixtures' (pre-1.5.0) laptop: wake_claim.
+    adds = FIXTURES["room_turns"]["hello_supports_adds"]
+    assert got["supports"] == [*want["supports"], adds]
     expect = FIXTURES["devices"]["linux_pc"]["expect"]
-    assert not set(got["supports"]) & set(expect["not_allowed"])
+    assert not set(got["supports"]) & (set(expect["not_allowed"]) - {adds})
 
 
 def test_the_laptop_never_declares_what_needs_root():
@@ -113,11 +117,14 @@ def test_a_speakerphone_laptop_declares_full_duplex_and_chat():
     assert hello["supports_full_duplex"] is True and "chat_mode" in hello["supports"]
 
 
-def test_a_pi_hello_has_no_board_and_no_list():
+def test_a_pi_hello_has_no_board_and_the_1_5_0_list():
     sat = client.Satellite(client.Config.from_toml({"device": {"profile": "xvf3800_usb"}}))
     hello = sat._hello_frame()
-    assert "board" not in hello and "supports" not in hello
-    assert set(hello) == set(FIXTURES["devices"]["pi_xvf3800"]["hello"])
+    assert "board" not in hello
+    # 1.5.0: a list, so it can name wake_claim (satellite/tests/test_wake_claim.py).
+    assert hello["supports"] == FIXTURES["room_turns"]["pi_hello_supports"]
+    assert set(hello) - {"supports"} == (set(FIXTURES["devices"]["pi_xvf3800"]["hello"])
+                                         | set(FIXTURES["rooms"]["hello_adds"]))
 
 
 # ─── the pin ──────────────────────────────────────────────────────────────

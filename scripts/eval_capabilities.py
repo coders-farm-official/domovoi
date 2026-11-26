@@ -1178,6 +1178,7 @@ def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -
     from domovoi.config import settings
     from domovoi.handlers import friend_houses as fh
     from domovoi.handlers import register_handler, unregister_handler
+    from domovoi.help_desk import admin_tasks
     from domovoi.printing import store as printer_store
 
     saved = {
@@ -1191,6 +1192,7 @@ def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -
     saved_names = dict(fh._NAMES)
     saved_home = (home_location._cache, home_location._cached_at)
     saved_list_printers = printer_store.list_printers
+    saved_updates_by_kit = admin_tasks.updates_by_kit
 
     async def fixture_printers(s: Any = None) -> list[dict[str, Any]]:
         return [
@@ -1223,6 +1225,9 @@ def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -
             home_location._cache, home_location._cached_at = (
                 home_location.clean(loc, rematch=False) if loc else None, time.monotonic())
             printer_store.list_printers = fixture_printers
+            # A house set up from an offline kit (1.5.0): the record
+            # domovoi.kit_rooms writes at install, as the fixture says.
+            admin_tasks.updates_by_kit = lambda: bool(house.get("offline_kit"))
             for p in house.get("plugins") or []:
                 if not p.get("enabled", True):
                     continue
@@ -1250,6 +1255,7 @@ def applied(house: dict, catalogue: dict[str, dict], *, lenient: bool = False) -
             fh._NAMES.update(saved_names)
             home_location._cache, home_location._cached_at = saved_home
             printer_store.list_printers = saved_list_printers
+            admin_tasks.updates_by_kit = saved_updates_by_kit
             CURRENT.update(house={}, lenient=False)
 
 
@@ -1305,6 +1311,17 @@ async def run_voice_turn(utterance: str, ctx: Any) -> Turn:
     return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path)
 
 
+def _fixture_caller(house: dict, device: str | None) -> Any:
+    """The fixture's ``device`` as ``devices.caller_device_row`` would find
+    it on a request presenting its device key; None for no such device."""
+    from web.backend.api.devices import CallerDevice
+
+    for d in house.get("devices") or []:
+        if device is not None and d["id"] == device:
+            return CallerDevice(d["id"], d.get("person_id"), bool(d.get("shared_screen")), None, None, "device_key")
+    return None
+
+
 def default_device(house: dict) -> str | None:
     """The phone or browser a typed message comes from when the case names
     none: the kitchen tablet on a shared screen, an unlinked browser for a
@@ -1348,8 +1365,10 @@ async def run_chat_turn(
         return Turn("reply", ai_features.TURNED_OFF_REASON, None, "chat_refused")
     user_row = _chat_row(thread, "user")
     tid = STATE["thread_ids"][thread]
+    # The fixture's phones and browsers are 1.5.0 clients: each proves
+    # itself with its device key (chat_memory.caller_asker).
     mem = await chat_memory.reply(FixtureSession(), thread_id=tid, content=utterance,
-                                  before_id=user_row, device_id=device)
+                                  before_id=user_row, request=None, caller=_fixture_caller(house, device))
     if mem is not None:
         _chat_row(thread, "assistant", mem.stats)
         return Turn("reply", mem.text, "chat_memory", "chat")

@@ -18,10 +18,17 @@ extension PortConflict {
 
     public var sheetTitle: String { "\(sentenceOwner) is using Domovoi's ports" }
 
-    public var sheetText: String {
+    public var sheetText: String { sheetText(offlineKit: false) }
+
+    /// `offlineKit`: Setup installs from an offline kit, which takes
+    /// Domovoi's own Ollama (the models come off the stick into it), so the
+    /// household's is never offered then.
+    public func sheetText(offlineKit: Bool) -> String {
         let which = ports.count == 1 ? "port" : "ports"
         var t = "\(sentenceOwner) holds \(which) \(Preflight.portList(ports)), which Domovoi needs. "
-        if let v = ollamaVersion {
+        if let v = ollamaVersion, offlineKit {
+            t += "It is Ollama \(v). An install from an offline kit runs Domovoi's own Ollama, with the AI models from the stick: quit this Ollama, then choose Retry."
+        } else if let v = ollamaVersion {
             t += "It is Ollama \(v). "
             if ollamaUsable {
                 t += "Domovoi can use it instead of running its own: its AI models then stay in that Ollama's own folder, and uninstalling Domovoi leaves them there."

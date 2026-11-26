@@ -297,7 +297,7 @@ async def test_add_to_playlist_refuses_http_source(db_session) -> None:
     the path-resolver."""
     mpd = MPDStubClient()
     # play_url stub gives us an http:// file.
-    await mpd.play_url("https://stream.example/stream", title="WBEZ")
+    await mpd.play_url("http://192.168.1.20:8000/stream", title="WBEZ")
     mpd_module._clients = {"kitchen": mpd}
 
     handler = PlaylistHandler()

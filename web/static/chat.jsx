@@ -21,6 +21,9 @@
  * runs shows it from the message list's `jobs`, polled until it ends; a
  * stopped summary offers "carry on".
  *
+ * Photo and video results (chat_media.jsx, ChatMedia): a reply that found
+ * the household's photos or videos carries `media`; its cards are drawn
+ * under the reply (optional here, like ChatVideos).
  * Videos (chat_videos.jsx, ChatVideos): one short video a message rides
  * the same paperclip when the server can watch one; the attachment shows
  * "Watching your video… about N minutes left" (the thread's `videos`,
@@ -43,6 +46,8 @@
  * the URL carries the household token as ?device_token= (withDeviceToken,
  * data.js) — the query the server accepts on reads and nowhere else. */
 const chatUploadUrl = (token) => withDeviceToken(`${API_BASE}/api/chat/uploads/${token}`);
+// A reply carrying photo and video results (chat_media.jsx).
+const hasMediaCards = (m) => !!(m && m.media && Array.isArray(m.media.items) && m.media.items.length);
 
 /* What a send says when the household's AI features are off. */
 const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
@@ -180,7 +185,7 @@ const ChatThreadRow = ({ t, active, onSelect, onDelete, onRename, onArchive }) =
         </div>
         <div style={{ fontSize: 11, color: active ? 'var(--fg-muted)' : 'var(--fg-faint)', overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {t.archived ? 'archived · ' : ''}{snippet}
+          {t.archived ? 'archived · ' : ''}{t.owner_name && !t.mine ? `${t.owner_name} · ` : ''}{snippet}
         </div>
       </div>
       <span className="mono" style={{ fontSize: 10, color: active ? 'var(--fg-muted)' : 'var(--fg-faint)', flexShrink: 0 }}>
@@ -191,17 +196,61 @@ const ChatThreadRow = ({ t, active, onSelect, onDelete, onRename, onArchive }) =
                   title={t.archived ? 'move back to chats' : 'archive chat'}
                   aria-label={t.archived ? 'move back to chats' : 'archive chat'}
                   onClick={stop(onArchive)}/>
-      <IconButton name="trash-2" title="delete chat" aria-label="delete chat" onClick={stop(onDelete)}/>
+      {t.can_delete !== false && (
+        <IconButton name="trash-2" title="delete chat" aria-label="delete chat" onClick={stop(onDelete)}/>
+      )}
     </div>
   );
 };
 
+/* Private chats (1.5.0, design-notes PRIVATE-CHATS.md §2.5): who can see
+ * the open chat, and the "Share with household" switch for the device
+ * that started it (or an admin). A thread from before the server knew
+ * about sharing carries no `shared` field: nothing is said then. */
+const CHAT_PRIVATE_LINE = 'Private · only this device and the house\'s admins can see it';
+const CHAT_SHARED_LINE = 'Shared with the household';
+const CHAT_SHARED_SCREEN_LINE = 'Shared · chats on this screen are shared with the household';
+const CHAT_SHARE_HELP = "Everyone's phones and browsers in the house can read and add to it.";
+const CHAT_UNSHARE_ASK = "Stop sharing? Other phones and browsers won't see this chat any more, "
+  + 'including anything they wrote in it.';
+const CHAT_GONE_LINE = "This chat isn't shared with this device any more.";
+const CHAT_SAVE_PRIVATE_ASK = 'Saves a copy to Documents, where the household can see it.';
+
+const ChatPrivacy = ({ thread, sharedScreen, onShare }) => {
+  if (!thread || typeof thread.shared !== 'boolean') return null;
+  const line = sharedScreen ? CHAT_SHARED_SCREEN_LINE : thread.shared ? CHAT_SHARED_LINE : CHAT_PRIVATE_LINE;
+  return (
+    <span className="chat-privacy">
+      <span className="chat-privacy-chip" title={line}>
+        <Icon name={thread.shared ? 'users' : 'lock'} size={12}/>
+        <span className="chat-privacy-text">{line}</span>
+      </span>
+      {!sharedScreen && thread.can_share && (
+        <label className="chat-privacy-switch" title={CHAT_SHARE_HELP}>
+          <input type="checkbox" checked={!!thread.shared} onChange={(e) => onShare(e.target.checked)}/>
+          <span>Share with household</span>
+        </label>
+      )}
+    </span>
+  );
+};
+
+/* An admin reading another device's private chat: what they may do. */
+const ChatAdminBanner = ({ thread }) => (thread && thread.admin_view ? (
+  <div className="chat-note info" role="note">
+    You're reading {thread.owner_name || 'another device'}'s private chat as an admin. You can share it or
+    delete it, not write in it.
+  </div>
+) : null);
+
 /* What the rail lists: a search across every chat (archived ones too),
  * the archived chats, or the chats. */
-const chatRailPath = (q, archived) => {
+const chatRailPath = (q, archived, all = false) => {
   const query = (q || '').trim();
-  if (query) return `/api/chat/threads?q=${encodeURIComponent(query)}`;
-  return archived ? '/api/chat/threads?archived=true' : '/api/chat/threads';
+  const scope = all ? 'scope=all' : '';
+  if (query) return `/api/chat/threads?q=${encodeURIComponent(query)}${scope ? '&' + scope : ''}`;
+  if (archived) return `/api/chat/threads?archived=true${scope ? '&' + scope : ''}`;
+  return scope ? `/api/chat/threads?${scope}` : '/api/chat/threads';
 };
 
 /* ─── Messages ──────────────────────────────────────────────────────────── */
@@ -231,8 +280,8 @@ const chatCopyText = async (text) => {
 /* Who sent a user message, as the details show it. */
 const chatDeviceLabel = (m) => {
   if (m.device) return m.device;
-  const mine = typeof DeviceIdentity !== 'undefined' && m.device_id && m.device_id === DeviceIdentity.id();
-  return mine ? 'this browser' : (m.device_name || m.device_id || null);
+  // `mine`: the server compared the row with this browser's X-Device-Id.
+  return m.mine ? 'this browser' : (m.device_name || null);
 };
 
 /* The copy / details menu, at the pointer (right-click or long press) or
@@ -396,7 +445,7 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
           <div {...bubbleEvents}
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0,
-                        flex: (m.draft || m.print_attachment) && !m.pending ? 1 : undefined }}>
+                        flex: (m.draft || m.print_attachment || hasMediaCards(m)) && !m.pending ? 1 : undefined }}>
             {headsUp ? (
               // A heads-up card is the reply until an option is picked
               // (documents plan D3): its own sentence and buttons.
@@ -413,6 +462,7 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
             ) : m.stats && m.stats.lookup_card
               ? <ChatLookups.Card m={m} busy={busy} onDecide={onLookup}/>
               : <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>}
+            {!m.pending && m.media && window.ChatMedia && <window.ChatMedia.Cards media={m.media}/>}
             {m.pending && m.status === 'waiting_for_voice' && !m.content && (
               <span className="mono chat-doc-checking">a spoken answer goes first…</span>
             )}
@@ -555,12 +605,18 @@ const ChatPageMain = () => {
   const [railQuery, setRailQuery] = React.useState('');
   const [showArchived, setShowArchived] = React.useState(false);
   const railQ = useDebouncedValue(railQuery, 250);
-  const railPath = chatRailPath(railQ, showArchived);
+  const admin = useAdminSignedIn();
+  // An admin's list filter: "My chats" (this device's and the shared ones)
+  // or "All chats in the house".
+  const [allChats, setAllChats] = React.useState(false);
+  const railPath = chatRailPath(railQ, showArchived, admin && allChats);
   const railList = useApiList(railPath, { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
   const railItems = railPath === '/api/chat/threads' ? threads : railList.items;
   const refreshAll = () => { refreshThreads(); railList.refresh(); };
   const { data: modelsInfo, refresh: refreshModels } = useApiObject('/api/chat/models');
-  const admin = useAdminSignedIn();
+  const sharedScreen = (typeof useSharedScreen === 'function' ? useSharedScreen : () => false)();
+  // The open thread as the server last described it (its access fields).
+  const [openThread, setOpenThread] = React.useState(null);
   // Pictures can't be read here (the vision model isn't installed): the
   // paperclip opens this note instead of the picker.
   const visionMissing = ChatDetails.visionMissing(modelsInfo);
@@ -622,15 +678,19 @@ const ChatPageMain = () => {
   const [videos, setVideos] = React.useState([]);
   const loadMessages = async (id) => {
     try {
-      const r = await apiGet(`/api/chat/threads/${id}/messages`);
+      const r = await apiGet(`/api/chat/threads/${id}/messages`, { headers: callerDeviceHeaders() });
       setMessages(r.messages || []);
       setJobs(r.jobs || []);
       setVideos(r.videos || []);
+      setOpenThread(r.thread || null);
       setMessagesRefusal(null);
     } catch (e) {
       setMessages([]);
       setJobs([]);
       setVideos([]);
+      setOpenThread(null);
+      // Unshared (or deleted) while it was open: say so and close it.
+      if (e && e.status === 404) { setThreadId(null); fire(CHAT_GONE_LINE); }
       setMessagesRefusal(e && (e.status === 401 || e.status === 403
         || (e.status === 429 && e.deviceTokenWait)) ? e : null);
     }
@@ -732,6 +792,7 @@ const ChatPageMain = () => {
   };
   const selectThread = (t) => {
     setThreadId(t.id);
+    setOpenThread(t && typeof t.shared === 'boolean' ? t : null);
     loadMessages(t.id);
     hideRailOnPhone();
     if (t.id !== threadId) setCanvas(null);
@@ -764,6 +825,8 @@ const ChatPageMain = () => {
       title: ((draftLatest[id] || {}).title) || 'draft' }),
     printAttachment: (attachment) => setPrintDraft({ attachment, title: attachment.name }),
     save: async (id, version) => {
+      if (openThread && openThread.shared === false
+          && !await askConfirm(CHAT_SAVE_PRIVATE_ASK, { confirmLabel: 'Save' })) return;
       try {
         const r = await Drafts.api.save(id, version, null);
         fire(`saved ${r.rel_path} · ${r.check ? r.check.line : ''}`);
@@ -824,15 +887,19 @@ const ChatPageMain = () => {
       const t = await apiPost('/api/chat/threads', {});
       refreshThreads();
       setThreadId(t.id);
+      setOpenThread(t);
       setMessages([]);
       hideRailOnPhone();
     } catch { fire('could not create chat'); }
   };
 
-  // The household's chats: a delete is for everyone (the app says the same).
+  // A shared chat's delete is for everyone in the house; a private one's
+  // is this device's (and the admins' view of it).
   const deleteThread = async (t) => {
-    if (!await askConfirm(`Delete "${t.title || 'new chat'}"? Deletes it for everyone in the house. `
-      + "This can't be undone.")) return;
+    const ask = t.shared === false
+      ? `Delete "${t.title || 'new chat'}"? This can't be undone.`
+      : `Delete "${t.title || 'new chat'}"? Deletes it for everyone in the house. This can't be undone.`;
+    if (!await askConfirm(ask)) return;
     try {
       await apiDelete(`/api/chat/threads/${t.id}`);
       if (t.id === threadId) { setThreadId(null); setMessages([]); }
@@ -922,6 +989,18 @@ const ChatPageMain = () => {
   };
 
   const [internetInfo] = ChatLookups.useInternet();
+  // "Share with household" on or off (the owning device or an admin).
+  const setShared = async (shared) => {
+    if (threadId == null) return;
+    if (!shared && !await askConfirm(CHAT_UNSHARE_ASK, { confirmLabel: 'Stop sharing' })) return;
+    try {
+      const t = await apiPatch(`/api/chat/threads/${threadId}`, { shared });
+      if (t && typeof t.shared === 'boolean') setOpenThread(t);
+      fire(shared ? 'shared with the household' : 'private to this device again');
+      refreshAll();
+    } catch (e) { fire((typeof apiErrorText === 'function' && apiErrorText(e, 0)) || 'could not change it'); }
+  };
+
   const setChatInternet = async (allowed) => {
     try {
       await apiPatch(`/api/chat/threads/${threadId}`, { internet_allowed: allowed });
@@ -973,6 +1052,7 @@ const ChatPageMain = () => {
         const t = await apiPost('/api/chat/threads', {});
         id = t.id;
         setThreadId(id);
+        setOpenThread(t);
       } catch { fire('could not create chat'); return; }
     }
     const images = revise ? [] : attachments;
@@ -1161,6 +1241,14 @@ const ChatPageMain = () => {
                    placeholder="search chats…" aria-label="search chats" maxLength={200}/>
             <span className="chat-rail-search-icon"><Icon name="search" size={13}/></span>
           </div>
+          {admin && (
+            <div className="chat-rail-scope" role="group" aria-label="which chats">
+              <button type="button" className={allChats ? '' : 'on'} aria-pressed={!allChats}
+                      onClick={() => setAllChats(false)}>My chats</button>
+              <button type="button" className={allChats ? 'on' : ''} aria-pressed={allChats}
+                      onClick={() => setAllChats(true)}>All chats in the house</button>
+            </div>
+          )}
           {showArchived && !railQ.trim() && (
             <div className="chat-rail-head">
               <IconButton name="arrow-left" title="back to chats" aria-label="back to chats"
@@ -1199,8 +1287,11 @@ const ChatPageMain = () => {
                       aria-label={railOpen ? 'hide chats' : 'show chats'}
                       onClick={() => setRailOpen(!railOpen)}/>
           <div className="chat-head-title">
-            {(threads.find((t) => t.id === threadId) || {}).title || 'new chat'}
+            {(threads.find((t) => t.id === threadId) || railItems.find((t) => t.id === threadId)
+              || openThread || {}).title || 'new chat'}
           </div>
+          <ChatPrivacy thread={threadId != null ? openThread : null} sharedScreen={!!sharedScreen}
+                       onShare={setShared}/>
           <ChatLookups.Chip info={internetInfo} thread={threads.find((t) => t.id === threadId)}
                             onToggle={setChatInternet}/>
           {modelsInfo && (
@@ -1249,7 +1340,9 @@ const ChatPageMain = () => {
           ))}
         </div>
 
+        <ChatAdminBanner thread={threadId != null ? openThread : null}/>
         {/* composer */}
+        {!(threadId != null && openThread && openThread.can_write === false) && (
         <div className="chat-composer">
           {attachments.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1303,6 +1396,7 @@ const ChatPageMain = () => {
             </React.Fragment>
           )}
         </div>
+        )}
       </div>
       )}
       {canvas && Drafts && wideCanvas && (

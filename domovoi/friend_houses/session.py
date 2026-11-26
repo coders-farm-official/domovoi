@@ -32,6 +32,26 @@ Frame kinds
 Only the kinds below exist; anything else closes the connection (finding
 20). Later phases add kinds here, each with a fixed body size or a capped
 one.
+
+1.5.0 added two, for plugin mail ("apps with friends"), behind a protocol
+number so a house from before it never sees either unasked:
+
+``CAPS`` (0x60, 3..1,059 bytes)
+    sent by the calling house, at most once per connection: ``proto u16``
+    (:data:`PROTO`), ``count u8`` (at most 32), then each plugin slug as
+    ``len u8`` + slug, ascending, no duplicates, exact length
+    (:mod:`domovoi.friend_houses.plugin_wire`). Sent only to friends an
+    admin turned "Apps with this friend" on for. A house before 1.5.0 doesn't
+    know the kind and closes the connection: that is how the caller learns
+    it is an older house (it records presence first).
+``MESSAGE_NACK`` (0x52, 21 bytes)
+    ``msg_id[16]``, ``reason u8`` (:class:`Nack`), ``retry_after_s u32``:
+    the answering house refuses one plugin mail and says why. Sent only on a
+    connection whose caller sent a CAPS with ``proto >= 2`` on that same
+    connection, and only for plugin mail; people's messages keep silence.
+
+A plugin-mail sender reads its connection with :data:`SENDER_ACCEPTS`:
+only the fixed-size answers, anything else closes it.
 """
 
 from __future__ import annotations
@@ -70,8 +90,18 @@ class Kind(enum.IntEnum):
     # receiver's ack, sent only after the message is safely stored.
     MESSAGE = 0x50
     MESSAGE_ACK = 0x51
+    # Plugin mail (1.5.0): the receiver refuses one mail, with a reason.
+    MESSAGE_NACK = 0x52
+    # Plugin mail (1.5.0): the caller's protocol number and its apps.
+    CAPS = 0x60
     BYE = 0x7F
 
+
+#: The protocol number a CAPS frame carries: 2 = plugin mail (1.5.0). A
+#: house that closes on CAPS is recorded as 1 (before 1.5.0).
+PROTO = 2
+PROTO_LEGACY = 1
+CAPS_BODY_MAX = 3 + 32 * 33
 
 # The exact body size each kind must have, or (min, max) for a capped one.
 _BODY_SIZES: dict[Kind, int | tuple[int, int]] = {
@@ -82,8 +112,50 @@ _BODY_SIZES: dict[Kind, int | tuple[int, int]] = {
     Kind.ACCEPT_OK: 0,
     Kind.MESSAGE: (1, 63 * 1024),
     Kind.MESSAGE_ACK: 16,
+    Kind.MESSAGE_NACK: 21,
+    Kind.CAPS: (3, CAPS_BODY_MAX),
     Kind.BYE: 0,
 }
+
+
+class Nack(enum.IntEnum):
+    """Why a plugin mail was refused (``MESSAGE_NACK``)."""
+
+    FULL = 1         # a quota: keep it, back off at least the retry-after
+    NOT_ALLOWED = 2  # this plugin isn't allowed with this house: drop its queue
+    RATE = 3         # a budget: keep it, back off the retry-after
+    UNAVAILABLE = 4  # paused, busy, or not handled yet: keep it, back off
+
+
+_NACK = struct.Struct(">16sBI")
+#: What a sender honours of a retry-after: at least 2 seconds, at most a day.
+RETRY_AFTER_MIN = 2
+RETRY_AFTER_MAX = 24 * 3600
+
+
+def nack_body(msg_id: bytes, reason: Nack, retry_after_s: int) -> bytes:
+    if len(msg_id) != 16:
+        raise ValueError("msg_id is 16 bytes")
+    return _NACK.pack(msg_id, int(Nack(reason)), max(0, min(int(retry_after_s), 0xFFFFFFFF)))
+
+
+def parse_nack(body: bytes) -> tuple[bytes, Nack, int]:
+    """``(msg_id, reason, retry_after)`` with the retry-after clamped to
+    [:data:`RETRY_AFTER_MIN`, :data:`RETRY_AFTER_MAX`]. An unknown reason
+    is a protocol error (SessionRefused)."""
+    if len(body) != _NACK.size:
+        raise SessionRefused("MESSAGE_NACK body has the wrong size")
+    msg_id, reason, secs = _NACK.unpack(body)
+    try:
+        why = Nack(reason)
+    except ValueError as exc:
+        raise SessionRefused("unknown refusal reason") from exc
+    return msg_id, why, max(RETRY_AFTER_MIN, min(secs, RETRY_AFTER_MAX))
+
+
+#: What the plugin-mail sender's connection accepts: fixed-size answers
+#: only (review D4; a dialled session otherwise accepts every kind).
+SENDER_ACCEPTS = frozenset({Kind.PONG, Kind.MESSAGE_ACK, Kind.MESSAGE_NACK, Kind.BYE})
 
 
 class SessionRefused(Exception):
@@ -165,8 +237,14 @@ class Session:
             self._writer.write(frame(self._transport.encrypt(bytes([kind]) + body)))
             await self._writer.drain()
 
-    async def recv(self, *, timeout: float = IDLE_TIMEOUT_SEC) -> tuple[Kind, bytes]:
-        data = await read_frame(self._reader, timeout=timeout)
+    async def recv(self, *, timeout: float = IDLE_TIMEOUT_SEC,
+                   accept: frozenset[Kind] | None = None) -> tuple[Kind, bytes]:
+        """The next frame. With ``accept``, any other kind is refused, and
+        no frame larger than the largest accepted body is even read."""
+        max_size = MAX_MESSAGE
+        if accept is not None:
+            max_size = 1 + max(_max_body(k) for k in accept) + TAGLEN
+        data = await read_frame(self._reader, max_size=max_size, timeout=timeout)
         try:
             plain = self._transport.decrypt(data)
         except NoiseError as exc:
@@ -177,6 +255,8 @@ class Session:
             kind = Kind(plain[0])
         except ValueError as exc:
             raise SessionRefused("unknown frame kind") from exc
+        if accept is not None and kind not in accept:
+            raise SessionRefused(f"{kind.name} isn't expected here")
         body = plain[1:]
         _check_body(kind, body)
         return kind, body
@@ -220,6 +300,11 @@ class Session:
             await asyncio.wait_for(self._writer.wait_closed(), CLOSE_DEADLINE_SEC)
         except Exception:  # noqa: BLE001 — already gone
             pass
+
+
+def _max_body(kind: Kind) -> int:
+    rule = _BODY_SIZES[kind]
+    return rule if isinstance(rule, int) else rule[1]
 
 
 #: How long :meth:`Session.close` waits for its BYE and for the stream.

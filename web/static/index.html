@@ -8,6 +8,9 @@
        it (Chrome on Android; browsers that don't know it ignore it). -->
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
   <title>Domovoi Web</title>
+  <!-- First, before anything reads the address: the setup-code QR's
+       #setup-code=... is taken out of it (setup_fragment.js). -->
+  <script src="/setup_fragment.js"></script>
   <script>
   /* The keyboard in a browser that lays it OVER the page (Safari on iOS,
    * and any without interactive-widget): the visual viewport is shorter
@@ -92,13 +95,17 @@
   <script type="text/babel" data-presets="react" src="podcasts.jsx"></script>
   <script type="text/babel" data-presets="react" src="audiobooks.jsx"></script>
   <script type="text/babel" data-presets="react" src="videos.jsx"></script>
+  <!-- Photos and Faces (1.5.0): after videos.jsx, whose player a video hit opens. -->
+  <script type="text/babel" data-presets="react" src="photos.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_documents.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_drafts.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_lookups.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_videos.jsx"></script>
+  <script type="text/babel" data-presets="react" src="chat_media.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat.jsx"></script>
   <script type="text/babel" data-presets="react" src="people.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellite_media.jsx"></script>
+  <script type="text/babel" data-presets="react" src="support_session.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellites.jsx"></script>
   <script type="text/babel" data-presets="react" src="calendar.jsx"></script>
   <script type="text/babel" data-presets="react" src="lists.jsx"></script>
@@ -114,8 +121,12 @@
   <!-- Settings → Household → Media folders (registers its panel). -->
   <script type="text/babel" data-presets="react" src="media_folders.jsx"></script>
   <script type="text/babel" data-presets="react" src="music_mix.jsx"></script>
+  <script type="text/babel" data-presets="react" src="media_understanding.jsx"></script>
   <script type="text/babel" data-presets="react" src="queue_history.jsx"></script>
-  <!-- Settings → Household → Friend Houses (registers its panel). -->
+  <script type="text/babel" data-presets="react" src="offline_kit.jsx"></script>
+  <!-- Settings → Household → Friend Houses (registers its panel). Its
+       "Apps with this friend" pieces load first and stay hidden. -->
+  <script type="text/babel" data-presets="react" src="friend_apps.jsx"></script>
   <script type="text/babel" data-presets="react" src="friend_houses.jsx"></script>
   <script type="text/babel" data-presets="react" src="settings.jsx"></script>
   <!-- Files is a multi-library browser. It MUST load before doc_editor.jsx /
@@ -163,6 +174,10 @@
       podcasts: () => window.PodcastsPage,
       audiobooks: () => window.AudiobooksPage,
       videos: () => window.VideosPage,
+      // Photos and the people in them (1.5.0, photos.jsx). Faces is on a
+      // launcher only while faces are on; the page says so by its address.
+      photos: () => window.PhotosPage,
+      faces: () => window.FacesPage,
       news: () => window.NewsPage,
       // Settings → Household → People since 2026-11-09: the shell turns
       // #people into #settings/people first (settingsTabRoute). Kept a core
@@ -539,6 +554,9 @@
               {/* The container guard's banner, on every page while an
                   incident is open (components.jsx). */}
               <ContainerGuardBanner/>
+              {/* A satellite support session is open: every viewer sees
+                  it, and any paired device may end it (support_session.jsx). */}
+              <SupportSessionBanner/>
               {/* A household token this server refused, or its "wait"
                   after wrong ones: said once, here (components.jsx). */}
               <DeviceTokenNotice/>

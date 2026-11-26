@@ -79,19 +79,27 @@ public struct SetupAnswers: Codable, Equatable {
     /// "Start this Mac after a power failure" (the consent page, desktop
     /// Macs, only while FeatureGates.startAfterPowerFailure is on).
     public var startAfterPowerFailure: Bool?
+    /// "Restore from a backup" (the media page, a first install only): the
+    /// house identity backup, copied by the app into its own private work
+    /// folder (IdentityBackup.read). Never saved in the install record: a
+    /// repair doesn't restore again.
+    public var restoreIdentity: String?
 
     enum CodingKeys: String, CodingKey {
         case internet, ollama
         case mediaRoot = "media_root"
         case keepAwake = "keep_awake"
         case startAfterPowerFailure = "start_after_power_failure"
+        case restoreIdentity = "restore_identity"
     }
 
-    public init(internet: String, mediaRoot: String, ollama: String, keepAwake: Bool? = nil, startAfterPowerFailure: Bool? = nil) {
+    public init(internet: String, mediaRoot: String, ollama: String, keepAwake: Bool? = nil, startAfterPowerFailure: Bool? = nil,
+                restoreIdentity: String? = nil) {
         self.internet = internet
         self.mediaRoot = mediaRoot
         self.ollama = ollama
         self.keepAwake = keepAwake
         self.startAfterPowerFailure = startAfterPowerFailure
+        self.restoreIdentity = restoreIdentity
     }
 }

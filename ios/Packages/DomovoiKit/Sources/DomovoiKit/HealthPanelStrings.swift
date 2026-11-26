@@ -101,18 +101,21 @@ public enum HealthPanelStrings {
     /// `:266`. Monospaced, like the meta line.
     public static let resolvedLabel = "last 24 hours · resolved and cleared"
 
-    /// `:275`. The arrow is **U+2192**. This is the sentence that stands in
-    /// for the acknowledge and clear buttons neither app draws: both routes
-    /// are admin-tier at both hops (`containers.py:133`, `:146`).
-    public static let adminClearsThese =
-        "an admin acknowledges or clears these on the dashboard's Settings → Health"
+    /// `IncidentAdminWords.DASHBOARD_OR_PHONE` (`IncidentAdmin.kt`). The
+    /// arrow is **U+2192**. Under the incidents while this phone holds no
+    /// admin: acknowledge and clear are admin-tier at both hops
+    /// (`containers.py:133`, `:146`), so they are the dashboard's or this
+    /// phone's own admin sign-in's (1.5.0, ``HealthIncidentAdminModel``).
+    public static let adminClearsThese = HealthIncidentAdminWords.dashboardOrPhone
 
     // MARK: - the dashboard foot (`:160-172`)
 
-    /// `:163-165`, two Kotlin literals joined with `+`.
+    /// `:163-166`, three Kotlin literals joined with `+`. Since 1.5.0 it also
+    /// says that admin on this phone approves rooms (``AdminSession``).
     public static let dashboardFoot =
         "Updates, disk space, rooms waiting for approval and the internet are checked on the "
-        + "dashboard's Health, where the admin signs in."
+        + "dashboard's Health, where the admin signs in, or sign in as admin on this phone "
+        + "(Settings → Household → Admin on this phone) to approve rooms in Settings → Rooms."
 
     /// `:169`.
     public static let openTheDashboard = "Open the dashboard's Health"

@@ -51,8 +51,14 @@ public enum ProvisionArgs {
     /// VM guard lets the core (not the containers) reach its port. It runs
     /// on the Mac's graphics chip beside Ollama, which the core is told
     /// (`--host-stt-shares-gpu`: WHISPER_REMOTE_SHARES_GPU=true in .env).
+    ///
+    /// `offlineKit`: the kit's folder inside the VM (KitNames.guestMount),
+    /// for provision.sh --offline-kit (P2's Linux side: it takes every file
+    /// from there, checked against the pins at the kit's commit). A kit made
+    /// without AI chat ticked installs with --no-ai-models (`noAIModels`).
     public static func build(source: ProvisionSource, answers: InstallRecord.Answers, ollamaURL: String,
-                             sttURL: String? = nil, sttModel: String? = nil) -> [String] {
+                             sttURL: String? = nil, sttModel: String? = nil, restoreIdentity: String? = nil,
+                             offlineKit: String? = nil, noAIModels: Bool = false) -> [String] {
         var a: [String] = []
         if source.repoBundle != nil {
             a += ["--repo-url", ProvisionSource.guestBundle]
@@ -62,6 +68,8 @@ public enum ProvisionArgs {
         if let r = source.ref { a += ["--ref", r] }
         if let t = source.trackBranch { a += ["--track-branch", t] }
         a += ["--internet", answers.internet, "--tier", answers.tier.rawValue]
+        if let k = offlineKit { a += ["--offline-kit", k] }
+        if noAIModels { a.append("--no-ai-models") }
         if let tz = answers.timezone { a += ["--timezone", tz] }
         for m in answers.media { a += ["--media", "\(m.name.lowercased())=\(m.guestPath)"] }
         a += ["--ollama-url", ollamaURL, "--vm-guard", limaNet, "--vm-guard-dns", limaDNS, "--vm-guard-lan", lanInterface]
@@ -72,6 +80,9 @@ public enum ProvisionArgs {
         }
         if source.allowedSigners != nil { a += ["--allowed-signers", ProvisionSource.guestSigners] }
         if source.noVisionModel { a.append("--no-vision-model") }
+        // S3-4: a house identity backup (IdentityBackup.guestFile), made this
+        // server's identity before the core first starts.
+        if let f = restoreIdentity { a += ["--restore-identity", f] }
         return a + source.extraArgs
     }
 }

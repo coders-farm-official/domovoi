@@ -1025,11 +1025,14 @@ def test_the_whole_folder_is_installed_not_just_the_binary():
 
 def test_the_client_is_allowed_to_drive_the_ring():
     """USB control needs root; the client tries a plain call then falls back
-    to `sudo -n`, so the allowlist entry is what makes the ring work at all."""
+    to `sudo -n`, so the allowlist entry is what makes the ring work at all.
+    Since 1.5.0 the entry is the root-owned wrapper that takes only the
+    satellite's own operations (satellite/xvf_guard.py), never the tool."""
     from domovoi.satellite_media import overlay
 
     sudoers = overlay.render_template("sudoers.tmpl", {"USER": "domovoi"})
-    assert "domovoi ALL=(root) NOPASSWD: /opt/xvf3800/xvf_host" in sudoers
+    assert "domovoi ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-xvf\n" in sudoers
+    assert "NOPASSWD: /opt/xvf3800/xvf_host" not in sudoers
 
 
 def test_the_profile_points_where_stage_one_installs_it():

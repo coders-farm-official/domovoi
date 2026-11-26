@@ -75,6 +75,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from domovoi import chat_access
 from domovoi.chat_titles import first_words_title
 from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import (
@@ -87,6 +88,7 @@ from domovoi.clients.whisper import (
     transcribe_full_window,
     transcribe_with_window,
 )
+from domovoi import stt_denoise
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.models import PHONE_ROOM_PREFIX, Context, Intent, Response
@@ -394,6 +396,9 @@ async def _transcribe(pcm: bytes, stages: dict[str, int]) -> str:
             "stt_unavailable",
         ) from e
     t0 = time.perf_counter()
+    # The noise-cleanup experiment (domovoi/stt_denoise.py), off by
+    # default: what Whisper hears, never what voice ID or the history keep.
+    pcm = await stt_denoise.for_stt(pcm)
     heard, window = await transcribe_with_window(whisper, pcm)
     heard = (heard or "").strip()
     # Decided on the request as it will be routed: a leading "hey Domovoi"
@@ -497,17 +502,32 @@ def message_dict(row: Any) -> dict[str, Any]:
 
 
 async def _thread_exists(thread_id: int) -> bool:
+    """Whether the thread is still there (after a save failed: was it
+    deleted meanwhile?). No caller's view: the turn was checked first."""
     async with session_scope() as s:
-        row = (
-            await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})
-        ).first()
-    return row is not None
+        return (await chat_access.load_thread(s, thread_id)) is not None
+
+
+async def _check_thread(thread_id: int, viewer: chat_access.Viewer) -> None:
+    """The caller may write into the thread (chat_access.thread_for), or
+    the turn is refused before anything is heard: 404 for a thread it
+    can't see (the same answer as a missing one), 403 when it may only
+    read it."""
+    async with session_scope() as s:
+        _, refusal = await chat_access.check_thread(
+            s, thread_id, viewer, chat_access.Action.WRITE, lock=False,
+        )
+    if refusal is None:
+        return
+    if refusal.status == 404:
+        raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
+    raise PhoneTurnRefused(refusal.status, refusal.detail, refusal.code)
 
 
 async def _write_turn(
     *,
     thread_id: int,
-    phone_id: str,
+    device_id: str | None,
     transcript: str,
     reply: str,
     speaker_person_id: int | None,
@@ -550,7 +570,9 @@ async def _write_turn(
                         """
                     ),
                     {
-                        "t": thread_id, "c": transcript, "dev": phone_id,
+                        # The device its key resolved to (chat_access),
+                        # never the self-asserted phone_id.
+                        "t": thread_id, "c": transcript, "dev": device_id,
                         "sp": speaker_person_id, "sc": speaker_confidence,
                     },
                 )
@@ -627,6 +649,7 @@ async def run_phone_turn(
     audio: bytes,
     player: dict[str, Any] | None = None,
     speak: bool = True,
+    viewer: chat_access.Viewer | None = None,
 ) -> dict[str, Any]:
     """Answer one push-to-talk turn. Raises :class:`PhoneTurnRefused` for
     a turn refused before anything was written. ``speak=False``: the phone
@@ -654,8 +677,15 @@ async def run_phone_turn(
         raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
     room = phone_room(phone_id)
     pcm = pcm_from_upload(audio)
-    if not await _thread_exists(thread_id):
-        raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
+    # Who may speak into this chat: chat_access, from the caller's device
+    # key (the web forwards it), never from phone_id. ``viewer`` None is
+    # a keyless household caller.
+    viewer = viewer or chat_access.Viewer()
+    await _check_thread(thread_id, viewer)
+    if viewer.device_id is not None and phone_id != viewer.device_id:
+        # phone_id names the routing session (phone-<id>): a phone with a
+        # key speaks as itself only.
+        raise PhoneTurnRefused(403, "phone_id isn't this phone's device id", "not_this_phone")
     if len(pcm) < MIN_CLIP_SEC * BYTES_PER_SEC:
         return _not_heard("too_short", room)
     if room in _BUSY:
@@ -670,7 +700,7 @@ async def run_phone_turn(
 
         async with voice_activity.turn("phone"):
             return await _answer(app, room=room, phone_id=phone_id, thread_id=thread_id,
-                                 pcm=pcm, player=player or {}, speak=speak)
+                                 pcm=pcm, player=player or {}, speak=speak, device_id=viewer.device_id)
     finally:
         _BUSY.discard(room)
 
@@ -684,6 +714,7 @@ async def _answer(
     pcm: bytes,
     player: dict[str, Any],
     speak: bool = True,
+    device_id: str | None = None,
 ) -> dict[str, Any]:
     from domovoi.router import route
     from domovoi.streaming import run_voice_profile_hooks
@@ -771,7 +802,7 @@ async def _answer(
         stats["error_code"] = error["code"]
     messages = await _write_turn(
         thread_id=thread_id,
-        phone_id=phone_id,
+        device_id=device_id,
         transcript=transcript,
         reply=reply,
         speaker_person_id=person_id,

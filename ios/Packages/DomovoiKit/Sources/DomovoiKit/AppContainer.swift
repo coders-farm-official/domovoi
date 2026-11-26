@@ -276,8 +276,23 @@ public final class InMemoryShellStore: ShellStore {
     }
 
     public func pinFor(_ key: String) -> ServerIdentity.Pin? { state.withLock { $0.book.pins[key] } }
-    public func pin(_ key: String, _ pin: ServerIdentity.Pin) { state.withLock { $0.book.pins[key] = pin } }
+    public func pin(_ key: String, _ pin: ServerIdentity.Pin) {
+        let before = adminMark()
+        state.withLock { $0.book.pins[key] = pin }
+        adminWrote(before)
+    }
     public func mayPinOnFirstProof(_ key: String) -> Bool { false }
+
+    /// What an admin session is bound to, before a write (L57; ``AdminSessions/storeWrote(before:after:)``).
+    private func adminMark() -> AdminSessions.StoreMark {
+        state.withLock { AdminSessions.StoreMark(server: $0.book.serverURL, pins: $0.book.pins) }
+    }
+
+    /// After the write and outside the lock (forgetting reads the server),
+    /// before this store's own sinks.
+    private func adminWrote(_ before: AdminSessions.StoreMark) {
+        AdminSessions.shared.storeWrote(before: before, after: adminMark())
+    }
 
     public func isTokenRejected(_ url: String) -> Bool {
         state.withLock { $0.book.rejected.contains(ServerCredentials.normalize(url)) }
@@ -299,13 +314,17 @@ public final class InMemoryShellStore: ShellStore {
     public func isTrusted(_ url: String) -> Bool { state.withLock { $0.book.isTrusted(url) } }
 
     public func trustServer(_ url: String, identity: ServerIdentity.Pin? = nil) {
+        let before = adminMark()
         state.withLock { $0.book.trust(url, identity: identity) }
+        adminWrote(before)
     }
 
     public func setServerURL(_ url: String) -> Bool {
         // Only a write that took is a change: `false` means the book refused
         // an untrusted address and wrote nothing.
+        let before = adminMark()
         let written = state.withLock { $0.book.setServerURL(url) }
+        adminWrote(before)
         if written { selectionChanged() }
         return written
     }
@@ -315,20 +334,26 @@ public final class InMemoryShellStore: ShellStore {
     }
 
     public func replacePin(url: String, pin newPin: ServerIdentity.Pin) {
+        let before = adminMark()
         state.withLock { $0.book.replacePin(url: url, pin: newPin) }
+        adminWrote(before)
         serverForgotten(url)
     }
 
     @discardableResult
     public func removeKnownServer(_ url: String) -> TrustBook.ForgetReach {
+        let before = adminMark()
         let reach = state.withLock { $0.book.forget(url) }
+        adminWrote(before)
         serverForgotten(url)
         return reach
     }
 
     @discardableResult
     public func forgetActiveServer() -> String? {
+        let before = adminMark()
         let gone = state.withLock { $0.book.forgetActiveServer()?.url }
+        adminWrote(before)
         if let gone {
             serverForgotten(gone)
             selectionChanged()
@@ -465,12 +490,26 @@ public final class AppContainer: Sendable {
 
     public let store: any ShellStore
     public let vault: TokenVault
+    /// The device keys and the per-server device ids (1.5.0, ``DeviceKeyStore``):
+    /// the app hands the Keychain's; a test's container keeps them in memory.
+    public let deviceKeys: DeviceKeyStore
     public let network: NetworkWatch
     public let tokenHealth: TokenHealth
     public let identity: IdentityGate
 
     /// The app's client: the only one that carries the household token.
     public let client: DomovoiClient
+
+    /// Admin on this phone (``AdminSession``): the password signs in, the
+    /// Bearer is held in memory only, and today's grant may be kept behind
+    /// Face ID or Touch ID (`AdminGrant.swift`). One for the app, so a
+    /// sign-in holds across screens — Android's `AppContainer.admin`. No
+    /// screen uses it yet.
+    ///
+    /// It proves the server through ``identity`` (``IdentityAdmission``),
+    /// and it is in ``AdminSessions/shared``, which the store's writes and
+    /// the room-mode seal reach (L57).
+    public let admin: AdminSession
 
     /// Room mode's seal, kept so ``start()`` can ask it. Android reads
     /// `RoomStore.isActive` in `DomovoiApplication.onCreate` and starts the
@@ -534,10 +573,15 @@ public final class AppContainer: Sendable {
         lock: HouseholdLock = .shared,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         configuration: URLSessionConfiguration = DomovoiClient.defaultConfiguration(),
-        log: @Sendable @escaping (String, String) -> Void = { _, _ in }
+        deviceKeys: DeviceKeyStore = DeviceKeyStore(),
+        log: @Sendable @escaping (String, String) -> Void = { _, _ in },
+        adminGrants: (any GrantShelf)? = nil,
+        adminLocker: (any GrantLocker)? = nil,
+        deviceID: @Sendable @escaping () -> String = { "" }
     ) {
         self.store = store
         self.vault = vault
+        self.deviceKeys = deviceKeys
         let observers = SinkRegistry()
         self.networkObservers = observers
         let healthSinks = SinkRegistry()
@@ -551,7 +595,8 @@ public final class AppContainer: Sendable {
 
         let book = ServerBook(
             activeServer: { store.serverURL },
-            tokenForServer: { url in store.token(for: url) }
+            tokenForServer: { url in store.token(for: url) },
+            deviceKeyForServer: { url in deviceKeys.deviceKey(for: url) }
         )
 
         let sink = DeferredSink(log: { log("NetworkWatch", $0) })
@@ -597,6 +642,20 @@ public final class AppContainer: Sendable {
         self.client = graph.app
         self.identity = graph.gate
         self.lock = lock
+        let adminSession = AdminSession(
+            client: graph.app,
+            prove: IdentityAdmission.fingerprintOf(graph.gate),
+            grants: adminGrants,
+            locker: adminLocker,
+            // The id this phone uses at the ACTIVE server, which the grant
+            // is bound to: the install's own, unless it lost its device key
+            // there and started over under a new one (``DeviceKeyStore``).
+            deviceID: { deviceKeys.startedOverID(for: store.serverURL) ?? deviceID() }
+        )
+        // A phone that starts over at a server under a new id drops a grant
+        // kept there (it was issued to the old id).
+        self.admin = adminSession
+        deviceKeys.startedOver = { server in adminSession.startedOver(server) }
 
         // The socket, built from the client that was just made rather than
         // from `self.client`, because not every stored property is set yet.

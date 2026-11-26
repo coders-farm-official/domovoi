@@ -821,12 +821,24 @@ async def test_after_a_start_internet_streams_leave_the_queue_when_internet_is_n
         return 2
 
     monkeypatch.setattr(mpd_provisioner, "_pin_startup_volume", pin)
+    scanned: list[str] = []
+
+    async def scan(room_id, client):
+        scanned.append(room_id)
+        return {}
+
+    from domovoi import relay_queue
+
     monkeypatch.setattr(mpd_internet, "purge_room", purge)
+    monkeypatch.setattr(relay_queue, "scan_room", scan)
     monkeypatch.setattr(mpd_provisioner, "PURGE_RETRY_SEC", 0.0)
     monkeypatch.setattr(egress, "internet_turned_off", lambda: never)
     await mpd_provisioner._after_start("office", 6650)
     assert pins == [6650]
-    assert purged == (["office", "office"] if never else [])
+    # purge_room is a no-op unless never (its own check, replaced here);
+    # then, under every answer, the relay check of the queue (L20).
+    assert purged == ["office", "office"]
+    assert scanned == ["office"]
 
 
 async def test_a_heal_that_keeps_failing_warns_once_an_hour(monkeypatch, caplog) -> None:

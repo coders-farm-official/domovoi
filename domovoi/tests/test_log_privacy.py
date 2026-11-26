@@ -319,3 +319,12 @@ def test_no_log_line_at_info_or_above_writes_a_transcript_bare() -> None:
                 if bare:
                     offenders.append(f"{path.relative_to(REPO)}:{node.lineno} {sorted(set(bare))}")
     assert offenders == [], "log what was said through log_privacy.said():\n" + "\n".join(offenders)
+
+
+def test_the_player_relay_token_is_blanked_in_a_request_line() -> None:
+    """L23 (review 2026-11-23): the relay's token is the path's last
+    segment; the access log never holds it."""
+    line = 'GET /v1/player-relay/AbC-123_xyz0123456789abcdefABCDEF HTTP/1.1" 200'
+    assert log_privacy.scrub(line) == 'GET /v1/player-relay/*** HTTP/1.1" 200'
+    assert log_privacy.scrub("http://172.17.0.1:6370/v1/player-relay/tok_en") == (
+        "http://172.17.0.1:6370/v1/player-relay/***")

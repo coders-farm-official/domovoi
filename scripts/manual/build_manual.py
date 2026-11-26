@@ -54,6 +54,9 @@ ROUTES: dict[str, dict] = {
     "podcasts": {"dashboard": "#podcasts", "app": {"screen": "Podcasts"}},
     "audiobooks": {"dashboard": "#audiobooks", "app": {"screen": "Audiobooks"}},
     "videos": {"dashboard": "#videos", "app": {"screen": "Videos"}},
+    # Photos and Faces (1.5.0): dashboard pages; the apps follow later.
+    "photos": {"dashboard": "#photos", "app": {"dashboard": True}},
+    "faces": {"dashboard": "#faces", "app": {"dashboard": True}},
     "news": {"dashboard": "#news", "app": {"screen": "News"}},
     "calendar": {"dashboard": "#calendar", "app": {"screen": "Calendar"}},
     # The Android app's Lists screen (iOS follows Android).
@@ -78,10 +81,15 @@ ROUTES: dict[str, dict] = {
     "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
     "settings/models": {"dashboard": "#settings/models", "app": {"screen": "Settings", "tab": "models"}},
     "settings/chat": {"dashboard": "#settings/chat", "app": {"screen": "Settings", "tab": "chat"}},
+    "settings/photos-and-videos": {"dashboard": "#settings/photos-and-videos", "app": {"dashboard": True}},
     "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
     "settings/search": {"dashboard": "#settings/search", "app": {"dashboard": True}},
     "settings/fonts": {"dashboard": "#settings/fonts", "app": {"dashboard": True}},
-    "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
+    # "Voice history" until 1.5.0 (the command recordings): the app's tab
+    # for them is still "voice-history" until the apps rename it.
+    "settings/command-recordings": {"dashboard": "#settings/command-recordings", "app": {"screen": "Settings", "tab": "voice-history"}},
+    # Keep voice history (1.5.0): the app has no tab for it yet.
+    "settings/keep-voice-history": {"dashboard": "#settings/keep-voice-history", "app": {"dashboard": True}},
     # Listening history (2026-11-12): the app has no tab for it yet.
     "settings/listening-history": {"dashboard": "#settings/listening-history", "app": {"dashboard": True}},
     "settings/music-mix": {"dashboard": "#settings/music-mix", "app": {"dashboard": True}},
@@ -157,7 +165,7 @@ PIECES: dict[str, tuple] = {
     "Look things up": ("lookups", "online only when you say yes", ["look up", "search", "internet", "wikipedia", "web", "allow once", "always allow internet", "searxng", "brave", "sources", "kiwix"], {}),
     "What Domovoi is good and not so good at": ("good-and-not", "where to trust the answers, and where to check", ["trust", "accurate", "accuracy", "reliable", "wrong", "mistakes", "heads-up", "warning", "limits", "good at", "bad at", "weak"], {}),
     "When AI is off": ("ai-off", "what still works without the AI models", ["ai off", "no ai", "without ai", "turn off ai", "ai features", "optional", "commands only", "set up for home commands"], {}),
-    "Asking Domovoi for help": ("help-desk", "ask it, show it, report it", ["help", "how do i", "ask domovoi", "screenshot", "report a problem", "diagnostics", "send the steps", "question mark"], {}),
+    "Asking Domovoi for help": ("help-desk", "ask it, show it, report it", ["help", "how do i", "ask domovoi", "screenshot", "report a problem", "diagnostics", "full answer", "question mark"], {}),
     # Documents and letters
     "Ask about a document": ("ask-document", "attach a file, ask what it says", ["document", "pdf", "word", "docx", "odt", "excel", "csv", "attach a document", "ask about", "sources", "pages", "couldn't find"], {}),
     "Summaries of long documents": ("long-documents", "read in parts, with stop", ["summary", "summarize", "long document", "progress", "carry on", "stop", "use home server"], {}),
@@ -165,7 +173,7 @@ PIECES: dict[str, tuple] = {
     "Letters": ("letters", "explain one, or take one by voice", ["letter", "bill", "what does this letter say", "photo of a letter", "take a letter", "dictate", "landlord", "end of letter"], {}),
     "Read it to me": ("read-aloud", "a document read out in a room", ["read me", "read aloud", "read it back", "continue reading", "stop reading", "lease"], {}),
     # Files, printing and calendar
-    "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive", "from chat", "scans"], {}),
+    "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive", "from chat", "scans", "photo search", "might show"], {}),
     "Documents and spreadsheets": ("documents", "write, edit and share, together", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "editor", "word", "docx", "pdf", "fonts", "photo", "picture", "caption", "crop", "co-editing", "together", "version history", "restore", "read-only"], {}),
     "What does this scan say?": ("scan-reader", "a short summary of a scanned letter", ["scan", "scanned letter", "what does it say", "read my mail", "ocr", "letter", "handwriting", "might say", "read the scan"], {}),
     "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page", "print a draft", "print it"], {}),
@@ -190,6 +198,7 @@ PIECES: dict[str, tuple] = {
     "Domovoi's voice": ("voice", "pick it, fix a word", ["voice", "say it like", "pronunciation", "kristin", "norman", "linda", "piper"], {}),
     # People and privacy
     "People and voices": ("people", "Domovoi learns who's talking", ["people", "voice id", "who am i", "my name is", "forget me", "profile"], {}),
+    "Faces in photos": ("faces", "name the people in your photos", ["faces", "face", "recognize faces", "people in photos", "forget my face", "name a face"], {}),
     "Guests, household and admin": ("guests", "who can change what", ["admin", "password", "guest", "sign in", "setup code", "household token", "paired"], {}),
     "Devices and house rules": ("devices", "names, queue and file access", ["devices", "ban", "queue access", "files access", "shared screen", "kitchen tablet"], {}),
     "What's kept, and forgetting": ("kept", "how long, and \"forget me\"", ["privacy", "data", "history", "delete", "forget", "retention", "recordings", "transcripts", "voice history"], {}),
@@ -312,11 +321,14 @@ PHRASES: dict[str, tuple] = {
     "fix the wifi": ("wifi", "fast", {}),
     "how's domovoi doing": ("homelab", "fast", {}),
     "how many songs do I have": ("library", "fast", {}),
+    "show me photos of the beach from last summer": ("media_search", "fast", {}),
+    "find the video where we sang happy birthday": ("media_search", "fast", {}),
     "what did I add this week": ("library", "fast", {}),
     "let's chat": ("chat_mode", "fast", {}),
     "how do I change the wake word": ("help_desk", "fast", {}),
     "say that again": ("repeat", "fast", {}),
     "never mind": ("dismiss", "fast", {}),
+    "end support session": ("support_session", "fast", {}),
     "what voices are there": ("voice", "fast", {}),
     "let me hear Norman's voice": ("voice", "fast", {}),
     "switch to Norman's voice": ("voice", "fast", {}),

@@ -33,7 +33,8 @@ extension RoomEngine {
                 let dialed = try RoomIdentity.dialBase(enrol.coreURL, resolve: parts.resolve)
                 round = RoomEnrolment(
                     coreURL: dialed, fingerprint: enrol.fingerprint,
-                    roomID: enrol.roomID, roomLabel: enrol.roomLabel
+                    roomID: enrol.roomID, roomLabel: enrol.roomLabel,
+                    inRoom: enrol.inRoom, inRoomName: enrol.inRoomName
                 )
                 _ = try RoomIdentity.verifyServer(httpBase: round.coreURL, fingerprint: round.fingerprint) { url in
                     let body = try parts.http.get(url, limit: 64 * 1024)
@@ -65,7 +66,7 @@ extension RoomEngine {
                 }
                 update { $0.link = .offline(reason: "the connection to the server dropped") }
                 sleep(backoff, run: run)
-            case "awaiting_approval", "pairing_rejected", "approval_conflict", "approval_throttled":
+            case "awaiting_approval", "pairing_rejected", "approval_conflict", "approval_throttled", "satellite_id_mismatch":
                 // Parked or refused: ask again later, or at once on "check now".
                 lastNudge = waitOrNudge(RoomSessionRules.retryAfterMS(result, backoff: backoff), last: lastNudge, run: run)
             case "approval_code_invalid":
@@ -119,7 +120,9 @@ extension RoomEngine {
         let hello = RoomProtocol.text(RoomProtocol.hello(
             roomID: enrol.roomID, wakeWord: word, pairingToken: token,
             approvalCode: store.approvalCode, echoCanceller: parts.echoCanceller,
-            wakeWords: words, wakeWordsMax: wordsMax
+            wakeWords: words, wakeWordsMax: wordsMax,
+            // The room the room code asked to join (`in=`), until approved.
+            requestedRoom: store.requestedRoom
         ))
         // The hello goes the moment the socket opens, whichever of "opened"
         // and "open returned" comes first.
@@ -179,8 +182,10 @@ extension RoomEngine {
 
     func onText(_ text: String) {
         switch RoomProtocol.parse(text) {
-        case let .ready(features, _, _, roomVoice):
-            onReady(features: features, roomVoice: roomVoice)
+        case let .ready(features, _, _, roomVoice, _, room):
+            onReady(features: features, roomVoice: roomVoice, room: room)
+        case let .room(place):
+            onRoom(place)
         case let .error(reason, _, code):
             onError(reason: reason, code: code)
         case .transcript, .pong, .other:
@@ -218,8 +223,15 @@ extension RoomEngine {
         }
     }
 
-    func onReady(features: Set<String>, roomVoice: String?) {
+    func onReady(features: Set<String>, roomVoice: String?, room: RoomPlace? = nil) {
         store.setApprovedOnce()
+        // Accepted: the server decides the room from now on, so the room
+        // code's `in=` is asked for no more.
+        store.clearRequestedRoom()
+        if let room {
+            store.noteRoom(room)
+            update { $0.place = room }
+        }
         let outcome: RoomOneShot<String>? = shared.withLock { s in
             s.features = features
             s.roomVoice = roomVoice
@@ -237,6 +249,17 @@ extension RoomEngine {
         batteryReporter.reset()
         let device = parts.device
         healthQueue.async { [self] in onBattery(device.battery()) }
+    }
+
+    /// The `room` frame (1.5.0): an admin moved this phone to another room,
+    /// or the room's wake claims changed. The phone stays connected and
+    /// carries on in the frame's room: its name on the screen, the rest
+    /// (wake words, voice, music, the room display) the server sends as for
+    /// any room. Only a hello that named `satellite_id` gets this frame.
+    func onRoom(_ place: RoomPlace?) {
+        guard let place else { return }
+        store.noteRoom(place)
+        update { $0.place = place }
     }
 
     func onError(reason: String?, code: String?) {

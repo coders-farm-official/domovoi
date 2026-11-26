@@ -50,6 +50,12 @@ What a turn becomes:
      after the wake word; the TV that kept the capture open is what follows.
      Whisper's punctuation is not needed: "play some jazz in the kitchen
      and in other news tonight..." plays.
+     Since 1.5.0 (noisy rooms, domovoi/loud_room.py) a satellite that says
+     where speech began (``first_voiced_frame``) has only the first few
+     seconds from there transcribed, so the command is all the transcript
+     holds; and the command is said back ("It's loud in here. I heard:
+     ..."), or asked about first ("Should I ...?") when it would change
+     the house. A yes/no to that question is a command at the start too.
   3. Else, **a question**: addressed by name, or the FIRST sentence a
      clear question to the assistant ("can you ...", "tell me how ...",
      "how do I ...", or a question about the world such as "Which river is

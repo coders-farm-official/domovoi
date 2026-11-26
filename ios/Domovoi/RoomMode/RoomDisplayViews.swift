@@ -123,9 +123,12 @@ struct RoomFadingScroll<Content: View>: View {
     }
 }
 
-/// The room's name, "domovoi room" under it, and the mic chip.
+/// The room's name, where this phone is under it ("This phone is in the
+/// Kitchen"; "domovoi room" when there is no line), and the mic chip.
 struct RoomTopRow: View {
     let label: String
+    /// The line under the name (``RoomKioskModel/whereLine``); nil: "domovoi room".
+    var whereLine: String? = nil
     let compact: Bool
     let palette: RoomPalette
     let micOpen: Bool
@@ -141,9 +144,11 @@ struct RoomTopRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .accessibilityAddTraits(.isHeader)
-                Text(RoomModeStrings.roomBrand)
+                Text(whereLine ?? RoomModeStrings.roomBrand)
                     .font(.footnote)
                     .foregroundStyle(palette.text2)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
             }
             Spacer(minLength: 0)
             RoomMicChip(open: micOpen, live: micLive, muted: muted)
@@ -455,6 +460,130 @@ struct RoomArtTile: View {
 }
 
 /// The running timers, soonest first, then the next alarm.
+/// Photo and video results asked for here (1.5.0; the dashboard kiosk's
+/// DpMedia at phone size, Android's `MediaCard`): the spoken answer, a grid
+/// of up to six tiles (two across, three on a wide card) with a video marker
+/// and its moment, "Might show: …" as plain text, the date, and "and more"
+/// when there are more on the Photos page. Gone with the next results or
+/// after `expires_in_ms` (``RoomDisplayModel/State/media``).
+struct RoomMediaCard: View {
+    let media: RoomDisplayModel.Media
+    let compact: Bool
+    let palette: RoomPalette
+    let loadImage: @MainActor (String) async -> Data?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !media.said.isEmpty {
+                // The server's words, drawn as they are: verbatim, never Markdown.
+                Text(verbatim: media.said)
+                    .font(.system(size: compact ? 16 : 18))
+                    .foregroundStyle(palette.text1)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ViewThatFits(in: .horizontal) {
+                grid(across: 3).frame(minWidth: 520)
+                grid(across: 2)
+            }
+            if let more = media.more {
+                Text(verbatim: more)
+                    .font(.system(size: 15))
+                    .foregroundStyle(palette.text2)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.border, lineWidth: 1))
+        .accessibilityIdentifier("room-media")
+    }
+
+    private func grid(across: Int) -> some View {
+        Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+            ForEach(Array(stride(from: 0, to: media.tiles.count, by: across)), id: \.self) { start in
+                GridRow(alignment: .top) {
+                    ForEach(start..<min(start + across, media.tiles.count), id: \.self) { index in
+                        RoomMediaTileView(tile: media.tiles[index], palette: palette, loadImage: loadImage)
+                            .id("\(media.id)-\(index)")
+                    }
+                    ForEach(0..<(across - min(across, media.tiles.count - start)), id: \.self) { _ in
+                        Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct RoomMediaTileView: View {
+    let tile: RoomDisplayModel.MediaTile
+    let palette: RoomPalette
+    let loadImage: @MainActor (String) async -> Data?
+    @State private var image: UIImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Color.clear
+                .aspectRatio(4.0 / 3.0, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .background(palette.raised)
+                .overlay {
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .opacity(palette.artOpacity)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if tile.video {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(palette.text1)
+                            .frame(width: 22, height: 22)
+                            .background(Color.black.opacity(0.6), in: Circle())
+                            .padding(6)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if let at = tile.at {
+                        Text(verbatim: at)
+                            .font(.system(size: 13).monospacedDigit())
+                            .foregroundStyle(palette.text1)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                            .padding(6)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(palette.border, lineWidth: 1))
+            // A picture model's guess: plain text, never markup or a link.
+            if let caption = tile.caption {
+                Text(verbatim: caption)
+                    .font(.system(size: 14))
+                    .foregroundStyle(palette.text2)
+                    .lineLimit(2)
+            }
+            if let date = tile.date {
+                Text(verbatim: date)
+                    .font(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(palette.text2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: tile.description))
+        .task(id: tile.thumb) {
+            image = nil
+            guard let path = tile.thumb, let data = await loadImage(path) else { return }
+            // A thumbnail made by ImageIO from the header up, never the whole
+            // picture; one with an extreme size is not drawn (as a cover).
+            image = RoomArtImage.thumbnail(data).map { UIImage(cgImage: $0) }
+        }
+    }
+}
+
 struct RoomTimersCard: View {
     let state: RoomDisplayModel.State
     let palette: RoomPalette

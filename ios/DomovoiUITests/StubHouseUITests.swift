@@ -3908,7 +3908,8 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
         XCTAssertTrue(app.buttons["notes.md"].waitForExistence(timeout: 20), "Documents never listed")
 
-        let line = app.staticTexts["deleting is on the dashboard — a phone can't sign in as an admin"]
+        // Signed out on a household phone: AdminDeleteWords.filesOrPhone.
+        let line = app.staticTexts["deleting is on the dashboard, or sign in as admin on this phone"]
         for _ in 0..<6 where !line.exists {
             app.swipeUp()
         }

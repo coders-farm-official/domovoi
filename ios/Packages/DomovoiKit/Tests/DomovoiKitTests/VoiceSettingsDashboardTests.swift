@@ -74,19 +74,23 @@ final class VoiceSettingsDashboardTests: XCTestCase {
         )
     }
 
-    /// **The one section whose key and dashboard page differ.** Its key is
-    /// `voice-history` and its page is `recordings`
-    /// (`SettingsScreen.kt:140`). A builder who reached for `section.key`
-    /// would pass every other section in the table and send this one to a
-    /// page that does not exist — so the assertion is both that it is
-    /// `recordings` *and* that it is not the key.
-    func testVoiceHistoryGoesToRecordingsNotToItsOwnKey() throws {
-        let voiceHistory = try section("voice-history")
-        XCTAssertEqual(voiceHistory.key, "voice-history")
-        XCTAssertEqual(voiceHistory.dashboard, "recordings")
-        let address = VoiceSettingsDashboard.url(serverURL: server, for: voiceHistory)
-        XCTAssertEqual(address, "http://10.0.0.42:6369/#settings/recordings")
-        XCTAssertEqual(address?.contains("voice-history"), false)
+    /// **Command recordings** (1.5.0, "Voice history" until then), the one
+    /// section whose key and dashboard page differ: its key is
+    /// `command-recordings` and its page `recordings`, the address every
+    /// dashboard version understands (a 1.4.x dashboard has no
+    /// `command-recordings`; a 1.5.0 one redirects `recordings` there). A link
+    /// with any of its three keys lands on it and opens that page: the
+    /// address comes from the `dashboard` field, never from the key.
+    func testCommandRecordingsOpensRecordingsWhateverKeyALinkUsed() throws {
+        for key in ["command-recordings", "voice-history", "recordings"] {
+            let recordings = try section(key)
+            XCTAssertEqual(recordings.key, "command-recordings", key)
+            XCTAssertEqual(recordings.label, "Command recordings", key)
+            XCTAssertEqual(recordings.dashboard, "recordings", key)
+            let address = VoiceSettingsDashboard.url(serverURL: server, for: recordings)
+            XCTAssertEqual(address, "http://10.0.0.42:6369/#settings/recordings", key)
+            XCTAssertEqual(address?.contains("command-recordings"), false, key)
+        }
     }
 
     /// Voices is the section this app changes itself, so it is marked with no
@@ -109,7 +113,7 @@ final class VoiceSettingsDashboardTests: XCTestCase {
     /// over the table so a section renamed in `SettingsSections.swift`
     /// cannot leave a stale literal here passing.
     func testAllThreeSignpostsResolveToTheirOwnPage() throws {
-        for key in ["wake-words", "greetings", "voice-history"] {
+        for key in ["wake-words", "greetings", "command-recordings"] {
             let item = try section(key)
             let page = try XCTUnwrap(item.dashboard, "\(key) should be a dashboard section")
             XCTAssertEqual(

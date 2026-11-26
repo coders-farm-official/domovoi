@@ -18,14 +18,20 @@ any other deterministic chat reply (``stats.model_role = "memory"``, no
 model asked, not "try again"-able), with ``stats.memory`` saying what it
 did.
 
-**Whose memory** (:func:`device_person`): memories are per person, and a
+**Whose memory** (:func:`caller_asker`): memories are per person, and a
 typed message names no voice. The person is the one the asking phone or
 browser belongs to (``devices.owner_person_id``, "this is me" on a
-person's People page; the device is the id the caller names itself by, as
-for listening history and the music mix). Never a guess:
+person's People page). Since 1.5.0 the device must PROVE it is that device
+(design-notes PRIVATE-CHATS.md, "Scope addition"), through the shared
+helper ``devices.caller_device_row``: the device key it presents
+(``X-Domovoi-Device-Key`` or the HttpOnly cookie), or, for an app from
+before 1.5.0 during the compatibility window, its claim key
+(``X-Domovoi-Claim-Key``) with its self-asserted id. A self-asserted id
+alone (the registration cookie, ``X-Device-Id``, ``?device_id=``, a
+body ``device_id``) names nobody here. Never a guess:
 
-* a device linked to nobody (or that didn't name itself, or is unknown):
-  the "isn't linked" line, nothing saved, read or deleted;
+* a device linked to nobody, unknown, or that proves nothing: the "isn't
+  linked" line, nothing saved, read or deleted;
 * a SHARED SCREEN (``devices.shared_screen``): treated as linked to nobody
   even if it once was (marking it shared drops its person anyway,
   web/backend/api/devices.py): it is the whole household's, so nobody's
@@ -159,22 +165,48 @@ class Asker:
     person_id: int | None = None
 
 
-async def device_person(s: Any, device_id: str | None) -> Asker:
-    """The person ``device_id`` belongs to, for memories. Linked only when
-    the device row names a person and is not a shared screen."""
-    if not device_id:
+def proven(device: Any, request: Any = None) -> bool:
+    """Whether ``device`` (``devices.caller_device_row``) proved, on this
+    request, that it is that device: its device key, or its claim key (an
+    app from before 1.5.0, whose row may hold no device key yet or one it
+    never kept). A self-asserted id alone proves nothing."""
+    from web.backend.api import devices as devices_api
+
+    if device is None:
+        return False
+    if device.proof == "device_key":
+        return True
+    if request is None:
+        return False
+    return devices_api.claim_key_matches(device.claim_key_hash, devices_api.presented_claim_key(request))
+
+
+def device_person(device: Any, request: Any) -> Asker:
+    """The person the caller's ``device`` belongs to, for memories. Linked
+    only when the device proved itself (:func:`proven`), names a person and
+    is not a shared screen; an unproven device is "unlinked", as an unknown
+    one always was."""
+    if not proven(device, request):
         return Asker("unlinked")
-    row = (await s.execute(
-        text("SELECT owner_person_id, shared_screen FROM devices WHERE device_id = :d"),
-        {"d": device_id},
-    )).first()
-    if row is None:
-        return Asker("unlinked")
-    if row[1]:
+    if device.shared_screen:
         return Asker("shared")
-    if row[0] is None:
+    if device.owner_person_id is None:
         return Asker("unlinked")
-    return Asker("linked", int(row[0]))
+    return Asker("linked", int(device.owner_person_id))
+
+
+async def caller_asker(s: Any, request: Any, body_device_id: str | None = None, caller: Any = None) -> Asker:
+    """Who the request's caller is, for memories: its device as the shared
+    helper resolves it (``devices.caller_device_row``; ``caller``: one
+    already resolved, a ``devices.CallerDevice``), then
+    :func:`device_person`. Unlinked with neither."""
+    from web.backend.api import devices as devices_api
+
+    if caller is None:
+        if request is None:
+            return Asker("unlinked")
+        caller = await devices_api.caller_device_row(s, request, body_device_id)
+    return device_person(caller, request)
 
 
 # ─── The step ─────────────────────────────────────────────────────────────
@@ -219,17 +251,20 @@ async def _previous(s: Any, thread_id: int, before_id: int) -> dict[str, Any] | 
 
 
 async def reply(
-    s: Any, *, thread_id: int, content: str, before_id: int, device_id: str | None,
+    s: Any, *, thread_id: int, content: str, before_id: int, request: Any,
+    body_device_id: str | None = None, caller: Any = None,
 ) -> Reply | None:
     """The memory step for ``content`` (the message whose row is
-    ``before_id`` in ``thread_id``, typed on ``device_id``), done in ``s``
+    ``before_id`` in ``thread_id``, sent by ``request``'s caller, or by
+    ``caller`` already resolved: see :func:`caller_asker`), done in ``s``
     (the caller commits), or None: not a memory command, and the model
     answers it as before."""
     cmd = command(content)
     if cmd is None:
         return await _forget_what_answer(s, thread_id=thread_id, content=content,
-                                         before_id=before_id, device_id=device_id)
-    asker = await device_person(s, device_id)
+                                         before_id=before_id, request=request,
+                                         body_device_id=body_device_id, caller=caller)
+    asker = await caller_asker(s, request, body_device_id, caller)
     what = {"remember": "save that", "list": "read your memories"}.get(cmd.kind, "forget that")
     if asker.state == "shared":
         return _reply(SHARED_SCREEN_TEXT, "refused_shared_screen")
@@ -279,7 +314,8 @@ async def _forget_last(s: Any, *, thread_id: int, before_id: int, pid: int, brus
 
 
 async def _forget_what_answer(
-    s: Any, *, thread_id: int, content: str, before_id: int, device_id: str | None,
+    s: Any, *, thread_id: int, content: str, before_id: int, request: Any,
+    body_device_id: str | None = None, caller: Any = None,
 ) -> Reply | None:
     """The message after "Forget what?" in this thread, read by the
     handler's own reply reader (a "never mind", or one of the asker's
@@ -287,7 +323,7 @@ async def _forget_what_answer(
     prev = await _previous(s, thread_id, before_id)
     if prev is None or prev.get("action") != "forget_what" or not isinstance(prev.get("person_id"), int):
         return None
-    asker = await device_person(s, device_id)
+    asker = await caller_asker(s, request, body_device_id, caller)
     if asker.state != "linked" or asker.person_id != prev["person_id"]:
         return None
     pid = int(asker.person_id)  # type: ignore[arg-type]
@@ -306,5 +342,6 @@ async def _forget_what_answer(
 
 __all__ = [
     "LINK_PLACE", "MODEL_ROLE", "NOT_YOURS_TEXT", "SHARED_SCREEN_TEXT",
-    "Asker", "Command", "Reply", "command", "device_person", "reply", "unlinked_text",
+    "Asker", "Command", "Reply", "caller_asker", "command", "device_person", "proven", "reply",
+    "unlinked_text",
 ]

@@ -30,6 +30,15 @@ public struct ChatRow: Equatable, Sendable, Identifiable {
     public let match: String?
     /// A lookup in this chat went online (V037): the row's globe.
     public let usedInternet: Bool
+    /// Private chats (1.5.0): shared with the household (nil: an older
+    /// server's, the household's).
+    public let shared: Bool?
+    /// Whether the server lets this phone write in it (rename and archive are
+    /// writes) and delete it; an older server denies nothing.
+    public let canWrite: Bool
+    public let canDelete: Bool
+    /// Another device's chat, for an admin: that device's name.
+    public let owner: String?
 
     public init(
         id: String,
@@ -40,8 +49,16 @@ public struct ChatRow: Equatable, Sendable, Identifiable {
         archived: Bool = false,
         pinned: Bool = false,
         match: String? = nil,
-        usedInternet: Bool = false
+        usedInternet: Bool = false,
+        shared: Bool? = nil,
+        canWrite: Bool = true,
+        canDelete: Bool = true,
+        owner: String? = nil
     ) {
+        self.shared = shared
+        self.canWrite = canWrite
+        self.canDelete = canDelete
+        self.owner = owner
         self.id = id
         self.title = title
         self.snippet = snippet
@@ -57,7 +74,8 @@ public struct ChatRow: Equatable, Sendable, Identifiable {
     public func pinned(_ value: Bool) -> ChatRow {
         ChatRow(
             id: id, title: title, snippet: snippet, updatedMs: updatedMs, messages: messages,
-            archived: archived, pinned: value, match: match, usedInternet: usedInternet
+            archived: archived, pinned: value, match: match, usedInternet: usedInternet,
+            shared: shared, canWrite: canWrite, canDelete: canDelete, owner: owner
         )
     }
 
@@ -73,9 +91,13 @@ public struct ChatRow: Equatable, Sendable, Identifiable {
     /// a reply that failed leaves the server's snippet blank, and an empty
     /// line under the chip is worse than no line.
     public var subtitle: String? {
-        guard let text = match ?? snippet,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return text
+        let words = (match ?? snippet).flatMap {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+        }
+        // Another device's chat, for an admin (1.5.0): that device first, as
+        // the dashboard's rail does.
+        let parts = [owner, words].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 
@@ -122,7 +144,11 @@ public enum ChatRules {
             messages: thread.messageCount,
             archived: thread.archived,
             match: thread.matchSnippet,
-            usedInternet: thread.usedInternet
+            usedInternet: thread.usedInternet,
+            shared: thread.shared,
+            canWrite: thread.writable,
+            canDelete: thread.deletable,
+            owner: thread.mine == true ? nil : thread.ownerName.flatMap { $0.isEmpty ? nil : $0 }
         )
     }
 
@@ -228,13 +254,15 @@ public enum ChatRules {
 
     /// What a row's menu offers, in order (`rowActions`, `ChatPlace.kt:122`).
     public static func rowActions(_ row: ChatRow) -> [String] {
+        // What the server would refuse is not offered (1.5.0): rename and
+        // archive are writes, and another device's shared chat has no delete.
         [
-            ChatStrings.actionRename,
+            row.canWrite ? ChatStrings.actionRename : nil,
             row.pinned ? ChatStrings.actionUnpin : ChatStrings.actionPin,
-            row.archived ? ChatStrings.actionUnarchive : ChatStrings.actionArchive,
+            row.canWrite ? (row.archived ? ChatStrings.actionUnarchive : ChatStrings.actionArchive) : nil,
             ChatStrings.actionShare,
-            ChatStrings.actionDelete,
-        ]
+            row.canDelete ? ChatStrings.actionDelete : nil,
+        ].compactMap { $0 }
     }
 
     // MARK: - the window divider

@@ -564,6 +564,17 @@ class ConversationTurn(BaseModel):
     # 2026-11-11). Admins only (web/backend/voice_match.py): null for every
     # other caller, for older rows and for turns not from a satellite.
     voice_match: VoiceMatchInfo | None = None
+    # Rooms with several satellites (V073, 1.5.0): the device that owned
+    # the turn and the one whose microphone was transcribed (the one that
+    # heard the person best). None for older rows.
+    satellite_id: str | None = None
+    mic_satellite_id: str | None = None
+    # The room's name and the transcribed mic's display name ("Kitchen
+    # phone"): set when the room has several satellites or the mic was
+    # not the turn's owner, for "Answered in the Kitchen. Heard best by
+    # Kitchen phone." None otherwise.
+    room_name: str | None = None
+    heard_by: str | None = None
 
 
 class RecentlyPlayed(BaseModel):
@@ -653,6 +664,23 @@ class SatellitePairing(BaseModel):
     paired: bool = False
     paired_at: datetime | None = None
     last_seen_at: datetime | None = None
+
+
+class SatelliteDevice(BaseModel):
+    """One satellite of a room (1.5.0: a room may hold several), for the
+    drawer's device picker: its Diagnostics checks and support session are
+    addressed to it by ``satellite_id``. Every field but the id and name is
+    about the CONNECTED device (false while it is offline), except
+    ``support_allowed`` / ``support_key_pinned``, which are stored."""
+
+    satellite_id: str
+    name: str | None = None
+    connected: bool = False
+    diagnostics: bool = False
+    support_allowed: bool = False
+    support_shell: bool = False
+    support_key_pinned: bool = False
+    support_key_changed: bool = False
 
 
 class Satellite(BaseModel):
@@ -745,10 +773,37 @@ class Satellite(BaseModel):
     # before) and for an offline room.
     board: str | None = None
     supports: list[str] | None = None
+    # The CONNECTED device declared ``diagnostics`` (1.5.0): it answers the
+    # read-only probes, so the drawer offers its Diagnostics tab. False
+    # offline and for a device that didn't declare it (every older one).
+    diagnostics: bool = False
+    # Support sessions (1.5.0): the "Allow support sessions" switch (off by
+    # default) and whether the CONNECTED device declared support_shell (a
+    # Pi on a prepared card whose account can't use sudo).
+    support_allowed: bool = False
+    support_shell: bool = False
+    # Whether a support key is pinned for the device (at its pairing's
+    # approval, or by the switch for one paired before that): when not,
+    # turning the switch on trusts the key it presents then, and the
+    # dashboard's confirm dialog says so. ``support_key_changed``: the
+    # CONNECTED device presents a key other than the pinned one (no
+    # support sessions until it is re-paired; voice use is unaffected).
+    support_key_pinned: bool = False
+    support_key_changed: bool = False
     # Whether the CONNECTED satellite declared mic_dsp (an XVF3800 with
     # xvf_host, 1.4.1): only then does its Settings tab offer the admin
     # Microphone DSP presets (GET/POST /api/satellites/{room}/mic_dsp).
     mic_dsp: bool = False
+    # The room's connected satellites that declared mic_dsp, by satellite id
+    # (1.5.0: a shared room may hold several XVF3800s, each with its own
+    # presets at /api/satellites/{satellite_id}/mic_dsp). ``mic_dsp`` is
+    # whether this list is non-empty.
+    mic_dsp_satellites: list[str] = Field(default_factory=list)
+    # The room's satellites (1.5.0), by id, each with its own diagnostics
+    # and support-session facts (SatelliteDevice). The drawer shows a device
+    # picker when there is more than one; empty from an older server, and
+    # then everything above is about the room's speaker, as before.
+    devices: list[SatelliteDevice] = Field(default_factory=list)
     # A code upgrade under way or just finished (SatelliteUpgrade), from the
     # Domovoi server snapshot; null when there is none. While ``state`` is
     # ``running`` the dashboard and the app keep the room's Upgrade button
@@ -1275,8 +1330,16 @@ class SpareDeviceEnrolRequest(BaseModel):
     second network card). The answer is the enrolment payload, the Linux
     install command and what the QR code carries."""
 
-    room: str = Field(..., min_length=1, max_length=64)
+    room: str | None = Field(default=None, max_length=64)
     core: str | None = Field(default=None, max_length=256)
+    # "Add a satellite to the Kitchen" (1.5.0): the existing room's id. The
+    # server then names the device itself ("Kitchen 2", or `room` again
+    # when it names a code made before) and the payload carries `in=`. The
+    # core's rule for a room id from outside (domovoi/room_ids.py
+    # ACCEPTED_RE), so a room the Wi-Fi setup portal named ("living-room")
+    # can be joined too. Pydantic's pattern engine reads `$` as the end of
+    # the text (no trailing-newline match).
+    in_room: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
 class SatelliteApproveRequest(BaseModel):
@@ -1288,6 +1351,11 @@ class SatelliteApproveRequest(BaseModel):
     compares it in constant time and counts the attempt."""
 
     code: str = Field(..., min_length=1, max_length=16, pattern=r"^[0-9]+$")
+    # 1.5.0, "Which room is it in?": an existing room's id OR a name for a
+    # new room (not both). Neither: the room the device asked for, if it
+    # exists, else a room of its own.
+    room_id: str | None = Field(default=None, max_length=120)
+    new_room_name: str | None = Field(default=None, max_length=120)
 
 
 class AdoptRequest(BaseModel):

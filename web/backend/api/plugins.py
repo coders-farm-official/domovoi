@@ -230,6 +230,34 @@ def _container_fields(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# The core's answer about plugin updates costs the page this long at most.
+_UPDATES_TIMEOUT_SEC = 3.0
+
+
+@router.get("/updates")
+async def updates() -> JSONResponse:
+    """Each GitHub-sourced plugin's update answer, from the core (open
+    read, the list's tier): ``{plugins: {slug: {state, latest, notes, ...}}}``.
+    Release notes are plain text. A core that doesn't answer reads as an
+    empty map, never as "up to date"."""
+    url = f"{_core_url().rstrip('/')}/v1/plugins/updates"
+    try:
+        async with httpx.AsyncClient(timeout=_UPDATES_TIMEOUT_SEC) as client:
+            r = await client.get(url)
+        if r.status_code == 200:
+            return JSONResponse(content=r.json())
+    except Exception as e:  # noqa: BLE001 - down, frozen, or an older core
+        log.info("plugin updates read failed: %s", e)
+    return JSONResponse(content={"plugins": {}, "core_unavailable": True})
+
+
+@router.post("/updates/check")
+async def check_updates(request: Request) -> JSONResponse:
+    """**Check now** — ``{}`` for every GitHub-installed plugin, or
+    ``{"slug": ...}`` for one. Admin-gated by the core."""
+    return await _proxy_post(request, "/v1/plugins/updates/check")
+
+
 @router.get("/{slug}/purge-preview")
 async def purge_preview(slug: str) -> dict[str, Any]:
     """What uninstall-with-purge would drop (§3.5): the plugin schema's

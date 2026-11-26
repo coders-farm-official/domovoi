@@ -948,7 +948,23 @@ const reportMutationFailure = (fire, verb, e, { kept = false, key = null } = {})
 };
 
 // apiGet(path, { quiet: true }) — a read that never opens a prompt.
-const apiGet = (path, opts) => apiFetch(path, opts && opts.quiet ? { quiet: true } : {});
+// apiGet(path, { headers }) — extra request headers (e.g. callerDeviceHeaders()).
+const apiGet = (path, opts) => {
+  const init = {};
+  if (opts && opts.quiet) init.quiet = true;
+  if (opts && opts.headers) init.headers = opts.headers;
+  return apiFetch(path, init);
+};
+
+// This browser's device id as X-Device-Id, for the reads that answer
+// "is this row mine?" (chat messages, draft versions: their `mine`) — the
+// server no longer hands out the stored ids themselves.
+const callerDeviceHeaders = () => {
+  try {
+    const id = typeof DeviceIdentity !== 'undefined' ? DeviceIdentity.id() : null;
+    return id ? { 'X-Device-Id': id } : {};
+  } catch { return {}; }
+};
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
 const apiPatch = (path, body) => apiFetch(path, { method: 'PATCH', body: JSON.stringify(body || {}) });
 const apiPut = (path, body) => apiFetch(path, { method: 'PUT', body: JSON.stringify(body || {}) });
@@ -1802,6 +1818,7 @@ const DeviceIdentity = (() => {
   const subscribeShared = (fn) => { sharedListeners.add(fn); return () => sharedListeners.delete(fn); };
 
   let registered = null;   // in-flight / resolved registration promise
+  let keyRetried = false;  // started over under a new id once (lost device key)
 
   const register = () => {
     if (registered) return registered;
@@ -1812,12 +1829,26 @@ const DeviceIdentity = (() => {
         name: suggestedName(),
         platform: 'browser',
         user_agent: (navigator.userAgent || '').slice(0, 400),
+        // Private chats (1.5.0): the server keeps this browser's device key
+        // in an HttpOnly cookie, so the browser always "keeps" it.
+        want_device_key: true,
       }),
       // Nobody pressed anything: a refusal (an unpaired browser, a
       // household token rotated since this one was stored) must not open
       // the pair prompt on whatever page is showing.
       noPrompt: true,
     }).then((row) => {
+      // Private chats (1.5.0): the server keeps this browser's device key in
+      // an HttpOnly cookie, minted at its first registration. A row that has
+      // a key this browser no longer presents (site data cleared, a cookie
+      // lost) can't be this browser's any more: start over under a new id,
+      // once. The old id's private chats stay, for the house's admins.
+      if (row && row.device_key_ok === false && !row.device_key && !keyRetried) {
+        keyRetried = true;
+        try { localStorage.removeItem(ID_KEY); } catch {}
+        registered = null;
+        return register();
+      }
       if (row && row.name) cacheName(row.name);
       return remember(row);
     }).catch((e) => {

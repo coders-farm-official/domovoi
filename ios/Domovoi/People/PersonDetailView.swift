@@ -50,6 +50,22 @@ struct PersonDetailView: View {
 
     @State private var tab: PersonDetailTab = .profile
 
+    /// Rename and forget (admin on this phone), built on first use.
+    @State private var adminZone: PeopleAdminModel?
+
+    /// Admin held here, and not a shared screen.
+    private var adminHeld: Bool {
+        guard let shell else { return false }
+        return peopleAdminHeld(shell.admin.state, sharedScreen: shell.visibility.sharedScreen)
+    }
+
+    private var editLine: String? {
+        guard let shell else { return PeopleStrings.renamingIsOnTheDashboard }
+        return peopleEditLine(shell.admin.state, sharedScreen: shell.visibility.sharedScreen)
+    }
+
+    private func say(_ text: String) { shell?.showToast(text) }
+
     var body: some View {
         PeopleScroll(embedded: embedded) {
             VStack(alignment: .leading, spacing: 14) {
@@ -80,6 +96,11 @@ struct PersonDetailView: View {
         // ``PersonDetailModel/show(_:)`` re-reads only the rooms for that.
         .onChange(of: person.voiceProfileCount) { _, _ in
             detail.show(person)
+        }
+        .task(id: adminHeld) {
+            if adminHeld, adminZone == nil, let shell {
+                adminZone = PeopleAdminModel(admin: shell.container.admin)
+            }
         }
     }
 
@@ -135,16 +156,31 @@ struct PersonDetailView: View {
                     .accessibilityIdentifier("person.voiceRelearnNotice")
             }
             PersonStatGrid(person: person, detail: detail)
-            // Where renaming and forgetting are done. Said once, under the
-            // tiles, exactly where Android draws the two controls — so a
-            // reader who went looking for them finds the answer rather than
-            // concluding the app forgot. ``PeopleStrings/renamingIsOnTheDashboard``
-            // is one of this screen's two iOS-only sentences
-            // (`overnight/people/IOS-ONLY-STRINGS.md`).
-            Text(PeopleStrings.renamingIsOnTheDashboard)
-                .font(.caption)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
+            // Rename and forget with admin held here (``PeopleAdminModel``);
+            // otherwise where they are done, said once under the tiles
+            // (``peopleEditLine(_:sharedScreen:)``).
+            if adminHeld, let zone = adminZone {
+                VStack(alignment: .leading, spacing: 8) {
+                    PersonRenameRow(person: person, zone: zone, say: say, onRenamed: onPeopleChanged)
+                    PersonForgetButton(
+                        person: person,
+                        sessionCount: detail.sessions.orElse([]).count,
+                        turnCount: detail.conversations.orElse([]).count,
+                        zone: zone,
+                        say: say,
+                        onForgotten: {
+                            people.closeDetail()
+                            detail.close()
+                            onPeopleChanged()
+                        }
+                    )
+                }
+            } else if let line = editLine {
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // Rooms that have learned this voice (1.3.0), after the stats and before
             // the notes (`PersonDetail.kt:289`). Hidden when there are none,
             // while they relearn, and while voice ID is off.

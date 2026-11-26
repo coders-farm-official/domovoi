@@ -237,6 +237,10 @@ if [ "$NO_STT" = 1 ]; then
 fi
 cp "$RELEASE_KEY" "$S/installer/release-signing.pub"
 cp "$REPO/scripts/linux/provision.sh" "$S/provision.sh"
+# Its model pins, read on the Mac when it installs from an offline kit: the
+# kit's AI models go into the Mac's Ollama only at these digests
+# (DomovoiMacKit OfflineKit.swift, ModelPins).
+cp "$REPO/scripts/linux/provision-manifest.conf" "$S/provision-manifest.conf"
 BUNDLE_NAME=""
 if [ -n "$BUNDLE" ]; then
   git bundle verify "$BUNDLE" >/dev/null 2>&1 || git bundle list-heads "$BUNDLE" >/dev/null || die "$BUNDLE is not a git bundle"

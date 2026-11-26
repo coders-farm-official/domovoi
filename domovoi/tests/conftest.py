@@ -179,6 +179,11 @@ TABLES_TO_TRUNCATE = [
     "friend_houses_space_ops",
     "friend_houses_space_items",
     "friend_houses_blocked",
+    # Plugin mail (V084); they cascade from the friend row too.
+    "friend_houses_plugin_pairs",
+    "friend_houses_plugin_outbox",
+    "friend_houses_plugin_inbox",
+    "friend_houses_plugin_sender",
     "timers",
     # The owner's "say it like" changes (V027); the defaults are a data file.
     "pronunciations",
@@ -189,6 +194,8 @@ TABLES_TO_TRUNCATE = [
     "sessions",
     "intents_log",
     "conversation_log",
+    # Forgets waiting to be told to plugins (V079, SDK 1.18).
+    "voice_history_forgets",
     "calendar_events",
     # Calendars by link and phones' shared calendars (V055).
     "calendar_sources",
@@ -214,6 +221,16 @@ TABLES_TO_TRUNCATE = [
     "media_plays",
     # Two-way drop-in call audit rows (event data).
     "dropin_calls",
+    # Plugin repositories' pinned ids (V081, M6).
+    "plugin_repo_pins",
+    # Media understanding (V078): the catalogue and everything worked out
+    # about it (media_items CASCADEs to the result tables), the excluded
+    # folders, faces. media_runner_state keeps its one seeded row.
+    "media_items",
+    "media_libraries",
+    "media_excluded",
+    "face_groups",
+    "face_denylist",
     # Spoken audio (podcasts + audiobooks + resume positions).
     # playback_positions FKs people (ON DELETE CASCADE) and podcast_episodes
     # FKs podcast_subscriptions (ON DELETE CASCADE); RESTART IDENTITY CASCADE
@@ -239,6 +256,9 @@ TABLES_TO_TRUNCATE = [
     # Satellite inventory rows (V003) — adoption/type metadata written by
     # tests, never reference data.
     "satellites",
+    # The house's rooms (V073) and which hear each other.
+    "room_hear_links",
+    "rooms",
     # Which rooms the household's default wake word still applies to (V054).
     "room_wake_words",
     # Printers and scanners (V033) and their job log. print_limits is a
@@ -395,6 +415,22 @@ def _not_shutting_down():
     lifecycle.reset()
     yield
     lifecycle.reset()
+
+
+@pytest.fixture(autouse=True)
+def _mpd_clients_rebound():
+    """A test that REBINDS the MPD client cache (``mpd._clients = {...}``,
+    common in the handler tests) never hands its fakes to the next test in
+    the process: the module's own dict is put back afterwards. Without it a
+    later test asking for "kitchen" got an earlier test's fake player, one
+    that never tells the room playout of a pause (test_room_sound failed
+    only after test_music_other_artist on the same worker)."""
+    from domovoi.clients import mpd
+
+    own = mpd._clients
+    yield
+    if mpd._clients is not own:
+        mpd._clients = own
 
 
 @pytest.fixture(autouse=True)

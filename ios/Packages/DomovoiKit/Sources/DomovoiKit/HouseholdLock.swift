@@ -45,7 +45,12 @@ public final class HouseholdLock: Sendable {
         active.withLock { $0 }
     }
 
+    /// Entering room mode also forgets every admin sign-in that obeys this
+    /// seal at once (security review 2026-11-23, L57), not only at its next
+    /// call, and drops today's kept grant (`AdminGrant.swift`) — Android's
+    /// `HouseholdLock` setter. Outside the flag's lock: forgetting reads it.
     public func setRoomModeActive(_ value: Bool) {
         active.withLock { $0 = value }
+        if value { AdminSessions.shared.roomModeEntered(self) }
     }
 }

@@ -181,10 +181,14 @@ targets:
         # Room mode (I7, batch 2026-11-14): leaving it takes the phone's own
         # unlock, through LAContext's deviceOwnerAuthentication — Android's
         # "exit behind the phone's unlock" (RoomLockRules.kt). Without this
-        # key iOS ends the app the moment Face ID is asked for.
+        # key iOS ends the app the moment Face ID is asked for. Admin on this
+        # phone (1.5.0, KeychainGrantLocker) asks for Face ID too, to keep
+        # admin for the day and to go on as admin later that day.
         NSFaceIDUsageDescription:
           Domovoi asks for Face ID or your passcode before this phone stops
           being a room, so only someone who can unlock it can leave room mode.
+          If you keep admin on this phone for the day, Face ID is what lets you
+          go on as admin without typing the password again.
 
         # `domovoi-room:` links, as Android's setup screen takes them
         # (AndroidManifest.xml, RoomSetupActivity's intent filter): a link

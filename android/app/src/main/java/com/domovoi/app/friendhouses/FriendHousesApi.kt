@@ -259,6 +259,112 @@ object FhPaths {
     }
 
     fun markRead(house: String): String = "$CONVERSATIONS/${house(house)}/read"
+
+    // ---- admin (1.5.0, phone admin sign-in; design §1's Friend Houses jobs) ----
+
+    const val REQUESTS = "$STATUS/requests"
+    const val BLOCKED = "$STATUS/blocked"
+
+    private fun id(value: String): String {
+        require(isFriendId(value)) { "not an id" }
+        return value
+    }
+
+    fun acceptRequest(id: String): String = "$REQUESTS/${id(id)}/accept"
+
+    fun declineRequest(id: String): String = "$REQUESTS/${id(id)}/decline"
+
+    /** DELETE removes the friend. */
+    fun friend(id: String): String = "$FRIENDS/${id(id)}"
+
+    fun blockFriend(id: String): String = "${friend(id)}/block"
+
+    /** DELETE unblocks the house. */
+    fun blocked(house: String): String = "$BLOCKED/${house(house)}"
+
+    /** DELETE (admin security): every message with that house, gone. */
+    fun conversationWith(house: String): String = "$CONVERSATIONS/${house(house)}"
+
+    /** GET (admin security, read): every message with that house as a file
+     *  (`domovoi-friend-houses-export-v1`). */
+    fun conversationFile(house: String): String = "${conversationWith(house)}/export"
+}
+
+/** A friend request (admin read): in `waiting` (for an admin here) or
+ *  `accepted` (still telling them); out `unsent` or `sent`. Names and
+ *  last_error came from another house: shown only through FhPlain. */
+@Serializable
+data class FhRequest(
+    val id: String = "",
+    val direction: String = "in",
+    val state: String = "",
+    @SerialName("their_name") val theirName: String? = null,
+    val name: String? = null,
+    val code: String? = null,
+    val trying: Boolean? = null,
+    @SerialName("last_error") val lastError: String? = null,
+)
+
+@Serializable
+data class FhRequests(val requests: List<FhRequest> = emptyList())
+
+@Serializable
+data class FhBlockedHouse(
+    val house: String = "",
+    val name: String? = null,
+    @SerialName("blocked_at") val blockedAt: String? = null,
+)
+
+@Serializable
+data class FhBlockedList(val blocked: List<FhBlockedHouse> = emptyList())
+
+/**
+ * The admin routes the phone uses (accept or decline a request, remove,
+ * block, unblock), each through the phone's admin sign-in: [headers] and
+ * [onlyTo] come from AdminSession.call / act, never stored here.
+ */
+class FriendHousesAdminApi(private val api: ApiClient) {
+    suspend fun requests(headers: Map<String, String>, onlyTo: String): List<FhRequest> =
+        DomovoiJson.decodeFromString(FhRequests.serializer(), api.raw("GET", FhPaths.REQUESTS, headers = headers, onlyTo = onlyTo)).requests
+
+    suspend fun blocked(headers: Map<String, String>, onlyTo: String): List<FhBlockedHouse> =
+        DomovoiJson.decodeFromString(FhBlockedList.serializer(), api.raw("GET", FhPaths.BLOCKED, headers = headers, onlyTo = onlyTo)).blocked
+
+    suspend fun accept(id: String, name: String, headers: Map<String, String>, onlyTo: String) {
+        api.post(FhPaths.acceptRequest(id), buildJsonObject { put("name", name.trim()) }, headers, onlyTo = onlyTo)
+    }
+
+    suspend fun decline(id: String, headers: Map<String, String>, onlyTo: String) {
+        api.post(FhPaths.declineRequest(id), buildJsonObject { }, headers, onlyTo = onlyTo)
+    }
+
+    suspend fun remove(friendId: String, headers: Map<String, String>, onlyTo: String) {
+        api.delete(FhPaths.friend(friendId), null, headers, onlyTo = onlyTo)
+    }
+
+    /** Block: returns whether the house is moving to a new address. */
+    suspend fun block(friendId: String, keepMessages: Boolean, newAddress: Boolean, headers: Map<String, String>, onlyTo: String): Boolean {
+        val body = buildJsonObject {
+            put("keep_messages", keepMessages)
+            put("new_address", newAddress)
+        }
+        val r = api.post(FhPaths.blockFriend(friendId), body, headers, onlyTo = onlyTo) as? JsonObject
+        return (r?.get("new_address") as? JsonPrimitive)?.content == "true"
+    }
+
+    suspend fun unblock(house: String, headers: Map<String, String>, onlyTo: String) {
+        api.delete(FhPaths.blocked(house), null, headers, onlyTo = onlyTo)
+    }
+
+    /** A conversation as the server's file, as it sent it (Save a copy). */
+    suspend fun conversationFile(house: String, headers: Map<String, String>, onlyTo: String): String =
+        api.raw("GET", FhPaths.conversationFile(house), headers = headers, onlyTo = onlyTo)
+
+    /** Delete every message with that house: how many went. */
+    suspend fun deleteConversation(house: String, headers: Map<String, String>, onlyTo: String): Int {
+        val r = api.delete(FhPaths.conversationWith(house), null, headers, onlyTo = onlyTo) as? JsonObject
+        return (r?.get("deleted") as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
+    }
 }
 
 /**

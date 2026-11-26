@@ -406,8 +406,10 @@ public enum PrintingStrings {
         "The address is on the printer's own screen or settings page. Only printers on your Wi-Fi "
         + "or plugged into your router work: a printer on a USB cable can't be added."
 
-    /// `ADMIN_ONLY_LINE` (`PrintModels.kt:433`) — the whole answer to Rename
-    /// and Remove, which are admin at both hops (`printers.py:185,192`).
+    /// `ADMIN_ONLY_LINE` (`PrintModels.kt`): Rename and Remove are admin at
+    /// both hops (`printers.py:185,192`). This is a shared screen's line;
+    /// signed out it is ``PrinterAdminWords/adminLineOrPhone``, and with
+    /// admin held the cards offer both (``PrinterAdminModel``).
     public static let adminOnlyLine = "An admin can rename or remove printers on the web dashboard."
 
     public static let noPrintersTitle = "no printers yet"

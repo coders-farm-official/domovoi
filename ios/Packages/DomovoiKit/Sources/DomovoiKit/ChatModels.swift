@@ -63,6 +63,39 @@ public struct ChatThread: Equatable, Sendable, Decodable {
     /// a thread rather than a control.
     public let usedInternet: Bool
 
+    // Private chats (1.5.0, ``ChatPrivacyRules``). Nil from an older server,
+    // which then denies nothing and says nothing about sharing.
+
+    /// Shared with the household (false: private to its device, or
+    /// admin-only).
+    public let shared: Bool?
+    /// This phone owns it.
+    public let mine: Bool?
+    public let canWrite: Bool?
+    public let canShare: Bool?
+    public let canDelete: Bool?
+    /// Visible only because the caller is an admin.
+    public let adminView: Bool
+    /// The owning device's name, for an admin; else nil.
+    public let ownerName: String?
+
+    /// The server sent the access fields.
+    public var knowsSharing: Bool { shared != nil }
+    /// A field an older server didn't send denies nothing.
+    public var writable: Bool { canWrite != false }
+    public var deletable: Bool { canDelete != false }
+
+    /// This thread with `other`'s access fields (the server's word, newer).
+    public func withAccess(of other: ChatThread) -> ChatThread {
+        ChatThread(
+            id: id, title: title, updatedAt: updatedAt, messageCount: messageCount, lastSnippet: lastSnippet,
+            archived: archived, titleByUser: titleByUser, matchSnippet: matchSnippet,
+            internetAllowed: internetAllowed, usedInternet: usedInternet,
+            shared: other.shared, mine: other.mine, canWrite: other.canWrite, canShare: other.canShare,
+            canDelete: other.canDelete, adminView: other.adminView, ownerName: other.ownerName
+        )
+    }
+
     public init(
         id: Int64,
         title: String? = nil,
@@ -73,8 +106,22 @@ public struct ChatThread: Equatable, Sendable, Decodable {
         titleByUser: Bool = false,
         matchSnippet: String? = nil,
         internetAllowed: Bool = false,
-        usedInternet: Bool = false
+        usedInternet: Bool = false,
+        shared: Bool? = nil,
+        mine: Bool? = nil,
+        canWrite: Bool? = nil,
+        canShare: Bool? = nil,
+        canDelete: Bool? = nil,
+        adminView: Bool = false,
+        ownerName: String? = nil
     ) {
+        self.shared = shared
+        self.mine = mine
+        self.canWrite = canWrite
+        self.canShare = canShare
+        self.canDelete = canDelete
+        self.adminView = adminView
+        self.ownerName = ownerName
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
@@ -98,6 +145,12 @@ public struct ChatThread: Equatable, Sendable, Decodable {
         case matchSnippet = "match_snippet"
         case internetAllowed = "internet_allowed"
         case usedInternet = "used_internet"
+        case shared, mine
+        case canWrite = "can_write"
+        case canShare = "can_share"
+        case canDelete = "can_delete"
+        case adminView = "admin_view"
+        case ownerName = "owner_name"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -115,6 +168,13 @@ public struct ChatThread: Equatable, Sendable, Decodable {
         matchSnippet = try values.decodeIfPresent(String.self, forKey: .matchSnippet)
         internetAllowed = try values.decodeIfPresent(Bool.self, forKey: .internetAllowed) ?? false
         usedInternet = try values.decodeIfPresent(Bool.self, forKey: .usedInternet) ?? false
+        shared = try values.decodeIfPresent(Bool.self, forKey: .shared)
+        mine = try values.decodeIfPresent(Bool.self, forKey: .mine)
+        canWrite = try values.decodeIfPresent(Bool.self, forKey: .canWrite)
+        canShare = try values.decodeIfPresent(Bool.self, forKey: .canShare)
+        canDelete = try values.decodeIfPresent(Bool.self, forKey: .canDelete)
+        adminView = try values.decodeIfPresent(Bool.self, forKey: .adminView) ?? false
+        ownerName = try values.decodeIfPresent(String.self, forKey: .ownerName)
     }
 }
 
@@ -384,17 +444,21 @@ public struct ChatMessage: Equatable, Sendable, Decodable {
 /// ignored by `JSONDecoder`, so adding it later is additive.
 public struct ChatMessageList: Equatable, Sendable, Decodable {
     public let messages: [ChatMessage]
+    /// The thread with its access fields (1.5.0); nil from an older server.
+    public let thread: ChatThread?
 
-    public init(messages: [ChatMessage] = []) {
+    public init(messages: [ChatMessage] = [], thread: ChatThread? = nil) {
         self.messages = messages
+        self.thread = thread
     }
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         messages = try values.decodeIfPresent([ChatMessage].self, forKey: .messages) ?? []
+        thread = try? values.decodeIfPresent(ChatThread.self, forKey: .thread)
     }
 
-    enum CodingKeys: String, CodingKey { case messages }
+    enum CodingKeys: String, CodingKey { case messages, thread }
 }
 
 // MARK: - what the house has installed

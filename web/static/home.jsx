@@ -11,6 +11,9 @@
  *   rooms            one row per room: pause / resume / stop / play
  *   announce         say something in every room
  *   today            today's and tomorrow's events
+ *   photos chip      "Understanding your photos: 3,210 of 20,000" while the
+ *                    photos-and-videos backlog runs (household, read-only;
+ *                    links to Settings → Chat & AI → Photos and videos)
  *   everything       every page that is not on this phone's bar (and a
  *                    link to pick the bar's tabs)
  *
@@ -345,6 +348,32 @@ const HomeFriendHousesRow = (inbox) => {
            text: HomePlural(n, 'unread Friend Houses message'),
            href: '#settings/friend-houses/messages' };
 };
+/* A new signed Domovoi release (update notices, 1.5.0): one row, not a
+ * problem, for every paired phone and browser and an admin (the device
+ * tier's read, never an unpaired guest). Only a signed release makes one,
+ * never a change on main. An admin (not on a shared screen) gets Update,
+ * which opens About & updates and runs that card's own one update action
+ * (#settings/about/update-now); everyone else reads that an admin can
+ * install it. No button that can't do what it says. */
+const HOME_UPDATE_NOTICE = '/api/updates/notice';
+const HOME_UPDATE_HREF = '#settings/about/update-now';
+const HOME_VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
+const HomeUpdateRow = (notice, { admin = false, shared = false } = {}) => {
+  if (!notice) return null;
+  // `updating` is the house's real update state, with or without a notice
+  // (a house on main, an update started by hand): never a button then.
+  if (notice.updating === true) {
+    return { key: 'update-available', tone: 'brand', scope: 'household', update: true,
+             text: 'Domovoi is restarting…', canUpdate: false, sub: null };
+  }
+  if (notice.available !== true) return null;
+  const version = typeof notice.version === 'string' && HOME_VERSION_RE.test(notice.version) ? notice.version : null;
+  if (!version) return null;
+  const canUpdate = !!admin && !shared;
+  return { key: 'update-available', tone: 'brand', scope: 'household', update: true,
+           text: `Domovoi ${version} is available`, canUpdate,
+           sub: canUpdate ? null : 'An admin can install it.' };
+};
 /* That row added to whatever the problems show: after the rows, below a
  * summary line, or on its own. */
 const HomeWithRow = (view, row) => {
@@ -354,7 +383,30 @@ const HomeWithRow = (view, row) => {
   return { mode: 'rows', rows: [row] };
 };
 
+/* Apps with friends (friend_apps.jsx fhAppsHomeRows): an admin's rows for
+ * paused mail, apps waiting to be allowed and a Docker problem, each
+ * linking to the Friend Houses page. Never on a shared screen. */
+const HOME_FH_APPS = '/api/friend-houses/apps/notices';
+const HomeAppsRows = (view, rows) => (rows || []).reduce((v, r) => HomeWithRow(v, r), view);
+
 /* ---- status line --------------------------------------------------- */
+/* Its row: the words (plain text), the muted line under them, and an
+ * admin's Update. Below 420 px the button drops to its own line. */
+const HomeUpdateNoticeRow = ({ r, cls = 'home-att-row' }) => (
+  <div className={`${cls} home-att-claim home-att-update`} data-key={r.key}>
+    <StatusDot tone={r.tone}/>
+    <span className="txt">
+      <span className="home-att-update-title">{r.text}</span>
+      {r.sub && <span className="home-att-update-sub">{r.sub}</span>}
+    </span>
+    {r.canUpdate && (
+      <span className="home-att-acts">
+        <Button variant="primary" icon="download"
+                onClick={() => { window.location.hash = HOME_UPDATE_HREF; }}>Update</Button>
+      </span>
+    )}
+  </div>
+);
 
 const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
   const [explain, setExplain] = React.useState(false);
@@ -434,7 +486,7 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
             <span className="txt">something needs the admin's attention</span>
             <span className="when">{view.count}</span>
           </div>
-          {(view.extra || []).map((r) => (
+          {(view.extra || []).map((r) => (r.update ? <HomeUpdateNoticeRow key={r.key} r={r}/> :
             <a key={r.key} className="home-att-row" data-key={r.key} href={r.href}>
               <StatusDot tone={r.tone}/>
               <span className="txt">{r.text}</span>
@@ -489,6 +541,7 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
               {r.at && <span className="when">{relTime(r.at)}</span>}
             </>
           );
+          if (r.update) return <HomeUpdateNoticeRow key={r.key} r={r} cls={cls}/>;
           if (r.claim) {
             return (
               <div key={r.key} className={`${cls} home-att-claim`} data-key={r.key}>
@@ -1163,6 +1216,7 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   const badges = given || own;
   const c = counts || {};
   const ai = useAiFeatures();
+  useFacesPage();   // Faces comes and goes with the switch (navItemsFor reads it)
   const items = navItemsFor(manifest, { shared, ai });
   const onBar = new Set(phoneBarRoutes(items, usePhoneBar()));
   // The sidebar's groups (resolveNavTree, components.jsx) over what the bar
@@ -1210,7 +1264,102 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   );
 };
 
+/* ---- photos and videos: the backlog chip ------------------------------ */
+
+/* "Understanding your photos: 3,210 of 20,000" (1.5.0, design
+ * MEDIA-UNDERSTANDING §5): read-only, only while understanding is on and
+ * a backlog is left, and never for a guest or on a shared screen (the
+ * read itself is the household tier). Home has no summary endpoint of its
+ * own, so this is the Settings card's read (/api/media-understanding),
+ * issued only on Home and only for the household; its progress event
+ * re-reads it (the core sends one at most every 10 s while it works).
+ * The chip links to the card, where Pause and the estimate are. */
+const HOME_MEDIA_HREF = '#settings/photos-and-videos';
+
+const HomeMediaChip = ({ data }) => {
+  const s = (data && data.settings) || {};
+  const p = (data && data.progress) || {};
+  if (!s.enabled) return null;
+  const ph = p.photos || {};
+  const vi = p.videos || {};
+  const left = (ph.left || 0) + (vi.left || 0);
+  if (left <= 0) return null;
+  const total = (ph.total || 0) + (vi.total || 0);
+  const done = total - left;
+  const what = vi.total ? 'photos and videos' : 'photos';
+  const n = (x) => Number(x || 0).toLocaleString();
+  return (
+    <div className="home-sec home-sec-media">
+      <a className="home-chip home-media-chip" href={HOME_MEDIA_HREF}
+         title={s.paused ? 'paused · open Photos and videos in Settings' : 'open Photos and videos in Settings'}>
+        <Icon name="image" size={12}/>
+        <span>Understanding your {what}: <span className="mono">{n(done)}</span> of <span className="mono">{n(total)}</span>{s.paused ? ' · paused' : ''}</span>
+      </a>
+    </div>
+  );
+};
+
 /* ---- the page ------------------------------------------------------- */
+
+/* Plugin cards (SDK 1.15, [[web.home_cards]]). A plugin's panel bundle
+ * registers `window.DomovoiPlugins.<slug>.homeCards.<Component>`; the
+ * manifest (enabled plugins only: a disabled or uninstalled one is not in
+ * it) says which cards exist. The slot is QUIET: a card whose script never
+ * loaded, that isn't registered, that throws, or that renders nothing
+ * (no data) leaves no trace on Home — no error box, no empty frame, and
+ * nothing in "needs attention". The card draws its own <Card> and reads
+ * its data quietly (apiFetch with noPrompt: true), so an unpaired guest is
+ * never prompted. `default_on = false` cards are not shown (Home has no
+ * per-household card settings yet). */
+const HomePluginCardBoundary = (typeof React.Component === 'function') ? class extends React.Component {
+  constructor(props) { super(props); this.state = { failed: false }; }
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error) {
+    try { console.warn(`home card ${this.props.slug}/${this.props.id} failed:`, error); } catch {}
+  }
+  render() { return this.state.failed ? null : this.props.children; }
+} : null;   // the render-test harness has no class components
+
+const HomePluginCard = ({ slug, id, title, guest, Comp }) => {
+  const props = { quiet: true, title, guest: !!guest };
+  if (!HomePluginCardBoundary) {
+    try { return Comp(props); } catch (e) { return null; }
+  }
+  return (
+    <HomePluginCardBoundary slug={slug} id={id}>
+      <Comp {...props}/>
+    </HomePluginCardBoundary>
+  );
+};
+
+const HomePluginCardList = (manifest) => {
+  const out = [];
+  const registry = window.DomovoiPlugins || {};
+  ((manifest && manifest.plugins) || []).forEach((p) => {
+    if (!p || p.status === 'uninstalled' || p.status === 'disabled') return;
+    const reg = registry[p.slug];
+    const comps = reg && reg.homeCards;
+    if (!comps || typeof comps !== 'object') return;
+    (p.home_cards || []).forEach((c) => {
+      const Comp = comps[c.component];
+      if (typeof Comp !== 'function' || c.default_on === false) return;
+      out.push({ slug: p.slug, id: c.id, title: c.title, order: c.order == null ? 50 : c.order, Comp });
+    });
+  });
+  return out.sort((a, b) => (a.order - b.order) || a.slug.localeCompare(b.slug) || a.id.localeCompare(b.id));
+};
+
+const HomePluginCards = ({ manifest, guest }) => {
+  const cards = HomePluginCardList(manifest || window.DomovoiPluginManifest);
+  if (!cards.length) return null;
+  return (
+    <div className="home-sec home-plugin-cards">
+      {cards.map(({ slug, id, title, Comp }) => (
+        <HomePluginCard key={`${slug}/${id}`} slug={slug} id={id} title={title} guest={guest} Comp={Comp}/>
+      ))}
+    </div>
+  );
+};
 
 const HomePage = ({ counts, badges }) => {
   const [fire, toastNode] = useToast();
@@ -1237,6 +1386,12 @@ const HomePage = ({ counts, badges }) => {
   const timers = useApiObject('/api/timers', { eventTypes: ['timers.changed', 'timer_fires.changed'], quiet: true,
                                                refetchOnAuth: true });
   const plugins = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'], quiet: true });
+  // The photos-and-videos backlog chip: a household read, issued only once
+  // this browser is paired (or an admin's), never on a shared screen.
+  const mediaHousehold = (viewer.paired || viewer.isAdmin) && !shared;
+  const mediaUnderstanding = useApiObject(mediaHousehold ? '/api/media-understanding' : null,
+                                          { eventTypes: ['media_understanding.changed'], quiet: true,
+                                            refetchOnAuth: true });
   // Named groups (V060) for the rooms' "play in upstairs too": a household
   // read, never issued for a guest.
   const musicGroups = useApiObject(guest ? null : '/api/music/groups',
@@ -1246,6 +1401,13 @@ const HomePage = ({ counts, badges }) => {
   // Friend Houses' unread count: the inbox's own tier (device), so only a
   // paired browser or an admin asks.
   const fhInbox = useApiObject(viewer.paired || admin ? HOME_FH_INBOX : null, { quiet: true, refetchOnAuth: true });
+  // Apps with friends' notices (friend_apps.jsx): paused mail, apps waiting
+  // to be allowed, Docker. The security tier, so only an admin asks.
+  const fhApps = useApiObject(admin && !shared ? HOME_FH_APPS : null, { quiet: true, refetchOnAuth: true });
+  // A new signed release (update notices): the device tier's read, so a
+  // paired browser or an admin asks, never an unpaired guest.
+  const updateNotice = useApiObject(viewer.paired || admin ? HOME_UPDATE_NOTICE : null,
+                                    { quiet: true, refetchOnAuth: true });
   const dayStart = HomeDayStart(Date.now());
   const calPath = React.useMemo(() => {
     const start = new Date(dayStart).toISOString();
@@ -1307,6 +1469,8 @@ const HomePage = ({ counts, badges }) => {
   HomeHooks.useInterval(() => approvals.refresh(), HOME_APPROVALS_MS, admin);
   HomeHooks.useInterval(() => hardware.refresh(), HOME_HARDWARE_MS, admin);
   const versionAt = React.useRef(0);
+  // The update notice: read at most every 10 minutes on focus, like the version.
+  const noticeAt = React.useRef(Date.now());
   React.useEffect(() => { if (admin) versionAt.current = Date.now(); }, [admin]);
   HomeHooks.useOnFocus(() => {
     cfg.refresh(); health.refresh(); cal.refresh(); fhInbox.refresh();
@@ -1315,6 +1479,10 @@ const HomePage = ({ counts, badges }) => {
     if (admin && Date.now() - versionAt.current > HOME_VERSION_GAP_MS) {
       versionAt.current = Date.now();
       version.refresh();
+    }
+    if (Date.now() - noticeAt.current > HOME_VERSION_GAP_MS) {
+      noticeAt.current = Date.now();
+      updateNotice.refresh();
     }
   });
 
@@ -1398,8 +1566,10 @@ const HomePage = ({ counts, badges }) => {
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
   // A household member's rows wait for the setting that decides them, so
   // an "admins only" house never flashes them while /api/config loads.
-  const view = HomeWithRow((!admin && !HomeAnswered(cfg)) ? { mode: 'none' }
-    : HomeAttentionView({ rows, viewer, visibility, shared }), HomeFriendHousesRow(fhInbox.data));
+  const view = HomeWithRow(HomeAppsRows(HomeWithRow((!admin && !HomeAnswered(cfg)) ? { mode: 'none' }
+    : HomeAttentionView({ rows, viewer, visibility, shared }), HomeFriendHousesRow(fhInbox.data)),
+    admin && !shared && typeof fhAppsHomeRows === 'function' ? fhAppsHomeRows(fhApps.data) : []),
+    HomeUpdateRow(updateNotice.data, { admin, shared }));
   const [checkedAt, setCheckedAt] = React.useState(null);
   React.useEffect(() => { if (!checking) setCheckedAt(Date.now()); },
     [checking, health.data, sats.data, plugins.data, acq.data, approvals.data, pending.data,
@@ -1566,6 +1736,8 @@ const HomePage = ({ counts, badges }) => {
               <Broadcast compact onlineCount={coreDown ? 0 : online.length} fire={fire}/>
             </div>
           )}
+          {mediaHousehold && <HomeMediaChip data={mediaUnderstanding.data}/>}
+          <HomePluginCards guest={guest}/>
           {isPhone !== false && <HomeEverything counts={counts} badges={badges} shared={shared}/>}
         </div>
       </div>

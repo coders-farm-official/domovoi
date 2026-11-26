@@ -126,11 +126,18 @@ class ApiClient(
     /** What the server's answers said about the token: refused, or "wait"
      *  ([TokenHealth]); null = nothing is learnt (the tests' default). */
     val health: TokenHealth? = null,
+    /** The device key by server address (Prefs.deviceKeyFor; net/DeviceKey.kt):
+     *  the interceptor puts the one the active server issued on its key
+     *  routes. Absent: no key goes anywhere (the tests' default). */
+    private val deviceKeyForServer: (String) -> String? = { null },
 ) {
-    /** Production wiring: the base URL and the household device token both
-     *  follow the saved preferences for the active server. */
+    /** Production wiring: the base URL, the household device token and the
+     *  device key all follow the saved preferences for the active server. */
     constructor(prefs: Prefs, gate: TokenGate? = null, health: TokenHealth? = null) :
-        this({ prefs.serverUrl.value }, { prefs.deviceToken.value }, gate, { prefs.tokenForServer(it) }, health)
+        this(
+            { prefs.serverUrl.value }, { prefs.deviceToken.value }, gate, { prefs.tokenForServer(it) }, health,
+            { prefs.deviceKeyFor(it) },
+        )
 
     private val tokenFor: (String) -> String? = tokenForServer ?: { deviceTokenProvider() }
 
@@ -150,7 +157,7 @@ class ApiClient(
         .followSslRedirects(false)
         .addInterceptor(RedirectPolicy.interceptor)
         .addInterceptor(CleartextPolicy.interceptor)
-        .addInterceptor(DeviceAuthInterceptor(tokenFor, baseUrlProvider, gate, health))
+        .addInterceptor(DeviceAuthInterceptor(tokenFor, baseUrlProvider, gate, health, deviceKeyForServer))
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
@@ -337,6 +344,12 @@ class ApiClient(
             if (onlyTo != null && onlyTo.trim().trimEnd('/') != baseUrl.trim().trimEnd('/')) {
                 throw ServerChangedException()
             }
+            // A credential a caller set goes only to the server's own paths:
+            // an absolute URL with an admin Bearer is refused, as on the
+            // iPhone (security review 2026-11-22, L57).
+            if (headers.keys.any { it.equals("Authorization", ignoreCase = true) } && !path.startsWith("/")) {
+                throw IOException("an admin call goes only to this server's own paths")
+            }
             val req = Request.Builder()
                 .url(absolute(path))
                 // Makes every call a preflighted one: a multipart or body-less
@@ -383,8 +396,13 @@ class ApiClient(
         onlyTo: String? = null,
     ): JsonElement =
         parse(raw("POST", path, jsonBody(body), headers = headers, onlyTo = onlyTo))
-    suspend fun patch(path: String, body: JsonElement? = null): JsonElement =
-        parse(raw("PATCH", path, jsonBody(body)))
+    suspend fun patch(
+        path: String,
+        body: JsonElement? = null,
+        headers: Map<String, String> = emptyMap(),
+        onlyTo: String? = null,
+    ): JsonElement =
+        parse(raw("PATCH", path, jsonBody(body), headers = headers, onlyTo = onlyTo))
     suspend fun put(
         path: String,
         body: JsonElement? = null,

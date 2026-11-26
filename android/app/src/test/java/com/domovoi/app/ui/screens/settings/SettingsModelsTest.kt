@@ -22,10 +22,11 @@ class SettingsModelsTest {
         )
         assertEquals(
             listOf(
-                listOf("Rooms", "People", "Phones & browsers", "Music mix", "Printers & scanners", "Phone calendars"),
+                listOf("Rooms", "People", "Phones & browsers", "Music mix", "Printers & scanners", "Phone calendars",
+                    "Admin on this phone"),
                 listOf("Wake words", "Voices", "Greetings"),
                 listOf("Models", "Chat"),
-                listOf("Internet", "Voice history"),
+                listOf("Internet", "Keep voice history", "Command recordings"),
                 listOf("About & updates", "Health", "App layout", "Advanced"),
             ),
             SettingsGroup.entries.map { g -> sectionsOf(g).map { it.label } },
@@ -59,11 +60,14 @@ class SettingsModelsTest {
     }
 
     @Test fun whatOnlyTheDashboardChangesOpensItThereInWordsEveryDashboardKnows() {
-        // The app has no admin session. An older server has no "advanced"
-        // or "voice-history" address, but every one has these.
+        // The app has no admin session, and a 1.5.0 phone may talk to a
+        // 1.4.x server: every target is a word every dashboard version
+        // understands. Command recordings opens at `recordings`, not its own
+        // key: a 1.4.x dashboard has no `command-recordings`, and a 1.5.0
+        // one redirects `recordings` there.
         assertEquals(
             mapOf("wake-words" to "wake-words", "greetings" to "greetings", "models" to "models",
-                "internet" to "internet", "voice-history" to "recordings", "advanced" to "configuration"),
+                "internet" to "internet", "command-recordings" to "recordings", "advanced" to "configuration"),
             SettingsSection.entries.filter { it.dashboard != null }.associate { it.key to it.dashboard },
         )
         assertEquals(
@@ -86,6 +90,11 @@ class SettingsModelsTest {
         assertEquals(SettingsSection.PhonesAndBrowsers, SettingsSection.named("connection"))
         assertEquals(SettingsSection.Voices, SettingsSection.named("voice"))
         assertEquals(SettingsSection.Advanced, SettingsSection.named("server"))
+        // "Voice history" until 1.5.0, and "recordings" before that.
+        assertEquals(SettingsSection.CommandRecordings, SettingsSection.named("command-recordings"))
+        assertEquals(SettingsSection.CommandRecordings, SettingsSection.named("voice-history"))
+        assertEquals(SettingsSection.CommandRecordings, SettingsSection.named("recordings"))
+        assertEquals(SettingsPlace.Section(SettingsSection.CommandRecordings), placeOf("voice-history"))
         assertNull(SettingsSection.named(null))
         assertNull(SettingsSection.named("nonsense"))
         val keys = SettingsSection.entries.flatMap { listOf(it.key) + it.aliases }
@@ -106,8 +115,12 @@ class SettingsModelsTest {
 
     @Test fun searchJumpsStraightToASection() {
         assertEquals(SettingsSection.WakeWords, searchSettings("wake").first())
-        assertEquals(SettingsSection.VoiceHistory, searchSettings("voice history").first())
-        assertEquals(SettingsSection.VoiceHistory, searchSettings("recordings").first())
+        assertEquals(SettingsSection.CommandRecordings, searchSettings("command recordings").first())
+        assertEquals(SettingsSection.CommandRecordings, searchSettings("recordings").first())
+        assertEquals(SettingsSection.CommandRecordings, searchSettings("captures").first())
+        assertEquals(SettingsSection.KeepVoiceHistory, searchSettings("keep voice history").first())
+        assertEquals(SettingsSection.KeepVoiceHistory, searchSettings("voice history").first())
+        assertEquals(SettingsSection.KeepVoiceHistory, searchSettings("retention").first())
         assertEquals(SettingsSection.Rooms, searchSettings("satellite").first())
         assertEquals(SettingsSection.PhonesAndBrowsers, searchSettings("token").first())
         assertEquals(SettingsSection.Printers, searchSettings("printer").first())

@@ -480,6 +480,7 @@ def test_the_system_packages_are_one_list():
     assert _bash_array(SCRIPT, "APT_PACKAGES") == [
         "python3", "python3-venv", "python3-dev", "build-essential", "pkg-config", "libasound2-dev",
         "git", "ffmpeg", "mpg123", "libchromaprint-tools", "xorriso", "tesseract-ocr", "tesseract-ocr-eng",
+        "dosfstools", "mtools",
         "zstd", "ca-certificates", "curl", "gnupg", "tzdata", "sudo",
     ]
 

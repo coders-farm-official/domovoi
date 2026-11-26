@@ -281,6 +281,11 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     # (at most 100 MB, web/backend/api/printers.py) and posts it here.
     ("/v1/print/preview", 101 * 1024 * 1024),
     ("/v1/print/jobs", 101 * 1024 * 1024),
+    # An update from an offline kit (domovoi/kit_update.py): kit.json (at
+    # most 64 MiB, offline_kit/format.py MAX_KIT_JSON), then each file in
+    # chunks of at most 16 MiB (CHUNK_MAX), on the core and the web door.
+    ("/v1/admin/offline-kit/update", 65 * 1024 * 1024),
+    ("/api/offline-kit/update", 65 * 1024 * 1024),
 )
 
 

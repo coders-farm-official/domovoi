@@ -1191,8 +1191,13 @@ it is `http(s)`, never any other kind of intent.
 
 Several features make the server fetch a **caller-chosen URL**: media
 acquisition (`POST /v1/admin/music/add-by-url`), a podcast feed and its
-episode files, a news feed, an internet radio stream (the browser proxy and
-the song sampler), a model pull. A server that fetches what it is told to
+episode files, a news feed, an internet radio stream (the browser proxy, the rooms'
+players' relay and the song sampler), a model pull. A plugin that plays a remote URL in a room asks the core
+for a relay URL (`sdk.playback.relay_url`, SDK 1.17) instead of handing
+the room's player the URL, so the player never fetches it and the
+core's own fetch makes every check below; the URL is fixed when the
+relay token is minted, so the relay is not a proxy anyone can point. A
+plugin written for an older core plays the URL directly, as before. A server that fetches what it is told to
 is a server-side request-forgery surface — the thing it can reach that you
 cannot is *everything else in your house*, plus its own admin endpoints on
 localhost. Two rules apply.
@@ -1211,8 +1216,8 @@ station writes (favorite, play, a stream-URL edit, the simulcast lookup)
 sit on the device tier; model pull, cancel and delete on the admin tier.
 
 **Where the server will go** (`domovoi/net_safety.py`, used by every
-fetcher — the podcast poller, the news fetcher, the radio stream proxy and
-sampler, the model pull):
+fetcher — the podcast poller, the news fetcher, the radio stream relays
+(the browser's, and the core's player relay for any plugin's room play) and sampler, the model pull):
 
 - `http` and `https` only. Not `file:`, not `concat:`, nothing else — the
   radio sampler never hands ffmpeg the station URL at all: it opens the
@@ -1610,7 +1615,7 @@ admin tier is code execution and configuration, not day-to-day use.
 
 | Surface | Endpoints | Behavior before first-run setup |
 |---|---|---|
-| **Plugin management** (install pipeline = code execution) | `POST /v1/plugins/install`, `/v1/plugins/install/{staged_id}/confirm`, `/v1/plugins/{slug}/enable`, `/disable`, `/uninstall`, `/upgrade` | **Fails closed** — 501 until an admin password exists. Local development uses the `domovoi plugin dev` CLI, which never crosses HTTP. |
+| **Plugin management** (install pipeline = code execution) | `POST /v1/plugins/install`, `/v1/plugins/install/{staged_id}/confirm`, `/v1/plugins/{slug}/enable`, `/disable`, `/uninstall`, `/upgrade`, `/v1/plugins/updates/check` | **Fails closed** — 501 until an admin password exists. Local development uses the `domovoi plugin dev` CLI, which never crosses HTTP. |
 | **Configuration** (values include plugin secrets, so *reads* are gated too) | Core: `GET/POST /v1/admin/config`. Dashboard: `GET/PATCH /api/config/editable` (which forwards your credentials to the core — both processes enforce the gate independently). | **Writes fail closed** — 501 until an admin password exists (a write can point the core at another database or change what it runs). Reads keep the pre-setup grace so a fresh install can finish setup. |
 | **Service restart** (bounces `domovoi-core` + `domovoi-web`, or starts the root `domovoi-update.service` where it is installed) | Core: `POST /v1/admin/version/restart`. Dashboard: `POST /api/config/version/restart`. | **Fails closed** — 501 until setup. |
 | **Update channel** (stable or main: which branch every later pull, and so the update unit's root run, follows; never moves the code itself) | Core: `POST /v1/admin/version/channel`. Dashboard: `POST /api/config/version/channel`. | **Fails closed** — 501 until setup. Only `stable` and `main`, and only those `DOMOVOI_UPSTREAM_BRANCH` in root's `/etc/default/domovoi-update` allows (the update unit refuses any other branch itself). The pin binds the dashboard and catches mistakes; the service user can rewrite its own `.git` refs, so only signed updates bound what root runs. |
@@ -1619,6 +1624,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Satellite media preparation** (builds the code and the first-boot scripts a Pi will run as root) | Dashboard: the whole `/api/satellites/media/*` router. Reads (`/status`, `/targets`, `/jobs`, `/jobs/{id}/download`, `/jobs/{id}/credentials`) take an admin **read** — the artifact is the code a satellite will run, `/jobs` lists the ids that name it, and `/targets` enumerates the drives plugged into this server. Writes (`/prepare`, `/cancel`, `/cache/refresh`) stay Bearer-only. | Pre-setup grace. The **downloadable zip carries no plaintext passwords**: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard from process memory. A card written directly to a **drive** still carries `domovoi/ap.json` and `domovoi/console.json` — stage 1 reads the first to raise its setup network, and anyone holding the card can read either anyway. |
 | **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer-only since 2026-10-14), `POST /v1/admin/device-token` (set a chosen one), `POST /v1/admin/device-token/rotate`. Dashboard: the same three at `/api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). Reading, setting and rotating are all Bearer-only: the dashboard cookie alone reads nothing here (it reaches every port of the host — see [Staying signed in across a reload](#staying-signed-in-across-a-reload)). |
 | **Satellite approval and rejection** (binds a parked device to a room for good, or drops its request) | Core: `POST /v1/admin/satellites/approvals/{room_id}/approve`, `/reject`. Dashboard: `POST /api/satellites/approvals/{room_id}/approve`, `/reject`. The list of parked requests is an admin **read** (Bearer or cookie). | **Fails closed** — 501 until setup (2026-10-08, REV-32). With strict pairing the default, a satellite that connects to an unclaimed core parks; before this, any LAN host could park a device of its own there and approve it with no credential, and that pairing outlived the setup. Finish first-run setup, then approve. |
+| **Satellite support sessions** (an admin's shell on one satellite, as its service account; see [Support sessions](#support-sessions-an-admins-shell-on-one-satellite)) | Core: `POST /v1/admin/satellites/{id}/support/open` and `/support/allow` (security tier, a password sign-in within 5 minutes, and for open the password typed again), `/support/disallow` (admin), `POST /v1/admin/support-sessions/{id}/end` (device tier), the audit list and transcripts `GET /v1/admin/support-sessions[/{id}/transcript]` (security-tier reads, Bearer only), `DELETE` (security tier). Dashboard: the same under `/api/satellites/{id}/support/*` and `/api/support-sessions/*`. | **Fails closed** — 501 until setup. A session minted from a phone grant never opens one. |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Command recordings for tuning** (audio of what was said in a room an admin opted in; see [below](#command-recordings-for-tuning-opt-in-per-room)) | Dashboard: `PUT` / `DELETE /api/captures/rooms/{room_id}` (turn a room on; turn it off, which deletes everything it kept), `PATCH` / `DELETE /api/captures/clips/{room_id}/{capture_id}` (label, delete one), and the reads `GET /api/captures` and `GET /api/captures/clips/{room_id}/{capture_id}/audio`. | **Fails closed** — 501 until setup, reads included. Reads and writes are Bearer-only (the dashboard cookie alone reads nothing here since 2026-10-14). The household token never reads these, unlike the rest of the household's speech. |
 | **Shared screens** (marks a device, such as the kitchen tablet, as one the whole household uses) | Dashboard: `PATCH /api/devices/{device_id}/shared-screen`; the flag reads back on `GET /api/devices` and on the device's own `POST /api/devices/register`. | Pre-setup grace. Admin tier, not the device tier the device's own rename takes, so the tablet's own household token cannot switch it back to personal. **Presentational, not a boundary, and a thin one.** The dashboard leaves personal content off a shared screen: calendar titles and locations, a reminder's text on Home and in the timer alert cards, the problem detail on Home, and People, Chat, Files and News on every launcher. But the tablet is paired, so it can read everything Home hides that way — the calendar and the rooms are household reads (since 2026-10-08) it holds the credential for — and the rest is an **open read** that anyone on the network can fetch with no credential at all (`/api/health`, `/api/plugins`). A reminder's words are the exception since 2026-09-30: every open timer read masks them for a caller without a household credential (rule M1, [Timers and reminders](#timers-and-reminders-house-wide)) — but the shared screen IS paired, so it receives them (and the `/ws/state` push carries them) and hides them only on screen. The pages dropped from the launchers still open by URL, and the tablet is paired, so it can read every device-tier page too (chat threads, files). Home also never masks a browser that can't register: an unpaired browser, **including a private window on the tablet itself**, gets the full Home. And the flag hangs off a **self-asserted device id** that the browser keeps in its own storage (`domovoi-client-id`). Clearing the tablet's site data, or registering under a new id, gives an unmarked device until an admin marks it again. A device that already holds the flag learns a change within about two minutes. The Android app applies the same masking to its own Home and launchers, from the same register answer, with the same limits: its device id lives in the app's own storage, an app that can't register (unpaired, on a claimed box) is never masked, and a web backend too old to send the flag is taken as "not shared". Enforcement would take a restricted display pairing of its own, which this is not. |
@@ -1638,7 +1644,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Library sweeps** (long server-side jobs) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/music/library/enrich/repair`. The version *check* beside the code pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
 | **Short address** (whether port `80` redirects to the dashboard; see [The short address](#the-short-address-port-80-a-redirect-and-nothing-else)) | Dashboard: `PUT /api/short-address`. The read (`GET /api/short-address`) is device tier. | Pre-setup grace. On or off, it only starts or stops a redirect to the same dashboard behind the same gates; it changes no setting, credential or code. |
-| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`; `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)); every admin session signs out after an hour without an admin action ([Signing out after an hour idle](#signing-out-after-an-hour-idle)) | n/a — these only exist once setup is done. |
+| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`, `POST /api/auth/phone-grant` and `GET` / `DELETE /api/auth/phone-grants[/{id}]` ([Admin on a phone](#admin-on-a-phone-the-days-grant)); `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)); every admin session signs out after an hour without an admin action ([Signing out after an hour idle](#signing-out-after-an-hour-idle)) | n/a — these only exist once setup is done. |
 
 The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
 "requires the admin password" — but none of those routes is open any more.
@@ -1702,10 +1708,46 @@ reason, so a new route cannot quietly ship open.
   that window re-uses the same code rather than invalidating the one you
   already wrote down; a restart after it writes a fresh one. The code file
   is deleted the moment setup completes.
+- **The setup-code QR (1.5.0).** Where the code is already on a screen,
+  a QR code of it is shown next to it, which a phone's camera opens:
+  `http://<server's LAN address>:6369/#setup-code=<code>`. The places are
+  the core's first-run banner and `--reset-admin` (only when stdout is a
+  terminal, the rule above), `python -m domovoi.setup_qr` run as the
+  core's user at a terminal (it reads the same 0600 file; redirected, it
+  prints only where the file is), and the Windows installer's last page
+  (**Set up from a phone**: the helper sends the modules over the same
+  stdout pipe as the code, and Setup draws them; no image file holds the
+  code). Nothing else shows it, and **no endpoint returns the code or its
+  QR**: the dashboard never has the code to show. The rules:
+  - **The fragment only.** The code is after the `#` and nowhere else:
+    never in the path or the query. A browser does not send the fragment
+    to the server, not in the request line and not in a `Referer`, so the
+    code does not reach the web process's access log, a proxy's log, or
+    another site. `domovoi/setup_qr.py` refuses a dashboard address that
+    has a path, query or fragment of its own.
+  - **Read in the page, then cleared.** `web/static/setup_fragment.js`, the
+    first script in `index.html` (before the hash router reads the
+    address), takes the code, puts the address back without the fragment
+    (`history.replaceState`, path and query kept; any other fragment, such
+    as a page route, is left alone), and keeps the code in the page's
+    memory only: no storage, no cookie, no request. The claim form (the
+    first-run welcome, which a scan opens even after "Not now", and the
+    admin setup dialog) starts with the code filled in and posts it exactly
+    as a typed one: `POST /api/auth/setup` with the code in the body, the
+    same backoff, the same checks.
+  - **Nothing else changes.** The code's 24-hour window, its single use
+    and the file it lives in are as above.
+  - **Residual.** The phone's browser may keep the opened address, with
+    its fragment, in its own history list (`replaceState` changes the
+    address bar and the Back entry, not every browser's history store).
+    The code is single-use and expires after 24 hours, so that copy is
+    useless once the house is claimed. Anyone who can see the screen can
+    scan the QR, as they could read the code; show it where you would show
+    the code.
 - **The password** is hashed with **argon2id**; only the hash is stored (a
   single row in Postgres). Minimum 10 characters. **Changing it revokes
   every other session** — only the session that made the change stays
-  logged in.
+  logged in — and every phone grant ([Admin on a phone](#admin-on-a-phone-the-days-grant)).
 - **Sessions** are 256-bit bearer tokens; the database stores **only the
   sha256** of each token. A session **signs out after 1 hour idle**: an
   hour after its last *admin action* (a change made as admin), whatever
@@ -1751,8 +1793,8 @@ reason, so a new route cannot quietly ship open.
   rendering is let the dashboard's own page take its Bearer back after a
   reload, inside the reload window — below.
 - **Forgot the password?** `python -m domovoi.main --reset-admin` on the
-  server clears the credential and every session and prints a fresh setup
-  code. Requires being at the machine — same proof-of-possession logic.
+  server clears the credential, every session and every phone grant, and
+  prints a fresh setup code. Requires being at the machine — same proof-of-possession logic.
 
 ### Signing out after an hour idle
 
@@ -1946,6 +1988,80 @@ that shows the browser a different scheme or port than the dashboard
 sees, the same-origin rule refuses the resume and a reload is view only,
 as before (uvicorn believes `X-Forwarded-Proto` from loopback only).
 
+### Admin on a phone: the day's grant
+
+1.5.0, owner-approved 2026-11-22. The phone apps let an admin sign in
+with the password and then keep admin **for the rest of the day** behind
+the phone's fingerprint or Face ID, without the phone ever storing the
+password or a Bearer.
+
+**How.** The phone signs in with the password (`POST /api/auth/login`) and
+holds that Bearer in memory, like the dashboard. With the switch on, it
+then asks for a **phone grant** (`POST /api/auth/phone-grant`): 256 random
+bits, bound to the phone's device id, ending **24 hours after it was
+issued**. The server keeps only its sha256. The phone keeps the grant
+encrypted under a key its biometrics unlock (Android Keystore, iPhone
+Keychain), and when it needs a Bearer again (the idle hour lapsed, the app
+restarted) it unlocks the grant and swaps it for a fresh admin session
+(`POST /api/auth/phone-grant/exchange`): an ordinary one, labelled
+`phone: <label>`, with the usual idle hour.
+
+**The rules the server holds.**
+
+* **A grant needs a fresh password sign-in.** It is issued only to a
+  session that proved the password within the last **5 minutes**
+  (`admin_sessions.signed_in_at`). That stamp is set by a password
+  sign-in, first-run setup and a password change, and by nothing else: an
+  admin action, a reload resume or a grant exchange never moves it. So a
+  Bearer that was stolen, or kept alive by admin changes, cannot mint a day
+  of access, and a session minted **from** a grant has no `signed_in_at` at
+  all: a grant cannot make another grant. A new day needs the password.
+* **Both credentials, every time.** Issuing and exchanging take the
+  household token itself (`X-Device-Token`); an admin Bearer is no
+  substitute. The exchange also needs the device id the grant was issued
+  for: a copied grant presented under another id is refused like a wrong
+  one (compared in constant time).
+* **Bound to the device key (1.5.0, V086).** Once the phone's device row
+  holds a device key ([Private chats](#private-chats)), a grant is issued
+  only to a request that presents that key (`X-Domovoi-Device-Key`; 403
+  otherwise), and swapped only by one (a missing or wrong key is refused
+  exactly like a wrong grant, and counted the same). The device id alone
+  is self-asserted; the key is a per-device secret, so a copied grant and
+  the phone's id are no longer enough without the key too. A device that
+  has no key yet is not held to it.
+* **The login's own throttle.** A wrong grant counts against the same
+  per-source backoff as a wrong password, both ways (a run of wrong grants
+  delays the password login from that address, and the reverse).
+* **One grant per phone.** A new grant for a device id replaces the old,
+  and the sessions the old one minted end with it.
+* **The end is the server's.** 24 hours after issue the grant is refused
+  (and deleted) whatever the phone thinks the time is.
+
+**What ends a grant, at once:** the phone's sign-out
+(`POST /api/auth/phone-grant/revoke`: holding the grant is the credential,
+and the answer is the same whether or not it existed), an admin's revoke
+on the dashboard (Settings → Advanced, **Admin on phones**: label, until
+when, last used), a password change, `--reset-admin`, and the 24 hours.
+Ending a grant also ends every admin session the phone made with it
+(`admin_sessions.phone_grant_id`). Biometrics enrolled anew on the phone
+invalidate its key, so the phone drops the grant and asks for the password.
+
+**What it costs, said plainly.** The grant does not rotate on each
+exchange (a new one would need a second biometric prompt to store it), so
+one grant is good, through one endpoint, for at most a day. Someone who
+copied the phone's stored grant AND has the household token AND the
+phone's device id can be admin until the grant ends or is revoked; the
+grant is encrypted under a biometric-gated key on the phone, so copying it
+means unlocking that key. The traffic is plain LAN HTTP like every other
+admin flow ([No TLS](#1-no-tls-on-admin-flows-or-anything-else)): a
+listener on the Wi-Fi who sees an exchange sees the grant and the Bearer.
+A session a grant minted ends when its grant does: at the grant's 24
+hours (`admin_sessions.hard_expires_at`, which no admin action moves), or
+at once when the grant is revoked, replaced or deleted, or earlier at its
+own idle hour. Ended grants are deleted at the next sign-in or exchange,
+where ended sessions are. Never logged: the grant, the token, the password; the log names
+the device id and the label.
+
 ## Plugin trust model — read this before installing anything
 
 This is the part where we are exactly as honest as the code is.
@@ -2000,6 +2116,42 @@ What the install flow *does* do (verified in
   plugin if one is missing from it: a marker set by hand, or applied by a
   call rather than a decorator, is a load error, never a route the screen
   did not show.
+- **Update checks never install anything.** For a plugin installed from
+  GitHub the core asks `api.github.com` once a day (and when an admin
+  presses **check for updates**) for the repo's newest `vX.Y.Z` release;
+  a zip install is asked about only when its manifest's homepage is a
+  GitHub repo and an admin asks. No token or credential is sent, no other
+  host is contacted (a redirect elsewhere is refused), nothing is asked
+  with the internet answered **No**, and a private or unreachable repo
+  reads "can't check for updates", never "up to date". **Update to
+  X.Y.Z** downloads the release's own `<slug>-X.Y.Z.zip` and refuses it
+  unless its SHA-256 matches the release's `SHA256SUMS` (only
+  `api.github.com`, `github.com` and GitHub's two storage hosts, every
+  redirect hop included); a release without both files falls back to the
+  tag's source archive, and the page and the trust screen say so. Either
+  way it is the ordinary GitHub upgrade: the same staging checks and trust
+  screen, and nothing runs until an admin confirms. The checksum proves the
+  zip is the one the release lists, not who wrote it: whoever controls the
+  repo controls both. **The repository's identity is pinned** (M6, review
+  of 2026-11-23): `owner/repo` is only a name, which a renamed,
+  transferred or deleted-and-re-registered repository passes to someone
+  else. Each check first reads the repository itself without following a
+  redirect, and keeps its numeric repository and owner ids per plugin
+  (the `plugin_repo_pins` table, V081). They are read when the plugin is
+  staged from GitHub and pinned when the admin confirms the install; a
+  plugin installed before 1.5.0 is pinned by its first check, and pins kept
+  in the earlier `~/.domovoi/plugin_repo_pins.json` are imported once (the
+  file is then renamed `.imported`). A redirect or other ids read "the
+  repository moved or changed owner", no update is offered, and an update
+  from the pinned address, by the release's zip or the tag's source
+  archive, is refused at staging. Reinstalling the plugin from another
+  address pins that repository. An answer for a plugin is dropped when it
+  was reinstalled from another repository, and an answer the check can't
+  read fails that plugin's check, not the others'. On the trust screen for
+  an update, a changed publisher and any permission the installed version
+  didn't declare are listed above the rest. Release notes are shown as plain text, never as HTML. The
+  check reads release metadata, which proves nothing about the code: the
+  trust screen is still where you decide.
 - **Downgrades require `force`** — installing an older version than what's
   present is refused by default, because it may reintroduce fixed
   vulnerabilities.
@@ -2033,6 +2185,68 @@ What the install flow *does* do (verified in
   hostile plugin could build a `RegisteredSource(core=True)` itself and
   register it directly, or patch the module; nothing in-process can stop
   that. Same boundary as above: install plugins from publishers you trust.
+- **A plugin's decode-only containers are the one place plugin code runs
+  outside the core (core 1.5.0).** A plugin that declares an `[isolated]`
+  decoder gets containers the core builds and runs
+  (`domovoi/plugins_runtime/isolated.py`), for decoding input it doesn't
+  trust; a plugin with the `friend_houses` permission must have one, and
+  its install is refused otherwise. Reworked after the 2026-11-23 design
+  review:
+  - *The image is the core's.* The core writes it, never from a plugin's
+    Dockerfile: the same digest-pinned Debian base as the Friend Houses
+    listener, Python and up to three allowlisted Debian packages (no pip,
+    installed before any plugin file is in), the core's runner and image
+    helper, and only the `.py` files of the decoder's own top-level
+    package (`domovoi_isolated_<slug>`, Python only, imports checked at
+    install), copied and byte-compiled, never run, at build. It is built
+    only for a loaded (admin-confirmed) plugin, only when the internet
+    answer isn't "never" and, for a `friend_houses` plugin, Friend Houses
+    is on and a friend has "Apps with this friend" on; rebuilt on a
+    content hash and at 30 days with `--pull --no-cache`; capped at 1 GB
+    and a low CPU weight on Docker's classic builder (on a Docker without
+    it the core refuses to build). The container guard is told the image
+    ID before any container runs it; an image it has no record of is
+    rebuilt, never run; any container under the `domovoi-plugin-dec-`
+    prefix but outside the plugin's slots is reported as tampering.
+  - *One container per friend.* A friend's bytes are decoded only in that
+    friend's own container, started on demand and stopped after 2 minutes
+    idle (at most 4 per plugin, 8 in all), so a friend who exploits a
+    decoder never sees, or answers for, another friend's mail. The friend
+    is never named to the container; the core keeps the request id and the
+    friend on its own side, one request at a time, and any byte the
+    container writes unasked kills it.
+  - *The wall.* No network, read-only root, no tmpfs, no mounts, no
+    capabilities, no new privileges, a fixed unprivileged uid, 128 MB with
+    no extra swap, 16 processes, a quarter of a CPU, 64 files, no
+    environment, no logs; stderr goes nowhere. It talks over stdin and
+    stdout only.
+  - *Hostile answers.* Every answer is held to size, UTF-8, depth, total
+    values, keys per object, key and string length, integer size, no NaN
+    or infinity, no duplicate keys and no NUL, control characters or lone
+    surrogates, re-serialized by the core and checked in the core's
+    process against the plugin's registered schema (none: nothing is
+    accepted). A hang, crash or broken stream kills that friend's
+    container and backs off that friend only; an item that faults twice is
+    dropped; three faults from one friend in an hour pause that friend
+    for that plugin, while every other friend carries on.
+  - *Images.* The container only decodes: the core's helper opens the
+    bytes with the core's `open_image` (PNG, JPEG or WebP; at most 4
+    megapixels by the header; first frame; at most 768 pixels a side out)
+    and answers raw pixels. The core checks that the pixel count matches
+    and writes the PNG itself (header, pixels, end), so no byte the
+    container chose reaches a browser in a file format, and EXIF, GPS, XMP,
+    ICC profiles and text can't exist in it. It is served as `image/png`
+    with `nosniff`. Pieces of an image are reassembled by the core as
+    opaque bytes, with bounds and an expiry; the plugin never holds them.
+
+  What this buys: a parser bug reachable by hostile bytes (a decompression
+  bomb, a native image decoder flaw) lands in a box that can't reach the
+  network, the database, the house keys or another friend's mail, and
+  whatever it answers is checked and rebuilt by the core. What it doesn't:
+  the plugin's own in-process code is still unsandboxed, and a decoder's
+  checked answers are still the friend's data. The boundary against a
+  hostile *plugin* remains the publisher you trust. Without Docker the
+  decoder is inert (nothing is decoded); there is no in-process fallback.
 - **Plugin HTTP routes are admin-gated by default in both processes.** A
   plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
   dashboard (`/api/plugins/<slug>/…`) sit behind the same rule
@@ -2065,9 +2279,11 @@ What the install flow *does* do (verified in
   `@open_endpoint` socket, a Starlette `WebSocketRoute` (which skips the
   gate) and any socket on the dashboard process are refused at load. The
   bundled
-  radio plugin opens nothing to the whole LAN: its
-  everyday mutations (play, favorite, edit, forget, simulcast lookup) are
-  `@device_endpoint` and its FCC bulk import keeps the admin default.
+  radio plugin opens no route without a credential (its stations reach a
+  room through the core's player relay, `GET /v1/player-relay/<token>`,
+  below). Its everyday mutations (play, favorite, edit, forget, simulcast
+  lookup) are `@device_endpoint` and its FCC bulk import keeps the admin
+  default.
 
 And the crucial caveat: **the manifest's permission flags and warnings are
 honesty devices, not enforcement.** A flag like `network = true` is the
@@ -2203,8 +2419,9 @@ All of it on hardware you own. Locations, verified against the code:
 | **The systemd journal on the server** (Linux; the Windows install keeps one inside its WSL distro) | What the core and the dashboard print to stdout: start-ups and shut-downs, warnings and errors, the loop watchdog's stall reports, one line per HTTP request but the routine polls (method, path, status, the caller's address), which room a turn came from and which handler answered it, and voice identification's scores (person ids and numbers). **Since 2026-10-16 no line holds a credential or what was said** at the default level: both processes blank the value of every credential-named parameter in every log line, whatever logger wrote it (`?device_token=` in the URLs the dashboard builds, a WebSocket's `?token=`, a Bearer: `device_token=***`, `domovoi/log_privacy.py`; in a query string the whole value is blanked, whatever characters a chosen household token holds), and a transcript, a search, an announcement or a reply appears only as a word count (`<5 words>`); with `LOG_LEVEL=DEBUG` the words are written too, for as long as it is set. Kept **on disk** (`Storage=persistent`, installed by `provision.sh` and every update so a freeze's record survives a power cycle, [LINUX_HOST.md](LINUX_HOST.md#the-loop-watchdog)) within journald's own limits: by default at most 10% of the file system, capped at 4 GB, with **no time limit** — the oldest entries go only when the cap is reached, which on a quiet box can be months. Readable by root and members of `adm` / `systemd-journal`. **"Forget me", deleting a person or a chat conversation, "Keep voice history", "Delete all voice history" and "never save my voice" do not reach it**: lines already written stay until journald rotates them out. To remove them sooner, as root: `journalctl --vacuum-time=7d` (or set `MaxRetentionSec=` in a drop-in of your own). A journal from before 2026-10-16 can hold the household token (the dashboard's access log printed `?device_token=` URLs) and transcripts (the core logged some at INFO) until it rotates: rotate the household token (Settings → Phones & browsers) and vacuum the journal if that matters to you. Setup's **Copy logs** on Windows copies the last 200 journal lines of a failed start into `provision.log`, with `device_token=` blanked there too (`Redact.KeyValue`). |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). A page scanned through Domovoi is saved as a PDF in `Documents/Scans/` (its words, as the server read them, are in the database: [Reading scans](#reading-scans)); a draft saved from a chat, a draft a phone sent home and a letter taken by voice are saved as files in `Documents/From Chat/`, and stay there until someone deletes them (deleting the chat does not). |
 | **Postgres: listening history** (V051 `music_listens`, `music_room_listeners`, 2026-11-12) | One row per library song each room, browser and phone played: the song id, the room or device id, when, how long, how it ended, and the person it was for (or the household); and, per room, whose its music is now. Kept 1 year by default, 90 days, or not at all ("Keep listening history"); see [Listening history](#listening-history-whats-kept-for-how-long-who-clears-it). |
-| **Postgres: chat** (`chat_threads`, `chat_messages`, V034–V039; `help_deliveries`, V035) | The home-server chats of the dashboard and the app: each thread's title, whether you or the chat model named it, whether it is archived, and every message (what was typed or, for a chat-mic turn, transcribed; the dictation of a letter taken by voice; the reply; the model; the device it came from; who the voice was recognized as). A reply that looked something up keeps the search words or page address, the sources shown under it and whether the internet was used, and the thread keeps whether "Allow in this chat" is on. A message that carried documents keeps a one-line summary of each (name, kind, pages, word count, notes); a reply answered from documents keeps the passages the model was given, with their text; a reply about a letter photo keeps the text read from the photo beside it. A long summary's per-part notes (`chat_doc_jobs`, V038) are kept only until the summary is finished, or while a stopped one waits to carry on. Drafts (`chat_drafts`, `chat_draft_versions`, V039) keep every version of a letter or other document the chat wrote: the text, the instruction that produced it, whether the model or a person wrote it, the model, the files saved from it, and the device (and person, when known) that made it. A "send the steps to my phone" leaves a `help_deliveries` row: the person, the chat and its title, no text. **Kept until the thread is deleted** (any paired device can delete one): there is no age limit, and "Keep voice history" does not touch chat. Deleting a thread removes its messages, document jobs, drafts and delivery rows; copies in the pre-update database dumps and in a rolled-back database (the rows above) stay until those are replaced. |
+| **Postgres: chat** (`chat_threads`, `chat_messages`, V034–V039; `help_deliveries`, V035) | The home-server chats of the dashboard and the app: each thread's title, whether you or the chat model named it, whether it is archived, and every message (what was typed or, for a chat-mic turn, transcribed; the dictation of a letter taken by voice; the reply; the model; the device it came from; who the voice was recognized as). A reply that looked something up keeps the search words or page address, the sources shown under it and whether the internet was used, and the thread keeps whether "Allow in this chat" is on. A message that carried documents keeps a one-line summary of each (name, kind, pages, word count, notes); a reply answered from documents keeps the passages the model was given, with their text; a reply about a letter photo keeps the text read from the photo beside it. A long summary's per-part notes (`chat_doc_jobs`, V038) are kept only until the summary is finished, or while a stopped one waits to carry on. Drafts (`chat_drafts`, `chat_draft_versions`, V039) keep every version of a letter or other document the chat wrote: the text, the instruction that produced it, whether the model or a person wrote it, the model, the files saved from it, and the device (and person, when known) that made it. A voice photo search sent to a phone ("Do you want them on your phone?") leaves a `help_deliveries` row: the person, the chat and its title, no text (voice help wrote these too before 1.5.0; it no longer sends anything). **Kept until the thread is deleted** (any paired device can delete one): there is no age limit, and "Keep voice history" does not touch chat. Deleting a thread removes its messages, document jobs, drafts and delivery rows; copies in the pre-update database dumps and in a rolled-back database (the rows above) stay until those are replaced. |
 | **`~/.domovoi/chat_uploads/` on the server** | Pictures sent into a home-server chat, letter photos included (the upload and the smaller copy the vision model was sent; up to 20 MB each and 4 a message) and, under `documents/`, the documents attached to a chat or copied in by "Ask about this document" (PDF, Word, OpenDocument, Excel, CSV, text or markdown; up to 100 MB each and 4 a message): the original as `<token><ext>` and the text read from it as `<token>-parts.json`, under random names. They go with the thread they belong to; a document picked in the composer and never sent is cleared out after an hour. Readable by a paired device only. See [Documents in chat](#documents-in-chat). |
+| **Postgres: photos and videos** (V078 `media_items`, `media_frames`, `media_segments`, `media_summaries`, `media_faces`, `face_groups`, `face_denylist`, 1.5.0) | What Domovoi works out about the photos and videos in Pictures and Videos, once an admin turns it on: per file its path, size, a fingerprint, the date taken, a caption, tags, text found, a video's transcript with times and summary; with faces on, each face's box and 128-number embedding and the groups and names; with places on, a photo's GPS position and town. `face_denylist` holds anonymous patterns of people who asked to be forgotten and is kept when faces are turned off. See [Photos and videos](#photos-and-videos-understanding-the-library). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`, which the dashboard writes and never reads back: Settings → Advanced shows an admin only whether one is set). Protect it like `~/.domovoi/plugins/`. No value written there may hold a newline or another control character (the configuration page refuses it, and the writer refuses it for every key): the core reads a quoted newline as part of the value, but a line-based reader would see a second setting, which a value could smuggle past the core. The update unit (root) reads it through the checkout's own reader, as the core does. |
 | **Postgres: guests** (V023 `guests_seen`, `guest_bans`, `room_queue_items.guest_*`, 2026-10-10) | `guests_seen`: one row per (self-asserted browser id, source address) that a GUEST (no household credential) changed the music from — the id, the address, the user agent, the room, the last action, first and last seen. Written by the core each time it lets a guest act; at most 10 rows per address (newest kept), and a row not seen for 30 days is deleted by the core's hourly `guests_seen_pruner` worker. `guest_bans`: the admin's bans (an id and/or an address, an optional note), kept until lifted. `room_queue_items.guest_device_id` / `guest_source`: which guest queued an entry, gone with the entry's provenance row. All three are read only by an admin (`GET /api/music/guests`, `/api/music/guest-bans`, the admin's queue read); a guest never sees them. No transcript, no recording. |
 | **Postgres: satellite health** (V022 `satellite_health`, `satellite_outages`, 2026-10-09) | One row per health sample a satellite sends (about one a minute: its memory, fds, CPU, temperature and throttle flags, uptime, mic frames/s, queue depths, link rate and SSID, NetworkManager state, whether its gateway and this core answered; a spare laptop or phone may add its battery level and charging state and whether its mic is blocked), pruned to 24 h per room; and the last 20 outage reports per room (what the satellite's previous process life wrote down before it died: its last sample, the failed connects it saw, the self-check actions it took, why it exited). Numbers and short strings — never a transcript, a recording or a person. Household data on the device-read tier (`GET /v1/admin/satellite/{room}/health`): a paired device learns the room's SSID, uptime, whether a turn or call is open right now, and whether anyone has been reconnecting it, nothing more. The Open `/v1/admin/snapshot` carries only when the latest sample and report arrived, never their content. Written only from a session whose `hello` matched the room's pairing token. |
@@ -2224,16 +2441,18 @@ Owner, 2026-10-17 (before 1.0): what people say to Domovoi was kept with no
 limit, forgetting a person only took their name off it, and there was no
 delete. Now there is a limit, a delete, and forgetting someone removes what
 they said. Everything below is `domovoi/voice_history.py`,
-`domovoi/workers/voice_history_pruner.py`, V030 and Settings → Household → People → **Voice
-history** on the dashboard (the same "Keep voice history" setting is also
-under Settings → System → Advanced → Privacy; Settings → Privacy → Voice history is
-the page for command recordings, below). Chat is not voice history: a
+`domovoi/workers/voice_history_pruner.py`, V030, Settings → Privacy → **Keep voice
+history** on the dashboard (the setting's one control since 1.5.0; Settings → Household →
+People → **Voice history**, which holds Delete all, and Settings → System → Advanced → Privacy show
+it and link there) and Settings → Privacy → **Command recordings** (the opt-in command
+recordings, below; it was called "Voice history" before 1.5.0, and its old address
+`#settings/voice-history` still opens it). Chat is not voice history: a
 home-server chat is kept until it is deleted (see [Data at rest](#data-at-rest)).
 
 | | |
 |---|---|
 | **What voice history is** | Every routed turn — what was said and what Domovoi answered (`conversation_log`: the Conversations and Sessions tabs read it) and its routing record with the transcript (`intents_log`; the dashboard's `[ui]` actions are rows there too, and so is the fast lane's own hearing, inside `timings`) — plus each room's short-term conversation (`sessions.context`: the last exchanges, the last answer for "say that again", what a turn parked waiting for a "yes") and the satellites' logs kept on the server (`~/.domovoi/satellite-logs/`, a `heard:` line for every utterance and the text of every reply). A turn said into the app's chat mic is one of these too (room `phone-<device id>`). |
-| **How long** | **Keep voice history**: 30 days, **90 days (the default)**, 1 year, or forever. Once a day the core deletes everything older: both logs' rows, a session idle that long, the older exchanges of a room that is still talking, and the older lines of the satellites' logs. Saving a shorter setting does it at once (Settings → Household → People → Voice history asks first). Forever deletes nothing on its own. The setting is `VOICE_HISTORY_KEEP` (`30`, `90`, `365`, `forever`); a value written in `.env` by hand rounds **up** to the next choice, never down (45 keeps 90 days; 0 or more than a year keeps everything), and anything unreadable (`6 months`, `2y`, a typo) deletes nothing: it reads as forever until it is fixed, and the log says so once. **The first run after the update that brings this deletes everything older than 90 days** unless `VOICE_HISTORY_KEEP` says otherwise. A run is skipped, with a warning in the log, when the server's clock looks wrong: earlier than the newest turn, or so far ahead that every turn would go; so a house that has said nothing for longer than the setting keeps its last turns until somebody speaks again. |
+| **How long** | **Keep voice history**: 30 days, **90 days (the default)**, 1 year, or forever. Once a day the core deletes everything older: both logs' rows, a session idle that long, the older exchanges of a room that is still talking, and the older lines of the satellites' logs. Saving a shorter setting does it at once (Settings → Privacy → Keep voice history asks first). Forever deletes nothing on its own. The setting is `VOICE_HISTORY_KEEP` (`30`, `90`, `365`, `forever`); a value written in `.env` by hand rounds **up** to the next choice, never down (45 keeps 90 days; 0 or more than a year keeps everything), and anything unreadable (`6 months`, `2y`, a typo) deletes nothing: it reads as forever until it is fixed, and the log says so once. **The first run after the update that brings this deletes everything older than 90 days** unless `VOICE_HISTORY_KEEP` says otherwise. A run is skipped, with a warning in the log, when the server's clock looks wrong: earlier than the newest turn, or so far ahead that every turn would go; so a house that has said nothing for longer than the setting keeps its last turns until somebody speaks again. |
 | **Deleting it all** | Settings → Household → People → Voice history → **Delete all voice history** (an admin), after a confirmation that names what goes and what stays. Everything said until that moment goes, everywhere: the rows of both logs, every room's short-term conversation and the satellites' logs. It runs on the server as a job (`voice_history_jobs`), in the same small batches as the daily run; the page shows its progress, a restart in the middle finishes it at the next start, and a failure is retried within the hour. Something said after the press stays. |
 | **Forgetting one person** | "Forget me" in the person's own voice, answered **yes** to "Say yes to delete everything you've said" (the very next turn, within a minute, in the same room or on the same phone, and not in somebody else's recognized voice; anything else deletes nothing), or People → a person → **forget person** (an admin), deletes **what they said**: every turn voice identification attributed to them as the **speaker** (the turn's `person_id`), with Domovoi's answers, and the short-term conversation of each session they spoke in (those entries name no speaker, so the whole of it goes); then the person, their voice samples, memories, favorites and preferences — one transaction. **A turn in which somebody else said their name is not theirs and stays**: it carries the other speaker's id, or none, and the text is never searched. A voice that only *claimed* their name loses only the samples it added and deletes no turns (S1 above); what that voice said while it was recognized as them stays filed under them, and goes with their own "forget me". The "forget me" and the question are theirs and go with the rest; the "yes" is written with nobody's id on it and goes when the setting's window passes. The tool router never offers the forget command on talk about forgetting something else ("forget about it", "forget that"). |
 | **Who can read it** | Unchanged (the 2026-10-16 delta review left this tier as it is): any **paired device** — one holding the household token (a header, or `?device_token=`), or an admin's session (the Bearer, or the dashboard's cookie) — reads a room's Conversations and Sessions (`GET /api/satellites/{room}/conversations`, `/sessions`) and a person's (`GET /api/people/{id}/conversations`, `/sessions`); anything else on the LAN gets `401`. Before first-run setup everything is open to the LAN, as everywhere. `GET /api/voice-history` — the setting, how many turns are kept and since when, the last cleanup and delete, never a word — is the same tier. Changing the setting and deleting it all are an admin's (Bearer; `501` before setup); forgetting a person from the dashboard is an admin's (Bearer; the pre-setup grace kept, like every person and profile delete). |
@@ -2307,6 +2526,20 @@ shared screen, or the device letting go wipes it. A claim and an admin
 marking the device shared at the same moment take turns (the device row is
 locked, and the write refuses a shared screen).
 
+**Since 1.5.0 (L39 and L40 of the review of 2026-11-22, closed in 1.5.0).**
+Chat reads no longer hand out the device ids messages and draft versions
+were sent from (`GET /api/chat/threads/{id}/messages`,
+`GET /api/chat/drafts/{id}`): each row says `mine` instead — true when it
+was sent with the id the caller names in its own `X-Device-Id` header,
+false for every row when there is none — and keeps `device_name`. `mine`
+is a display hint only ("this browser", "edited by you"), so the
+self-asserted header is enough for it. Writes still carry `device_id` as
+before. And a person's own music-mix sliders (`PUT
+/api/people/{id}/music-mix`) now take the same claim-key check as clearing
+their history: from a device claimed as that person, the request carries
+`X-Domovoi-Claim-Key`; without a matching key it is refused `403`
+`{"detail", "code": "claim_key_required"}`. An admin skips the check.
+
 **What this still allows.** Claiming a person **nobody has claimed** stays
 easy on purpose (owner decision 2026-11-12: "this is me" should just work).
 So any household device can claim, for example, a child or anyone else who
@@ -2319,6 +2552,52 @@ can read a device's own storage (the browser's site data, the phone's app
 data) holds its key. Song attribution (a "listening as" pick, a room's
 starter) stays self-asserted: a household member can still file songs under
 someone else.
+
+## Satellite diagnostics (read-only, admin)
+
+Owner decision 2026-11-22: the safe alternative to a remote terminal. A
+room drawer's **Diagnostics** tab shows what an admin would otherwise SSH
+in for, and nothing more (`satellite/diagnostics.py`,
+`domovoi/satellite_diagnostics.py`).
+
+| | |
+|---|---|
+| **No command input** | The core sends `diag_request` with a probe NAME and no other field. The device looks the name up in a fixed allowlist (`recent_logs`, `network`, `system`, `audio`, `versions`, `service`, and `mic_dsp` on an XVF3800 that declared it) and refuses any other, running nothing. Nothing the core or the dashboard sends reaches a subprocess, a file path or a pattern. |
+| **What runs** | Only what the satellite's own account may: `/proc` and `/sys` reads, `ip route`, `iwgetid -r`, `systemctl show` for its own unit, a TCP connect to the server and the gateway, one DNS lookup of the server's name, the audio device list, and on an XVF3800 the five DSP reads `satellite/mic_dsp.py` already makes (no write, no new `xvf_host` call or sudo rule). No sudo rule was added for it, and none may be. |
+| **What leaves the device** | Each answer is cut to 4000 characters, control characters are taken out, the pairing token is replaced wherever it appears, and so is anything secret-looking: `Bearer …`, `token=` / `password:` / `api_key` / `psk` / `cookie` values, private-key blocks, long hex and base64 runs. A `key=value` secret, or one after `password` / `secret` / `psk`, is blanked to the end of its line (all of a multi-word value). The Wi-Fi network's name is never sent: the network probe shows the first 8 hex digits of an HMAC-SHA-256 keyed with the house's server fingerprint (two rooms of one house compare; a table of common names made elsewhere doesn't apply), and the recent-logs probe replaces the name wherever a log line holds it. The device runs at most 8 probes at once, refilled about one every three seconds, whatever the server asks. The core cleans every answer again with the same rules before serving it, and keeps none: the socket's receive loop only cuts the answer to 32,000 characters, and the cleaning runs on a worker thread with a 5-second deadline. Every rule is bounded and starts at a word, so its work is linear in the text: an answer built to make a rule backtrack can't hold the core (one did, for about 18 minutes, before 1.5.0 shipped). |
+| **Who can run it** | An admin (Bearer, the admin tier at both hops; not the household token). The recent-logs probe carries the satellite's log lines, which include what the room heard, the same content the drawer's Logs tab already gates. Rate-limited per satellite (18 probe runs a minute). Nothing is kept: results live in the admin's browser tab. |
+| **Which devices** | Only a connected device whose hello declared `diagnostics`; the dashboard shows the tab for no other (and the core sends no frame to it). |
+
+## Support sessions: an admin's shell on one satellite
+
+Owner decision 2026-11-22 (1.5.0), with the owner's answers of 22 Nov. For
+the rare fault that diagnostics and the fixed actions can't fix, an admin
+may open a real shell on ONE satellite from the dashboard
+(`domovoi/support_sessions.py`, `domovoi/support_routes.py`,
+`satellite/support_shell.py`, `web/backend/api/support_sessions.py`).
+
+**Why it gives a thief of the server nothing new.** The server already
+controls its satellites: a code push runs new code as the service account
+and a plugin payload runs a declared script as root. So a shell is held to
+three rules: it is no easier to get than a code push, it is obvious, and it
+gives the satellite no new power over the server.
+
+| | |
+|---|---|
+| **Who can open one** | An admin on the web dashboard, at the security tier (Bearer only; the cookie opens nothing; 501 before setup), whose session proved the password within the last **5 minutes** (`admin_sessions.signed_in_at`), and who types the **password again** in the Open dialog (checked behind the login backoff). A session minted from a phone grant has no `signed_in_at`, so it never opens one; the phone apps don't offer it. |
+| **Which satellites** | Only one whose hello declared `support_shell` (never assumed, not even for a Pi), and only a **Raspberry Pi on a prepared card** that holds the **root-owned server pin** (`/etc/domovoi/server-identity.json`), whose account can't use sudo, and that has **no known way from its account to root**: the device declares it only when stage 1's `/var/lib/domovoi` exists, the root pin is there, its unit gives it a watchdog socket (`NotifyAccess=main`), no `domovoi*.service` running as root starts code from a path the account can write, `sudo -n true` fails, and no rule in `sudo -n -l` lets it run `ALL` or hand the XVF3800 tool free arguments. A hand-built Pi whose user is in `sudo` never declares it (the shell would be root there). **A card prepared before 1.5.0 offers it only once its update has switched it** (the first reboot after the satellite update; "The satellite service account" below): until then its provisioning unit starts the account's own code as root at boot and its sudoers allows `xvf_host` with any arguments, both ways to root from the shell, and the check refuses it. Spare PCs and phones never declare it in 1.5.0, and the core refuses one that does. And only while that satellite's **Allow support sessions** switch is on: off by default; turning it on needs the same 5-minute sign-in; turning it off needs any admin and ends an open session. |
+| **Only the server can open one** | The satellite's WebSocket is plain `ws` and its frames carry no authentication of their own, so a host in the middle of the LAN could otherwise inject frames. Every frame that arms, opens or types into a shell is therefore **signed by the server's identity key** (Ed25519, the key a satellite pins; context `domovoi-support-v1`, used for nothing else, so no health answer or manifest signature can stand in for one). The signed document holds the frame's kind, the **satellite's id**, a **nonce the satellite sent in this connection's hello** (new on every connect), the **satellite's pinned support key** (below), the issue time (within 2 minutes of the device's clock) and the frame's own fields: the session id and limits for `support_open`; a sequence number, the bytes and whether a key was pressed for each `support_input`; the switch for `support_allow`. The satellite checks it against its **root-owned** pin and acts only on the signed values; an unsigned, forged, stale, replayed (a used session id, an input number not past the last), other-satellite, other-connection or other-key frame is refused. **The satellite holds its own copy of the switch**: off at every connect, set only by a signed `support_allow` the core sends after `ready` and whenever an admin flips it; an open before it is refused. While the device offers sessions, a remote `set_config` may not turn `leds.enabled` off, set `leds.brightness` below 4 or `leds.num_leds` below 1, so the magenta light can't be switched off from the network first. **And the other way:** every frame the satellite sends about a session (`support_opened`, `support_refused`, `support_output`, `support_echo`, `support_closed`) is **signed by the satellite's own support key** (below), under the same context with a direction label (`domovoi-support-v1`, then `satellite-to-server`, then the document, so a frame signed one way can never pass as one signed the other), over its kind, the satellite's id, this connection's nonce, the session id, a **sequence number that rises on every frame the satellite sends on the connection**, and the frame's fields (the output bytes, the echo state, the end reason), which travel only inside the signature. The core refuses an unsigned, tampered, replayed, out-of-order, other-kind, other-satellite, other-connection or other-session frame, logs the refusal (kind, satellite, the session's first digits, why; never the content), and counts it for nothing: a forged `support_closed` ends no session, and no run of forged frames closes the socket. A close that never arrives runs into the session's own limits. |
+| **The satellite's support key** | An Ed25519 key the satellite makes once (`~/.domovoi/support_key`, 0600, its account's; the shell's sandbox hides it), sent as `support_key` in every hello. The satellite had no key of its own before 1.5.0 (the pairing token travels in the clear in the hello, so it proves nothing against a host in the middle). The core **pins** it (`satellites.support_key`, V082/V083) when an admin **approves the satellite's pairing**, a step a person already confirms. A device that proves its approval (the exchange in `satellite/pairing_proof.py`, version 3, used with a server that signed `pairing_proof >= 3`) binds the `support_key` of its hello into the exchange's transcript, after the pairing token, so the key the admin approved is the one the device holds: a host in the middle that swaps, adds or strips the key makes the device's confirmation fail, and nothing is bound or pinned. A request approved by the code the core compares (the device's code in its hello: a device whose server could not prove an approval, or a phone) keeps the key its parked hello presented and pins it on approval; that hello carries the pairing token too, so the key there is exactly as safe as the pairing itself. A **re-pair** (resetting the room's pairing, then approving again) pins the key the device holds then, or drops the pin when it presents none; turning the switch off no longer clears it. A satellite presenting any other key on a later connection (a reflashed card, or a key put in the hello on the way) is sent a signed "not allowed" and no open, the switch refuses to turn on for it, its normal voice use is unchanged, and the room drawer says "this satellite's support key changed; re-pair it to use support sessions". **A satellite paired before this** has no key pinned until it is re-paired. For one of those, turning the switch on pins the key the connected satellite presents at that moment, as 1.5.0 did before; the switch's confirm dialog says the key is being trusted now (see "Not closed yet"). The switch can't be turned on for a satellite that isn't connected or sent no key. The core also names the pinned key in every frame it signs, and the satellite refuses one that names a key other than its own, so a swapped key never reaches the shell. A device that can't make or read its key doesn't declare `support_shell` (fail closed). |
+| **What it is** | A PTY running the account's login shell as the service account, which on a device that declares it has no known way to root (the qualification check above enforces it on every connect), inside the satellite's own locked-down unit (`ProtectSystem=strict`; writable to the client only `~/.domovoi`, `~/domovoi`, `/tmp`), with a clean environment and `TERM=xterm-256color`, and inside a **sandbox of its own** (`satellite/support_sandbox.py`), so nothing the shell writes outlives the session: its own user, mount, PID and IPC namespaces, made by a helper running as the account (unprivileged user namespaces: no root, no setuid helper, no new sudo rule); **every mount read-only**, the home folder, `~/.domovoi` and `~/domovoi` included (the code sync's layout leaves `~/domovoi` writable to the account, because the client runs from it, so the sandbox is what makes it read-only to the shell); a **private, size-capped, in-memory tmpfs** on `/tmp`, `/dev/shm` and `/dev/mqueue`, which holds the session's working directory, `HOME` and `TMPDIR` (`/tmp/session`, made fresh at open); its own `/proc`, so the shell sees and signals only its own processes; the shell is PID 1 of its namespace, holds no capabilities after it starts (it can't undo a mount), and runs with `no_new_privs`. The tmpfs exists only in that mount namespace and is freed with its last process, so every end (`exit`, the limits, End, the service restart, a client crash, a power cut) removes it, and there is never anything on disk to clean up at the next start. The helper kills the namespace when it is hung up and dies with the client. A device that can't build the sandbox (the helper's probe at start: built, and the home folder, `~/.domovoi` and `~/domovoi` refuse a write from inside) doesn't declare `support_shell`. One cost: the shell can read the configuration but not change it; changes go through the dashboard, as before. No new sudoers line, no new helper, no new port: the bytes ride the satellite's existing WebSocket as base64 in JSON text frames (docs/uml/satellite-protocol.md). A root task is done the ways that already exist: the fixed sudo helpers, a code update or plugin payload, or a screen and keyboard. |
+| **The browser's socket** | `POST /api/satellites/{id}/support/open` answers a **single-use ticket** (30 seconds, bound to the admin session and the satellite; the core keeps only its sha256). The page offers it as a WebSocket subprotocol, never in the URL, together with its own admin Bearer (`bearer.<token>`: a browser socket can't send an Authorization header). The dashboard's socket checks `Origin` (present, and a dashboard's: the `collab.origin_ok` rule), then relays to the core over loopback with the ticket and `Authorization: Bearer`; the core burns the ticket whether or not it was good and refuses it unless the Bearer's hash is the opener's, so a ticket picked up on the network is not enough on its own. The terminal is xterm.js with only its fit add-on: no links add-on, no clipboard (OSC 52) add-on, `windowOptions` all off, and a link handler that does nothing, so a link the satellite's output draws never opens. Output is drawn by xterm and never becomes HTML. |
+| **Limits** (both ends; the satellite keeps its own copy) | **30 minutes**, with warnings at 5 and 1 minutes left shown in the terminal's frame (never typed into the shell); the satellite refuses a session asking for more than 60. **One per satellite** (`409`; a unique index holds it too). **10 minutes without input** (output alone, `top` or `tail -f`, doesn't count, and neither do the terminal's own automatic answers to a program's queries: only key presses and pastes, which the browser marks and the server signs into each input frame, so both ends count the same), warning at 9. Output at most **16 KB a frame and 64 KB/s** (over that the satellite stops reading the PTY, so the shell slows rather than floods); input at most 4 KB a frame. |
+| **How it ends** | The admin's End; **any paired household device** (End on the banner: ending only removes power, so the device tier is enough); **the room's voice** ("end support session", a fixed handler that needs no network; the room answers "Support session ended."); the switch turned off; the satellite unpaired; `exit` in the shell; the transcript reaching its cap ("log full"); the time and idle limits; a closed tab, a reload or a dashboard restart (no reattach); **any satellite disconnect or restart** (it never resumes); a core restart (rows left open are marked "server restarted" at start); and within **5 seconds of the admin session ending** (a password change, a revoke, `--reset-admin`, the idle hour, the 90-day cap, its phone grant ending): the core re-checks the opener's session every 5 seconds and before each input. Shell input counts as an admin action for the idle hour. At the end the satellite hangs up the shell's process group and **restarts its own service**, so nothing started with `nohup` or `setsid` lives on (the unit's cgroup kill takes every child); if the restart can't be asked for, the client exits non-zero and systemd restarts the unit. The core records the close before it tells the satellite, so a stalled socket can't keep a session looking open; removing a satellite ends its session too. **The shell's own user can't hold the end off**: input reaches the PTY from a worker thread through a bounded queue (a program that stops reading fills it and the session ends, "the shell stopped reading its input"), so the client's event loop never blocks on it; while a session is open the event loop feeds a **systemd watchdog** (30 s, armed with `WATCHDOG_USEC` at open), so a client frozen or stopped from inside the shell (`kill -STOP`) is killed with every process in its unit and started again; and at open the client makes itself non-dumpable, so the shell (the same account) can't attach a debugger to it. |
+| **Who can see it** | **In the room:** one spoken line when it opens ("A support session has started in this room.") and when it ends ("The support session has ended."), and the light: **magenta (#FF00C8) breathing slowly** (4 s), clearly not violet's "awaiting approval"; on the XVF3800 ring a magenta dot over the state's colour while the room listens, thinks or speaks. A drop-in call's solid red would win, so a call and a shell at once are refused at both ends: the satellite refuses an open during a call, and the core starts no call while either side has a session. The opening line is said (retried for up to three tries) before the server reads the first byte of input from the browser. **On every dashboard page, for every viewer** (household too: it is their room): "Support session open on Kitchen, 23 min left", with End. **Afterwards:** the audit list and the transcript. There is no consent step in the room before it opens (the broken device is often in an empty room); the light, the line, the banner and the voice end are the room's say. |
+| **The transcript** | Written by the core as asciicast v2 under `~/.domovoi/support-sessions/<id>.cast` (mode 0600): input as the server received it from the browser, output as the satellite sent it. **Redaction is best effort**, at write time, a whole line at a time per direction (so a secret typed one key per frame, or split over two output frames, is still one line), matched with the line's escape codes taken out too (coloured `grep` output): input typed while the shell asks for a hidden line (ECHO off with the line discipline canonical, the way `sudo`, `passwd` and `read -s` ask) is logged as `[hidden input: N bytes]` for each frame, and only for the first line: echo off past it is not a password prompt, so later input is logged as typed; the household token and the setup code are blanked; so are `psk=`, `password` / `token` / `secret` / `key` assignments, private-key blocks, and any 32+ character token after `pairing_token`. **No string can stop the log**: a private key leaves `[private key removed]`; a line inside one that isn't base64 or a header, or 16 KB without an END line, ends the key with a marker and logging resumes; every character redaction holds back still counts against the cap. Nothing runs unlogged: input is written before it is passed on, output before it reaches the browser (a line not yet ended waits in memory, at most 4 KB per direction, and is written at the end), and at **8 MB** the session ends. The redaction rules are linear in the text: a hostile line can't make them run for seconds. Kept **30 days** and **200 MB** in all (oldest first, swept hourly); an admin can delete one or all. Because redaction is best effort, the transcript is an admin-only read (security tier, Bearer only). The viewer shows it as plain text with escape codes taken out (never HTML); the download is `text/plain`, an attachment, with `nosniff` and the `sandbox` CSP. The core log gets one line per open and close (who, which satellite, why), never the content. |
+| **The audit list** | `support_sessions` (V077): id, satellite and room, the opener's session label and the first 12 hex digits of its token hash, opened, closed, end reason, bytes in and out, whether the log filled. Settings → System → **Support sessions**, linked from the satellite's Settings tab. |
+| **A satellite talking back** | Declaring `support_shell` only lets the server *offer* a session; a satellite can never start one. Its `support_*` frames are accepted only when signed by its pinned support key (above), only for the session open on that same connection, capped in size and rate, stored as data and never parsed or run. Frames for no open session are dropped and counted; a run of 20 closes its socket. A satellite can lie about its output, but it runs the commands anyway, so that gains it nothing. No new server route a satellite can call; the one new credential on the satellite is its support key, which only signs its own frames about a session. |
+| **What to know** | The shell runs as the account that owns the microphone, so an admin could record the room; the magenta light is the warning, as solid red is for a drop-in call. Someone in the house can't open one without the admin password, but can see it and end it. |
+| **Not closed yet** | (1) **The card-side switch is not yet checked on hardware.** The two ways from the account to root found in review (the provisioning unit running the account-writable `~/domovoi` code as root at every boot; sudoers allowing `/opt/xvf3800/xvf_host` with any arguments) are closed by root's own copy of the code and the `domovoi-xvf` wrapper ("The satellite service account" below), and a card prepared before 1.5.0 switches at its first reboot after the update. Until a real card has passed the check after the switch, read it as: no known way from the account to root, enforced by the qualification check; a card that still has either path does not declare `support_shell`. (2) **The sandbox is not yet checked on hardware** either: it needs unprivileged user namespaces, which Raspberry Pi OS allows, and a device where the helper's probe fails doesn't offer sessions. What the shell can still change outside the sandbox is not files: hardware it can reach as the account (the light, the audio devices, GPIO) until the service restarts at the end, and the network (it can reach other hosts like any program on the device). (3) **A satellite paired before support keys were pinned at approval** gets its key pinned on first sight, when the switch is first turned on (the dashboard asks first and says so): a host in the middle of the LAN at that very moment could put its own key in the hello and have it pinned. It still never reaches the shell (the satellite refuses every frame naming a key other than its own), but it could then show the admin a made-up session. Re-pairing the satellite removes the risk: its key is then pinned at the approval, inside the exchange. A satellite paired or re-paired on 1.5.0 by the proving exchange has no such moment. (4) The spoken lines and the light are best effort: the room's volume is a household setting, and a line said over a playing answer may be missed. |
 
 ## Command recordings for tuning (opt-in per room)
 
@@ -2351,7 +2630,7 @@ compare them in a noisy room without SSH (`domovoi/mic_dsp.py`,
 |---|---|
 | **Who** | An admin: the change and the marker need the admin Bearer at both hops; reading the state takes the admin read tier. Not the household token. |
 | **Which satellites** | Only one whose hello sent `"mic_dsp": true` (an XVF3800 with `xvf_host` installed). The ability is never assumed, so an older satellite, a 2-Mic HAT, a spare computer or a phone never gets the frame or the control (409). |
-| **What crosses the socket** | A preset NAME. The core refuses a name not in its list (422); the satellite refuses one not in its own fixed table and writes nothing. No parameter name, value or command ever comes from the server: every value written is a literal in the satellite's table, or a value it read from the chip itself at start (`factory`). It runs the same `xvf_host` the LED ring uses, through the same `sudo -n` entry. |
+| **What crosses the socket** | A preset NAME. The core refuses a name not in its list (422); the satellite refuses one not in its own fixed table and writes nothing. No parameter name, value or command ever comes from the server: every value written is a literal in the satellite's table, or a value it read from the chip itself at start (`factory`). It runs the same `xvf_host` the LED ring uses, through the same `sudo -n` entry: the root-owned wrapper `domovoi-xvf`, which accepts these five parameters only with plain non-negative numbers (and the LED verbs), never `SAVE_CONFIGURATION` or an option, so "runtime only" holds below the Python table too (a card from before 1.5.0 not yet switched still names the tool itself). |
 | **What it can't do** | Save to the chip's flash (`SAVE_CONFIGURATION` is never sent): unplugging the array restores its own settings. The worst a stolen admin session can do is pick one of four presets. |
 | **Test markers** | Plain text, control characters escaped, at most 120 characters, written to the satellite's log and the server's log with a timestamp. |
 | **What is kept** | On the satellite, `~/.domovoi/mic_dsp.json`: the chosen preset and the chip's start-up values. On the server, the last reported state, in memory only. |
@@ -2467,9 +2746,10 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   matches. Reading the checks is household tier (`GET /api/help/checks`),
   and what Home shows only to an admin (the update's details, the internet
   question, approvals waiting) is shown only to one, on that page — **never
-  in a chat, even a proven admin's**: a help chat on the home server is
-  household-shared, so its records use the household view whoever asks,
-  and say where an admin reads the rest. What a chat does show a proven
+  in a chat, even a proven admin's**: a help answer in any chat, private
+  ones included, uses the household view whoever asks (a private chat is
+  readable by every admin and by its device, which may not be an admin's),
+  and says where an admin reads the rest. What a chat does show a proven
   admin (below) is the **steps** of an admin's job — add a room, update,
   install a plugin, the admin password, deleting files — which are the
   public manual's own words; a member asking the same gets who can do it
@@ -2489,18 +2769,24 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   a value Domovoi never saw can still be in a free-text line. The server
   keeps no copy; the person reads it, then copies or saves it and posts it
   themselves.
-* **Sending help steps is limited.** At most 3 sends an hour to a person
+* **Voice help sends nothing.** Voice "how do I…" speaks the best page's
+  first sentences and says the full answer is in the manual. Since 1.5.0
+  it no longer offers to send the steps to a phone, so it writes no chat
+  and no delivery row. Rows an older version wrote stay where they were
+  (the person, the chat and its title) until the chat is deleted.
+* **Results sent to a phone go to one of the asker's own phones.** The one
+  voice feature that still sends (a photo search's "Do you want them on
+  your phone?", [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md)) sends only to
+  the most recently seen of the phones marked "This phone belongs to
+  <person>" for the speaker voice ID recognised (1.5.0), never to every phone, at most 3 sends an hour to a person
   (their phones share it) and 3 from one asking session, and the same
-  steps to the same person once an hour; after "Who should I send it
-  to?", only a name the household knows counts as the answer.
-* **Help steps go to the asker's own phones.** Voice "how do I…" sends
-  steps only to the phones marked "This phone belongs to <person>" for the
-  recognised speaker, or for the person named when asked; never to every
-  phone. The app now tells the server that mark (`devices.owner_person_id`,
-  V035), self-asserted like the rest of the device row: it decides where
-  help steps are offered, nothing more. The steps are a home-server chat
-  (household-shared, like every server chat); the delivery row holds only
-  the person, the chat and its title.
+  search to the same person once an hour. That mark
+  (`devices.owner_person_id`, V035) is self-asserted like the rest of the
+  device row. The results are a home-server chat private to that phone
+  (by its device key; shared when the phone has no key yet, an app from
+  before 1.5.0), see [Private chats](#private-chats); the delivery row holds
+  the person, the chat, its title and that phone, and only that phone's
+  catch-up read lists it.
 * **A "proven admin" changes words, never what is allowed.** A turn's
   `Context.proven_admin` (N1, owner 2026-11-25) is derived by the server
   on that turn's own request, never taken from a client:
@@ -2525,6 +2811,125 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   and where (`domovoi/help_desk/admin_tasks.py`). Every admin action keeps
   its own endpoint gate, so the flag can only ever change which words are
   said. `domovoi/tests/test_proven_admin.py` pins each of these.
+
+## Private chats
+
+1.5.0, owner decisions 2026-11-25 (design-notes PRIVATE-CHATS.md). A
+home-server chat is **private to the phone or browser that started it**:
+only that device and the house's admins can see it. A **Share with
+household** switch shares it with every paired phone and browser, and can
+be turned back off. The phone apps' own chat (on the phone) stays the fully
+private option: it never leaves the phone.
+
+**The device key.** Without a per-device secret, "private to a device"
+could not be enforced: the device id every client sends is self-asserted,
+and the household token is the same for every device. So `POST
+/api/devices/register` mints a **device key** (256 bits) the first time a
+device row without one registers asking for it (`want_device_key`: a client
+that keeps it; an app from before 1.5.0 never asks, so no key is minted that
+nobody keeps), and returns it once (`device_key`); only
+its SHA-256 is stored (`devices.device_key_hash`, unique). A browser gets
+it as the `domovoi-device-key` cookie, **HttpOnly** (no page script reads
+it) and **SameSite=Strict** (a page on another site can't make the browser
+present it); the apps keep it in their secure storage (Android Keystore,
+iPhone Keychain) and send `X-Domovoi-Device-Key`. A row that has a key is
+never given another: a client that lost its key (cleared storage, a
+reinstall) starts over under a new device id, and its old private chats
+stay, for the admins. A row that holds a claim ("this is me", with its
+claim key) is given its first device key only on a registration that also
+presents that claim key (`X-Domovoi-Claim-Key`): someone who merely knows
+a 1.4.x phone's id can't take its migrated chats or its claim (pre-merge
+review M1). A row with no claim still gets its key on first use; that
+window closes as each device's updated app or browser registers. Unlike
+the shared-screen flag or the device id, the key **is** a boundary between
+the house's devices.
+
+**Who sees what** (`domovoi/chat_access.py`, the one place the rule lives;
+both the web and the core use it):
+
+| Viewer ↓ / chat → | Private, mine | Private, another device's | Shared | Admin-only |
+|---|---|---|---|---|
+| The device that started it | everything | 404 | everything | 404 |
+| Another paired device, or one with no key | 404 | 404 | read and write (no share, no delete: 403) | 404 |
+| A shared screen | never owns one | 404 | read and write | 404 |
+| An admin (Bearer, or the cookie on reads) | as owner | read, share, delete; **never write** | everything | read, share, delete |
+| An unpaired browser | 401 | 401 | 401 | 401 |
+
+* **Identity comes from the key alone.** `X-Device-Id`, the
+  `domovoi-device-id` cookie, a body `device_id`, `?device_id=` and the
+  voice turn's `phone_id` are ignored for chats; a message's device is the
+  one the key resolved to. A wrong or missing key is a keyless household
+  caller: it sees shared chats only, and the chats it starts are shared
+  (a 1.4.x app, which already says "shared with the household").
+* **A hidden chat answers exactly like a missing one**: the same 404 and
+  body, on every route that names a thread or one of its children (drafts,
+  document and video jobs, messages). Lists and search filter in the SQL
+  itself, so a search can't match, or quote a snippet from, a chat the
+  caller can't see.
+* **Admins read everything, and write in nothing that isn't theirs.** For
+  parental oversight an admin can list every chat in the house
+  (`?scope=all`), read, share and delete any of them, but can't post in
+  another device's private chat (403 `admin_read_only`): oversight is
+  reading, not speaking as the child. Admin means a live Bearer (a phone's
+  day grant included) or the admin cookie on a read, **never the pre-setup
+  grace**: after `--reset-admin` anyone on the LAN would otherwise read
+  every private chat. Before setup chats work per device, with no admin
+  view.
+* **Shared screens.** A chat started on a shared screen is always shared.
+  A device marked a shared screen later owns nothing while it is one: its
+  earlier private chats are admin-only until it is unmarked (no row is
+  rewritten).
+* **Deleted or key-less owners.** A chat whose device is gone, or lost its
+  key, is admin-only: an admin can share or delete it. It never falls back
+  to shared. A device whose household token was rotated keeps its row and
+  key, and has its chats back once it is paired again.
+* **Sharing races.** A write takes a row lock on the thread, and the share
+  switch waits for it: a send that started before an unshare finishes, and
+  its reply is saved. Any request after the switch gets the 404; every open
+  client reads its list again.
+* **Room voice** (a letter taken by voice) makes a shared chat with no
+  owner: it was said aloud in a shared room and saved into household
+  Documents anyway. **Photos to a phone** make a chat private to one
+  phone, the person's most recently seen (when it holds a key; a phone
+  with no key yet gets a shared one), and only that phone's catch-up read
+  lists the delivery.
+* **The live events carry no chat content** (see *The state socket*).
+* **"My" actions use the key too.** Whatever acts for the person a device
+  says it is (`devices.owner_person_id`: clearing their listening history,
+  their mix, forgetting their face, whose mix a room follows, a draft
+  version's person, "this is me") finds the caller's device by its device
+  key (`web/backend/api/devices.py` `caller_device_row`). A device id alone
+  is accepted only for a device that holds no key yet (an app from before
+  1.5.0); a keyed device is never named by its id alone. The device key with
+  the device's own claim proves a claim as the claim key
+  (`X-Domovoi-Claim-Key`) does, and the claim key stays accepted for older
+  apps.
+
+**What is not a boundary, said plainly.**
+
+* **File tokens stay capabilities.** A chat's pictures and documents are
+  served by 128-bit random tokens, learned only from a chat the caller
+  could read, so an `<img>` and the apps' image loaders keep working. When
+  the request carries an identity (a key or an admin session) the server
+  also checks that the caller can read a chat that names the token. A
+  device that copied a file's address before a chat was unshared keeps
+  that one file.
+* **Printing and Save to Documents leave the chat.** A print job's name
+  shows on the household's printer list like any print, and Save to
+  Documents puts a copy where the household can see it (the button says
+  so).
+* **An in-process plugin is admin-installed code with database access**
+  ("full access to your Domovoi server"); it can read any chat. The plugin
+  SDK has no chat API and gets none.
+* **The migration can't be undone.** V086 made every existing chat
+  private to the device that wrote its first message, and admin-only when
+  none could be matched. Nothing records that they used to be shared, and
+  going back to 1.4.x would show every chat to everyone again. Until a
+  device's own updated app (or browser) registers and takes its key, a
+  household member who knew that device's id could register under it first
+  and read its migrated chats, which every household device could read the
+  day before anyway; the device then finds its key taken
+  (`device_key_ok: false`) and starts over under a new id.
 
 ## Documents in chat
 
@@ -2750,6 +3155,203 @@ and what can't happen:
   is always shown as what a frame "might show"; no face is recognised and
   nobody is named.
 
+## Photos and videos (understanding the library)
+
+What Domovoi works out about the photos in Pictures and the videos in
+Videos (1.5.0; user guide [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md)).
+Faces and places have their own sections below.
+
+* **Everything stays on the server.** Descriptions come from the house's
+  own vision model through its Ollama, transcripts from its own speech
+  model, text in pictures from Tesseract. No photo, video, description or
+  search is sent anywhere: when the vision model is an Ollama cloud model,
+  or `OLLAMA_URL` names a host that is not on this network, the library
+  work that needs it is skipped (`vision-model-not-local`) rather than
+  sending the library out at night (`photos.vision_is_local`). The only downloads are the pinned face models
+  and the GeoNames town list, each only after an admin's switch and never
+  under internet access "No" (`domovoi/egress.py`).
+* **What is kept** (`media_items`, `media_frames`, `media_segments`,
+  `media_summaries`, V078): per file its place in the library, size, time,
+  a fingerprint, the date taken, a caption, up to 12 tags, any text found,
+  the transcript of a video with times, and a summary. Nothing is written
+  into the library folders; the work files of a job are deleted when it
+  ends.
+* **Off until chosen.** "Understand photos and videos" is on for a new
+  install and **off** for a house that upgraded, until an admin turns it
+  on. Faces and places are off for everyone. Every switch is admin only.
+* **Who sees it.** Search and the Photos page are the household tier (a
+  paired phone or browser), the same tier that can already open the files.
+  A guest gets nothing (401). A device marked as a shared screen gets no
+  person filters. A place's name is one of the searchable words of a
+  photo (with locations on), so a place word still narrows a search on a
+  shared screen, as a caption word does. An unrecognized voice or a shared
+  screen that names anyone in the household gets the same refusal whether
+  or not that person has faces, so the refusal doesn't say who does.
+  "Rescan" is admin.
+* **Text from a model or a file is data, never instructions.** A caption,
+  tag, transcript or text found in a picture is drawn as text only (never
+  HTML). It reaches a chat model only inside a fenced block the model is
+  told never to obey, and a chat turn that carries it is not offered
+  lookups, so words in a photo can't send a search out.
+* **Caps.** One step at a time across the house, voice always first;
+  helper programs at the lowest priority with a memory cap; file reads at
+  most 20 MB/s, each read in a worker thread (a sleeping disk or a hung
+  mount stalls that file, not voice); a time budget per video, and its
+  own budget for a video's faces pass and its transcript; three attempts
+  per file ([ARCHITECTURE.md](ARCHITECTURE.md#media-understanding-150)).
+  Only regular files are catalogued. A library video's container and
+  picture codec must be on an allow-list (chat's, plus the older camera
+  and TV formats) before ffmpeg reads it, so a playlist or a concat
+  script named `.mp4` is skipped. A photo over 80 MiB is not read by the
+  caption or the face stage, and HEIC, HEIF and TIFF are skipped by the
+  face stage rather than failed.
+* **Deleting.** Deleting a file through Files deletes its results at once.
+  The hourly look only marks a file it doesn't see as missing; its row,
+  results, face confirmations and names are deleted after 3 complete looks
+  and a day (14 days when one look lost more than a quarter of the
+  library). A look that couldn't list a folder or stopped at its file cap
+  counts nothing as missing, and a library whose root is absent,
+  unreadable or **empty while it has rows** (a drive not mounted, or a
+  NAS not up yet: the Windows install mounts each folder with `nofail`)
+  keeps every row (security review 2026-11-23, M10; V080). A file whose
+  only change is its modified time, with the same fingerprint, keeps its
+  results; a file moved to another library is matched by fingerprint and
+  keeps them too. Excluding a folder deletes its results. Turning faces
+  or places off deletes theirs (below).
+
+## Faces and people
+
+Recognizing faces in the house's photos and videos (1.5.0) is the most
+sensitive thing Domovoi keeps: a face embedding identifies a person,
+including guests and children who never agreed. So it is **off by
+default**, and only an admin turns it on (Settings → Chat & AI → Photos
+and videos → Recognize faces). The code is
+`domovoi/media_understanding/faces.py` (the data and the grouping),
+`face_engine.py` (the models), `face_models.py` (the fetch) and
+`web/backend/api/faces.py` (who may do what).
+
+* **What is stored.** For each face found: which photo or video it is in,
+  the moment in a video, the box around it (as fractions of the picture),
+  a quality figure and its 128-number SFace embedding (512 bytes), in
+  `media_faces`. Faces the household hasn't named are put in unnamed
+  groups (`face_groups`); a named group is linked to a `people` row, the
+  same people voice ID knows (naming a group can create a face-only
+  person). No face picture is saved: the People pages cut faces out of the
+  ordinary thumbnails. A video keeps one row per *appearance* (the same
+  person within 30 s), not one per frame.
+* **Where it is worked out.** On the server only, by two small models on
+  ONNX Runtime (one thread, voice first, like all background
+  understanding). The nightly re-group runs in a short-lived child
+  process at low priority whose maths library is held to one thread (its
+  thread-count variables are set before numpy loads; the child gets the
+  faces' embeddings on a pipe and answers with ids and group labels
+  only), a blocked neighbour search (memory bounded
+  by the block, not the library), pausing while a voice turn runs, for at
+  most 20,000 unconfirmed faces a night; the night is marked done before
+  it starts, so a re-group that dies is not retried in a loop (security
+  review 2026-11-23, H4). The models are fetched once, after the admin's switch,
+  pinned by SHA-256 ([LICENSES.md](LICENSES.md#the-server)); InsightFace's
+  non-commercial weights are never used. No photo, face or embedding ever
+  leaves the house.
+* **Who sees and trains it** (owner answers, 2026-11-22):
+  * **guests** (no household credential) get nothing: every face route
+    is the household tier, so 401;
+  * **shared screens** (a device an admin marked shared) get nothing
+    either, an admin signed in on one included: 403. The mark is the
+    self-asserted one described under [the device tier](#device-tier-the-household-token), so
+    it keeps faces off the kitchen tablet's screen rather than being a
+    wall;
+  * **the household** (a paired phone or browser) sees the People and
+    face pages, names a group, confirms a face, says "not this person",
+    hides a stranger's group, and merges or splits groups nobody is named
+    in;
+  * **admins** also merge or split a named person's faces (it changes
+    whose faces are whose), move a named group or a face that is already
+    someone's to someone else, list, unhide, name, merge, split or confirm
+    in hidden groups, list and undo forgotten faces, and own every
+    switch.
+* **Strangers.** Faces nobody names stay in unnamed groups; small groups
+  (fewer than 3 faces) and hidden groups are left off the People page, and
+  the household is never asked "who is this?".
+* **Children** have no special rule: the household opted in and nothing
+  leaves the house. An admin can forget a child's face at any time.
+* **Forget my face.** An admin, or the person themselves from a phone or
+  browser claimed as theirs ("this is me": its claim key, not a shared
+  screen, claimed more than 10 minutes ago **and before the person's
+  oldest confirmed face**), can forget one person's face. A claim newer
+  than the faces, or a person with no confirmed face, needs an admin, so
+  a household token can't claim someone (or a person it just made and
+  confirmed someone's faces onto) and erase them (security review
+  2026-11-23, M9). Every face row and group of theirs is deleted, and one
+  averaged embedding tied to nobody goes on `face_denylist`, so new photos
+  of them are neither stored nor grouped (any other stored face that
+  matches it is deleted too, a sibling's look-alike included). Chat
+  replies that showed their photos lose the result cards and the words.
+  Their photos and their `people` row stay. It is best effort: one
+  averaged signature, and a new group can be named with the kept name.
+  An admin can list the forgotten faces and undo one
+  (`DELETE /api/faces/denylist/{id}`); the photos with no face left are
+  then looked at again.
+* **Turning faces off** deletes every face, group and embedding at once
+  (the switch asks to confirm when there are any); turning it on again
+  starts from zero. The forget list (`face_denylist`) is **kept** (owner
+  decision, 2026-11-22): it is tied to no one, and it is what keeps a
+  "forget my face" permanent. Deleting it with the rest would quietly
+  undo every forget the next time faces are turned on, and a person who
+  asked to be forgotten would be learned again from the same photos. The
+  confirm says so, and the "Forget my face" confirm says the forget holds
+  across faces off and on (only an admin's undo lifts it). Faces off also
+  strips every chat reply's person-filtered results. A face being
+  stored at the moment faces go off is deleted with the rest (the store
+  and the switch take the same row lock).
+* **No export.** No route answers with an embedding or a group centroid,
+  and there is no export of face data: it leaves the server only inside a
+  database backup, like every table (`domovoi/tests/test_media_faces.py`
+  holds the face tables to the faces code).
+* **Deleting a photo** (through Files, or from the folder, after the
+  missing grace above) deletes its faces with its other results; deleting
+  a person (the admin's delete, or voice "forget me") deletes their
+  groups, and their faces become unnamed: no confirmation is kept on a
+  face of nobody.
+
+## Photo locations
+
+Where a photo was taken says where the household lives, works and travels,
+so "Use photo locations" (1.5.0, Settings → Chat & AI → Photos and videos)
+is **off by default** and only an admin turns it on (owner answers,
+2026-11-22). The code is `domovoi/media_understanding/geocode.py` and the
+photo date stage in `photos.py`.
+
+* **What is stored.** Only while the switch is on: a photo's EXIF GPS
+  position (`media_items.gps`, latitude and longitude) and the town it is
+  in (`place_name`, e.g. "Portland, Oregon, United States"), which is also
+  in the photo's search text. With it off, the position is read from no
+  photo and nothing about where is kept. Videos keep no location.
+* **Where it is worked out.** On the server, in GeoNames' list of towns
+  (`cities1000`, with region and country names; CC BY 4.0,
+  [LICENSES.md](LICENSES.md#the-server)). No position is ever sent to an
+  online map or geocoding service. The list itself is downloaded once,
+  after the admin's switch, from the Internet Archive's copy, pinned by
+  size and SHA-256 ([INTERNET.md](INTERNET.md#egress-inventory)); under
+  internet access "No" it isn't, and places stay unnamed.
+* **"At home".** A search for "at home" keeps the photos within 10 km of
+  the Home location (Settings → Household, a town rather than the
+  house's address). The comparison happens inside the database query: the
+  Home location's point is never copied into a result or a photo's row.
+* **Who sees it.** Search answers (`/api/media/search`, the household
+  tier) carry the place's name and whether it was near home, never a
+  latitude or longitude, and no route returns `gps`. Guests get nothing
+  (401). A device marked as a shared screen gets no place and no "near
+  home", as Home leaves locations off there; that mark is the
+  self-asserted one described under [the device
+  tier](#device-tier-the-household-token).
+* **Turning it off** deletes every stored position and place name at once,
+  and rebuilds those photos' search text without them (the switch asks to
+  confirm when there are any). A position being saved at that moment is
+  dropped too (the save and the switch take the same row lock). The
+  downloaded town list stays: it is public data, and turning locations on
+  again then needs no download.
+
 ## Looking things up (chat lookups)
 
 A chat may look things up. Who decides, what goes where, and what can't
@@ -2856,8 +3458,7 @@ again on every frame, so a friend removed or blocked mid-connection is cut
 off at its next one. Tor's SOCKS port reaches onion addresses only.
 
 **The listener is walled off.** The code that reads what other houses
-send (the inbound listener, which reads only fixed-size, fixed-format
-frames) runs in a container of its own, `domovoi-fh-listener`, built by
+send (the inbound listener) runs in a container of its own, `domovoi-fh-listener`, built by
 the core like the Tor image (`domovoi/Dockerfile.fh-listener`: the same
 pinned Debian base, Debian's Python and cryptography, and only the
 listener's own modules). The container has **no network at all**, a
@@ -2875,9 +3476,138 @@ What a defect there could still read is the house keys, which the
 listener needs to answer the handshake; and it shares the kernel with the
 rest of the server, like any container.
 
+What the listener parses is small and bounded. Most frames have a fixed
+size and layout. Since 1.5.0 two don't: a friend's `CAPS` (at most 1,059
+bytes, checked to the exact length) and a plugin mail envelope (at most
+about 16.5 KiB). Of a plugin mail the listener reads only the kind and the
+app's name, to sort it and to check it against the friend's allowed apps,
+then checks the signature; **the payload stays opaque there**, because the
+listener holds the house keys. Payloads are decoded only in the plugin's
+decode-only container, one per friend.
+
+**Plugin mail ("apps with friends", 1.5.0).** Two houses' copies of one
+plugin exchange mail, and only with friends an admin turned **"Apps with
+this friend"** on for, and per friend only the plugins allowed for it. A
+plugin installed later with the permission (or upgraded to gain it) is
+allowed for nobody until an admin confirms it. Turning the toggle on is
+announced like a new friend, and its text says the friend's house will see
+which of these apps this house has.
+
+Plugin mail is its own envelope kind on its own path, and **it never
+reaches people's messages**: the listener sorts it by kind before spending
+any budget and sends it to the core as a separate event; the core puts it
+on a lane of its own (64 waiting, 2 workers, apart from the 24 events
+above), and the core's message code accepts text and list changes only.
+The lane re-checks everything (friend, toggle, app allowed and installed,
+epoch and sequence, quotas) and stores the mail; **an acknowledgement
+means the mail is committed here**. No plugin code and no decoding runs in
+the lane: mail is decoded later, only in that plugin's decode-only
+container for that friend, and the plugin gets core's own checked value
+with **every piece of text as `FriendText`**, on every delivery.
+
+- **Replays.** Each (friend, app) has a sequence number inside the signed
+  envelope and a high-water mark here that outlives deleted mail: a mail
+  at or below the mark is acknowledged and dropped, so a resend or a
+  replay never reaches the plugin twice. The friend's sending epoch must
+  match the connection's, and the last 16 epochs a friend left behind are
+  never accepted again. The sending side can't go backwards either: a
+  sequence number is at least the clock in milliseconds, and the core
+  writes a fresh restore marker at every start, so a database restored
+  from a backup starts a new epoch instead of having its mail dropped as
+  replays.
+- **Quotas and expiry.** Inbox and outbox each hold at most 125 mails or
+  1 MiB per (friend, app), 1,000 or 8 MiB per app and 4,000 or 32 MiB for
+  the house; every (friend, app) keeps 16 mails / 128 KiB the totals can't
+  take, so friends who are offline for days can't fill an app for
+  everyone. Mail lives at most 3 days (the sender's choice, sent as the
+  time left) and is deleted when it expires.
+- **One friend can't break an app for the others.** Each (friend, app)
+  has a breaker kept in the database: a decoder fault while that friend's
+  own request was in flight, a reply that fails the core's re-check, or a
+  plugin handler that raises or runs past 10 seconds weighs 1; three in an
+  hour pause that friend's mail to that app for an hour, doubling up to a
+  day; 150 refusals of malformed mail in an hour pause it for an hour (the
+  two houses may run different versions). A mail that faults twice is
+  deleted. **Mail is marked as being worked on before the decoder or the
+  plugin's handler sees it**, so a mail whose handler takes the whole core
+  down is found at the next start, charged 3 (the pause starts at once,
+  and the notice says Domovoi restarted) and deleted the second time:
+  never a restart loop. A container that fails before it is ready, dies
+  while idle, or dies with others at once (Docker restarting) charges
+  nobody. The admin sees each pause on the Friend Houses page and can
+  resume it or turn apps off with that friend; it is logged, never spoken.
+- **Closing.** Turning the toggle off, revoking an app, disabling or
+  uninstalling the plugin (or an upgrade that drops the permission),
+  removing or blocking the friend each delete that app's queued and stored
+  mail in one transaction, cancel a running handler and close the
+  connection; the listener's friend list is rewritten at once by its only
+  writer, which reads the database under its own lock. Going dark ("never")
+  or turning Friend Houses off stops every sender (each closes its own
+  connection) and keeps queued mail until it expires.
+- **What a friend learns.** A house tells a friend which apps it may mail
+  in a `CAPS` frame: a protocol number and the apps' names, never their
+  versions, and only to friends with "Apps with this friend" on, so other
+  friends don't learn that the house runs 1.5.0; turning it off sends one
+  empty `CAPS`. The listener takes at most one `CAPS` per connection, only
+  from a current friend, and passes a changed one to the core at once
+  (repeats within 12 an hour). A house before 1.5.0 closes the connection
+  on `CAPS`; it is recorded as "older" only after two closes 5+ minutes
+  apart, never as offline, and people's messages work as before. A friend
+  refused plugin mail learns only a reason (full, not allowed, rate,
+  unavailable) and a wait; a wait caused by this house's overall budgets
+  is a fixed minute, so it says nothing about other friends. One
+  "not allowed" deletes only that mail; the rest waits until the friend's
+  `CAPS` confirms it. A friend that sends 16 mails for unlisted apps on one
+  connection is disconnected.
+- **Sending.** One mail at a time per friend, on one held connection (at
+  most 8 held for the house, 30 connects an hour per friend), with fixed
+  deadlines (an answer 30 seconds, a connection idle 110 seconds) and
+  backoffs that only an acknowledgement resets; the sending budgets match
+  the receiving ones and are kept in the database, so a restart refills
+  nothing. A plugin can't send to a friend it isn't allowed with.
+- **What a plugin sees of a friend.** `friends()` lists only the friends
+  with "Apps with this friend" on and that plugin allowed, each by an id
+  the core derives for that plugin alone (HMAC under a key derived with
+  HKDF from the house's signing key, never the signing key itself), so two
+  plugins can't compare notes about this house's friends; the id never
+  leaves the server. A friend's name reaches the plugin as `FriendText`.
+  The list is empty while Friend Houses is off or dark.
+- **Open routes can't reach friends.** `friends()`, `send_mail` and
+  `send_image` refuse a call made while serving a plugin route that asked
+  for no credential (an `@open_endpoint`, or a GET that is neither
+  `@device_endpoint` nor behind the admin check): the route gate records
+  the tier each request came in on, and the calls read it. Voice turns,
+  workers and mail handlers aren't routes and aren't affected.
+- **Images.** A plugin may send a picture (`send_image`): a short label
+  and the image bytes, at most 16 KiB together. The receiving house never
+  lets its plugin or its plugin's decoder touch those bytes: the core's
+  image helper in that friend's decode-only container opens them (PNG,
+  JPEG or WebP, 4 megapixels at most by the header, first frame) and
+  answers raw pixels at most 768 a side, which the core checks and writes
+  as its own PNG (no metadata, colour profile or text can exist in it),
+  kept with the mail until the plugin's handler has it, and counted in the
+  inbox quota. A plugin gets images only if it asked for them; otherwise
+  an image is refused like malformed mail. A pixel count that doesn't
+  match weighs 1 on the friend's breaker.
+- **Friend words in what a room says (M5).** For a plugin holding the
+  `friend_houses` permission, every reply its voice handlers give is
+  filtered before a room says it, exactly like a friend's message read
+  aloud: wake phrases and anything that sounds like the assistant's name
+  are taken out and the line is cut at 400 characters. The chat history,
+  the conversation log and the chat model (in a conversation) keep
+  "[text from a friend house]" instead, unless the plugin gives its own
+  history line (`friend_reply` does, with the friend's words stood in
+  for). The plugin's `sdk.speech` lines get the same filter and cap.
+
 **Limits that keep one house from swamping this one.** A friend can send
-at most 60 messages an hour; connects, "I'm back" and accepts are capped
-at 120 an hour per house, and one accept ends its connection; friend
+at most 60 messages an hour (text and list changes only: plugin mail
+never spends it); plugin mail has budgets of its own, each a sustained rate
+plus a burst: 2,400 an hour per friend and app (burst 120), 3,600 an hour
+per friend over all its apps (180), 16 MiB an hour per friend (1 MiB),
+7,200 an hour for the whole house (360), and 64 MiB an hour of it
+(4 MiB); mail for an app the friend isn't allowed is refused before any
+budget is spent; connects, "I'm back" and
+accepts are capped at 120 an hour per house, and one accept ends its connection; friend
 requests have their own 8 connection slots and only a request naming an
 open friend file counts toward that file's 20 an hour; frames that ask
 nothing (a pong not asked for, "I'm back" again) are capped per
@@ -2907,17 +3637,41 @@ lists. The friend list includes each friend's 4-digit code: it is a value
 to compare, not a secret (a code read here can't make a swapped friend
 file match), and only an admin can mark it verified.
 
-**The 4-digit code.** Both houses compute the same 4-digit code from
+**The 6-digit code.** Both houses compute the same 6-digit code from
 random values each side committed to before seeing the other's (the
 asking house commits to its house key too, so it can't generate keys
 until the code comes out the way it wants), so
 someone who swapped a friend file in transit can't make the codes match
-except by a 1-in-10,000 chance per try. A request broken off after the
-two houses' random values are out counts as a try: the inviting house
-closes the friend file after three (runs in parallel included: each
-holds a try until it ends), and the asking house stops retrying on
-its own after one and says so (withdraw and import the file again, or ask
-for a new one). Comparing codes (by phone, in person) is optional; a friend shows "Not verified" until someone does.
+except by a 1-in-1,000,000 chance per try, and the tries are limited by
+the 20 requests an hour above and by the file's expiry. A request broken
+off after the two houses' random values are out counts as a try: the
+inviting house closes the friend file after three (runs in parallel
+included: each holds a try until it ends), and the asking house
+stops retrying on its own after one and says so (withdraw and import the
+file again, or ask for a new one). Comparing codes
+(by phone, in person) is optional; a friend shows "Not verified" until
+someone does. The code was 4 digits before 1.5.0; friends made then keep
+the 4-digit code they were shown.
+
+**Pairing versions, and no way back to 4 digits.** The 6-digit code
+belongs to pairing version 2 (1.5.0). The version is a byte inside the
+friend file, under the inviting house's signature, and it is bound into
+the request's handshake (its own preface, and a Noise prologue and code
+context of its own, so a v2 handshake hash or code can't be mixed with a
+v1 one). A house from 1.5.0 on asks only with a version-2 file and answers
+only version-2 requests; it doesn't speak version 1 at all, in either
+role. So there is nothing to negotiate down to: a house, or someone in
+the middle, that claims to be older gets no answer and no code, and a
+file relabelled as version 1 fails its signature. With an older house:
+
+- importing an older house's friend file is refused at once with "Your
+  friend's Domovoi needs updating to add friends." (a request imported
+  before this house updated shows the same message and isn't retried);
+- an older house importing a new friend file is told by its own Domovoi
+  that the file "is from a newer Domovoi";
+- friends made before either house updated are unaffected: only the
+  making of new friends changed, and the friend-to-friend connection
+  (messages, presence, lists) is the same protocol as before.
 
 **Every new friend is announced** aloud in the rooms and logged, and so
 is every list shared with a friend, so a friend added without the
@@ -3445,11 +4199,12 @@ watch the server's traffic under **No**.
 | **ListenBrainz similar artists and song popularity (Up next)** — the **MusicBrainz ids** of the library's artists (similar artists: `GET labs.api.listenbrainz.org/similar-artists/json`) and of its songs that have one (popularity: `POST api.listenbrainz.org/1/popularity/recording`, a read with no account or key, 100 ids a request) go to ListenBrainz, with a User-Agent naming the project. No title, name, file, play history or person. The answers (similar artists with a score, listen and listener counts) are stored in `artist_similarity` / `recording_popularity` (V056) and read by the Up next picker from the database: **building or extending a queue never makes a network call**, cache miss included (`domovoi/workers/listenbrainz_fetch.py`, `domovoi/clients/listenbrainz.py`; `tests/test_up_next_offline.py`) | Two switches, each its own. Similar artists: on when the internet answer is **Yes**, off for **Sometimes**, **No** and while unanswered. Popularity: on for **Yes** and **Sometimes**, off for **No** and while unanswered. Then a background job only, at most one request a second, a small batch a minute, only while the connectivity probe reports online; each artist again after 90 days, each song after 30; a 429/503 pauses it | Settings → Household → Music mix (or Settings → Advanced → Library): `music_similar_artists_enabled`, `music_popularity_enabled`. Switching one off stops it before its next request and deletes what it fetched; Up next then works from the library alone. |
 | **LRCLIB synced lyrics** — for library songs with no timed lyrics of their own (no `.lrc` next to them, none in their tags), the song's **title, artist credit and primary performer, album and length in seconds** go to lrclib.net, which answers with its lyrics, timed when it has them (`domovoi/workers/lyrics_fetch.py`, `domovoi/clients/lrclib.py`; [Lyrics](#lyrics-household-tier-only) above) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. Then about one request a second (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down), only while the connectivity probe reports online; a song LRCLIB didn't have is asked about again after 4, 8 and then 16 weeks | Set `lyrics_lrclib_enabled` off (Settings → Advanced → Library → "Synced lyrics from LRCLIB") to keep it off anyway; switching it off stops the lookup before its next request. Lyrics in `.lrc` files and in the songs' own tags never need it. |
 | **Cover Art Archive** — for an identified library song (song recognition's checked match, a "Needs review" choice, or the file's own MusicBrainz id), the album's MusicBrainz release or release-group id goes to coverartarchive.org, which redirects to archive.org's storage; the front cover that comes back is written into MP3 and FLAC files (with Undo) or kept in Domovoi's own copy (`domovoi/workers/library_cover_art.py`; [Music files Domovoi changes](#music-files-domovoi-changes-cover-art-and-the-duplicates-trash)) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. About one request a second, only while the connectivity probe reports online; a song the archive has no cover for is asked again after 30 days or after **Rescan library** | Set `library_cover_art_enabled` off (Settings → Advanced → Library → "Cover art from the Cover Art Archive"); switching it off stops it before its next request. |
+| **Face models** — one-time fetch of OpenCV Zoo's YuNet (face detection, MIT) and SFace (face embedding, Apache-2.0) from `media.githubusercontent.com`, each pinned to one commit, its size and its SHA-256; a file that doesn't match is never used ([Faces and people](#faces-and-people)) | Only after an admin turns on **Recognize faces** (off by default), and only while the files aren't on the server | Leave faces off. Under `never` nothing is fetched and faces stay unavailable; or place the two pinned files in `~/.domovoi/face_models/` yourself. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. A device set up with the server address left blank never sends its code at all: it checks the approval itself ([Asking every house](#asking-every-house-an-approval-the-device-can-check-140)). |
-| **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
+| **Version check / pull** — `git fetch`/`pull` against the GitHub repo; for a new release, its signed `DomovoiSetup.manifest.json` and `.sig` from the GitHub release (each at most 64 KiB, github.com and its release-asset hosts only) | The check: once a day and at start when the internet answer is **Yes** and **Check for updates by itself** is ticked (the default), else only when someone presses **Check for updates**. The pull: only when an admin presses **Update Domovoi** | Untick **Check for updates by itself**, or answer Sometimes or No, and don't click. Nothing is ever installed by itself. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
-| **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. Before the radio plugin hands a station to the player it follows the stream's redirects itself, every hop through the outbound-URL check, and hands over the URL that answered: a station whose stream redirects into the house when the server asks is refused, not played (PLG-12, round 6). This judges what the server's own request saw. The player then makes its own request, looks the name up itself and follows its own redirects, and its container is not fenced off the house network, so a stream host that answers the player differently from the server can still point the player at an address inside the house. Closing that needs the player to fetch through the core or a fenced network; until then, play only stations you trust. |
+| **Radio streams** — fetched by the core, for a room's music player (MPD container) or the dashboard's browser player | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. Since 1.5.0 a room's player never fetches an internet station itself: the radio plugin hands it a one-use relay URL on the core (`/v1/player-relay/<token>`, the core's player relay any plugin can use, SDK 1.17), and the core makes the only request to the station, through the outbound-URL check with every redirect hop checked and pinned to the address its check judged, and passes the audio on. A station that answers the core's first look with audio and a later request with a redirect into the house is refused at the relay, and nothing plays (M11, review of 2026-11-22; before 1.5.0 the player made its own request and followed its own redirects). The token is random, good for one connection, opened within 30 seconds, bound to one room and one station, and served only to the address that room's player calls from; a new play in the room ends the old relay. The relay passes audio only (no playlist, which the player would open entry by entry), reads no faster than 512 KiB/s after an 8 MiB start, ends after 24 hours, and passes the station's ICY title blocks through unchanged so "now playing" still names the song. **No raw internet URL sits in a room's queue** (L20, review of 2026-11-23): every add to a player's queue, whatever asks for it, refuses an internet address that is not a relay URL the core minted (the tuner's stream and anything else on this network still go in), and `sdk.playback.play_url` puts a raw internet URL through the relay first. At core start, after every start of a room's player and when a player is seen to have restarted, each room's queue is checked: an internet entry that isn't relayed is rewritten to a fresh relay URL for that room when the core can tell what it was (its relay record, or the room's play history: a station or a plugin-played file), else removed; a relay URL with no record (it can never play) is removed, and one made for another room is made again for this one. The log names a hash of an address, never the address. A group hand-off makes each relay entry again for the receiving room (tokens are bound to one room and never copied) and refuses a raw internet URL. A relay URL stays in a queue longer than a token lives, so each minted token leaves a record core-side (room, station or file address, kind; in memory and in an owner-only file under `~/.domovoi/player_relay/`, keyed by a hash of the token): when the token's grant is gone (its one connection spent, a file's hours up, a core restart), the request is admitted again only from that room's player's address while that player has this very entry as its current song, playing or paused. So a station resumed after a restart, or after a long pause, plays through the relay again, and a stop still ends the stream at once. The open reads (the status snapshot, the dashboard's now-playing, the room queue a guest can read) show a relay entry with the token replaced by a hash of it (L23), and the play history records the station's own address, not the token. FM is not relayed: the player reads the tuner's own listener on this machine. On a development box running the core natively on Windows or macOS (Docker Desktop) the player's connection arrives from loopback, so there the token alone binds it. A plugin playing a finite file through the same relay (`kind="file"`) gets a token good for byte-range requests (a seek, a resume) for 6 hours from minting rather than one connection, the first within 30 seconds; every request re-checks the room's token, the caller's address and the internet answer, a newer request ends the token's earlier stream, and no ICY is asked for. A request from another address, or one carrying a forwarding header (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`; a local process could otherwise claim the player's address through the server's loopback-trusting rewrite), is answered 404 and changes nothing (L23, L24 of the review of 2026-11-23: the token is readable on the open now-playing reads, so a stranger presenting it no longer ends the room's stream; the access log blanks it). The relay asks for identity and refuses any `Content-Encoding`, reading the station's raw bytes in chunks of at most 16 KiB, so a few kilobytes of nested gzip can't become hundreds of megabytes in the core (H2). The station has 15 seconds to answer with its headers and first bytes (else 504), a running stream ends after 30 seconds without bytes, and a stop or internet set to No ends a stalled read within 2 seconds (M4). A relay is minted only for a room that has a music player, after the outbound check (L25). |
 | **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
 | **Video-satellite kiosk browser** — Chromium's own background traffic | Never: the kiosk is launched with `--disable-background-networking`, `--disable-component-update`, `--no-pings` and `--disable-domain-reliability` | Nothing to do. The page itself talks only to the Domovoi server. |
 | **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |
@@ -3457,6 +4212,7 @@ watch the server's traffic under **No**.
 | **Wake-word training** — the trainer image's build (Docker Hub's base image, two GitHub repositories, PyPI packages, GitHub release assets, Ubuntu's package archive) and its training data (Hugging Face `davidscripka/openwakeword_features` and `MIT_environmental_impulse_responses`, openWakeWord's background-clip zips on Backblaze B2): about 22 GB, once | Only after an admin turns training on in Settings → Voice → Wake words: the build and the data download then, a rebuild by the Linux update unit when `scripts/wake_word/docker` changes, and a training that finds its data missing. All of it from inside containers, outside the core's outbound-URL check ([details](#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) | Don't turn it on. Under `never` the card refuses, every training is refused before it starts, and the update unit doesn't rebuild; answering `never` stops a setup job's build or download and the update unit's rebuild that are already running. |
 | **NVIDIA Container Toolkit** — NVIDIA's apt repository (`nvidia.github.io`) | Only on a Linux server (or the Windows install's distro) where an NVIDIA GPU is visible: at install, and at an update or Restart while it is missing; `apt upgrade` afterwards, like any package | `DOMOVOI_MANAGE_GPU_RUNTIME=0` in `/etc/default/domovoi-update`. Under `never` the update unit downloads nothing (the install itself still does, as for every package it installs). |
 | **Debian's installer image** — the amd64 netinst (793 MB) from `cdimage.debian.org`, kept only if its size and SHA-256 are the pinned ones, for old computers' room sticks; and `xorriso` from Ubuntu's archive on a server installed before it (the update unit) | Only when an admin presses **Prepare the stick** and the image isn't on the server yet (it is kept for the next stick). The old computer itself then downloads Debian's packages and the satellite's libraries while it sets up, as a Linux laptop does | Don't prepare a stick. Under `never` it is refused unless the image is already here, and the update unit installs nothing. |
+| **The offline kit** — a USB stick image of everything an install would download (Settings → System → Offline kit): the release's files from GitHub, Ollama, the pinned AI models (Ollama's registry), Whisper and the voices (Hugging Face), the Python packages (PyPI), Ubuntu's and Docker's packages and images (a package-mirror container and Docker Hub), the WSL and Mac parts, each held to its pin ([below](#the-offline-kit)) | Only when an admin presses **Make the kit**, and only for what the server doesn't hold yet | Don't make a kit. Under `never` nothing is fetched: a kit is made only from what the server already holds, else the card says what is missing. |
 | **The Android app for phones** — the APKs `android/release.json` names, from this project's GitHub release, each held to its pinned size, SHA-256 and signing certificate (`domovoi/android_app.py`; [below](#the-app-from-your-own-server-the-join-page)) | At install, with the other install-time downloads (`scripts/linux/provision.sh`, the `phone-app` step, which the Windows installer runs in its distro too), whatever the internet answer; never fatal (owner decision 2026-11-15). Else when an admin presses **Download the app to this server**; afterwards, under **Yes, always** only, the newer release an update names, once per start | Installing needs the internet (an install without it finishes without the app and says so). After that, don't press it, or drop the APKs in by hand. Under `never` the dashboard's download and the refresh are refused. |
 | **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub), and the spare-device card's **get the Windows files** (python.org, PyPI) and **get the Linux Python** (python-build-standalone's GitHub releases), each file held to its pinned SHA-256 | Only when an admin starts one | Don't start them. Under `never` they are refused. |
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Privacy → Internet lists every enabled plugin whose manifest asks for the network. |
@@ -3528,7 +4284,8 @@ network:
   existing ones are stopped and removed from every queue when the answer
   becomes `never` and at every core start;
 - transfers already running when the answer changes: the radio stream
-  relay, a model pull and a podcast episode download stop;
+  relays (the browser player's and the rooms' players'), a model pull and
+  a podcast episode download stop;
 - plugins' requests through the SDK's HTTP client (`sdk.http` in the core,
   the web host's `http()`), which refuse any non-local URL;
 - the SearXNG container, which is stopped when the answer is saved and
@@ -3789,6 +4546,86 @@ private key.
 LAN: the identity proves *who* answered and that the code manifest is the
 one your core published, not that nothing in between could read the
 traffic. See the hardening backlog.
+
+### Keeping the house identity across a reinstall
+
+1.5.0 (S3-4). A reinstall used to mint a new key, and every room set up
+for the old one then refused the new install: rightly, since nothing tells
+a reinstalled house from an impostor at the same address. The fix is to
+keep the key, never to teach rooms to accept a new one: re-pinning over the
+network was considered and rejected (owner decision 2026-11-22). Three
+ways keep it:
+
+- **A keep-data uninstall**, the default on every host. Linux
+  (`scripts/linux/uninstall.sh`) leaves `~/.domovoi` with the key, the
+  database volumes and the settings where they are; Windows moves the
+  distro's disk (database, settings, key) to an administrators-only
+  `C:\ProgramData\Domovoi-kept-<time>` and the next Setup offers to import
+  it in place. **Remove everything** deletes the key with the rest and is
+  asked for explicitly (typed on Linux, a second confirmation on Windows).
+- **The house identity backup**, Settings → System → About & updates →
+  **Download house identity backup** (`POST /api/config/server-identity/backup`,
+  then the core's `POST /v1/admin/server-identity/backup`). The file is the
+  private key, so it is guarded like nothing else on the dashboard: the
+  security tier (an admin session; fails closed before setup; never the
+  household token or a phone grant's session), a password sign-in within
+  the last 5 minutes **and** the password typed again behind the login
+  backoff, at both hops. The answer is `Cache-Control: no-store` and an
+  attachment; the dashboard relays it and keeps nothing. The core logs that
+  a backup was downloaded and the (public) fingerprint, never the key or
+  the password. It is in no household-tier export: the route is the only
+  code that builds one (`test_identity_backup.py` holds that). The page
+  says plainly that the file is the key and should be kept like one. From
+  a shell on the server: `python -m domovoi.server_identity --write-backup FILE`
+  (a new file, mode 0600).
+- **A restore at install**: `install.sh --restore-identity FILE` (and
+  `provision.sh --restore-identity FILE`), Windows Setup's **Restore the
+  house identity from a backup file**, or Mac Setup's **Restore from a
+  Backup...** (on its media-folder page). The backup is checked completely
+  before anything is written: its kind and schema, the algorithm, a 32-byte
+  private key, that the public key and fingerprint are the ones the private
+  key makes, and a signature over a fresh message that verifies. A damaged,
+  edited or foreign file (a room's public record, a different algorithm) is
+  refused and nothing is written. On Linux root hands the file's bytes to
+  the service user's own python on stdin, which writes
+  `~/.domovoi/server-identity.json` (0600) itself, right before Domovoi's
+  first start; on Windows Setup checks the file's shape, DomovoiHost copies
+  it into the distro root-only, and the same check runs there (the copy is
+  deleted once used, and a later repair or update never restores it again).
+  On a Mac, Setup checks the file's shape and copies it into the account's
+  own private work folder (0600); the root helper reads it there once,
+  refusing a link or a file another account owns, and puts it in the VM
+  root-only (0600) for that one `provision.sh` run, deleting it afterwards
+  whether the run worked or not. The answer is never saved in the install
+  record, so a repair never restores it again. A Mac that kept Domovoi's
+  data from an earlier install offers no restore: its identity is there.
+  Mac Setup's **Remove everything** says the rooms will need setting up
+  again and where the backup is.
+  A restore never replaces a **different** identity already in place: the
+  install stops instead (by hand, `--restore-identity FILE
+  --replace-existing` retires the current key beside the new one, never
+  deleting it).
+
+A restore weakens nothing a room checks: the room still holds the server to
+its pinned fingerprint, and a restored key either is that fingerprint or is
+refused like any other.
+
+**A room whose server changed says so.** A room (1.5.0 code) that gets a
+complete, valid proof at its own address, signed over its nonce and the
+address it dialled, for a key that is not its pin, refuses it exactly as
+before (nothing recorded, no re-pin) and tells the household instead of
+blinking the generic no-server orange: a teal LED pattern (a double blink on
+the 2-Mics HAT, a slow breath on the XVF3800) and the spoken line "My Domovoi
+server has changed, so I can't connect to it. Please set me up again"
+(`server_changed.mp3`, rendered by the core per voice and synced while the
+room was still connected). The line is said when the change is first seen,
+then at most every 12 hours (the time is kept on disk, so a restart doesn't
+repeat it), and whenever someone says the wake word. A relayed answer, an
+unsigned one or one not bound to the dialled address never counts as
+"changed". A rogue host at the room's address can make it say the line (any
+key can sign); it can't make the room trust it, and the room sends it
+nothing it doesn't send any server (a nonce and the dialled address, never
+its pin).
 
 ### Which crypto library does the arithmetic
 
@@ -4484,6 +5321,113 @@ the QEMU kit and are never set on a household's server:
 `DOMOVOI_USB_STICK_REPACK` (run the repack step elsewhere, for a core with no
 xorriso) and `DOMOVOI_USB_STICK_DEBUG=1` (the kit's serial-port markers).
 
+### The offline kit
+
+Since 1.5.0 the server can make an **offline kit**: a FAT32 USB stick image
+holding everything an install would download, for a house with no
+internet ([OFFLINE_KIT.md](OFFLINE_KIT.md)). The builder is
+`domovoi/kit_builder/`; the stick's format and its checker are
+`domovoi/offline_kit/`.
+
+**Routes.** On the core: `GET /v1/admin/offline-kit` (the card; admin
+read tier), `POST /v1/admin/offline-kit/build` and
+`POST /v1/admin/offline-kit/cancel` (admin write tier),
+`DELETE /v1/admin/offline-kit/builds/<id>` and
+`POST /v1/admin/offline-kit/builds/<id>/ticket` (admin write tier), and
+`GET /v1/offline-kit/<id>/<name>`: the image, its Raspberry Pi Imager list
+(`os-list.json`) and its Imager manifest. On the dashboard:
+`GET /api/offline-kit` (admin read tier), `POST /api/offline-kit`,
+`POST /api/offline-kit/cancel`, `DELETE /api/offline-kit/<id>` and
+`POST /api/offline-kit/<id>/ticket` (admin write tier, forwarded to the
+core with the caller's credentials), and
+`GET /api/offline-kit/<id>/<image>`, which streams the image from the core
+with the caller's credentials or its `ticket` and adds none of its own.
+
+**Who may download a kit.** A plain kit holds a public release and public
+models, nothing of the household's (design section 7; a test seeds a
+server's secrets and greps a built kit for them), so its files are served
+**without a login** under a random 32-character id only the admin's card
+shows, as the room stick's are: Imager and a browser download can't send
+one. A kit with **household items** ticked (models this house added, with
+their system prompts, and wake words it trained) is the house's own, so
+`GET /v1/offline-kit/<id>/…` answers it only to the **admin's Bearer**
+or to a **download ticket** that Bearer minted (401 otherwise, Imager
+included). The card says so: its download button asks for a ticket
+(`POST …/ticket`, admin write tier) and the browser then downloads
+`/api/offline-kit/<id>/<image>?ticket=…` straight to disk, as any
+download. A ticket is 32 random bytes, good for 5 minutes, for that one
+kit's image, and for one download: the core keeps only its SHA-256, in
+memory (a restart voids them), and refuses it once used, once expired, or
+for another kit. It does travel in the URL, so the browser's download
+history holds it, used up. The saved image is then written with Imager's
+**Use custom**. The id travels in plain HTTP on the LAN like
+everything else ([no TLS](#1-no-tls-on-admin-flows-or-anything-else)).
+
+**What goes on it, and how it is held to its pin.** Every file comes from
+a pin in the release commit (`domovoi/kit_builder/pins.py` names where
+each lives) or is the house's own household item, marked "not checked
+against a release" in kit.json and on the card. Downloads go through the
+outbound gate, each held to its pinned SHA-256 and size; a pin with no
+size stops the card (it caps the download and counts in the free-space
+check). Files copied from the server's own stores (Ollama's blobs, named
+by their digest; Whisper, the voices, voice ID's model, the wheels, the
+mirror's `.deb`s, every pinned upstream file) are hashed **as they are
+written** and the kit is refused, nothing kept, when one doesn't match:
+a damaged or changed file never reaches a stick under its pin's name.
+The package mirror is made in a container from Ubuntu's image pinned by
+digest (`APT_MIRROR_IMAGE`), unprivileged (`no-new-privileges`, no mount
+but its output folder); only regular files are taken from its output
+(a link or a device stops the build), and each `.deb` must match its
+signed index.
+
+**On the server.** One kit at a time, on a thread; its state is in
+memory. A cancel stops the next chunk, or within a second the running
+command (the package container, an image pull or save, the source
+bundle); the container has a known name and is removed on a cancel or a
+timeout, and at the core's start the kit containers and half-made images
+a restart left are removed. A kit image is kept three days, and only the
+newest.
+
+**The checker** (`python -m domovoi.offline_kit verify`, and the
+installers) reads kit.json of at most 64 MiB, with a `part_size` of at
+least 1 MiB and files of at most 1 TiB, and counts parts arithmetically,
+so a damaged or hostile kit.json can't make it build a huge list. It
+names every entry kit.json doesn't account for: an unlisted file, a link
+or other non-regular entry (a link to a folder is not walked into), and
+a folder kit.json lists nothing in (M12, review of 2026-11-23). Windows
+Setup walks the stick the same way before it uses anything on it
+(`OfflineKit.Unaccounted` in `windows/common/OfflineKit.cs`, run by the
+helper's kit-check right after kit.json is read, before the release
+signature): any reparse point (a symlink, a junction or anything else
+Windows redirects) is refused and not walked into, files and folders
+kit.json doesn't account for are refused in the checker's words, and an
+apt suite or component folder outside `^[a-z0-9][a-z0-9.+-]{0,63}$` is
+refused even when kit.json lists it (kit.json itself is not signed). The
+refusal is one message in Setup's "This offline kit can't be used"
+dialog that names up to five entries. The only entries let be, never
+read or copied, are the operating system's own: its files (`.DS_Store`,
+`Thumbs.db`, `desktop.ini`, `.metadata_never_index`, `._*`, as the
+checker) in any folder, only as plain files (a link or folder with such a
+name is refused); and its folders (`System Volume Information`,
+`$RECYCLE.BIN`, `.Trashes`, `.Spotlight-V100`, `.fseventsd`,
+`.TemporaryItems`, `.DocumentRevisions-V100`, `lost+found`) only at the
+top of the drive when the kit is the drive itself (deeper down they are
+refused). provision.sh then holds the package folders again, as below.
+
+**The kit's packages go through apt's signature check.** Each suite and
+component of the kit's Ubuntu packages is a folder name on the stick, and
+the installers write it into the apt source stanza. A name outside
+`^[a-z0-9][a-z0-9.+-]{0,63}$` (a newline could add a line of its own, such
+as `Trusted: yes`) or a folder that is a link stops the install before apt
+runs (`kit_apt_name` in `scripts/linux/install.sh` and
+`scripts/linux/provision.sh`; M12, review of 2026-11-23). The stanza
+always names Ubuntu's keyring (`Signed-By`) and never `Trusted`, and apt
+is run with insecure and unauthenticated sources refused. Whisper's files
+are copied off a stick only by name (`model.bin`, `config.json`,
+`tokenizer.json`, `preprocessor_config.json`, `vocabulary.*`); `model.bin`
+is held to the release's pin, the small files only to kit.json (L39 of the
+same review, open: they have no release pin of their own yet).
+
 ## Satellite pairing (WS auth)
 
 The satellite WebSocket (`/v1/stream/{room_id}`) authenticates each device
@@ -4703,6 +5647,37 @@ counts a server as found at an address only when its answer is bound to
 that address: an unbound answer holds no fingerprint, so it can't stand in
 for the real server when the device looks for every house.
 
+**The exchange binds the pairing token (version 2, 1.5.0; L9 of the review
+of 2026-11-22, closed in 1.5.0).** In version 1 the exchange's transcript
+named the room and the server's key but not the pairing token the core
+then stored for the room, so something relaying a device's connection at
+the server's own address could forward the exchange unchanged and put its
+own token in the `hello`. A 1.5.0 core signs `pairing_proof=2`, and a
+1.5.0 device that sees that signed adds `pairing_proof: 2` to its `hello`
+and runs the version-2 transcript, which also carries `SHA-256(pairing
+token)`: the device hashes the token it sent, the core the token it
+received. A swapped token makes the two transcripts differ, so the
+device's confirmation fails as a wrong code would, nothing is bound and
+the device gets no proof. The device uses version 2 only with a server
+that signed version 2 (the advert is signed, so it can't be raised or
+lowered on the way); with a 1.4.0 core it runs version 1 as before, and a
+1.5.0 core still serves a 1.4.0 device's version-1 `hello`. A `hello` that
+names any other version is refused (`approval_pake_invalid`). Removing
+`pairing_proof: 2` from a version-2 device's `hello` on the way only makes
+the run fail: the device computes version 2 whatever the core does.
+
+**The exchange binds the support key (version 3, 1.5.0).** A support-session
+satellite's Ed25519 support key (the `support_key` of its `hello`;
+"Support sessions" above) is pinned when its pairing is approved, so it
+rides the exchange too: a 1.5.0 core signs `pairing_proof=3`, and a 1.5.0
+device that sees that signed sends `pairing_proof: 3` and runs the
+version-3 transcript, which carries the hello's `support_key` string
+(empty for none) right after the token hash. A key swapped, added or
+stripped on the way makes the transcripts differ: the run fails as a wrong
+code would, and nothing is bound or pinned. When the run approves the
+device, the core pins exactly the key it bound. With a server that signed
+2 the device runs version 2 and no key is pinned at approval.
+
 *Known limit.* The setup portal still accepts an address the person types
 in and, on a device with no server key recorded, keeps the old approval
 flow with a server whose answer isn't bound to an address. That keeps
@@ -4864,7 +5839,11 @@ hotspot), `systemctl --no-block restart` of its own two units,
 `systemctl reboot`, for the no-server self-check), `domovoi-wifi-reset`
 (argv-less, cards prepared since 2026-10-17: the Wi-Fi radio off and on,
 then the `domovoi-home` profile by name; it refuses while the setup
-hotspot's profile is saved) and `xvf_host`. Every one of
+hotspot's profile is saved) and `domovoi-xvf` (since 1.5.0: the XVF3800 tool
+through a root-owned wrapper, `satellite/xvf_guard.py`, that runs it only
+for the LED verbs and the five DSP parameters with plain numbers; cards
+prepared earlier named `xvf_host` with any arguments until their update
+switches them). No rule runs `ALL`. Every one of
 those targets is a root-owned path the account cannot edit, and every
 script root runs on the device (stage 1, stage 2 as
 `/usr/local/sbin/domovoi-stage2`, the two helpers, `domovoi-status`) lives
@@ -4892,9 +5871,25 @@ into `config.toml` is ignored when the pin exists), and the payload helper
 verifies the signed list against that pin itself before it stages or runs
 anything, so the account cannot route root code to itself by choosing the
 server either — see *Root checks the list itself* under Server identity.
-And `domovoi-provisioning.service` (root, every boot) still starts
-`python -m satellite.provisioning_mode` from the account's own venv and
-code tree; moving that onto a root-owned copy is the remaining item. Since
+And `domovoi-provisioning.service` (root, every boot) runs **root's own
+copy** of the code (since 1.5.0, `satellite/root_code.py`): the system
+Python (`/usr/bin/python3 -E -s -m satellite.root_entry`) from
+`/usr/local/lib/domovoi/root-code`, a link to one release under
+`root-code.d/`, root's and writable by nobody else; the unit names the
+account (`DOMOVOI_SATELLITE_USER`), no path in its home. The account's
+synced tree stays where it is, for the client. Root's copy changes only by a
+root step at boot that checks the code channel's signed manifest itself
+(the one the client kept, `~/.domovoi/code-manifest.sig.json`): the
+signature against the root-owned pin, the serial against root's own record
+(`/var/lib/domovoi/root-code-serial.json`), then each file's SHA-256, and it
+writes only the bytes it checked; a card without the root-owned pin keeps
+the copy it has. A card prepared before 1.5.0 switches once, at the first
+reboot after its update: that run (the old unit, so the account's tree one
+last time) writes root's copy, the wrapper, the new unit and sudoers
+(`visudo -cf` first) and reloads systemd, undoing every step on any
+failure. So a switched card has no known way from the account to root, and
+the support-session check enforces that on every connect; this is not yet
+confirmed on a real card. Since
 2026-10-12 that root path does real work on every provisioned boot, not
 only until adoption: it applies three network settings
 (`satellite/net_settings.py`) — it deletes the `domovoi-setup` hotspot
@@ -5015,6 +6010,18 @@ state still answered the LAN, so polling them was the feed this gate
 denied. They take the household tier now (see *Device tier*, "So is who is
 home"), so the socket and the reads beside it answer the same callers.
 
+**Chats are not on the socket (1.5.0).** Every paired phone and browser gets
+every event, so the two that concern chats carry no chat content.
+`chat.changed` is an opaque digest (an HMAC under a key that lives only in
+the web process's memory) that moves when any chat is written: no thread
+count, no time, no id. Each client then reads its own list over HTTP,
+which shows it only the chats it may see (`domovoi/chat_access.py`).
+`help_deliveries.changed` rows carry ids and a time, and as the title only
+the kind ("Photos from Domovoi", or nothing), never the chat's own title;
+`person_id` and `thread_id` stay so the phone apps can tell which rows are
+theirs. Until 1.5.0 the first carried the house's chat count and last-write
+time, and the second each delivered chat's title.
+
 ## A room phone (Android room mode)
 
 A spare phone or tablet can be a room (docs/SPARE_DEVICE_SATELLITES.md, "Phones and tablets";
@@ -5112,7 +6119,19 @@ room's own core and only at `/v1/music/cover/<digits>` (any other path,
 percent-encoding or `..` is refused), and its size is read before it is
 decoded: a cover with a side over 4096 px or longer than 8:1 is not
 drawn, and the rest are decoded to at most 1024 px on the long side, so
-a crafted cover cannot crash the room.
+a crafted cover cannot crash the room. Since 1.5.0 the frame may also
+carry photo and video results asked for by voice in that room, for 90
+seconds (`domovoi/room_media.py`): never filtered by a person's face for a
+guest's voice, captions drawn as text only, and thumbnails from the open
+`GET /v1/room-media/{token}`, where a random token kept only in the core's
+memory names one shown item, works only while those results are on the
+screen (10 minutes at most), is answered `no-store` and is blanked in the
+access log. A recognized voice's "photos of Sarah" does show on the
+room's screen for those 90 seconds, to whoever is in the room: the person
+who asked is in that room. The video satellite's kiosk reads the same
+results from the device-read `GET /v1/admin/room-media/{room_id}`
+through the dashboard; the open `GET /v1/admin/snapshot` carries only
+`{room: results id}` (security review 2026-11-23, H1).
 
 **One microphone owner:** room mode, the phone drop-in call, the chat mic
 and phone chats (Domovoi on this phone) ask `audio/MicArbiter` first; while room mode

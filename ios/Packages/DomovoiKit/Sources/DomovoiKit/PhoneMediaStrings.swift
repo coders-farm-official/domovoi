@@ -117,7 +117,7 @@ public enum PhoneMediaStrings {
 
     /// `DeviceUpload.kt:355`, the blocked tail.
     public static let blockedTail = ". You can browse and play what's on this phone, but not upload it. " +
-        "An admin lifts the block in the dashboard under Settings → Phones & browsers."
+        AdminDeleteWords.liftedWhere
     /// `DeviceUpload.kt:358`, the read-only tail.
     public static let uploadsOffTail = ", so uploads are off. Everything else here works."
 

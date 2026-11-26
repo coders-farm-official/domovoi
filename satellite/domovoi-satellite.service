@@ -22,6 +22,12 @@ WorkingDirectory=@HOME@/domovoi
 ExecStart=@HOME@/satellite-venv/bin/python -m satellite.client
 Restart=on-failure
 RestartSec=5
+# Lets the client (and only its main process) talk to systemd: during a
+# support session it arms a watchdog (WATCHDOG_USEC) and feeds it from its
+# event loop, so a client stopped or frozen from inside the session's shell
+# is killed with every process in the unit and started again. Without it
+# the client never offers support sessions (satellite/support_shell.py).
+NotifyAccess=main
 StandardOutput=journal
 StandardError=journal
 # The file system is read-only to this unit except the trees the client

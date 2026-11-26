@@ -437,7 +437,9 @@ internal fun serverDetail(e: Throwable): String? {
 internal fun printFailureText(action: String, e: Throwable): String =
     serverDetail(e) ?: com.domovoi.app.net.failureText(action, e)
 
-/** The line for admin-only actions this app can't take. */
+/** The line for rename and remove on a shared screen (admin on the server);
+ *  signed out it names this phone's sign-in too, and with admin held the
+ *  cards offer both (PrinterAdmin.kt, printersAdminLine). */
 internal const val ADMIN_ONLY_LINE = "An admin can rename or remove printers on the web dashboard."
 
 /** The panel's top line: network printers only (owner rule 2026-11-16), in

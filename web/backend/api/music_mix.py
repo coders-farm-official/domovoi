@@ -9,7 +9,11 @@
   "use the household's") and the mix their sessions use.
 * ``PUT  /api/people/{id}/music-mix`` — set it; ``{"override": null}``
   goes back to the household's. An admin, or a phone or browser that
-  said "this is me" as that person (``devices.owner_person_id``).
+  said "this is me" as that person (``devices.owner_person_id``) and
+  proves it with its claim key (``X-Domovoi-Claim-Key``, 1.5.0: L39/L40
+  of the 2026-11 review), as clearing the person's listening history
+  does. Without a matching key: 403 ``{"detail", "code":
+  "claim_key_required"}``.
 
 The two internet switches ("Similar artists from the internet", "Song
 popularity from the internet") are core settings
@@ -24,6 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -36,6 +41,8 @@ from web.backend.domovoi_client import get_cached_snapshot
 router = APIRouter(tags=["music"])
 
 NOT_YOURS_DETAIL = "Only an admin, or this person's own phone, can change their mix."
+#: A claimed device that can't prove the claim (no key, or a wrong one).
+CLAIM_KEY_REQUIRED = "claim_key_required"
 
 Step = Field(default=None, ge=1, le=5)
 
@@ -114,16 +121,25 @@ async def get_person_mix(person_id: int) -> dict[str, Any]:
         return await _person_answer(s, person_id)
 
 
-@router.put("/api/people/{person_id}/music-mix", dependencies=[Depends(require_device)])
-async def put_person_mix(person_id: int, body: PersonMixIn, request: Request) -> dict[str, Any]:
+@router.put("/api/people/{person_id}/music-mix", dependencies=[Depends(require_device)],
+            responses={403: {"description": 'not this person\'s device, or {"detail", "code": '
+                                            '"claim_key_required"} without its claim key'}})
+async def put_person_mix(person_id: int, body: PersonMixIn, request: Request) -> Any:
     if not await devices_api.caller_is_admin(request):
-        caller = devices_api.caller_device(request)
         async with session_scope() as s:
-            owner = (await s.execute(
-                text("SELECT owner_person_id FROM devices WHERE device_id = :d"),
-                {"d": caller})).scalar() if caller else None
-        if owner is None or int(owner) != person_id:
+            # The caller's own device: devices.caller_device_row.
+            device = await devices_api.caller_device_row(s, request)
+            name = (await s.execute(text("SELECT name FROM people WHERE id = :p"),
+                                    {"p": person_id})).scalar_one_or_none()
+        mine = device is not None and device.owner_person_id is not None
+        if not mine or int(device.owner_person_id) != person_id or device.shared_screen:
             raise HTTPException(status_code=403, detail=NOT_YOURS_DETAIL)
+        # Proven by its device key with its own claim, or (apps from before
+        # 1.5.0) by the claim key: devices.proves_claim.
+        if not devices_api.proves_claim(device, request):
+            detail = (devices_api.RECLAIM_DETAIL if not device.claim_key_hash
+                      else devices_api.WRONG_KEY_DETAIL).format(name=name or "this person")
+            return JSONResponse(status_code=403, content={"detail": detail, "code": "claim_key_required"})
     async with session_scope() as s:
         await _person_answer(s, person_id)
         await M.save_person(s, person_id, body.override.model_dump() if body.override else None)

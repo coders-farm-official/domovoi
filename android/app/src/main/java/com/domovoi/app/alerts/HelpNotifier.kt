@@ -27,13 +27,13 @@ const val EXTRA_CHAT_TITLE = "com.domovoi.app.extra.CHAT_TITLE"
 // on: a tap after a switch to another server opens Chat, not a thread id
 // that means nothing there.
 
-/** The notification tag help steps post under (the id is the delivery's). */
+/** The notification tag deliveries post under (the id is the delivery's). */
 fun helpTag(serverKey: String): String = "help_delivery:$serverKey"
 
 /**
  * The notification side of voice help: a "Help" channel of its own, one
  * notification per delivery. Privacy as for the other alerts: the lock
- * screen's public version says only "Domovoi sent you help steps".
+ * screen's public version says only "Domovoi sent you something in Chat".
  */
 class HelpNotifier(context: Context, private val prefs: Prefs) : HelpSink {
     private val ctx = context.applicationContext
@@ -93,8 +93,8 @@ class HelpNotifier(context: Context, private val prefs: Prefs) : HelpSink {
             .setSmallIcon(R.drawable.ic_stat_timer)
             .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-        val public = base().setContentTitle("Domovoi sent you help steps").build()
-        val text = "Tap to open the steps in Chat."
+        val public = base().setContentTitle("Domovoi sent you something in Chat").build()
+        val text = "Tap to open it in Chat."
         val notification = base()
             .setContentTitle(helpTitle(row))
             .setContentText(text)
@@ -106,7 +106,7 @@ class HelpNotifier(context: Context, private val prefs: Prefs) : HelpSink {
         try {
             NotificationManagerCompat.from(ctx).notify(helpTag(serverKey), row.id.toInt(), notification)
         } catch (e: SecurityException) {
-            Log.i(TAG, "help steps not posted: ${e.message}")
+            Log.i(TAG, "delivery not posted: ${e.message}")
         }
     }
 }

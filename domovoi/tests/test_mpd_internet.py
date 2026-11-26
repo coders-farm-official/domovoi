@@ -140,9 +140,13 @@ async def test_the_real_client_refuses_before_touching_the_queue() -> None:
     with egress.override_policy("never"):
         ok = await client._queue_url(conn, INTERNET, title="KEXP", artist=None, start=False)
     assert ok is False and conn.calls == []       # the queue is left as it was
+    # Under any answer a raw internet URL is refused too (L20: it reaches a
+    # player only as a relay URL, domovoi/relay_queue.py); one at home isn't.
     with egress.override_policy(""):
         ok = await client._queue_url(conn, INTERNET, title="KEXP", artist=None, start=False)
-    assert ok is True and conn.calls[:2] == ["clear", f"addid {INTERNET}"]
+        assert ok is False and conn.calls == []
+        ok = await client._queue_url(conn, LAN, title="FM", artist=None, start=False)
+    assert ok is True and conn.calls[:2] == ["clear", f"addid {LAN}"]
 
 
 # ─── purging the queues ───────────────────────────────────────────────────
@@ -300,6 +304,27 @@ def test_the_core_start_purges_after_warming_the_rooms() -> None:
 
     src = inspect.getsource(main.lifespan)
     warm = src.index("await warm_known_rooms()")
-    boot = src.index("mpd_internet.schedule_boot_purge()")
+    # relay_queue's boot scan runs the purge first, room by room (L20).
+    boot = src.index("relay_queue.schedule_boot_scan()")
     assert warm < boot
-    assert "await mpd_internet" not in src
+    assert "await mpd_internet" not in src and "await relay_queue" not in src
+
+
+async def test_the_boot_scan_purges_each_room_before_its_relay_check(monkeypatch) -> None:
+    from domovoi import relay_queue
+
+    order: list[str] = []
+
+    async def purge(room_id, client):
+        order.append(f"purge {room_id}")
+        return 0
+
+    async def scan(room_id, client):
+        order.append(f"scan {room_id}")
+        return {}
+
+    monkeypatch.setattr(mpd_internet, "purge_room", purge)
+    monkeypatch.setattr(relay_queue, "scan_room", scan)
+    mpd_mod._clients["kitchen"] = object()   # type: ignore[assignment]
+    await relay_queue.scan_all()
+    assert order == ["purge kitchen", "scan kitchen"]

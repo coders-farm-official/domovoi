@@ -108,9 +108,11 @@ TASKS: tuple[AdminTask, ...] = (
         "pulls the update and restarts with it; on a server that can't restart itself, press Restart "
         "to apply changes next. A failed update rolls itself back. Reload any open dashboard once "
         "afterwards.",
-        # No request form: on a house updated from an offline kit the
-        # answer is the kit, not this page (capability case 5.11), and
-        # this table can't tell; "update yourself" by voice routes as before.
+        # No request form here. On a house set up from an offline kit
+        # (:func:`updates_by_kit`) :func:`answer` gives the kit's words
+        # instead of this page's (capability cases 5.11 / 5.11b), and
+        # "(can you) update yourself" by voice is answered whole on that
+        # house only (:data:`KIT_UPDATE_RE`); elsewhere it routes as before.
     ),
     AdminTask(
         "plugins",
@@ -247,10 +249,59 @@ def request(utterance: str, *, provided: Iterable[str] = ()) -> AdminTask | None
     return None
 
 
-def answer(task: AdminTask, *, admin: bool) -> str:
+# ─── A house that updates from an offline kit (1.5.0) ──────────────────
+
+#: What a house with no internet is told about updating (capability cases
+#: 5.11 and 5.11b): the kit, never the online update's page.
+KIT_UPDATE_LEAD = "This house has no internet, so it updates from a newer offline kit."
+KIT_UPDATE_ADMIN = (KIT_UPDATE_LEAD + " Plug in the new kit's USB stick and open Settings → System → "
+                    "About & updates → Update from an offline kit.")
+KIT_UPDATE_MEMBER = KIT_UPDATE_LEAD + " An admin needs to do it."
+
+#: "Can you update yourself?" / "update yourself" asked WHOLE (lower case,
+#: no closing punctuation), with any ask or impersonation in front. Only a
+#: house that updates from a kit answers it this way (help_desk's fast
+#: path declines elsewhere, so the turn routes as before).
+KIT_UPDATE_RE = re.compile(
+    rf"^(?:{OVERRIDE_LEAD})?(?:{_REQUEST_ASK}|(?:can|could|will|would|do) you |are you able to )?"
+    r"(?:update|upgrade) (?:yourself|itself|domovoi|you|the server|this server)"
+    r"(?:,? (?:for me|for us|please|now|right now|by yourself|on your own))?\Z"
+)
+
+
+def updates_by_kit() -> bool:
+    """Whether this house was set up from an offline kit, and so updates
+    from a newer one: the record the kit's install (and every update from
+    a kit) writes, ``~/.domovoi/offline_kit/rooms-from-kit.json``
+    (:func:`domovoi.kit_rooms.read_record`, which the offline kit's own
+    cards read). False when it can't be read."""
+    try:
+        from domovoi import kit_rooms  # stdlib-only at import, like this module
+
+        return kit_rooms.read_record() is not None
+    except Exception:  # noqa: BLE001 — not a kit house, as far as anyone can tell
+        return False
+
+
+def kit_update_answer(*, admin: bool) -> str:
+    """The fixed answer about updating on a kit house: where the kit goes
+    for a proven admin, else that an admin does it."""
+    return KIT_UPDATE_ADMIN if admin else KIT_UPDATE_MEMBER
+
+
+def kit_update_asked(utterance: str) -> bool:
+    """Whether ``utterance`` is a whole "can you update yourself?"."""
+    return KIT_UPDATE_RE.match(_norm(utterance).rstrip(".,!?").strip()) is not None
+
+
+def answer(task: AdminTask, *, admin: bool, kit: bool | None = None) -> str:
     """The fixed answer: the steps for a proven admin, else who and where.
     ``admin`` must come from the server's own check for this turn
-    (``Context.proven_admin`` / ``admin_auth.request_is_proven_admin``)."""
+    (``Context.proven_admin`` / ``admin_auth.request_is_proven_admin``).
+    The update task on a house that updates from an offline kit (``kit``,
+    default :func:`updates_by_kit`) gets the kit's words instead."""
+    if task.key == "update" and (updates_by_kit() if kit is None else kit):
+        return kit_update_answer(admin=admin)
     return task.admin if admin else task.member
 
 
@@ -269,5 +320,6 @@ def provided_by(plugin_rows: Iterable[dict[str, Any]]) -> set[str]:
     return out
 
 
-__all__ = ["AdminTask", "DOWNLOADER_CAPABILITY", "OVERRIDE_LEAD", "REQUEST_RE", "TASKS", "TASK_BY_KEY",
-           "answer", "match", "provided_by", "request"]
+__all__ = ["AdminTask", "DOWNLOADER_CAPABILITY", "KIT_UPDATE_ADMIN", "KIT_UPDATE_LEAD", "KIT_UPDATE_MEMBER",
+           "KIT_UPDATE_RE", "OVERRIDE_LEAD", "REQUEST_RE", "TASKS", "TASK_BY_KEY", "answer", "kit_update_answer",
+           "kit_update_asked", "match", "provided_by", "request", "updates_by_kit"]

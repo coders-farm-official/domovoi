@@ -37,6 +37,8 @@ HELLO_TIMEOUT_SEC = 5.0
 _ACK = re.compile(r"\[(?P<code>\d+)@(?P<index>\d+)\]\s+\{(?P<command>[^}]*)\}\s*(?P<message>.*)")
 #: MPD's ACK code for a bad argument.
 ACK_ERROR_ARG = 2
+#: The commands that put a URI in the queue.
+_ADDS = frozenset({"add", "addid"})
 
 
 class MPDError(Exception):
@@ -187,7 +189,16 @@ class MPDConnection:
         for a in args:
             if "\n" in str(a) or "\r" in str(a):
                 raise CommandError(f"[{ACK_ERROR_ARG}@0] {{{name}}} an argument contains a line break")
-        line = " ".join([name, *(quote(a) for a in args)]) + "\n"
+        if name in _ADDS and args:
+            # A room's player fetches what it is given, by itself: an
+            # internet address reaches it only as a relay URL on the core
+            # (L20; domovoi/relay_queue.py). Refused as MPD refuses a bad
+            # argument, so every caller treats it as a skipped entry.
+            from domovoi.relay_queue import refuses_queue_uri
+
+            if refuses_queue_uri(args[0]):
+                raise CommandError(f"[{ACK_ERROR_ARG}@0] {{{name}}} an internet address must be relayed")
+        line =" ".join([name, *(quote(a) for a in args)]) + "\n"
         async with self._lock:
             if self._writer is None:
                 raise MPDConnectionError("not connected to MPD")

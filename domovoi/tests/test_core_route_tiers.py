@@ -100,6 +100,10 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/satellite/restart"),
     ("POST", "/v1/admin/satellite/display"),
     ("POST", "/v1/admin/satellite/{room_id}/voice"),
+    # Read-only diagnostics (1.5.0): the recent-logs probe carries what the
+    # room heard, so admin at both hops, like the log pull.
+    ("POST", "/v1/admin/satellite/{room_id}/diagnostics"),
+    ("POST", "/v1/admin/satellite/{room_id}/diagnostics/{probe}"),
     # XVF3800 DSP presets and test markers (1.4.1, domovoi/mic_dsp.py).
     ("POST", "/v1/admin/satellite/{room_id}/mic_dsp"),
     ("POST", "/v1/admin/satellite/{room_id}/mic_dsp/mark"),
@@ -203,6 +207,12 @@ FRIEND_HOUSES_SECURITY = [
     ("POST", "/v1/admin/friend-houses/friends/{friend_id}/block"),
     ("GET", "/v1/admin/friend-houses/blocked"),
     ("DELETE", "/v1/admin/friend-houses/blocked/{house}"),
+    # Apps with friends (SDK 1.19, design §6.11): the toggle, each app, Resume.
+    ("GET", "/v1/admin/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/apps"),
+    ("PUT", "/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}"),
+    ("POST", "/v1/admin/friend-houses/friends/{friend_id}/apps/{slug}/resume"),
+    ("GET", "/v1/admin/friend-houses/apps/notices"),
 ]
 
 
@@ -307,6 +317,44 @@ def test_the_chat_callback_wears_its_own_secret_gate() -> None:
     assert admin_auth.require_device not in gates
 
 
+#: Core reads open on purpose, each with why.
+OPEN_BY_DESIGN = {
+    ("GET", "/v1/player-relay/{token}"): (
+        "a room's music player (SDK 1.17 player relay) holds no credential; the token in "
+        "the path is it: minted by a play, bound to one room, one remote URL and that "
+        "room's player's address (domovoi/player_relay.py, test_player_relay.py)"
+    ),
+}
+
+
+@pytest.mark.parametrize(("method", "path"), sorted(OPEN_BY_DESIGN))
+def test_open_by_design_routes_wear_no_gate_and_are_marked_open(method, path) -> None:
+    from domovoi.tests.route_walk import iter_route_contexts
+    from domovoi.webkit import is_open_endpoint
+
+    assert OPEN_BY_DESIGN[(method, path)].strip()
+    gates = _gates_for(method, path)
+    assert not any(g in gates for g in (
+        admin_auth.require_device, admin_auth.require_admin_mutation,
+        admin_auth.require_admin_read, admin_auth.require_device_read,
+    ))
+    (endpoint,) = [
+        rc.dependant.call for rc in iter_route_contexts(core_app.routes)
+        if getattr(rc, "path", None) == path and method in (getattr(rc, "methods", None) or set())
+    ]
+    assert is_open_endpoint(endpoint)
+
+
+@pytest.mark.asyncio
+async def test_the_player_relay_answers_a_bad_token_404_not_401(monkeypatch) -> None:
+    """No credential is asked for; a token that isn't good is simply not
+    found."""
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        r = await c.get("/v1/player-relay/not-a-token")
+    assert r.status_code == 404
+
+
 # ─── Behaviour: what an uncredentialed caller actually gets ───────────────
 
 
@@ -323,7 +371,7 @@ def _client() -> AsyncClient:
 def _sample_path(path: str) -> str:
     return (
         path.replace("{room_id}", "kitchen").replace("{action}", "pause")
-        .replace("{incident_id}", "1")
+        .replace("{incident_id}", "1").replace("{probe}", "versions")
     )
 
 
@@ -690,3 +738,26 @@ async def test_voice_activity_says_busy_and_nothing_else_to_the_household_token(
         assert (await c.get("/v1/voice/activity")).status_code == 401
         r = await c.get("/v1/voice/activity", headers={HEADER: DEVICE_TOKEN})
     assert r.status_code == 200 and r.json() == {"busy": False}
+
+
+def _friend_apps_routes() -> list[tuple[str, str]]:
+    """Every core route for apps with friends (SDK 1.19): the per-friend
+    toggle, allow/revoke, resume and the list (the plugin mail service)."""
+    from domovoi.tests.route_walk import iter_route_contexts
+
+    return sorted({(m, rc.path) for rc in iter_route_contexts(core_app.routes)
+                   if getattr(rc, "path", "").startswith("/v1/admin/friend-houses")
+                   and "/apps" in rc.path for m in (getattr(rc, "methods", None) or ())})
+
+
+def test_apps_with_friends_stays_on_the_security_tier() -> None:
+    # The design note §6.11: security tier at both hops; inviting and
+    # playing are on the plugin's own device-tier routes, never these.
+    household = DEVICE_READS + FRIEND_HOUSES_DEVICE_WRITES
+    assert not [r for r in household if "/apps" in r[1]]
+    assert len(_friend_apps_routes()) == 5
+    for method, path in _friend_apps_routes():
+        gates = _gates_for(method, path)
+        assert (admin_auth.require_admin_security in gates
+                or admin_auth.require_admin_security_read in gates), (method, path)
+        assert admin_auth.require_device not in gates and admin_auth.require_device_read not in gates

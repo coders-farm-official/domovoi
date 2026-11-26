@@ -48,11 +48,43 @@ __all__ = [
 ]
 
 
+#: Where the client keeps the signed code manifest it last accepted, beside
+#: config.toml. Root's boot step checks it again for itself (signature
+#: against the root-owned pin, its own serial record) before it copies a
+#: single file into root's own copy of the code (satellite/root_code.py).
+ENVELOPE_PATH = Path("~/.domovoi").expanduser() / "code-manifest.sig.json"
+
+
 def fetch_manifest(
     base: str,
     timeout: float = 10.0,
     expected_fingerprint: str | None = None,
 ) -> dict[str, str]:
+    return _fetch_manifest(base, timeout, expected_fingerprint)[0]
+
+
+def save_envelope(doc: dict, path: Path | None = None) -> bool:
+    """Keep the signed envelope of a tree that is now fully on disk.
+    Best-effort: without it root's copy simply stays as it is."""
+    import json
+
+    path = ENVELOPE_PATH if path is None else path
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(doc), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as e:
+        log.warning("code sync: could not keep the signed manifest for root: %s", e)
+        return False
+    return True
+
+
+def _fetch_manifest(
+    base: str,
+    timeout: float = 10.0,
+    expected_fingerprint: str | None = None,
+) -> tuple[dict[str, str], dict | None]:
     """The code channel's file list, authenticated when this device knows
     who to expect.
 
@@ -81,6 +113,7 @@ def fetch_manifest(
         r = requests.get(f"{base}/v1/satellite-code/manifest", timeout=timeout)
         r.raise_for_status()
         manifest = r.json()
+        envelope = None
     else:
         r = requests.get(f"{base}/v1/satellite-code/manifest.sig", timeout=timeout)
         if r.status_code == 404:
@@ -89,9 +122,10 @@ def fetch_manifest(
                 "server serves none; upgrade the Domovoi server first"
             )
         r.raise_for_status()
+        envelope = r.json()
         try:
             manifest = server_identity.accept_manifest_envelope(
-                r.json(),
+                envelope,
                 channel=server_identity.CODE_CHANNEL,
                 expected_fingerprint=expected_fingerprint,
             )
@@ -101,7 +135,7 @@ def fetch_manifest(
         isinstance(k, str) and isinstance(v, str) for k, v in manifest.items()
     ):
         raise RuntimeError("code sync: the manifest is not a path -> sha256 map")
-    return manifest
+    return manifest, envelope
 
 
 def sync_code(
@@ -126,7 +160,7 @@ def sync_code(
     carries; a manifest entry with any other suffix is skipped with a
     warning (defence-in-depth — the server already filters)."""
     base = http_base.rstrip("/")
-    manifest: dict[str, str] = fetch_manifest(base, timeout, expected_fingerprint)
+    manifest, envelope = _fetch_manifest(base, timeout, expected_fingerprint)
 
     satellite_root.mkdir(parents=True, exist_ok=True)
     downloaded = 0
@@ -157,6 +191,8 @@ def sync_code(
         downloaded += 1
 
     pruned = _prune_within_previous(satellite_root, manifest, prev_manifest, ext_allow)
+    if envelope is not None:
+        save_envelope(envelope)
     return {"manifest": manifest, "downloaded": downloaded, "pruned": pruned}
 
 

@@ -19,13 +19,14 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 
 // ---------------------------------------------------------------------------
-// Help steps sent by voice (assistant plan part 9): someone asks a room
-// "how do I…", Domovoi answers in a sentence and offers "Want me to send the
-// steps to your phone?". A yes opens a home-server chat ("Help: …") and
-// lists a delivery for the asker. This phone posts a notification for a
-// delivery only when it is for the person this phone belongs to on that
-// server (Settings → Connection, "This phone belongs to"), once, and never
-// on a shared screen. Tapping it opens Chat on that thread.
+// Something Domovoi sent to a person's phone: a home-server chat opened for
+// them and listed as a delivery for that person (photos found for them, for
+// one; 1.5.0 removed the voice "send the steps to your phone" offer, and a
+// 1.4.x server may still send its "Help: …" threads). This phone posts a
+// notification for a delivery only when it is for the person this phone
+// belongs to on that server (Settings → Connection, "This phone belongs
+// to"), once, and never on a shared screen. Tapping it opens Chat on that
+// thread.
 //
 // The shape of IncidentEngine: the engine is pure (fake sink, fake book and
 // a MockWebServer in the JVM tests); HelpAlerts wires it to the live socket
@@ -74,16 +75,45 @@ fun parseDeliveries(el: JsonElement?): List<HelpDelivery>? {
     return list.mapNotNull { parseDelivery(it) }
 }
 
-/** The notification's title: the row's own ("Help: add a room"), with the
- *  "Help: " the plan names added when the row lacks it. */
-fun helpTitle(row: HelpDelivery): String {
-    val t = row.title.trim()
-    return when {
-        t.isEmpty() -> "Help from Domovoi"
-        t.startsWith("Help:", ignoreCase = true) -> t
-        else -> "Help: $t"
+/**
+ * The push's titles by delivery id, and nothing else from it (1.5.0,
+ * core-0056/core-0058): the push no longer carries the chat's title (it says
+ * "Photos from Domovoi" for a photo delivery), and its `person_id` and
+ * `thread_id` will be dropped. Its rows are a hint to read the deliveries
+ * again; the title is only the fallback for a fetched row that has none.
+ */
+internal fun pushTitles(el: JsonElement?): Map<Long, String> {
+    val list = when (el) {
+        is JsonArray -> el
+        is JsonObject -> el["deliveries"] as? JsonArray ?: return emptyMap()
+        else -> return emptyMap()
     }
+    return list.mapNotNull { item ->
+        val o = item as? JsonObject ?: return@mapNotNull null
+        val id = (o["id"] as? JsonPrimitive)?.longOrNull ?: return@mapNotNull null
+        val title = (o["title"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        if (title.isEmpty()) null else id to title
+    }.toMap()
 }
+
+/** The delivery ids a push names (for the mark only). */
+internal fun pushIds(el: JsonElement?): List<Long> {
+    val list = when (el) {
+        is JsonArray -> el
+        is JsonObject -> el["deliveries"] as? JsonArray ?: return emptyList()
+        else -> return emptyList()
+    }
+    return list.mapNotNull { ((it as? JsonObject)?.get("id") as? JsonPrimitive)?.longOrNull }
+}
+
+/** [rows] with a blank title filled from [titles] (the push's, by id). */
+internal fun withPushTitles(rows: List<HelpDelivery>, titles: Map<Long, String>): List<HelpDelivery> =
+    rows.map { r -> if (r.title.isBlank()) titles[r.id]?.let { r.copy(title = it) } ?: r else r }
+
+/** The notification's title: the chat's title exactly as sent ("Photos:
+ *  The beach"; an older server's "Help: add a room" as it is), or
+ *  "From Domovoi" when it has none. Nothing is added to it. */
+fun helpTitle(row: HelpDelivery): String = row.title.trim().ifEmpty { "From Domovoi" }
 
 /** What to post and what to remember, from [rows] (any order). */
 data class HelpPlan(val post: List<HelpDelivery>, val seen: Long?)
@@ -153,26 +183,39 @@ class HelpDeliveryEngine(
 
     private fun ownerId(): Long? = owner()?.trim()?.toLongOrNull()
 
-    /** A `help_deliveries.changed` push: the last hour's rows, newest first. */
+    /**
+     * A `help_deliveries.changed` push: read the deliveries (1.5.0). The
+     * rows that count are the server's answer to this phone's own read,
+     * which it filters by this phone's device key and which carries each
+     * chat's real title; the push's own rows give only a fallback title
+     * ([pushTitles]). Never throws.
+     */
     suspend fun onEvent(payload: JsonElement?) {
-        val rows = parseDeliveries(payload) ?: return
-        val key = activeKey() ?: return
-        apply(key, rows)
+        if (ownerId() == null) {
+            // Nothing to read for nobody; the push's ids still move the mark,
+            // so naming an owner later never posts what was already there.
+            val key = activeKey() ?: return
+            val ids = pushIds(payload).map { HelpDelivery(it, personId = -1, threadId = -1, title = "", createdAt = null) }
+            if (ids.isNotEmpty()) apply(key, ids)
+            return
+        }
+        refresh(pushTitles(payload))
     }
 
     /**
-     * The catch-up read, for what was sent while the socket was down: this
-     * phone's owner's rows since the last one seen (the last hour on a
-     * first run, which only sets the mark). Without an owner there is
-     * nothing to ask for. Never throws.
+     * The catch-up read, for what was sent while the socket was down (and
+     * on every push): this phone's owner's rows since the last one seen (the
+     * last hour on a first run, which only sets the mark), titled from the
+     * row, else from [pushTitles]. Without an owner there is nothing to ask
+     * for. Never throws.
      */
-    suspend fun refresh() {
+    suspend fun refresh(pushTitles: Map<Long, String> = emptyMap()) {
         val key = activeKey() ?: return
         val person = ownerId() ?: return
         try {
             val seen = book.seen(key)
             val rows = parseDeliveries(api.getUntracked(HelpDeliveriesApi.path(person, seen))) ?: return
-            apply(key, rows)
+            apply(key, withPushTitles(rows, pushTitles))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
