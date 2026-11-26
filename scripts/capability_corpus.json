@@ -2972,6 +2972,58 @@
       "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't see the door. I have no camera.'"
     },
     {
+      "id": "16.4e",
+      "utterance": "What's the temperature in here?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "\\b(?:it'?s|it is|about|around|currently) -?\\d+\\s*(?:°|degrees?)",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b",
+        "\\boutside\\b|\\bforecast\\b|\\bweather\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't tell the temperature inside. I have no thermometer.'"
+    },
+    {
+      "id": "16.4f",
+      "utterance": "Is the oven on?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:the oven|it)(?:'s| is) (?:still )?(?:on|off)\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't check the oven.'"
+    },
+    {
+      "id": "16.4g",
+      "utterance": "Did I leave the garage open?",
+      "where": "voice",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+      ],
+      "must_not_include": [
+        "(?<!if )\\b(?:the garage(?: door)?|it)(?:'s| is| was) (?:still )?(?:open|closed|shut)\\b|\\byou (?:did|didn'?t) leave\\b",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
+      ],
+      "needs_change": "N17",
+      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't check the garage.'"
+    },
+    {
       "id": "16.5",
       "utterance": "Is my alarm set?",
       "where": "voice",
