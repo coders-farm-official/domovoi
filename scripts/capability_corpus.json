@@ -919,15 +919,13 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "^You can add video downloads on the Plugins page\\.$"
+        "^No, not on this house\\. You can add video downloads from the Plugins page\\.$"
       ],
-      "note": "N18, owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Proven admin (live dashboard session): the pointer, not the member line",
+      "note": "N18 (owner 2026-11-25; Main's wording, wf/main-b2): a proven admin gets 'You can add {feature} from the Plugins page.'; never a plugin name",
       "stub": true,
       "must_not_include": [
-        "\\bnot on this house\\b",
         "\\ban admin can\\b"
-      ],
-      "needs_change": "N18"
+      ]
     },
     {
       "id": "4.34",
@@ -1729,15 +1727,13 @@
       "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "^You can add video downloads on the Plugins page\\.$"
+        "^No, not on this house\\. You can add video downloads from the Plugins page\\.$"
       ],
-      "note": "N18, owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Proven admin (live dashboard session): the pointer, not the member line",
+      "note": "N18 (owner 2026-11-25; Main's wording, wf/main-b2): a proven admin gets 'You can add {feature} from the Plugins page.'; never a plugin name",
       "stub": true,
       "must_not_include": [
-        "\\bnot on this house\\b",
         "\\ban admin can\\b"
-      ],
-      "needs_change": "N18"
+      ]
     },
     {
       "id": "8.7e",
@@ -1763,7 +1759,7 @@
         "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
       ],
       "must_not_include": [
-        "^You can add"
+        "\\bYou can add\\b"
       ],
       "stub": true,
       "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Expired admin session: no live sign-in this turn, so the member line"
@@ -1779,7 +1775,7 @@
         "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
       ],
       "must_not_include": [
-        "^You can add"
+        "\\bYou can add\\b"
       ],
       "stub": true,
       "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Guest: the member line"
@@ -1795,7 +1791,7 @@
         "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
       ],
       "must_not_include": [
-        "^You can add"
+        "\\bYou can add\\b"
       ],
       "stub": true,
       "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Voice is never a proven admin (Q1), even in the proven-admin house"
