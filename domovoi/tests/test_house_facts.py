@@ -490,8 +490,11 @@ def test_the_how_to_turn_on_clause_by_place() -> None:
     assert hf._how_to_turn_on("picture making") == "An admin can turn on picture making from the Plugins page."
     assert hf._how_to_turn_on("picture making", admin=True) == (
         "Turn on picture making from the Plugins page: press enable on its row.")
-    # Adding a plugin's feature is one answer for everyone (4.33 / 8.7d / 8.7e).
+    # Adding a plugin's feature: a pointer, no steps; the admin hears it as
+    # theirs (owner decision 2026-11-25; 4.33 / 8.7d / 8.7e).
     assert hf._how_to_turn_on("picture making", add=True, admin=True) == (
+        "You can add picture making from the Plugins page.")
+    assert hf._how_to_turn_on("picture making", add=True) == (
         "An admin can add picture making from the Plugins page.")
     # A place with no steps keeps the member words for everyone.
     assert hf._how_to_turn_on("it", place="Settings → Somewhere", admin=True) == (

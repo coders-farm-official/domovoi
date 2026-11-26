@@ -7,7 +7,7 @@ model. Everything that needs no model, no network and no database is
 asserted here:
 
 * the corpus and the house fixtures are well-formed (unique ids, houses
-  that exist, valid verdicts, needs_change ids N1..N17 without the
+  that exist, valid verdicts, needs_change ids N1..N18 without the
   resolved N7 and N10);
 * the global reply checks (no hedge on a question, no plugin names, no
   secrets, menu paths that exist in web/static/settings.jsx) on sample
@@ -343,9 +343,12 @@ def test_voice_is_never_a_proven_admin() -> None:
     assert _reply("8.7a").startswith(_reply("8.7b"))
 
 
-def test_can_you_download_videos_is_one_answer_for_everyone() -> None:
-    """The capability table's answer, the same for a member and an admin."""
-    assert _reply("8.7e") == _reply("8.7d") == _reply("4.33")
+def test_can_you_download_videos_points_the_admin_to_the_plugins_page() -> None:
+    """The capability table's answer: a member hears who can add it, a
+    proven admin that they can (owner decision 2026-11-25)."""
+    assert _reply("8.7d") == _reply("4.33") == (
+        "No, not on this house. You can add video downloads from the Plugins page.")
+    assert _reply("8.7e") == "No, not on this house. An admin can add video downloads from the Plugins page."
 
 
 def test_line_sets_match_as_templates() -> None:

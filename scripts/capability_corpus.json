@@ -916,13 +916,16 @@
       "utterance": "Can you download videos?",
       "where": "chat",
       "house": "admin-no-video",
-      "expect": "ADMIN",
+      "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
+        "^No, not on this house\\. You can add video downloads from the Plugins page\\.$"
       ],
-      "note": "the capability table's one answer, the same for members and admins",
-      "stub": true
+      "note": "N18 (owner 2026-11-25; Main's wording, wf/main-b2): a proven admin gets 'You can add {feature} from the Plugins page.'; never a plugin name",
+      "stub": true,
+      "must_not_include": [
+        "\\ban admin can\\b"
+      ]
     },
     {
       "id": "4.34",
@@ -1721,13 +1724,16 @@
       "utterance": "Can you download videos?",
       "where": "chat",
       "house": "admin-no-video",
-      "expect": "ADMIN",
+      "expect": "EXACT",
       "kind": "question",
       "must_include": [
-        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
+        "^No, not on this house\\. You can add video downloads from the Plugins page\\.$"
       ],
-      "note": "the capability table's one answer, the same for members and admins",
-      "stub": true
+      "note": "N18 (owner 2026-11-25; Main's wording, wf/main-b2): a proven admin gets 'You can add {feature} from the Plugins page.'; never a plugin name",
+      "stub": true,
+      "must_not_include": [
+        "\\ban admin can\\b"
+      ]
     },
     {
       "id": "8.7e",
@@ -1737,44 +1743,58 @@
       "expect": "CANT",
       "kind": "question",
       "must_include": [
-        "No, not on this house\\. An admin can add video downloads from the Plugins page\\."
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
       ],
-      "note": "the capability table's one answer, the same for members and admins; no plugin name",
+      "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Member: the can't line, unchanged",
       "stub": true
     },
     {
       "id": "8.7f",
-      "utterance": "How do I add a room?",
-      "where": "phone",
-      "house": "proven-admin",
-      "expect": "EXACT",
+      "utterance": "Can you download videos?",
+      "where": "chat",
+      "house": "admin-expired",
+      "expect": "CANT",
       "kind": "question",
-      "skip_reason": "1.5.0 only: added when 1.5.0 is on main"
+      "must_include": [
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
+      ],
+      "must_not_include": [
+        "\\bYou can add\\b"
+      ],
+      "stub": true,
+      "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Expired admin session: no live sign-in this turn, so the member line"
     },
     {
       "id": "8.7g",
-      "utterance": "How do I add a room?",
-      "where": "phone",
-      "house": "base",
-      "expect": "ADMIN",
+      "utterance": "Can you download videos?",
+      "where": "chat",
+      "house": "guest",
+      "expect": "CANT",
       "kind": "question",
-      "skip_reason": "1.5.0 only: added when 1.5.0 is on main"
+      "must_include": [
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
+      ],
+      "must_not_include": [
+        "\\bYou can add\\b"
+      ],
+      "stub": true,
+      "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Guest: the member line"
     },
     {
       "id": "8.7h",
-      "utterance": "How do I add a room?",
-      "where": "playbox",
-      "house": "base",
-      "expect": "ADMIN",
+      "utterance": "Can you download videos?",
+      "where": "voice",
+      "house": "admin-no-video",
+      "expect": "CANT",
       "kind": "question",
       "must_include": [
-        "An admin adds rooms, on the dashboard: Settings → Household → Rooms\\."
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
       ],
       "must_not_include": [
-        "prepare a room's SD card"
+        "\\bYou can add\\b"
       ],
-      "note": "the dashboard play box with no live admin Bearer (a device token, a guest, the cookie alone): the member answer",
-      "stub": true
+      "stub": true,
+      "note": "owner 2026-11-25 (via Core): a proven admin gets the feature-named pointer; members, guests and voice keep the can't line; never a plugin name. Voice is never a proven admin (Q1), even in the proven-admin house"
     },
     {
       "id": "8.7i",
@@ -2917,7 +2937,7 @@
         "(?<!if )\\b(?:the door|it)(?:'s| is) (?:still )?(?:locked|unlocked)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check doors or locks.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -2934,7 +2954,7 @@
         "(?<!if )\\b(?:the lights?|they)(?:'re| are| is) (?:still )?(?:on|off)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check the lights.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -2951,7 +2971,7 @@
         "(?<!if )\\b(?:the (?:garage )?door|it)(?:'s| is) (?:still )?(?:open|closed|shut)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't check doors.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -2968,7 +2988,7 @@
         "(?<!if )\\b(?:there'?s|there is) (?:no ?one|nobody|someone|somebody|a person)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17: device-state QUESTIONS have no fixed answer (house_facts covers only the lock/lights commands, house_facts.py:893-899), so the QA model answers; real-model run 2026-11-26 vs 7135aabf: 'I don't think so, I can hear the creak of the door.' and 'Let me listen...' (both passed the old check); suggested fixed line: 'No, I can't see the door. I have no camera.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -2986,7 +3006,7 @@
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b",
         "\\boutside\\b|\\bforecast\\b|\\bweather\\b"
       ],
-      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't tell the temperature inside. I have no thermometer.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -3003,7 +3023,7 @@
         "(?<!if )\\b(?:the oven|it)(?:'s| is) (?:still )?(?:on|off)\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't check the oven.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
@@ -3020,7 +3040,7 @@
         "(?<!if )\\b(?:the garage(?: door)?|it)(?:'s| is| was) (?:still )?(?:open|closed|shut)\\b|\\byou (?:did|didn'?t) leave\\b",
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bcreak|\\bsounds? like\\b|\\blooks? like\\b"
       ],
-      "note": "N17 (Core 2026-11-26): a device-state question with no sensor behind it; a plain can't, never a guessed state, never pretend-sensing; suggested fixed line: 'No, I can't check the garage.'",
+      "note": "N17 fixed in #65 (f4d0d484): a device-state question gets a fixed can't line from house_facts, never a guessed state or pretend-sensing (the QA model said 'I can hear the creak of the door' before the fix)",
       "stub": true
     },
     {
