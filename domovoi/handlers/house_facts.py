@@ -64,6 +64,9 @@ class HouseFactsHandler(Handler):
         self.fast_paths = [
             FastPath(house_facts.QUESTION_RE, HouseFactsHandler._question),
             FastPath(house_facts.CAP_RE, HouseFactsHandler._capability),
+            # "Is the door locked?" / "are the lights on?": a fixed can't,
+            # never the model pretending to sense the house (N17).
+            FastPath(house_facts.DEVICE_STATE_RE, HouseFactsHandler._device_state),
             FastPath(house_facts.SECRET_RE, HouseFactsHandler._secret),
             FastPath(house_facts.ADMIN_QUESTION_RE, HouseFactsHandler._admin),
             FastPath(house_facts.PLUGINS_QUESTION_RE, HouseFactsHandler._plugins),
@@ -100,6 +103,15 @@ class HouseFactsHandler(Handler):
             text = house_facts.D3_VOICE
         else:
             text = house_facts.answer(qid, await self._facts(ctx))
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _device_state(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        # None when a plugin's fast path takes it: the turn routes on.
+        text = house_facts.device_state_reply(m.group(0))
+        if text is None:
+            return None
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
 
     async def _secret(
@@ -153,7 +165,10 @@ class HouseFactsHandler(Handler):
         found = house_facts.capability_of(m.group(0))
         if found is None:
             return None
-        text = await house_facts.capability_answer(found[0], await self._facts(ctx))
+        # A proven admin (the play box with a live sign-in; voice never is)
+        # hears the steps in a "how to get it" clause (N1).
+        text = await house_facts.capability_answer(found[0], await self._facts(ctx),
+                                                    admin=ctx.proven_admin)
         if text is None:
             return None
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)

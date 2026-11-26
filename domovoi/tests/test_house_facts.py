@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
+from domovoi import off_answers
 from domovoi import house_facts as hf
 from domovoi.clients.ollama import VOICE_QA_SYSTEM_PROMPT
 from domovoi.models import Context, Intent
@@ -388,10 +389,10 @@ def test_real_bodies(body: str) -> None:
 
 # ─── The capability table ─────────────────────────────────────────────────
 
-async def _cap(said: str, facts: hf.HouseFacts = BASE) -> str | None:
+async def _cap(said: str, facts: hf.HouseFacts = BASE, *, admin: bool = False) -> str | None:
     found = hf.capability_of(hf.normalize(said))
     assert found is not None, said
-    return await hf.capability_answer(found[0], facts)
+    return await hf.capability_answer(found[0], facts, admin=admin)
 
 
 @pytest.mark.asyncio
@@ -458,6 +459,67 @@ async def test_ai_off_answers() -> None:
     assert await _cap("can you look at a picture", R(BASE, ai_on=False)) == (
         "Not right now: reading pictures needs AI features, and they're off on this house. An admin "
         "can turn on AI features in Settings → Chat & AI → Models.")
+
+
+@pytest.mark.asyncio
+async def test_how_to_turn_on_a_proven_admin_hears_the_steps() -> None:
+    """N1: the "how to get it" clause gives a proven admin the steps; a
+    member (and every voice turn) keeps who and where."""
+    assert await _cap("can you look at a picture", R(BASE, ai_on=False), admin=True) == (
+        "Not right now: reading pictures needs AI features, and they're off on this house. Turn on "
+        "AI features in Settings → Chat & AI → Models: press turn on on the AI chat and questions card.")
+    assert await _cap("can you check the news", R(BASE, news_on=False), admin=True) == (
+        "No, the news briefing is off on this house. Turn on the news briefing in Settings → System → "
+        "Advanced: press show the settings, switch on News worker under Workers, then press Save; it "
+        "starts after a restart.")
+    assert await _cap("can you look at a picture", R(BASE, vision_model=False), admin=True) == (
+        "Not right now: no model for reading pictures is set. Add one in Settings → Chat & AI → Models: "
+        "pick a model in the Vision row of Active models, then press Switch.")
+    assert await _cap("can you look at a picture", R(BASE, vision_model=False)) == (
+        "Not right now: no model for reading pictures is set. An admin can add one in "
+        "Settings → Chat & AI → Models.")
+
+
+def test_the_how_to_turn_on_clause_by_place() -> None:
+    for (place, add) in off_answers.PLACE_STEPS:
+        member = hf._how_to_turn_on("it", place=place, add=add)
+        admin = hf._how_to_turn_on("it", place=place, add=add, admin=True)
+        assert member.startswith("An admin can ") and place in member
+        assert not admin.startswith("An admin") and place in admin and admin.endswith(".")
+    # The plugin page's two: today's member words, and the admin's steps.
+    assert hf._how_to_turn_on("picture making") == "An admin can turn on picture making from the Plugins page."
+    assert hf._how_to_turn_on("picture making", admin=True) == (
+        "Turn on picture making from the Plugins page: press enable on its row.")
+    # Adding a plugin's feature is one answer for everyone (4.33 / 8.7d / 8.7e).
+    assert hf._how_to_turn_on("picture making", add=True, admin=True) == (
+        "An admin can add picture making from the Plugins page.")
+    # A place with no steps keeps the member words for everyone.
+    assert hf._how_to_turn_on("it", place="Settings → Somewhere", admin=True) == (
+        "An admin can turn on it in Settings → Somewhere.")
+
+
+@pytest.mark.asyncio
+async def test_chat_capability_answer_takes_the_admin_check() -> None:
+    def get(name: str):
+        return {"internet_access": "always", "news_enabled": False}.get(name)
+
+    async def yes() -> bool:
+        return True
+
+    async def no() -> bool:
+        return False
+
+    async def broken() -> bool:
+        raise RuntimeError("no session")
+
+    member = await hf.chat_reply("can you check the news", get_setting=get, scope=None, admin_check=no)
+    admin = await hf.chat_reply("can you check the news", get_setting=get, scope=None, admin_check=yes)
+    assert member is not None and member.endswith(
+        "An admin can turn on the news briefing in Settings → System → Advanced.")
+    assert admin is not None and "press show the settings, switch on News worker" in admin
+    assert await hf.chat_reply("can you check the news", get_setting=get, scope=None) == member
+    assert await hf.chat_reply("can you check the news", get_setting=get, scope=None,
+                               admin_check=broken) == member
 
 
 def test_an_unknown_x_never_gets_a_no() -> None:
@@ -659,6 +721,132 @@ async def test_offline_library_offers_the_web_in_every_no(db_session) -> None:
 async def test_print_depends_on_a_printer(db_session) -> None:
     assert await _cap("can you print") == (
         "Not yet: no printer is set up. An admin can add one in Settings → Household → Printers & scanners.")
+
+
+# ─── Device-state questions (N17) ────────────────────────────────────────
+
+DOORS_LOCKS = "No, I can't check doors or locks."
+LIGHTS = "No, I can't check the lights."
+NO_CAMERA = "No, I can't see the door. I have no camera."
+NO_THERMOMETER = "No, I can't tell the temperature inside. I have no thermometer."
+
+
+@pytest.mark.parametrize(("said", "expected"), [
+    # 16.4-16.4g
+    ("Is the door locked?", DOORS_LOCKS),
+    ("Are the lights on?", LIGHTS),
+    ("Is the garage door open?", "No, I can't check doors."),
+    ("Is anyone at the front door?", NO_CAMERA),
+    ("What's the temperature in here?", NO_THERMOMETER),
+    ("Is the oven on?", "No, I can't check the oven."),
+    ("Did I leave the garage open?", "No, I can't check the garage."),
+    # neighbours of each
+    ("Did I lock the door?", DOORS_LOCKS),
+    ("did I lock the front door", DOORS_LOCKS),
+    ("is the back door unlocked", DOORS_LOCKS),
+    ("did I forget to lock the door", DOORS_LOCKS),
+    ("is the house locked", DOORS_LOCKS),
+    ("Did I leave the lights on?", LIGHTS),
+    ("are the kitchen lights on", LIGHTS),
+    ("are the lights still on in the kitchen", LIGHTS),
+    ("did I turn off the lights", LIGHTS),
+    ("is the front door open", "No, I can't check doors."),
+    ("did I leave the garage door open", "No, I can't check the garage."),
+    ("who's at the door", NO_CAMERA),
+    ("is there someone at the door", NO_CAMERA),
+    ("who rang the doorbell", NO_CAMERA),
+    ("how warm is it inside", NO_THERMOMETER),
+    ("what's the temperature in the house", NO_THERMOMETER),
+    ("did I leave the stove on", "No, I can't check the stove."),
+    ("did I turn the iron off", "No, I can't check the iron."),
+    ("is the dishwasher running", "No, I can't check the dishwasher."),
+    ("is the washing machine done", None),   # not a state we answer: the model's, as before
+    ("is the tv on", "No, I can't check the TV."),
+    ("is the ac on", "No, I can't check the air conditioning."),
+])
+def test_device_state_questions_get_a_fixed_can_t(said: str, expected: str | None) -> None:
+    assert hf.device_state_answer(hf.normalize(said)) == expected
+
+
+@pytest.mark.parametrize("said", [
+    # Not this house's state: a story, a film, a song, somewhere else.
+    "is the door locked in the movie", "is the door open in the story", "who's at the door in the song",
+    "are the lights on in the movie", "are the lights on at the stadium",
+    "is there anyone at the door of the shop",
+    # The weather, outside: the weather's question, never this one.
+    "what's the temperature", "what's the temperature outside", "what is the temperature in paris",
+    "how cold is it outside", "is it cold outside", "what's the weather",
+    # Commands: the capability rows' and the handlers' own.
+    "lock the door", "turn on the lights", "turn off the oven",
+    # Other words that start the same.
+    "is the oven on sale", "is the door locked yet or not today please", "are the lights on sale",
+])
+def test_other_questions_are_not_device_state(said: str) -> None:
+    assert hf.device_state_answer(hf.normalize(said)) is None
+    assert hf.DEVICE_STATE_RE.match(hf.normalize(said)) is None
+
+
+class _PluginHandler:
+    """A stand-in plugin handler whose fast path takes ``pattern``."""
+
+    def __init__(self, slug: str, pattern: str) -> None:
+        import re as _re
+
+        from domovoi.handlers.base import FastPath
+
+        self.name = f"plugin_{slug}"
+        self.plugin_slug = slug
+        self.fast_paths = [FastPath(_re.compile(pattern), lambda *a: None)]
+
+
+def test_a_plugin_that_takes_the_question_is_stepped_aside_for(monkeypatch) -> None:
+    from domovoi import handlers
+    from domovoi.capabilities import CAPABILITIES, WEATHER_PROVIDER
+
+    assert hf.device_state_reply("is the door locked") == DOORS_LOCKS
+    smart = _PluginHandler("smarthome", r"^is the (?:front )?door locked\Z")
+    monkeypatch.setattr(handlers, "HANDLERS", [*handlers.HANDLERS, smart])
+    assert hf.device_state_reply("is the door locked") is None
+    assert hf.device_state_reply("are the lights on") == LIGHTS     # only what it takes
+    # A weather plugin never takes "what's the temperature in here?".
+    wx = _PluginHandler("wx", r"^what's the temperature.*\Z")
+    monkeypatch.setattr(handlers, "HANDLERS", [*handlers.HANDLERS, wx])
+    CAPABILITIES.register(WEATHER_PROVIDER, object(), slug="wx")
+    try:
+        assert hf.device_state_reply("what's the temperature in here") == NO_THERMOMETER
+    finally:
+        CAPABILITIES.unregister(WEATHER_PROVIDER, slug="wx")
+    assert hf.device_state_reply("what's the temperature in here") is None  # wx not weather now
+
+
+@pytest.mark.asyncio
+async def test_chat_device_state_question_gets_the_fixed_line() -> None:
+    def get(name: str):
+        return {"internet_access": "always"}.get(name)
+
+    assert await hf.chat_reply("Is the door locked?", get_setting=get, scope=None) == DOORS_LOCKS
+    assert await hf.chat_reply("What's the temperature in here?", get_setting=get,
+                               scope=None) == NO_THERMOMETER
+    assert await hf.chat_reply("is the door locked in the movie", get_setting=get, scope=None) is None
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("said", "expected"), [
+    ("Is the door locked?", DOORS_LOCKS),
+    ("Are the lights on?", LIGHTS),
+    ("Is anyone at the front door?", NO_CAMERA),
+    ("What's the temperature in here?", NO_THERMOMETER),
+    ("Is the oven on?", "No, I can't check the oven."),
+    ("Did I leave the garage open?", "No, I can't check the garage."),
+])
+async def test_device_state_by_voice_needs_no_model(db_session, monkeypatch, said: str, expected: str) -> None:
+    from domovoi import router
+
+    monkeypatch.setattr(router, "get_ollama_client", lambda: _NoModel())
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)
+    r = await router.route(Intent(transcript=said, room_id="kitchen"), ctx, db_session)
+    assert (r.matched_handler, r.matched_path, r.text) == ("house_facts", "fast", expected)
 
 
 # ─── The router: no model, and the backstop ───────────────────────────────

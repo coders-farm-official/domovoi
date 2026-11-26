@@ -103,6 +103,26 @@ def test_each_admin_step_names_a_real_control() -> None:
     assert {"Enable drop-in", "Find songs by their words"} <= labels
 
 
+def test_each_how_to_turn_on_step_names_a_real_control() -> None:
+    """off_answers.PLACE_STEPS quote the dashboard's own words (N1)."""
+    from domovoi.config_schema import EDITABLE_FIELDS
+
+    plugins, models, printers = _src("plugins.jsx"), _src("models.jsx"), _src("printers.jsx")
+    steps = off_answers.PLACE_STEPS
+    assert ">enable</Button>" in plugins and "press enable" in steps[(off_answers.PLUGINS_PAGE, False)]
+    assert (off_answers.PLUGINS_PAGE, True) not in steps   # 4.33 / 8.7d: one answer for everyone
+    models_add = steps[("Settings → Chat & AI → Models", True)]
+    assert "vision: 'Vision'" in models and 'title="Active models"' in models and ">Switch</Button>" in models
+    assert "Vision row of Active models" in models_add and "press Switch" in models_add
+    printers_add = steps[("Settings → Household → Printers & scanners", True)]
+    for said, src in (("Look for printers", "'Look for printers'"), ("Add by address", ">Add by address</Button>"),
+                      ("Add on yours", ">Add</Button>")):
+        assert said in printers_add and src in printers, said
+    news = next(f for f in EDITABLE_FIELDS if f.name == "news_enabled")
+    assert (news.label, news.group) == ("News worker", "Workers")
+    assert "switch on News worker under Workers" in steps[("Settings → System → Advanced", False)]
+
+
 def test_the_shared_off_replies_take_the_admin_variant() -> None:
     tail = off_answers.turn_on_line("ai", admin=True)
     assert ai_features.off_lookup_line() == ai_features.OFF_LOOKUP_LINE

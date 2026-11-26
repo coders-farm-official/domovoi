@@ -108,8 +108,8 @@ TASKS: tuple[AdminTask, ...] = (
         "pulls the update and restarts with it; on a server that can't restart itself, press Restart "
         "to apply changes next. A failed update rolls itself back. Reload any open dashboard once "
         "afterwards.",
-        # No request form here. On a house set up from an offline kit
-        # (:func:`updates_by_kit`) :func:`answer` gives the kit's words
+        # No request form here. On a house set up from an offline kit whose
+        # internet answer is No or not answered (:func:`updates_by_kit`) :func:`answer` gives the kit's words
         # instead of this page's (capability cases 5.11 / 5.11b), and
         # "(can you) update yourself" by voice is answered whole on that
         # house only (:data:`KIT_UPDATE_RE`); elsewhere it routes as before.
@@ -269,10 +269,10 @@ KIT_UPDATE_RE = re.compile(
 )
 
 
-def updates_by_kit() -> bool:
-    """Whether this house was set up from an offline kit, and so updates
-    from a newer one: the record the kit's install (and every update from
-    a kit) writes, ``~/.domovoi/offline_kit/rooms-from-kit.json``
+def installed_from_kit() -> bool:
+    """Whether this house was set up from an offline kit: the record the
+    kit's install (and every update from a kit) writes,
+    ``~/.domovoi/offline_kit/rooms-from-kit.json``
     (:func:`domovoi.kit_rooms.read_record`, which the offline kit's own
     cards read). False when it can't be read."""
     try:
@@ -281,6 +281,29 @@ def updates_by_kit() -> bool:
         return kit_rooms.read_record() is not None
     except Exception:  # noqa: BLE001 — not a kit house, as far as anyone can tell
         return False
+
+
+#: The internet answers under which a kit house updates online like any
+#: other: Yes and Sometimes both allow the About card's Check for updates
+#: (``egress.internet_allowed``; update notices show under both, and only
+#: the automatic check waits for Yes). No and not answered keep the kit.
+ONLINE_UPDATE_ANSWERS = ("always", "sometimes")
+
+
+def updates_by_kit() -> bool:
+    """Whether this house updates from a newer offline kit: set up from one
+    (:func:`installed_from_kit`) AND its internet answer TODAY is No or not
+    answered (``egress.policy()``, the answer the egress gate reads, live).
+    A kit house whose answer was changed to Yes or Sometimes updates online,
+    and hears the same update answer as any other house."""
+    if not installed_from_kit():
+        return False
+    try:
+        from domovoi import egress  # not at import: this module stays stdlib-only
+
+        return egress.policy() not in ONLINE_UPDATE_ANSWERS
+    except Exception:  # noqa: BLE001 — can't read the answer: the kit, as installed
+        return True
 
 
 def kit_update_answer(*, admin: bool) -> str:
@@ -321,5 +344,6 @@ def provided_by(plugin_rows: Iterable[dict[str, Any]]) -> set[str]:
 
 
 __all__ = ["AdminTask", "DOWNLOADER_CAPABILITY", "KIT_UPDATE_ADMIN", "KIT_UPDATE_LEAD", "KIT_UPDATE_MEMBER",
-           "KIT_UPDATE_RE", "OVERRIDE_LEAD", "REQUEST_RE", "TASKS", "TASK_BY_KEY", "answer", "kit_update_answer",
-           "kit_update_asked", "match", "provided_by", "request", "updates_by_kit"]
+           "KIT_UPDATE_RE", "ONLINE_UPDATE_ANSWERS", "OVERRIDE_LEAD", "REQUEST_RE", "TASKS", "TASK_BY_KEY", "answer",
+           "installed_from_kit", "kit_update_answer", "kit_update_asked", "match", "provided_by", "request",
+           "updates_by_kit"]

@@ -1,5 +1,6 @@
 {
   "extends": "base",
-  "note": "Installed from the offline kit.",
-  "offline_kit": true
+  "note": "Installed from the offline kit; the internet answer is still No, so it updates from a kit.",
+  "offline_kit": true,
+  "internet": "never"
 }

@@ -125,8 +125,9 @@ async def voice(db_session, tmp_path, monkeypatch):
     await store.reset_limits()
     sessions: dict[str, object] = {}
 
-    async def say(utterance: str, room: str = "kitchen"):
-        ctx = Context(room_id=room, session_id=sessions.get(room), online=True)
+    async def say(utterance: str, room: str = "kitchen", *, admin: bool = False):
+        # ``admin``: the play box with a live sign-in; a voice turn never is.
+        ctx = Context(room_id=room, session_id=sessions.get(room), online=True, proven_admin=admin)
         resp = await route(Intent(transcript=utterance, room_id=room), ctx, db_session)
         sessions[room] = resp.session_id
         return resp
@@ -206,6 +207,32 @@ async def test_nothing_to_print_and_no_printer(voice):
     assert r.text == NO_PRINTER
     (voice.docs / "Lease.pdf").write_bytes(_pdf(1))
     r = await voice("print the lease")
+    assert r.text == NO_PRINTER
+
+
+ADD_STEPS = ("Add one in Settings → Household → Printers & scanners: press Look for printers and Add on "
+             "yours, or press Add by address.")
+
+
+def test_how_to_add_a_printer_member_and_admin():
+    from domovoi.handlers import printing
+
+    assert printing._how_to_add_printer() == (
+        "An admin can add one in Settings → Household → Printers & scanners.")
+    assert printing._how_to_add_printer(admin=True) == ADD_STEPS
+    assert printing.PrintingHandler._no_printer_text("No printer", admin=True) == (
+        f"There's no printer set up. {ADD_STEPS} Or say set up the printer to look for one.")
+    assert printing.PrintingHandler._no_printer_text("No printer") == NO_PRINTER
+
+
+@requires_db
+async def test_no_printer_a_proven_admin_hears_the_steps(voice):
+    # N1: the play box with a live sign-in hears the steps; voice keeps who and where.
+    r = await voice("print a joke", admin=True)
+    assert r.text.startswith("There's no printer set up. Add one in Settings")
+    assert "Look for printers" in r.text and "Add by address" in r.text
+    assert "An admin can" not in r.text
+    r = await voice("print a joke")
     assert r.text == NO_PRINTER
 
 
@@ -336,6 +363,13 @@ async def test_scan_with_no_scanner(voice):
     r = await voice("scan this")
     assert r.text == ("There's no scanner set up. An admin can add one in Settings → Household → "
                       "Printers & scanners.")
+
+
+@requires_db
+async def test_scan_with_no_scanner_a_proven_admin_hears_the_steps(voice):
+    r = await voice("scan this", admin=True)
+    assert r.text.startswith("There's no scanner set up. Add one in Settings")
+    assert "Look for printers" in r.text and "An admin can" not in r.text
 
 
 @requires_db
