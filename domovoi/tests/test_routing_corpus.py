@@ -176,7 +176,10 @@ def test_library_is_catch_all_no_longer_poaches_yes_no_questions() -> None:
     """Regression: `^is (.+)` with an OPTIONAL 'in my library' owned every
     yes/no question from band 310."""
     assert _fast_path_winner("is it true that the great wall is visible from space") == "double_check"
-    assert _fast_path_winner("is the oven on") is None
+    # Not the library's: a plain yes/no question about something else. (Since
+    # N17 this one is house_facts' fixed "can't check" answer.)
+    assert _fast_path_winner("is the oven on") != "library"
+    assert _fast_path_winner("is the sky blue") != "library"
     assert _fast_path_winner("is creep in my library") == "library"
     assert _fast_path_winner("do i have ok computer") == "library"
 
