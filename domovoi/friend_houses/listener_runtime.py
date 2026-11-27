@@ -17,8 +17,12 @@ built for that one job:
   CPU, and no logs kept by Docker (an event line can hold a message);
 * it sees three things from the host: the house keys and the listener's
   files (friend list, hello, open friend files), both read-only, and the
-  folder its two sockets live in, which the Tor container also mounts
-  (``<tor run folder>/listen``, not the folder with Tor's SOCKS socket);
+  folder its sockets live in, which the Tor container also mounts
+  (``<tor run folder>/listen``, not the folder with Tor's SOCKS socket).
+  With away chat (1.5.0) on, a fourth: the house's away Noise key,
+  read-only; the listener's files then hold ``phones.json`` too. While
+  Friend Houses is off and away chat on, the house keys aren't mounted and
+  only ``away.sock`` is served;
 * it runs as the core's own user so Tor (the same user) can use its
   sockets, but that user owns nothing inside the container;
 * it is started with ``docker run -i --rm`` by the core, which talks to it
@@ -58,6 +62,9 @@ BUILD_TIMEOUT_SEC = 900.0
 SOURCES = (
     "__init__.py",
     "_ed25519.py",
+    "away/__init__.py",
+    "away/listener.py",
+    "away/wire.py",
     "crypto_backend.py",
     "friend_houses/__init__.py",
     "friend_houses/budget.py",
@@ -73,6 +80,7 @@ SOURCES = (
 
 # Paths inside the container.
 KEYS_MOUNT = "/etc/fh/house-keys.json"
+AWAY_KEY_MOUNT = "/etc/fh/away-noise.key"
 FILES_MOUNT = "/var/lib/fh-listener"
 SOCKETS_MOUNT = "/run/fh-listen"
 
@@ -168,25 +176,37 @@ async def ensure_image() -> str:
     return image_id
 
 
-def run_args(*, image_id: str, keys: Path, files: Path, sockets: Path, uid: int, gid: int) -> list[str]:
+def run_args(*, image_id: str, keys: Path | None, files: Path, sockets: Path, uid: int, gid: int,
+             away_key: Path | None = None) -> list[str]:
     """The ``docker run`` arguments, listener arguments included. A pure
-    function so tests pin every one of them."""
+    function so tests pin every one of them. ``keys`` None: Friend Houses
+    is off, so only away chat's socket is served (``away_key`` given)."""
+    if keys is None and away_key is None:
+        raise ValueError("the listener needs the house keys, the away key, or both")
+    mounts: list[str] = []
+    listener: list[str] = ["--folder", FILES_MOUNT]
+    if keys is not None:
+        mounts += ["-v", f"{keys}:{KEYS_MOUNT}:ro"]
+        listener += ["--keys", KEYS_MOUNT,
+                     "--socket", f"{SOCKETS_MOUNT}/main.sock",
+                     "--pairing-socket", f"{SOCKETS_MOUNT}/pairing.sock"]
+    if away_key is not None:
+        mounts += ["-v", f"{away_key}:{AWAY_KEY_MOUNT}:ro"]
+        listener += ["--away-socket", f"{SOCKETS_MOUNT}/away.sock", "--away-key", AWAY_KEY_MOUNT]
     return [
         "run", "-i", "--rm", "--name", CONTAINER,
         "--network", "none",
         "--user", f"{uid}:{gid}",
         "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-        "--memory", "128m", "--pids-limit", "32", "--cpus", "0.5",
+        "--memory", "192m", "--pids-limit", "32", "--cpus", "0.5",
         "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=1m",
         "--log-driver", "none",
         "--label", "org.domovoi.owner=core", "--label", "org.domovoi.role=friend-houses-listener",
-        "-v", f"{keys}:{KEYS_MOUNT}:ro",
+        *mounts,
         "-v", f"{files}:{FILES_MOUNT}:ro",
         "-v", f"{sockets}:{SOCKETS_MOUNT}",
         image_id,
-        "--keys", KEYS_MOUNT, "--folder", FILES_MOUNT,
-        "--socket", f"{SOCKETS_MOUNT}/main.sock",
-        "--pairing-socket", f"{SOCKETS_MOUNT}/pairing.sock",
+        *listener,
     ]
 
 

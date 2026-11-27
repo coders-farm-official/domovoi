@@ -21339,6 +21339,217 @@
         }
       }
     },
+    "/api/away/enroll": {
+      "post": {
+        "tags": [
+          "away-chat"
+        ],
+        "summary": "Enroll",
+        "description": "Set away chat up for this phone, or replace both of its keys. The\nphone sends the public halves of two X25519 keys it made (Tor client\nauthorization: 52 characters of upper-case base32; Noise static: 43\ncharacters of base64url); the answer is the away onion, its port, the\nhouse's away Noise key, the protocol number and whether the onion is\n``ready`` or still ``starting`` (the first phone's enrolment restarts\nTor; later ones ride a batched reload).",
+        "operationId": "enroll_api_away_enroll_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Enroll Api Away Enroll Post"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{\"code\": \"bad_key\"}: a key has the wrong shape or length, or the two are the same"
+          },
+          "401": {
+            "description": "{\"code\": \"device_key_required\"}, or the device tier's own answer"
+          },
+          "403": {
+            "description": "{\"code\": \"lan_only\"}: not called from the home network"
+          },
+          "409": {
+            "description": "{\"code\": \"away_off\" | \"internet_off\" | \"guest\"}"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "away-chat"
+        ],
+        "summary": "Unenroll",
+        "description": "Turn away chat off for this phone (or it is unpairing): its keys are\nrevoked at once for the Noise check, and its Tor key goes in the next\nbatched reload. Always ``{\"ok\": true}``, enrolled or not.",
+        "operationId": "unenroll_api_away_enroll_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Unenroll Api Away Enroll Delete"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/away/status": {
+      "get": {
+        "tags": [
+          "away-chat"
+        ],
+        "summary": "Status",
+        "description": "Why the away onion can or can't be reached, for the app at home\n(the onion itself never says): the house's state (``on``,\n``away_off``, ``internet_off``), whether this phone is enrolled, and\nwhether its onion is ``ready`` or ``starting`` (null when it isn't\nenrolled or the house has it off).",
+        "operationId": "status_api_away_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Status Api Away Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/away/phones": {
+      "get": {
+        "tags": [
+          "away-chat"
+        ],
+        "summary": "List Phones",
+        "description": "The house setting and every phone that set away chat up: its name,\nplatform, when, and whether it counts now (``current``: false once the\ndevice lost the key it enrolled with, or became a shared screen).",
+        "operationId": "list_phones_api_away_phones_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Phones Api Away Phones Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/away/phones/{device_id}": {
+      "delete": {
+        "tags": [
+          "away-chat"
+        ],
+        "summary": "Remove Phone",
+        "description": "Remove one phone's away chat: the same as the phone turning it off.",
+        "operationId": "remove_phone_api_away_phones__device_id__delete",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Remove Phone Api Away Phones  Device Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/away/setting": {
+      "put": {
+        "tags": [
+          "away-chat"
+        ],
+        "summary": "Put Setting",
+        "description": "Turn \"Chat from away\" on or off for the house. Off removes the away\nonion (enrolled phones keep their keys and work again when it's back\non); open connections are closed with ``BYE away_off``.",
+        "operationId": "put_setting_api_away_setting_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Setting Api Away Setting Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/podcasts/subscriptions": {
       "get": {
         "tags": [
@@ -29896,6 +30107,18 @@
         "title": "EnrichRequeueWindow",
         "description": "``since <= enriched_at < until``, ISO 8601 with a timezone (the\ncore checks the order)."
       },
+      "EnrollBody": {
+        "properties": {
+          "tor_auth_pub": {
+            "title": "Tor Auth Pub"
+          },
+          "noise_pub": {
+            "title": "Noise Pub"
+          }
+        },
+        "type": "object",
+        "title": "EnrollBody"
+      },
       "Favorite": {
         "properties": {
           "id": {
@@ -37332,6 +37555,20 @@
           "model"
         ],
         "title": "SetActiveBody"
+      },
+      "SettingBody": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On",
+            "description": "Chat from away on (the default) or off for the house"
+          }
+        },
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "SettingBody"
       },
       "SetupKeyRequest": {
         "properties": {

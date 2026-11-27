@@ -29,6 +29,14 @@ setting, the internet answer, the friend list, and once at boot. It:
 The container guard asks :func:`tor_wanted` what to expect of the
 ``domovoi-tor`` container, and pins the listener's image.
 
+Away chat (1.5.0, domovoi/away/) rides the same reconcile: its onion
+(``hs-away``) is wanted while "Chat from away" is on, the internet answer
+isn't "never" and at least one phone has enrolled, whether or not Friend
+Houses is on. The phones' Tor keys go in ``hs-away/authorized_clients``,
+their Noise keys in the listener's ``phones.json`` (written first, so a
+phone removed is refused from its next handshake), and the listener's
+``away.sock`` hands each request to :mod:`domovoi.away.bridge`.
+
 Windows: the server runs Friend Houses on its Linux side (the WSL distro);
 a core started natively on Windows (a developer's box) reports it as
 unavailable rather than half-running it.
@@ -67,7 +75,14 @@ _STATE: dict[str, Any] = {
     "pairing": None,
     "hello": None,
 }
-_LISTENER: dict[str, Any] = {"proc": None, "task": None, "stopping": False, "image": None}
+_LISTENER: dict[str, Any] = {"proc": None, "task": None, "stopping": False, "image": None,
+                             # (Friend Houses' sockets, away chat's socket) it serves
+                             "mode": (True, False)}
+# Away chat: "starting" while its onion is being brought up, "ready" once
+# Tor runs it, None when it doesn't; ``authorized`` is the phones' file ids
+# Tor has been given, ``phones`` the enrolments last applied.
+_AWAY: dict[str, Any] = {"state": None, "authorized": frozenset(), "phones": (), "watch": None}
+AWAY_WATCH_SEC = 30.0
 
 
 def _root() -> Path:
@@ -238,6 +253,31 @@ async def _inputs() -> tuple[list[_Peer], dict[str, float]]:
     return peers, {i["id"]: i["expires_at"].timestamp() for i in invites}
 
 
+async def _away_inputs() -> tuple[bool, list[Any]]:
+    """Whether "Chat from away" is on, and the current phones (none while
+    it is off): domovoi/away/store.py."""
+    from domovoi.away import store as away_store
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        on = await away_store.setting_on(s)
+        phones = await away_store.current_phones(s) if on else []
+    return on, phones
+
+
+def away_status(device_id: str | None = None) -> str | None:
+    """Away chat's state for the web's ``GET /api/away/status``: ``ready``
+    once Tor runs the away onion (with ``device_id``: and has that phone's
+    key), ``starting`` while it is being brought up or that phone's key is
+    waiting for the next batched reload, None when it isn't running."""
+    state = _AWAY["state"]
+    if state != "ready" or device_id is None:
+        return state
+    from domovoi.away.store import Phone
+
+    return "ready" if Phone(device_id, "", b"").file_id in _AWAY["authorized"] else "starting"
+
+
 async def _reconcile() -> None:
     from domovoi import egress
     from domovoi.config import settings
@@ -248,21 +288,27 @@ async def _reconcile() -> None:
     if sys.platform == "win32":
         _STATE.update(status="unavailable" if enabled else "off",
                       detail="Friend Houses runs on the server's Linux side" if enabled else None)
+        _AWAY.update(state=None)
         return
     policy = egress.policy()
     peers: list[_Peer] = []
     invites: dict[str, float] = {}
+    away_on, phones = False, []
     # "never" is decided before the database is read, so an outage can't
     # keep Tor running against the internet answer.
-    if enabled and policy != "never":
-        peers, invites = await _inputs()
+    if policy != "never":
+        if enabled:
+            peers, invites = await _inputs()
+        away_on, phones = await _away_inputs()
     w = tc.wanted(enabled=enabled, internet_policy=policy, friends=len(peers),
-                  open_invites=len(invites))
+                  open_invites=len(invites), away_on=away_on, away_phones=len(phones))
     before = _STATE["applied"]
     action = tc.plan_change(before, w)
+    fh_wanted = w.main_onion or w.pairing_onion
 
     if not w.run:
         _stop_retries()  # first: nothing below may keep the house on Tor (R6 FH-2)
+        _stop_away_watch()
         try:
             await _stop_listener()
         except Exception:
@@ -279,12 +325,17 @@ async def _reconcile() -> None:
         _STATE.update(applied=w, onion=None, pairing=None, was_on=False,
                       status="off" if not enabled else "stopped",
                       detail=None if not enabled else _why_stopped(policy, len(peers)))
+        _AWAY.update(state=None, authorized=frozenset(), phones=())
         return
 
-    if fid.load() is None:
+    if fh_wanted and fid.load() is None:
         fid.create()
+    if not fh_wanted:
+        _stop_retries()  # Tor runs for away chat alone: no friends' work
     folder = _folder()
     folder.ensure()
+    if w.away_onion:
+        _ensure_away_keys(folder)
     if before is not None and before.pairing_onion and not w.pairing_onion:
         folder.forget_onion("hs-pairing")
     # A block asked for a new address (blocking.py): delete this house's
@@ -301,8 +352,14 @@ async def _reconcile() -> None:
     # Read fresh from the database by the one writer (M2), never from the
     # snapshot above.
     await write_listener_files()
-    folder.write_torrc(w)
+    # The client keys first, then the torrc that names the onions: a write
+    # that fails leaves Tor's config as it was (review L2).
     _sync_key_files(folder, peers)
+    _sync_phone_files(folder, phones if w.away_onion else [])
+    if w.away_onion and not folder.phones_authorized():
+        raise RuntimeError("the phones' Tor keys aren't on disk; the away onion isn't configured")
+    folder.write_torrc(w)
+    _AWAY["phones"] = _away_fingerprint(away_on, phones)
 
     if _firewall_blocks_start():
         log.warning("Friend Houses: not starting its Tor container without the firewall rules "
@@ -310,12 +367,18 @@ async def _reconcile() -> None:
         if await rt.state() == "running":
             with holds.holding(GUARD_HOLD, "Friend Houses is stopping", settle_sec=60):
                 await rt.stop()
-        _STATE.update(applied=None, onion=None, pairing=None, was_on=False, status="error",
+        _STATE.update(applied=None, onion=None, pairing=None, was_on=False,
+                      status="error" if enabled else "off",
                       detail="The firewall rules that keep Friend Houses away from your home network "
-                             "aren't in place. Update Domovoi, or run its installer again.")
+                             "aren't in place. Update Domovoi, or run its installer again."
+                             if enabled else None)
+        _AWAY.update(state=None, authorized=frozenset())
         _retry_reconcile_later()
         return
-    _STATE.update(status="starting", detail=None)
+    if enabled:
+        _STATE.update(status="starting", detail=None)
+    if w.away_onion and _AWAY["state"] != "ready":
+        _AWAY["state"] = "starting"
     with holds.holding(GUARD_HOLD, "Friend Houses is starting its connection", settle_sec=120):
         if action == "start":
             await rt.start(data=folder.data, run=folder.run)
@@ -328,15 +391,26 @@ async def _reconcile() -> None:
             await rt.reload()
             _STATE["last_reload"] = time.monotonic()
     _STATE["applied"] = w
+    if w.away_onion:
+        _AWAY.update(state="ready", authorized=frozenset(p.file_id for p in phones))
+        _start_away_watch()
+    else:
+        _AWAY.update(state=None, authorized=frozenset())
+        _stop_away_watch()
 
     onion = await _wait_for_onion(folder, "hs-main") if w.main_onion else None
     _STATE["onion"] = onion
     _STATE["pairing"] = await _wait_for_onion(folder, "hs-pairing") if w.pairing_onion else None
     await write_listener_files(onion=onion)
-    await _ensure_listener(folder)
-    _start_retries()
+    await _ensure_listener(folder, mode=(fh_wanted, w.away_onion))
+    if fh_wanted:
+        _start_retries()
     came_online = onion is not None and not _STATE.get("was_on")
-    _STATE.update(status="on", detail=None, was_on=onion is not None)
+    if fh_wanted:
+        _STATE.update(status="on", detail=None, was_on=onion is not None)
+    else:
+        _STATE.update(status="stopped" if enabled else "off",
+                      detail=_why_stopped(policy, len(peers)) if enabled else None, was_on=False)
     if came_online:
         from domovoi.friend_houses import messages
 
@@ -377,6 +451,62 @@ def _sync_key_files(folder: tc.TorFolder, peers: list[_Peer]) -> None:
         if p.id in held_ids:
             assert p.reach_private is not None and p.onion_key is not None
             folder.hold_key_for(p.id, p.onion_key, p.reach_private)
+
+
+def _sync_phone_files(folder: tc.TorFolder, phones: list[Any]) -> None:
+    """Make ``hs-away/authorized_clients`` say exactly which phones are
+    enrolled (one ``<phone>.auth`` each; :class:`domovoi.away.store.Phone`)."""
+    wanted_ids = {p.file_id for p in phones}
+    for stale in folder.phones_authorized() - wanted_ids:
+        folder.deauthorize_phone(stale)
+    for p in phones:
+        folder.authorize_phone(p.file_id, p.tor_auth_pub)
+
+
+def _ensure_away_keys(folder: tc.TorFolder) -> None:
+    """The house's away keys exist (the web process usually made them at
+    the first enrolment), and Tor has the away onion's key in its format
+    before it first starts, so the address phones were given is the one
+    Tor publishes."""
+    from domovoi.away import keys as away_keys
+
+    away_keys.noise_key(create=True)
+    seed = away_keys.onion_seed(create=True)
+    assert seed is not None
+    away_keys.write_tor_keys(folder.data / "hs-away", seed)
+
+
+def _away_fingerprint(on: bool, phones: list[Any]) -> tuple:
+    return (on, tuple((p.device_id, p.tor_auth_pub, p.noise_pub) for p in phones))
+
+
+def _start_away_watch() -> None:
+    """While the away onion runs: every :data:`AWAY_WATCH_SEC` seconds,
+    reconcile when the enrolments or the setting changed and nobody said
+    so (the web process tells the core on every change; this catches a
+    word that didn't arrive)."""
+    task = _AWAY.get("watch")
+    if task is None or task.done():
+        _AWAY["watch"] = asyncio.get_running_loop().create_task(_away_watch(), name="away-chat-watch")
+
+
+def _stop_away_watch() -> None:
+    task = _AWAY.get("watch")
+    if task is not None and not task.done() and task is not asyncio.current_task():
+        task.cancel()
+    _AWAY["watch"] = None
+
+
+async def _away_watch() -> None:
+    while True:
+        await asyncio.sleep(AWAY_WATCH_SEC)
+        try:
+            on, phones = await _away_inputs()
+        except Exception as e:  # noqa: BLE001 — tried again on the next pass
+            log.warning("away chat: checking the phones failed (%s)", type(e).__name__)
+            continue
+        if _away_fingerprint(on, phones) != _AWAY["phones"]:
+            schedule_reconcile()
 
 
 def _write_invites(invites: dict[str, float]) -> None:
@@ -500,6 +630,7 @@ async def write_listener_files(*, onion: Any = _KEEP) -> None:
                        p.pending, tuple(apps.get(p.id, ())) if not p.pending else ()) for p in peers]
         folder = _write_friend_list(peers)
         _write_invites(invites)
+        await _write_phones(folder)
         if onion is _KEEP:
             return
         path = folder / fl.HELLO_FILE
@@ -513,6 +644,27 @@ async def write_listener_files(*, onion: Any = _KEEP) -> None:
         hello = fs.Hello(keys.address_statement(onion, int(time.time())), await _current_epoch_locked())
         _STATE["hello"] = hello
         tc._write_private(path, hello.to_bytes())
+
+
+async def _write_phones(folder: Path) -> None:
+    """The listener's ``phones.json``: whether away chat is on and each
+    current phone's Noise key (hex) with its device id. Called only by
+    :func:`write_listener_files`, under its lock, read fresh each time. A
+    database that can't be read writes nobody, never an older list."""
+    from domovoi import egress
+
+    doc: dict[str, Any] = {"on": False, "phones": {}}
+    if sys.platform != "win32" and egress.policy() != "never":
+        try:
+            on, phones = await _away_inputs()
+        except Exception as e:  # noqa: BLE001 — nobody gets in
+            log.warning("away chat: the phone list couldn't be read (%s); refusing every phone",
+                        type(e).__name__)
+            on, phones = False, []
+        doc = {"on": on, "phones": {p.noise_pub.hex(): p.device_id for p in phones}}
+    from domovoi.away import listener as al
+
+    tc._write_private(folder / al.PHONES_FILE, json.dumps(doc))
 
 
 async def my_hello() -> fs.Hello | None:
@@ -533,14 +685,22 @@ def socks_path() -> Path:
 
 
 # The longest line the listener can print: an event with a 63 KiB envelope
-# in hex, plus room. asyncio's default (64 KiB) let one large message end
-# every event after it (audit R6 FH-2).
-EVENT_LINE_MAX = 1024 * 1024
+# in hex, or an away chat request with its picture (1 MiB, base64), plus
+# room. asyncio's default (64 KiB) let one large message end every event
+# after it (audit R6 FH-2).
+EVENT_LINE_MAX = 2 * 1024 * 1024
 
-async def _ensure_listener(folder: tc.TorFolder) -> None:
+async def _ensure_listener(folder: tc.TorFolder, mode: tuple[bool, bool] = (True, False)) -> None:
+    """The listener running, serving ``mode``: (Friend Houses' sockets,
+    away chat's socket). A listener started for the other mode is
+    restarted with the new one."""
     proc = _LISTENER["proc"]
-    if proc is not None and proc.returncode is None:
+    running = proc is not None and proc.returncode is None
+    if running and _LISTENER.get("mode") == mode:
         return
+    if running or _LISTENER.get("task") is not None:
+        await _stop_listener()
+    _LISTENER["mode"] = mode
     _LISTENER["stopping"] = False
     _LISTENER["task"] = asyncio.get_running_loop().create_task(
         _run_listener(folder), name="friend-houses-listener"
@@ -571,10 +731,14 @@ def _listener_command(folder: tc.TorFolder) -> list[str]:
 
     from domovoi.friend_houses import listener_runtime as lrt
 
+    from domovoi.away import keys as away_keys
+
     uid, gid = (os.getuid(), os.getgid()) if hasattr(os, "getuid") else (10001, 10001)
-    return ["docker", *lrt.run_args(image_id=_LISTENER["image"], keys=fid.keys_path(),
+    fh, away = _LISTENER.get("mode", (True, False))
+    return ["docker", *lrt.run_args(image_id=_LISTENER["image"], keys=fid.keys_path() if fh else None,
                                     files=_listener_folder(), sockets=folder.listen,
-                                    uid=uid, gid=gid)]
+                                    uid=uid, gid=gid,
+                                    away_key=away_keys.noise_path() if away else None)]
 
 
 LISTENER_PROBLEM = ("Friends can't reach this house right now: its Friend Houses listener "
@@ -621,6 +785,7 @@ async def _run_listener(folder: tc.TorFolder) -> None:
         started = time.monotonic()
         await asyncio.gather(_read_events(proc), _read_log(proc))
         await proc.wait()
+        _stop_away_relays()  # its connections are gone with it
         if _LISTENER["stopping"]:
             break
         log.warning("Friend Houses: the listener stopped (exit %s); starting it again", proc.returncode)
@@ -710,6 +875,14 @@ def handle_event(event: dict) -> None:
         _event(friending.on_event(event), "friend-houses-event")
     elif kind == "message":
         _event(_store_and_answer(event), "friend-houses-message")
+    elif kind in ("away", "away_closed"):
+        # Away chat (1.5.0): a phone's request, or its connection ended.
+        # Its own lane and its own bounds (domovoi/away/bridge.py), never
+        # the friends' event pool.
+        from domovoi.away import bridge
+
+        bridge.on_event(event)
+        return
     if kind == "im_back":
         from domovoi.friend_houses import messages
 
@@ -737,6 +910,21 @@ async def _store_and_answer(event: dict) -> None:
 
 #: How long one answer to the listener may take to write (review D4).
 PIPE_WRITE_SEC = 5.0
+
+
+async def send_listener_line(line: str) -> bool:
+    """One longer line to the listener's stdin (away chat's answers: an
+    ASCII JSON line, ``domovoi.away.bridge``), with the same deadline as
+    :func:`_answer_listener`. False when there is no listener to tell."""
+    proc = _LISTENER["proc"]
+    if proc is None or proc.stdin is None or proc.returncode is not None:
+        return False
+    try:
+        proc.stdin.write((line + chr(10)).encode("ascii"))
+        await asyncio.wait_for(proc.stdin.drain(), PIPE_WRITE_SEC)
+    except (ConnectionError, RuntimeError, asyncio.TimeoutError):
+        return False
+    return True
 
 
 async def _answer_listener(line: str) -> None:
@@ -903,8 +1091,16 @@ def _stop_retries() -> None:
     plugin_sender.stop_all()
 
 
+def _stop_away_relays() -> None:
+    """Away chat's relays end with the listener process they answer."""
+    from domovoi.away import bridge
+
+    bridge.stop_all()
+
+
 async def _stop_listener() -> None:
     _LISTENER["stopping"] = True
+    _stop_away_relays()
     proc = _LISTENER["proc"]
     if proc is not None and proc.returncode is None:
         proc.terminate()  # the docker CLI passes it on to the container
@@ -939,6 +1135,10 @@ async def shutdown() -> None:
     """Core teardown: stop the listener. The Tor container keeps running so
     a core restart doesn't take the house offline; boot reconciles it."""
     _stop_retries()
+    _stop_away_watch()
+    from domovoi.away import bridge
+
+    bridge.stop_all()
     from domovoi.friend_houses import plugin_mail
 
     try:

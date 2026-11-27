@@ -48,6 +48,7 @@ from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
 from web.backend.api import fonts as fonts_api
 from web.backend.api import friend_houses as friend_houses_api
+from web.backend.api import away as away_api
 from web.backend.api import offline_kit as offline_kit_api
 from web.backend.api import printers as printers_api
 from web.backend.api import files_security
@@ -518,6 +519,9 @@ app.include_router(printers_api.router)
 app.include_router(offline_kit_api.router)
 # Friend Houses: proxies to the core's /v1/admin/friend-houses (security tier at both hops).
 app.include_router(friend_houses_api.router)
+# Away chat (1.5.0): the phone's setup on the home network, System's list
+# and switch, and the core's relay for requests from away.
+app.include_router(away_api.router)
 app.include_router(podcasts_api.router)
 app.include_router(audiobooks_api.router)
 app.include_router(videos_api.router)

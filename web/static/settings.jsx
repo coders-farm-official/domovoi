@@ -6563,7 +6563,7 @@ const SETTINGS_GROUPS = [
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat', 'photos-and-videos'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'keep-voice-history', 'command-recordings', 'listening-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
-  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'app-layout', 'advanced', 'support-sessions'] },
+  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'offline-kit', 'health', 'away-chat', 'app-layout', 'advanced', 'support-sessions'] },
 ];
 
 const SETTINGS_SECTIONS = [
@@ -6671,6 +6671,11 @@ const SETTINGS_SECTIONS = [
   { id: 'health', label: 'Health', optional: true,
     sub: 'Every check on this Domovoi, green or not: the server, updates, rooms, plugins, internet and containers.',
     words: 'health status problems problem check checks containers container guard incident incidents tamper disk database server attention' },
+  // away_chat.jsx registers it (1.5.0): household phones chatting with
+  // the house from away, over its own private connection (admin).
+  { id: 'away-chat', label: 'Chat from away', optional: true, aliases: ['away'],
+    sub: 'Household phones chatting with Domovoi when they are away from home: on or off, and which phones have it.',
+    words: 'away chat remote phone phones outside travel tor onion private connection mobile data from away' },
   { id: 'advanced', label: 'Advanced', aliases: ['configuration', 'config'],
     sub: 'The admin account, and every setting of the Domovoi server — for when you know what you are changing.',
     words: 'advanced configuration config settings admin password sign in setup claim database port ports path acoustid' },

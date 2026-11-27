@@ -86,7 +86,7 @@ def house(tmp_path, monkeypatch):
     async def fake_epoch():
         return b"\x05" * 8
 
-    async def fake_ensure(_folder):
+    async def fake_ensure(_folder, **_kw):
         listener["running"] = True
 
     async def fake_stop():
@@ -94,6 +94,15 @@ def house(tmp_path, monkeypatch):
 
     monkeypatch.setattr("domovoi.db.session.session_scope", fake_scope)
     monkeypatch.setattr(svc, "_inputs", fake_inputs)
+    # Away chat (1.5.0) rides the same reconcile: no phones unless a test
+    # adds some (domovoi/tests/test_away_service.py).
+    phones: list = []
+    away = {"on": True}
+
+    async def fake_away_inputs():
+        return away["on"], (list(phones) if away["on"] else [])
+
+    monkeypatch.setattr(svc, "_away_inputs", fake_away_inputs)
     monkeypatch.setattr(svc, "_start_retries", lambda: None)
     # Background work a reconcile starts ("I'm back" to every friend, event
     # handling) is recorded, not run: a task left running would touch the
@@ -141,6 +150,7 @@ def house(tmp_path, monkeypatch):
     h = House()
     h.docker, h.friends, h.listener, h.policy, h.root = docker, friends, listener, policy, tmp_path
     h.invites = invites
+    h.phones, h.away = phones, away
     h.spawned = spawned
     h.enable = lambda on=True: monkeypatch.setattr(settings, "friend_houses_enabled", on, raising=False)
     return h
