@@ -4365,6 +4365,141 @@
       ],
       "note": "typed chat: after a claim, still the member answer",
       "stub": true
+    },
+    {
+      "id": "24.1",
+      "utterance": "Who's in this house?",
+      "where": "away",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I know .+\\. That's who has a profile with me; I can't tell who's home right now\\.$",
+        "\\bAlex\\b",
+        "\\bAna\\b",
+        "\\bBen\\b",
+        "\\bAmber\\b"
+      ],
+      "stub": true,
+      "note": "away twin of 8.10m (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording"
+    },
+    {
+      "id": "24.2",
+      "utterance": "Who lives here?",
+      "where": "away",
+      "house": "people-1",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^I know Alex\\. That's who has a profile with me; I can't tell who's home right now\\.$"
+      ],
+      "stub": true,
+      "note": "away twin of 8.10n (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording"
+    },
+    {
+      "id": "24.3",
+      "utterance": "Who's the owner?",
+      "where": "away",
+      "house": "people-1",
+      "expect": "EXACT",
+      "kind": "question",
+      "one_of": "ONE_PERSON_LINES",
+      "before": [
+        {
+          "say": "Who's the owner?"
+        }
+      ],
+      "differs_from_before": true,
+      "note": "away twin of 23.18b (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording",
+      "stub": true
+    },
+    {
+      "id": "24.4",
+      "utterance": "Can you install plugins?",
+      "where": "away",
+      "house": "base",
+      "expect": "ADMIN",
+      "kind": "question",
+      "must_include": [
+        "an admin installs plugins from the Plugins page"
+      ],
+      "must_not_include": [
+        "Install from zip"
+      ],
+      "stub": true,
+      "note": "away twin of 8.5 (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording"
+    },
+    {
+      "id": "24.5",
+      "utterance": "Can you install plugins?",
+      "where": "away",
+      "house": "proven-admin",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "press Install from zip",
+        "trust screen"
+      ],
+      "must_not_include": [
+        "an admin installs"
+      ],
+      "note": "away twin of 8.6 (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording",
+      "stub": true
+    },
+    {
+      "id": "24.6",
+      "utterance": "Can you download videos?",
+      "where": "away",
+      "house": "base",
+      "expect": "CANT",
+      "kind": "question",
+      "must_include": [
+        "^No, not on this house\\. An admin can add video downloads from the Plugins page\\.$"
+      ],
+      "note": "away twin of 8.7e (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording",
+      "stub": true
+    },
+    {
+      "id": "24.7",
+      "utterance": "Can you download videos?",
+      "where": "away",
+      "house": "admin-no-video",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^No, not on this house\\. You can add video downloads from the Plugins page\\.$"
+      ],
+      "note": "away twin of 4.33 (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording",
+      "stub": true,
+      "must_not_include": [
+        "\\ban admin can\\b"
+      ]
+    },
+    {
+      "id": "24.8",
+      "utterance": "Who can approve this?",
+      "where": "away",
+      "house": "proven-admin",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^An admin approves that, on the dashboard\\. That's you, signed in here\\.$"
+      ],
+      "stub": true,
+      "note": "away twin of 23.12d (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording"
+    },
+    {
+      "id": "24.9",
+      "utterance": "is my data safe with you?",
+      "where": "away",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "Settings → Privacy shows exactly what's kept and what goes online\\."
+      ],
+      "stub": true,
+      "note": "away twin of 22.9 (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording"
     }
   ]
 }
