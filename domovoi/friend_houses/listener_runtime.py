@@ -198,7 +198,7 @@ def run_args(*, image_id: str, keys: Path | None, files: Path, sockets: Path, ui
         "--network", "none",
         "--user", f"{uid}:{gid}",
         "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-        "--memory", "128m", "--pids-limit", "32", "--cpus", "0.5",
+        "--memory", "192m", "--pids-limit", "32", "--cpus", "0.5",
         "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=1m",
         "--log-driver", "none",
         "--label", "org.domovoi.owner=core", "--label", "org.domovoi.role=friend-houses-listener",

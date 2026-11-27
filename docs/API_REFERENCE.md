@@ -2806,9 +2806,12 @@ one its key resolves to, never an id the caller names. Errors are
 
 Revocation: a phone's own DELETE, an admin's **Remove**, the setting off,
 the internet answer "never", marking the device a shared screen, the
-device row going, or the device holding another key take effect at the
-phone's next handshake (the listener's phone list is rewritten at once),
-and an open connection is closed within seconds.
+device row going, the device holding another key, or **a new household
+token** (`POST /api/auth/device-token[/rotate]`: every phone enrols again
+at home) are refused by the chat code at once; the core is told, rewrites
+the listener's phone list (at the latest within 30 s by its own check),
+and the phone's next handshake is refused and an open connection closed
+within seconds.
 
 Inside the house (not API for clients): `POST /api/away/bridge` (not in
 the OpenAPI document) is the core's relay of one phone request to the chat

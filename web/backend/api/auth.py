@@ -764,6 +764,15 @@ class DeviceTokenRequest(BaseModel):
     token: str
 
 
+async def _away_after_token_change() -> None:
+    """A new household token cuts off chat from away (every phone sets it
+    up again at home: domovoi/away/store.py): the core is told now, so the
+    listener refuses those phones from their next handshake."""
+    from web.backend.api import away as away_api
+
+    await away_api.tell_core(None)
+
+
 @router.post(
     "/device-token",
     dependencies=[Depends(admin_auth.require_admin_security)],
@@ -784,6 +793,7 @@ async def auth_set_device_token(body: DeviceTokenRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(e))
     admin_auth.write_device_token_file(token)
     await calendar_feeds.after_device_token_change(session_scope)
+    await _away_after_token_change()
     log.info("device token set by an admin (web)")
     return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER, "rotated": True}
 
@@ -800,5 +810,6 @@ async def auth_rotate_device_token() -> dict:
         token = await admin_auth.rotate_device_token(s)
     admin_auth.write_device_token_file(token)
     await calendar_feeds.after_device_token_change(session_scope)
+    await _away_after_token_change()
     log.info("device token rotated by an admin (web)")
     return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER, "rotated": True}

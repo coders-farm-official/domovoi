@@ -5098,6 +5098,10 @@ async def admin_set_device_token(body: _AdminDeviceTokenBody) -> dict[str, Any]:
     from domovoi import calendar_feeds
 
     await calendar_feeds.after_device_token_change(session_scope)
+    # A new household token cuts off chat from away (domovoi/away/store.py).
+    from domovoi.friend_houses import service as _fh_service
+
+    _fh_service.schedule_reconcile()
     log.info("device token set by an admin")
     return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
 
@@ -5118,6 +5122,10 @@ async def admin_rotate_device_token() -> dict[str, Any]:
     from domovoi import calendar_feeds
 
     await calendar_feeds.after_device_token_change(session_scope)
+    # A new household token cuts off chat from away (domovoi/away/store.py).
+    from domovoi.friend_houses import service as _fh_service
+
+    _fh_service.schedule_reconcile()
     log.info("device token rotated by an admin")
     return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
 

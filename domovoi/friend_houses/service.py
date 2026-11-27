@@ -352,9 +352,13 @@ async def _reconcile() -> None:
     # Read fresh from the database by the one writer (M2), never from the
     # snapshot above.
     await write_listener_files()
-    folder.write_torrc(w)
+    # The client keys first, then the torrc that names the onions: a write
+    # that fails leaves Tor's config as it was (review L2).
     _sync_key_files(folder, peers)
     _sync_phone_files(folder, phones if w.away_onion else [])
+    if w.away_onion and not folder.phones_authorized():
+        raise RuntimeError("the phones' Tor keys aren't on disk; the away onion isn't configured")
+    folder.write_torrc(w)
     _AWAY["phones"] = _away_fingerprint(away_on, phones)
 
     if _firewall_blocks_start():
@@ -781,6 +785,7 @@ async def _run_listener(folder: tc.TorFolder) -> None:
         started = time.monotonic()
         await asyncio.gather(_read_events(proc), _read_log(proc))
         await proc.wait()
+        _stop_away_relays()  # its connections are gone with it
         if _LISTENER["stopping"]:
             break
         log.warning("Friend Houses: the listener stopped (exit %s); starting it again", proc.returncode)
@@ -1086,8 +1091,16 @@ def _stop_retries() -> None:
     plugin_sender.stop_all()
 
 
+def _stop_away_relays() -> None:
+    """Away chat's relays end with the listener process they answer."""
+    from domovoi.away import bridge
+
+    bridge.stop_all()
+
+
 async def _stop_listener() -> None:
     _LISTENER["stopping"] = True
+    _stop_away_relays()
     proc = _LISTENER["proc"]
     if proc is not None and proc.returncode is None:
         proc.terminate()  # the docker CLI passes it on to the container

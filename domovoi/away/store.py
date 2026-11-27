@@ -6,7 +6,11 @@ hold, checked in one query (:data:`_CURRENT_SQL`):
 * the device still holds the device key it enrolled with
   (``devices.device_key_hash``: V086);
 * the device isn't a shared screen (a shared screen is the household's,
-  never a member's phone).
+  never a member's phone);
+* it was made (or made again) after the household token last changed
+  (``household_device_tokens.rotated_at``): changing the token is the
+  lost-phone step (docs/SECURITY_PRIVACY.md), so it cuts off away chat too,
+  and every phone sets it up again at home with the new token (review H2).
 
 Whether the house runs away chat at all is the setting (``away_chat`` in
 ``household_settings``, on unless an admin turned it off) and the internet
@@ -91,11 +95,13 @@ async def house_state(s: Any) -> str:
 
 # ─── phones ───────────────────────────────────────────────────────────────
 
-_CURRENT_SQL = (
-    "FROM away_phones a JOIN devices d ON d.device_id = a.device_id "
-    "WHERE d.device_key_hash IS NOT NULL AND d.device_key_hash = a.device_key_hash "
-    "AND NOT COALESCE(d.shared_screen, false)"
+_CURRENT = (
+    "d.device_key_hash IS NOT NULL AND d.device_key_hash = a.device_key_hash "
+    "AND NOT COALESCE(d.shared_screen, false) "
+    "AND a.updated_at > COALESCE((SELECT t.rotated_at FROM household_device_tokens t WHERE t.id = 1), "
+    "'-infinity'::timestamptz)"
 )
+_CURRENT_SQL = f"FROM away_phones a JOIN devices d ON d.device_id = a.device_id WHERE {_CURRENT}"
 
 
 async def enroll(s: Any, device_id: str, device_key_hash: str, tor_auth_pub: str,
@@ -155,11 +161,11 @@ async def phone_for(s: Any, device_id: str, noise_pub: bytes) -> bool:
 async def list_for_admin(s: Any) -> list[dict[str, Any]]:
     """Every enrolment, for System → Chat from away: the device's name and
     platform, when it was set up, and whether it counts now (a device that
-    lost its key or became a shared screen doesn't)."""
+    lost its key or became a shared screen doesn't, nor one set up before
+    the household token last changed)."""
     rows = (await s.execute(text(
         "SELECT a.device_id, d.name, d.platform, a.created_at, a.updated_at, "
-        "(d.device_key_hash IS NOT NULL AND d.device_key_hash = a.device_key_hash "
-        " AND NOT COALESCE(d.shared_screen, false)) AS current "
+        f"({_CURRENT}) AS current "
         "FROM away_phones a JOIN devices d ON d.device_id = a.device_id "
         "ORDER BY a.created_at"
     ))).mappings().all()

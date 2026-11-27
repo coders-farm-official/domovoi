@@ -46,6 +46,9 @@ BRIDGE_HEADER = "X-Domovoi-Away-Bridge"
 _DEVICE = re.compile(r"^[A-Za-z0-9._:\-]{1,64}\Z")
 _HEX64 = re.compile(r"^[0-9a-f]{64}\Z")
 _DIGITS = re.compile(r"^[0-9]{1,10}\Z")
+#: A connection id: the listener starts them at a random 48-63-bit number
+#: in each of its processes (domovoi/away/listener.py).
+_CONN = re.compile(r"^[0-9]{1,19}\Z")
 
 _RELAYS: dict[int, set[asyncio.Task]] = {}
 #: The HTTP client factory (tests: domovoi/away/loopback.py points it at
@@ -66,6 +69,9 @@ def web_url() -> str:
 
 
 def stop_all() -> None:
+    """Cancel every relay. Called when a listener process ends: its
+    connections are gone, and an answer still on its way must never reach
+    a connection of the next process (review H1)."""
     for tasks in list(_RELAYS.values()):
         for task in list(tasks):
             task.cancel()
@@ -82,7 +88,7 @@ def on_event(event: dict[str, Any]) -> None:
     less than the core)."""
     kind = event.get("event")
     conn_s = str(event.get("conn", ""))
-    if not _DIGITS.match(conn_s):
+    if not _CONN.match(conn_s):
         return
     conn = int(conn_s)
     if kind == "away_closed":

@@ -62,6 +62,10 @@ MAX_RESP = wire.MAX_RESP - 4096
 DELTA_CHARS = 6000
 #: How long a stopped reply may take to end by itself before it is cut.
 STOP_GRACE_SEC = 15.0
+#: An admin turn's session ends with its reply, and after this at the latest.
+ADMIN_TURN_MAX_SEC = 15 * 60
+#: The largest picture from away that is decoded (a phone sends 1024 px).
+AWAY_MAX_PIXELS = 16_000_000
 #: A finished run is kept this long, for a chat.stream that comes late.
 KEEP_FINISHED_SEC = 30.0
 #: The question a picture sent with no words asks (the wire allows an
@@ -385,7 +389,7 @@ def _reencode(data: bytes, kind: str) -> bytes:
     from PIL import ImageOps
 
     fmt = "JPEG" if kind == "jpeg" else "WEBP"
-    with image_safety.open_image(io.BytesIO(data), (fmt,)) as im:
+    with image_safety.open_image(io.BytesIO(data), (fmt,), max_pixels=AWAY_MAX_PIXELS) as im:
         if (im.format or "").upper() != fmt:
             raise image_safety.PictureRefused("not the format it said")
         upright = ImageOps.exif_transpose(im)
@@ -436,7 +440,8 @@ async def _admin_session(device_id: str, grant: str) -> str:
     async with session_scope() as s:
         if not await admin_auth.has_admin_auth(s):
             raise _Refused("admin_grant_invalid", "no admin is set up on this house")
-        outcome = await admin_auth.exchange_phone_grant(s, grant, device_id)
+        outcome = await admin_auth.exchange_phone_grant(s, grant, device_id,
+                                                        max_session_sec=ADMIN_TURN_MAX_SEC)
     if outcome == "expired":
         raise _Refused("admin_grant_expired", "the admin sign-in on this phone has ended; sign in again at home")
     if not isinstance(outcome, tuple):
@@ -482,20 +487,6 @@ async def _turn(chat_id: int, message_id: int, viewer: Viewer, req: Request
         elif m.get("role") == "user":
             break
     return user, None
-
-
-async def _user_message(chat_id: int, message_id: int | None, viewer: Viewer, req: Request
-                        ) -> dict[str, Any] | None:
-    """The stored user turn: by id, or this device's latest in the chat."""
-    from web.backend.api import chat as chat_api
-
-    out = await chat_api.list_messages(chat_id, request=req, viewer=viewer)
-    for m in reversed(out["messages"]):
-        if m.get("role") != "user":
-            continue
-        if (message_id is not None and int(m["id"]) == message_id) or (message_id is None and m.get("mine")):
-            return m
-    return None
 
 
 async def _send(viewer: Viewer, request: wire.Request, picture_b64: str, household: str | None
@@ -584,10 +575,14 @@ async def _start_send(viewer: Viewer, request: wire.Request, picture_b64: str, h
             response = await chat_api.send_message(
                 chat_id, chat_api.SendBody(content=content, images=images, device_id=device_id),
                 req, viewer=viewer)
-            user = await _user_message(chat_id, None, viewer, req)
-            if user is None:  # pragma: no cover — send_message stored it
+            # The id send_message stored the user turn under (it says so
+            # in the request's state), never a look-up after the fact.
+            message_id = getattr(req.state, "chat_user_message_id", None)
+            if not isinstance(message_id, int):  # pragma: no cover — send_message sets it
                 raise _Refused("internal", "the message was stored but can't be read back")
-            message_id = int(user["id"])
+            user, _reply = await _turn(chat_id, message_id, viewer, req)
+            if user is None:  # pragma: no cover — it was just stored
+                raise _Refused("internal", "the message was stored but can't be read back")
             async with session_scope() as s:
                 await away_store.record_send(s, device_id, request.client_id, chat_id, message_id)
             started = Run(device_id, chat_id, message_id, admin_token=admin_token)

@@ -16,7 +16,9 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import struct
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -438,3 +440,161 @@ async def test_the_relay_is_bounded_and_a_closed_connection_cancels_its_own(rela
     await asyncio.sleep(0.05)
     assert 1 not in relay.bridge._RELAYS and 2 in relay.bridge._RELAYS
     assert relay.started[0]["request"] == {"op": "chat.list", "archived": False, "limit": 50, "cursor": None}
+
+
+# ─── review fixes (2026-11-27) ───────────────────────────────────────────
+
+
+def test_connection_ids_start_at_random_large_numbers_per_process(tmp_path) -> None:
+    """H1: a listener that restarts never reuses the ids of the one before."""
+    a, b = al.AwayState(tmp_path, None), al.AwayState(tmp_path, None)
+    assert a._seq >= 1 << 48 and b._seq >= 1 << 48 and a._seq != b._seq
+    assert a._seq < 1 << 63
+
+
+async def test_a_stale_bye_or_answer_from_core_is_dropped(house) -> None:
+    phone = await _phone(house)
+    (conn,) = house.state.conns.values()
+    # An answer or a bye for a request this connection doesn't have open.
+    house.state.from_core(json.dumps({"c": conn.id, "r": 3, "k": "bye", "b": {"code": "revoked"}}).encode())
+    house.state.from_core(json.dumps({"c": conn.id, "r": 3, "k": "resp", "b": {}, "end": True}).encode())
+    await phone.send(wire.PING)
+    assert (await phone.recv()).kind == wire.PONG          # still open, nothing else arrived
+    # Core's own word (r 0) is a bye.
+    house.state.from_core(json.dumps({"c": conn.id, "r": 0, "k": "bye", "b": {"code": "revoked"}}).encode())
+    assert (await phone.recv()).json() == {"code": "revoked"}
+
+
+async def test_a_listener_restart_cancels_the_replies_in_flight(relay, monkeypatch, tmp_path) -> None:
+    """H1: when the listener process ends, every relay for its connections
+    ends with it, so nothing can reach a connection of the next process."""
+    from domovoi.friend_houses import service as svc
+    from domovoi.friend_houses import tor_config as tc
+
+    monkeypatch.setitem(svc._LISTENER, "proc", None)
+    monkeypatch.setitem(svc._LISTENER, "task", None)
+    monkeypatch.setitem(svc._LISTENER, "stopping", False)
+
+    async def no_docker():
+        svc._LISTENER["image"] = "sha256:test"
+
+    monkeypatch.setattr(svc, "_prepare_listener", no_docker)
+    monkeypatch.setattr(svc, "_listener_command", lambda folder: [sys.executable, "-c", "pass"])
+    stopped = asyncio.Event()
+    real_stop = svc._stop_away_relays
+
+    def stop():
+        real_stop()
+        stopped.set()
+
+    monkeypatch.setattr(svc, "_stop_away_relays", stop)
+    conn = (1 << 48) + 7
+    relay.bridge.on_event(_event(conn=conn, req=3))
+    await asyncio.sleep(0.05)
+    (in_flight,) = relay.bridge._RELAYS[conn]
+    run = asyncio.get_running_loop().create_task(svc._run_listener(tc.TorFolder(tmp_path / "fh")))
+    try:
+        await asyncio.wait_for(stopped.wait(), 20)   # the process exited
+        await asyncio.sleep(0.05)
+        assert in_flight.cancelled() and conn not in relay.bridge._RELAYS
+    finally:
+        svc._LISTENER["stopping"] = True
+        proc = svc._LISTENER["proc"]
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+        run.cancel()
+        try:
+            await run
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — torn down either way
+            pass
+
+
+async def test_stopping_the_listener_cancels_the_relays(relay, monkeypatch) -> None:
+    from domovoi.friend_houses import service as svc
+
+    monkeypatch.setitem(svc._LISTENER, "proc", None)
+    monkeypatch.setitem(svc._LISTENER, "task", None)
+    relay.bridge.on_event(_event(conn=9, req=1))
+    await asyncio.sleep(0.05)
+    await svc._stop_listener()
+    await asyncio.sleep(0)
+    assert not relay.bridge._RELAYS
+
+
+async def test_a_refused_pictures_slot_isnt_open_and_ends_by_its_deadline(house, monkeypatch) -> None:
+    """L1: a refused request's picture is read and dropped, never counted as
+    an open request, and only for the picture deadline."""
+    monkeypatch.setattr(al, "PICTURE_DEADLINE_SEC", 0.3)
+    phone = await _phone(house)
+    data = _jpeg(5000)
+    await phone.request(1, _send(text="", picture=_pic(data), unknown=1))     # refused: bad_request
+    assert (await phone.answer(1))[0][1]["code"] == "bad_request"
+    for req in range(2, 6):                                                    # four open still fit
+        await phone.request(req, {"op": "chat.stream", "chat_id": req})
+    await _events(house, n=4)
+    await asyncio.sleep(0.5)                                                    # the deadline passed
+    await phone.send(wire.BLOB, 1, wire.blob_body(0, data[:100]))
+    assert await phone.closed()                                                 # a piece for no picture
+
+
+async def test_requests_in_pieces_are_capped_and_have_a_deadline(house, monkeypatch) -> None:
+    """L7: at most four requests in pieces at once; one that never ends
+    closes the connection."""
+    phone = await _phone(house)
+    for req in range(1, 5):
+        await phone.send(wire.REQ, req, b'{"op":', more=True)
+    await phone.send(wire.REQ, 5, b'{"op":', more=True)
+    assert await phone.closed()
+    monkeypatch.setattr(al, "PIECES_DEADLINE_SEC", 0.3)
+    slow = await _phone(house)
+    await slow.send(wire.REQ, 1, b'{"op":', more=True)
+    assert await slow.closed()
+
+
+async def test_a_phone_replaces_its_own_oldest_even_when_the_house_is_full(house, monkeypatch) -> None:
+    monkeypatch.setattr(al, "MAX_CONNECTIONS", 2)
+    first, second = await _phone(house), await _phone(house)
+    third = await _phone(house)                    # every slot taken, but it's the same phone
+    assert (await first.recv()).json() == {"code": "replaced"}
+    await third.send(wire.PING)
+    assert (await third.recv()).kind == wire.PONG
+    other_key = X25519PrivateKey.generate()
+    house.set_phones({_pub(house.key): "android-alex", _pub(other_key): "android-sam"})
+    with pytest.raises(asyncio.IncompleteReadError):
+        await house.phone(other_key).connect(house.port)   # another phone: the house is full
+    second.close()
+
+
+async def test_pictures_in_flight_have_a_house_wide_budget(house, monkeypatch) -> None:
+    """M1: past the budget, a picture is ERR busy (and its pieces dropped)."""
+    monkeypatch.setattr(al, "PICTURES_IN_FLIGHT_MAX", 3000)
+    phone = await _phone(house)
+    first, second = _jpeg(2000), _jpeg(2000)
+    await phone.request(1, _send(1, text="", picture=_pic(first)))
+    await phone.request(2, _send(2, text="", picture=_pic(second)))
+    assert (await phone.answer(2))[0][1]["code"] == "busy"
+    await phone.picture(2, second)                         # read and dropped
+    await phone.picture(1, first)
+    (event,) = await _events(house)
+    assert base64.b64decode(event["picture"]) == first
+    assert house.state._pictures == 0                       # given back once handed on
+    phone.close()
+
+
+def test_the_outbox_cap_is_smaller_now() -> None:
+    assert al.OUTBOX_MAX_BYTES <= 2 * 1024 * 1024
+    assert al.PICTURES_IN_FLIGHT_MAX <= 12 * 1024 * 1024
+
+
+def test_the_phone_list_is_read_again_when_replaced_with_the_same_time_and_size(tmp_path) -> None:
+    """L6: the cache is keyed on the inode too, not the mtime alone."""
+    state = al.AwayState(tmp_path, None)
+    path = tmp_path / al.PHONES_FILE
+    path.write_text(json.dumps({"on": True, "phones": {"aa" * 32: "android-1"}}), encoding="utf-8")
+    assert list(state.phones().by_key.values()) == ["android-1"]
+    st = path.stat()
+    new = tmp_path / "new.json"
+    new.write_text(json.dumps({"on": True, "phones": {"bb" * 32: "android-2"}}), encoding="utf-8")
+    os.utime(new, ns=(st.st_atime_ns, st.st_mtime_ns))
+    os.replace(new, path)
+    assert list(state.phones().by_key.values()) == ["android-2"]

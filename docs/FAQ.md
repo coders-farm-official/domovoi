@@ -445,7 +445,7 @@ The default vision model is the pick for a box without a GPU: a 1.9 GB download,
 - **Pictures:** the phone makes each one smaller (and drops its location and camera details) before sending it, at most 1 MB; the house reads the picture and saves a fresh copy of its own.
 - **When the phone drops out:** the house finishes the reply anyway and keeps it in the chat; there are no push notifications, so it's waiting when you open the chat again.
 
-Turning it off on the phone, removing the phone in Settings, marking it a shared screen or turning **Chat from away** off stops that phone at its next connection, and an open one within a few seconds. docs/SECURITY_PRIVACY.md, "Away chat", has how it's protected.
+Turning it off on the phone, removing the phone in Settings, marking it a shared screen or turning **Chat from away** off stops that phone at its next connection, and an open one within a few seconds. Changing the household token (what you do when a phone is lost) stops every phone's chat from away: set it up again from each phone at home. docs/SECURITY_PRIVACY.md, "Away chat", has how it's protected.
 
 ## Does Domovoi send my photos anywhere?
 

@@ -1242,6 +1242,9 @@ async def send_message(
         )
         await _notify_chat(s, "message")
         await s.commit()
+    # Which row the user turn is, for a server caller that built the
+    # request itself (away chat, web/backend/away_bridge.py).
+    request.state.chat_user_message_id = int(user_row_id)
 
     if video_jobs:
         # A video: the core watches it in the background; the reply says

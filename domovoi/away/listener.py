@@ -36,6 +36,7 @@ import asyncio
 import base64
 import json
 import logging
+import secrets
 import sys
 import time
 from collections import deque
@@ -57,12 +58,17 @@ MAX_HANDSHAKING = 8         # before the handshake; the oldest makes room
 HANDSHAKES_PER_MINUTE = 60  # house-wide; over it: silence
 HANDSHAKE_DEADLINE_SEC = 30.0
 IDLE_SEC = 120.0
-PICTURE_DEADLINE_SEC = 120.0
+PICTURE_DEADLINE_SEC = 120.0  # a picture's pieces, and a refused one's, from its REQ
+PIECES_DEADLINE_SEC = 120.0   # a REQ arriving in pieces: closed past it
 OPEN_REQUESTS = 4           # per connection: ERR busy
 PINGS_PER_MINUTE = 30       # per connection; more is closed
 MAX_DISCARDING = 4          # refused requests whose pictures are still arriving
 WATCH_EVERY_SEC = 2.0
-OUTBOX_MAX_BYTES = 4 * 1024 * 1024  # a phone that stops reading is closed
+OUTBOX_MAX_BYTES = 1536 * 1024  # a phone that stops reading is closed
+#: Picture bytes being received across the house (each picture's declared
+#: size, held from its REQ until it is handed on or dropped): over it, a
+#: picture is answered ERR busy. Keeps the container under its memory cap.
+PICTURES_IN_FLIGHT_MAX = 12 * 1024 * 1024
 
 #: Per device, across its connections: (window seconds, limit).
 LIMITS = {
@@ -188,15 +194,17 @@ class Conn:
     outbox: asyncio.Queue = field(default_factory=asyncio.Queue)
     queued: int = 0
     closed: bool = False
-    assembling: dict[int, wire.RequestPieces] = field(default_factory=dict)
+    assembling: dict[int, tuple[wire.RequestPieces, asyncio.TimerHandle]] = field(default_factory=dict)
     awaiting: dict[int, tuple[wire.Request, wire.PictureSink, asyncio.TimerHandle]] = field(default_factory=dict)
-    discarding: dict[int, wire.PictureSink] = field(default_factory=dict)
+    # A refused request's picture still arriving: read and dropped, never
+    # counted as open, for at most PICTURE_DEADLINE_SEC.
+    discarding: dict[int, tuple[wire.PictureSink, asyncio.TimerHandle]] = field(default_factory=dict)
     forwarded: set[int] = field(default_factory=set)
     pings: Window = field(default_factory=lambda: Window(60.0, PINGS_PER_MINUTE))
 
     @property
     def open(self) -> int:
-        return len(self.awaiting) + len(self.forwarded) + len(self.discarding)
+        return len(self.awaiting) + len(self.forwarded)
 
     def in_use(self, req: int) -> bool:
         return req in self.awaiting or req in self.forwarded or req in self.discarding
@@ -216,7 +224,7 @@ class Conn:
         return True
 
     def close(self) -> None:
-        for _, _, handle in self.awaiting.values():
+        for *_, handle in (*self.awaiting.values(), *self.discarding.values(), *self.assembling.values()):
             handle.cancel()
         if not self.closed:
             self.closed = True
@@ -229,8 +237,12 @@ class AwayState:
     key: Any  # X25519PrivateKey, or None: every handshake fails
     emit: Callable[..., None] = emit
     _phones: Phones = field(default_factory=Phones)
-    _mtime: int | None = None
-    _seq: int = 0
+    _stamp: tuple[int, int, int] | None = None
+    # Connection ids start at a random 48- to 63-bit number in each listener
+    # process, so an answer core still holds for a connection of an earlier
+    # process can never name one of this process's (review H1).
+    _seq: int = field(default_factory=lambda: (1 << 48) + secrets.randbelow((1 << 63) - (1 << 48)))
+    _pictures: int = 0  # picture bytes in flight, house-wide
     _sockets: int = 0
     _handshaking: deque = field(default_factory=deque)
     _handshakes: Window = field(default_factory=lambda: Window(60.0, HANDSHAKES_PER_MINUTE))
@@ -240,14 +252,17 @@ class AwayState:
     # ── the phone list ──────────────────────────────────────────────────
 
     def phones(self) -> Phones:
+        """``phones.json``, read again whenever its inode, time or size
+        changed (core replaces it atomically)."""
         path = self.folder / PHONES_FILE
         try:
-            mtime = path.stat().st_mtime_ns
+            st = path.stat()
         except OSError:
-            self._phones, self._mtime = Phones(), None
+            self._phones, self._stamp = Phones(), None
             return self._phones
-        if mtime != self._mtime:
-            self._phones, self._mtime = read_phones(path), mtime
+        stamp = (st.st_ino, st.st_mtime_ns, st.st_size)
+        if stamp != self._stamp:
+            self._phones, self._stamp = read_phones(path), stamp
         return self._phones
 
     def still_admitted(self, conn: Conn) -> str | None:
@@ -300,7 +315,9 @@ class AwayState:
         if conn is None or conn.closed:
             return
         if k == "bye":
-            self.bye(conn, str(body.get("code", "")))
+            # For a request this connection has open, or r 0: core's own word.
+            if r == 0 or r in conn.forwarded:
+                self.bye(conn, str(body.get("code", "")))
             return
         kind = _KINDS.get(k)
         if kind is None or r not in conn.forwarded:
@@ -344,6 +361,8 @@ class AwayState:
             _done_waiting(self._handshaking, writer)
             if conn is not None:
                 conn.close()
+                for req in list(conn.awaiting):
+                    self._drop_picture(conn, req)
                 self.conns.pop(conn.id, None)
                 dev = self.devices.get(conn.device)
                 if dev is not None and conn in dev.conns:
@@ -375,7 +394,11 @@ class AwayState:
         if device is None:
             raise wire.ProtocolError("not a current phone")
         wire.parse_phone_hello(payload)
-        if len(self.conns) >= MAX_CONNECTIONS:
+        # A phone already holding its two connections replaces its own
+        # oldest, so it gets in even when every slot is taken.
+        known = self.devices.get(device)
+        replacing = known is not None and len(known.conns) >= MAX_PER_DEVICE
+        if len(self.conns) >= MAX_CONNECTIONS and not replacing:
             raise wire.ProtocolError("every phone slot is taken")
         writer.write(wire.frame(hs.write_message(wire.HOUSE_HELLO)))
         await writer.drain()
@@ -445,23 +468,33 @@ class AwayState:
         return conn.push(wire.encode_message(wire.ERR, req, wire.dump(body)))
 
     def _on_req(self, conn: Conn, msg: wire.Message) -> bool:
-        pieces = conn.assembling.get(msg.req)
-        if pieces is None:
-            if conn.in_use(msg.req):
+        assembling = conn.assembling.get(msg.req)
+        if assembling is None:
+            if conn.in_use(msg.req) or msg.req in conn.discarding:
                 raise wire.ProtocolError("req already open")
-            if len(conn.assembling) > OPEN_REQUESTS:
-                raise wire.ProtocolError("too many requests in pieces")
-            pieces = conn.assembling[msg.req] = wire.RequestPieces()
+            if msg.more:
+                if len(conn.assembling) >= OPEN_REQUESTS:
+                    raise wire.ProtocolError("too many requests in pieces")
+                handle = asyncio.get_running_loop().call_later(
+                    PIECES_DEADLINE_SEC, self._pieces_late, conn, msg.req)
+                assembling = conn.assembling[msg.req] = (wire.RequestPieces(), handle)
+            else:
+                assembling = (wire.RequestPieces(), None)
+        pieces, handle = assembling
         pieces.add(msg.body)
         if msg.more:
             return True
-        del conn.assembling[msg.req]
+        conn.assembling.pop(msg.req, None)
+        if handle is not None:
+            handle.cancel()
         picture: wire.Picture | None = None
         try:
             request = pieces.finish()
             picture = request.picture
             if conn.open >= OPEN_REQUESTS:
                 raise wire.BadRequest("busy", "this connection has four requests open")
+            if picture is not None and self._pictures + picture.size > PICTURES_IN_FLIGHT_MAX:
+                raise wire.BadRequest("busy", "the house is receiving too many pictures; try again shortly")
             wait = self._device(conn).charge(request, time.monotonic())
             if wait:
                 return self._refuse(conn, msg.req, picture, "rate", "too many requests; wait a little",
@@ -476,27 +509,51 @@ class AwayState:
         handle = asyncio.get_running_loop().call_later(
             PICTURE_DEADLINE_SEC, self._picture_late, conn, msg.req)
         conn.awaiting[msg.req] = (request, wire.PictureSink(picture), handle)
+        self._pictures += picture.size
         return True
+
+    def _pieces_late(self, conn: Conn, req: int) -> None:
+        """A REQ still in pieces past its deadline: the connection closes."""
+        if conn.assembling.pop(req, None) is not None and not conn.closed:
+            log.info("away: a request in pieces didn't finish in time; closing")
+            conn.close()
 
     def _refuse(self, conn: Conn, req: int, picture: wire.Picture | None, code: str, detail: str,
                 retry_after: int | None = None) -> bool:
         """An ERR for a request; its picture, if one is on its way, is
-        read and dropped."""
+        read and dropped for up to :data:`PICTURE_DEADLINE_SEC` (not an
+        open request; at most :data:`MAX_DISCARDING` at once)."""
         if picture is not None:
             if len(conn.discarding) >= MAX_DISCARDING:
                 raise wire.ProtocolError("too many refused pictures in flight")
-            conn.discarding[req] = wire.PictureSink(picture, keep=False)
+            handle = asyncio.get_running_loop().call_later(
+                PICTURE_DEADLINE_SEC, self._discard_late, conn, req)
+            conn.discarding[req] = (wire.PictureSink(picture, keep=False), handle)
         return self._err(conn, req, code, detail, retry_after)
 
+    def _discard_late(self, conn: Conn, req: int) -> None:
+        # Pieces after this are pieces for no picture: the connection closes.
+        conn.discarding.pop(req, None)
+
+    def _drop_picture(self, conn: Conn, req: int) -> tuple | None:
+        """Forget a picture being received and give its bytes back to the
+        house-wide budget."""
+        waiting = conn.awaiting.pop(req, None)
+        if waiting is not None:
+            waiting[2].cancel()
+            self._pictures = max(0, self._pictures - waiting[1].picture.size)
+        return waiting
+
     def _picture_late(self, conn: Conn, req: int) -> None:
-        if conn.awaiting.pop(req, None) is not None and not conn.closed:
+        if self._drop_picture(conn, req) is not None and not conn.closed:
             self._err(conn, req, "bad_request", "the picture didn't arrive within 120 seconds")
 
     def _on_blob(self, conn: Conn, msg: wire.Message) -> bool:
         offset, data = wire.parse_blob(msg.body)
-        sink = conn.discarding.get(msg.req)
-        if sink is not None:
-            if sink.add(offset, data):
+        dropping = conn.discarding.get(msg.req)
+        if dropping is not None:
+            if dropping[0].add(offset, data):
+                dropping[1].cancel()
                 del conn.discarding[msg.req]
             return True
         waiting = conn.awaiting.get(msg.req)
@@ -505,8 +562,7 @@ class AwayState:
         request, sink, handle = waiting
         if not sink.add(offset, data):
             return True
-        handle.cancel()
-        del conn.awaiting[msg.req]
+        self._drop_picture(conn, msg.req)
         try:
             picture = sink.finish()
         except wire.BadRequest as e:

@@ -319,3 +319,32 @@ async def test_the_setting_needs_the_security_tier(away_db, told) -> None:
             assert (await bare.put("/api/away/setting", json={"on": False}, headers=no_rw)).status_code == 403
         async with session_scope() as s:
             assert await away_store.setting_on(s)
+
+
+async def test_a_new_household_token_cuts_off_every_phone(away_db, told, tmp_path) -> None:
+    """H2: changing the household token (the lost-phone step) ends every
+    enrolment; a phone sets away chat up again at home with the new token."""
+    async with web_client() as c:
+        base, admin, _ = await claimed(c)
+        p = await phone(c, base)
+        await enroll(c, p)
+        assert (await _listed(tmp_path))["phones"]
+        told.clear()
+        r = await c.post("/api/auth/device-token/rotate", headers=admin)
+        assert r.status_code == 200, r.text
+        assert told == ["reconcile"]                                  # the core was told
+        assert (await _listed(tmp_path))["phones"] == {}              # the listener refuses it
+        new_base = {**base, "X-Device-Token": r.json()["token"]}
+        headers = {**p["headers"], "X-Device-Token": r.json()["token"]}
+        assert (await c.get("/api/away/status", headers=headers)).json()["enrolled"] is False
+        listing = (await c.get("/api/away/phones", headers={**admin, "X-Device-Token": r.json()["token"]})).json()
+        assert listing["phones"][0]["current"] is False
+        # Set up again at home with the new token: it counts again.
+        r = await c.post("/api/away/enroll", json=p["body"], headers=headers)
+        assert r.status_code == 200, r.text
+        assert (await _listed(tmp_path))["phones"] == {public_bytes(p["noise"]).hex(): p["id"]}
+        # Setting a token of one's own is a change too.
+        r = await c.post("/api/auth/device-token", json={"token": "a-household-token-of-ours"},
+                         headers={**admin, "X-Device-Token": new_base["X-Device-Token"]})
+        assert r.status_code == 200, r.text
+        assert (await _listed(tmp_path))["phones"] == {}

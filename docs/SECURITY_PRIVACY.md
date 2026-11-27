@@ -3488,18 +3488,32 @@ WebP it says, then decodes it (only that format, with the pixel limit of
 every chat picture) and writes a fresh JPEG with no metadata at all
 before anything reads it.
 
-**Limits.** Per phone: two connections (a third closes the oldest), four
-open requests on one, one reply being written, 10 messages a minute and
-200 an hour, 60 other requests a minute, 30 pictures and 20 MB an hour.
-Across the house: 16 phone connections and 60 handshakes a minute. A
-connection that says nothing for two minutes is closed.
+**Limits.** Per phone: two connections (a third closes the oldest, even
+when every house slot is taken), four open requests on one, one reply
+being written, 10 messages a minute and 200 an hour, 60 other requests a
+minute, 30 pictures and 20 MB an hour. Across the house: 16 phone
+connections, 60 handshakes a minute and 12 MiB of pictures being received
+at once. A connection that says nothing for two minutes is closed, and so
+is one whose request in pieces, or whose picture, isn't finished within
+two minutes. The listener's container is capped at 192 MB of memory.
 
 **Taking it away.** The phone turning it off, an admin's **Remove**,
 "Chat from away" off, the internet answer "never", marking the device a
-shared screen, or the device losing the key it enrolled with each stop
-the phone at its next connection, and close an open one within a few
-seconds (the listener checks its list every two seconds and on every
-message, and the dashboard's chat code checks again on every request).
+shared screen, the device losing the key it enrolled with, or **changing
+the household token** each stop the phone. The dashboard's chat code
+refuses its next request at once (it checks on every request); the
+listener's phone list is rewritten as soon as the core hears of the
+change (each of these tells it), and at the latest within 30 seconds by
+the core's own check, so the phone's next handshake is refused and an
+open connection is closed within seconds of that (the listener checks its
+list every two seconds and on every message).
+
+**Changing the household token cuts off every phone's away chat.** It is
+the lost-phone step (see "Device tier (the household token)", above): an enrolment
+counts only if it was made after the token last changed, so a lost phone
+that still holds its away keys can't chat from away either. Every other
+phone sets away chat up again at home, with the new token, as it already
+has to for everything else.
 
 **Logs.** Nothing from a message's text or a picture is logged, by the
 listener, the core or the dashboard process: device ids, request kinds and

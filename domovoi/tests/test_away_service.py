@@ -266,3 +266,17 @@ async def test_the_state_route_says_what_the_core_knows(monkeypatch) -> None:
     assert await routes.away_state("android-9") == {"state": "starting"}  # its key waits for a reload
     monkeypatch.setitem(svc._AWAY, "state", None)
     assert await routes.away_state("android-1") == {"state": None}
+
+
+
+async def test_no_torrc_names_the_away_onion_without_a_client_key_on_disk(away, monkeypatch) -> None:
+    """L2: the client keys are written before the torrc, and an away onion
+    whose keys aren't on disk is never configured (it would be open)."""
+    monkeypatch.setattr(svc, "_retry_reconcile_later", lambda: None)
+    monkeypatch.setattr(tc.TorFolder, "authorize_phone", lambda self, *a: None)   # a write that "failed"
+    away.phones.append(_phone(1))
+    await svc.reconcile()
+    torrc = _tor(away) / "torrc"
+    assert not torrc.exists() or "hs-away" not in torrc.read_text()
+    assert away.docker.calls == []
+    assert svc._STATE["status"] == "error"

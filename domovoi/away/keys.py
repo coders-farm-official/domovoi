@@ -216,7 +216,8 @@ def bridge_matches(presented: str | None) -> bool:
         return False
     if len(stored) != 64:
         return False
-    return secrets.compare_digest(stored, presented.strip())
+    return secrets.compare_digest(stored.encode("ascii"),
+                                  presented.strip().encode("utf-8", "replace"))
 
 
 def reset_bridge_secret() -> None:

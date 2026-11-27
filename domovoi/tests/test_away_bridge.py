@@ -412,3 +412,65 @@ async def test_a_picture_that_isnt_one_is_refused(house) -> None:
         assert out == [{"k": "err", "b": {"code": "unsupported_picture", "detail": out[0]["b"]["detail"]},
                         "end": True}]
         assert not list(chat_api.UPLOADS_DIR.glob("*")) if chat_api.UPLOADS_DIR.exists() else True
+
+
+# ─── review fixes (2026-11-27) ───────────────────────────────────────────
+
+
+async def test_a_grant_session_for_one_turn_lasts_fifteen_minutes_at_most(house) -> None:
+    """L4: the admin session a turn's grant becomes ends with the reply, and
+    in 15 minutes whatever happens."""
+    from datetime import datetime, timedelta, timezone
+
+    from domovoi import admin_auth
+
+    async with web_client() as c:
+        h = await _setup(c)
+        p = h["phone"]
+        grant = (await c.post("/api/auth/phone-grant", json={"device_id": p["id"], "label": "Pixel"},
+                              headers={**h["admin"], KEY: p["headers"][KEY]})).json()["grant"]
+        async with session_scope() as s:
+            token, _ = await admin_auth.exchange_phone_grant(s, grant, p["id"],
+                                                             max_session_sec=away_bridge.ADMIN_TURN_MAX_SEC)
+            hard = (await s.execute(text("SELECT hard_expires_at FROM admin_sessions WHERE token_hash = :h"),
+                                    {"h": admin_auth.token_sha256(token)})).scalar_one()
+        assert hard <= datetime.now(timezone.utc) + timedelta(minutes=15, seconds=5)
+
+
+async def test_the_bridge_secret_compare_never_raises(tmp_path, monkeypatch) -> None:
+    """L5: a header with characters outside ASCII is a plain no, not a 500."""
+    from domovoi import admin_auth
+
+    monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
+    away_keys.reset_bridge_secret()
+    secret = away_keys.bridge_secret()
+    assert away_keys.bridge_matches(secret)
+    assert not away_keys.bridge_matches("é" * 64)
+    assert not away_keys.bridge_matches(secret[:-1] + "\u00ff")
+    away_keys.reset_bridge_secret()
+
+
+async def test_a_picture_over_16_megapixels_is_too_large(house) -> None:
+    """L9: pictures from away are decoded only up to 16 megapixels."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (5000, 4000), (0, 0, 0)).save(buf, "JPEG", quality=10)
+    data = buf.getvalue()
+    assert len(data) < 1_048_576
+    pic = {"type": "jpeg", "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    async with web_client() as c:
+        h = await _setup(c)
+        out = await _away(c, h, _send("look", picture=pic), picture=data)
+        assert out[0]["b"]["code"] == "too_large"
+
+
+async def test_the_user_turn_id_comes_from_the_send_itself(house) -> None:
+    """L9: the RESP's message_id is the row send_message stored, even when
+    the same phone has a later message in the chat."""
+    async with web_client() as c:
+        h = await _setup(c)
+        first = await _away(c, h, _send("one"))
+        hist = _final(await _away(c, h, {"op": "chat.history", "chat_id": first[0]["b"]["chat_id"]}))
+        users = [m for m in hist["messages"] if m["role"] == "user"]
+        assert first[0]["b"]["message_id"] == users[-1]["id"] == first[0]["b"]["user_message"]["id"]
