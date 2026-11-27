@@ -103,7 +103,23 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 VERDICTS = ("CAN", "CANT", "DEPENDS", "ADMIN", "DO_IT", "EXACT")
-WHERE = ("voice", "chat", "playbox", "phone")
+# "away": a phone's chat from away over the house's onion (1.5.0 away chat,
+# web/backend/away_bridge.py): the home chat under that phone's identity.
+WHERE = ("voice", "chat", "playbox", "phone", "away")
+# Who can chat from away: the enrolled phone's person; a valid admin_grant
+# makes that one turn a proven admin. Shared screens and guests are refused
+# at enrol (AWAY-CHAT-WIRE.md section 8), so no away case has those askers.
+AWAY_ASKERS = ("member", "proven_admin")
+#: Stand-ins for the household token and a grant's one-turn admin session.
+AWAY_HOUSEHOLD_TOKEN = "fixture-household-token"
+AWAY_ADMIN_SESSION = "fixture-away-admin-session"
+
+
+def away_available() -> bool:
+    """Whether this checkout has the away chat bridge (1.5.0 wf/away-chat)."""
+    import importlib.util
+    return importlib.util.find_spec("web.backend.away_bridge") is not None
+
 KINDS = ("question", "command")
 ASKERS = ("member", "proven_admin", "guest", "room_mode_phone", "shared_screen")
 INTERNET = ("always", "sometimes", "never")
@@ -1351,7 +1367,7 @@ def _chat_row(thread: str, role: str, stats: dict[str, Any] | None = None) -> in
 
 async def run_chat_turn(
     utterance: str, house: dict, *, device: str | None, thread: str,
-    model_url: str | None, model: str | None,
+    model_url: str | None, model: str | None, away: bool = False,
 ) -> Turn:
     """The home-server chat as web/backend/api/chat.py send_message runs a
     typed message: refused with AI off (before anything is stored); the
@@ -1381,12 +1397,32 @@ async def run_chat_turn(
     async def previous_assistant() -> None:
         return None
 
-    async def admin_check() -> bool:
-        return house.get("asker") == "proven_admin"
+    if away:
+        # The bridge's own request (away_bridge.build_request): the household
+        # token, plus the one-turn admin session when the phone sent a valid
+        # admin_grant (this house's asker "proven_admin").
+        from domovoi import admin_auth
+        from web.backend import away_bridge
 
-    async def guest_check() -> bool:
-        # admin_auth.request_is_guest: no device token, Bearer or cookie.
-        return house.get("asker") == "guest"
+        bearer = AWAY_ADMIN_SESSION if house.get("asker") == "proven_admin" else None
+        away_req = away_bridge.build_request(device or "away-phone", AWAY_HOUSEHOLD_TOKEN, bearer)
+
+        async def admin_check() -> bool:
+            # chat.caller_is_admin validates the Bearer against the database;
+            # the grant exchange is Main's test (test_away_bridge). Here: the
+            # session reached the request the chat code reads.
+            return admin_auth.bearer_token(away_req) == AWAY_ADMIN_SESSION
+
+        async def guest_check() -> bool:
+            # The real rule on the bridge's real request: never a guest.
+            return await admin_auth.request_is_guest(away_req)
+    else:
+        async def admin_check() -> bool:
+            return house.get("asker") == "proven_admin"
+
+        async def guest_check() -> bool:
+            # admin_auth.request_is_guest: no device token, Bearer or cookie.
+            return house.get("asker") == "guest"
 
     fact = await house_facts.chat_reply(
         utterance, get_setting=house_facts.core_setting, scope=fixture_scope,
@@ -1409,7 +1445,7 @@ async def run_chat_turn(
 
         try:
             turn = await help_api.help_turn_for(
-                utterance, help_thread=False, admin=house.get("asker") == "proven_admin")
+                utterance, help_thread=False, admin=await admin_check())
         except Exception:  # noqa: BLE001 - chat._help_turn: the chat answers as before
             turn = None
         if turn is not None:
@@ -1483,6 +1519,8 @@ async def run_case(
 ) -> Turn:
     if case.skip_reason:
         return Turn("skipped", detail=case.skip_reason)
+    if case.where == "away" and not away_available():
+        return Turn("skipped", detail="away chat isn't on this checkout (web/backend/away_bridge.py)")
     TOUCHES.clear()
     # Only the model is real in an --ollama run: state the fixture doesn't
     # hold is still "needs db" (answering it empty made fake failures:
@@ -1499,7 +1537,8 @@ async def run_case(
         if case.where == "playbox":
             return await run_playbox_turn(say, house)
         return await run_chat_turn(say, house, device=device or default_device(house),
-                                   thread=thread, model_url=model_url, model=model)
+                                   thread=thread, model_url=model_url, model=model,
+                                   away=case.where == "away")
 
     with applied(house, catalogue, lenient=lenient):
         try:

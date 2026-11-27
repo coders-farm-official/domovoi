@@ -122,7 +122,7 @@ def test_the_list_is_covered() -> None:
     """Every group of the question list is in the corpus, the trust groups
     and DO IT concretely enough to check without a judge."""
     groups = {c.group for c in CASES}
-    assert groups == set(range(1, 14)) | set(range(15, 24))
+    assert groups == set(range(1, 14)) | set(range(15, 25))
     for g in (10, 16, 17, 18, 20):
         concrete = [c for c in CASES if c.group == g and not c.judge and not c.skip_reason]
         assert concrete, f"group {g} has no concrete case"
@@ -292,7 +292,9 @@ def _run(case):
 
 def _stub_param(case):
     marks = []
-    if case.needs_change:
+    if case.where == "away" and not ev.away_available():
+        marks.append(pytest.mark.skip(reason="away chat isn't on this checkout"))
+    elif case.needs_change:
         marks.append(pytest.mark.xfail(strict=False, reason=f"known gap {case.needs_change}"))
     elif case.id in STUB_FINDINGS:
         marks.append(pytest.mark.xfail(strict=False, reason=f"finding: {STUB_FINDINGS[case.id]}"))
@@ -312,13 +314,15 @@ def test_stub_flags_are_honest() -> None:
     """A case answered without a model is marked ``stub`` (so CI runs it),
     and no other case is."""
     answered = []
+    no_away = not ev.away_available()
     for case in CASES:
-        if case.skip_reason:
+        if case.skip_reason or (no_away and case.where == "away"):
             continue
         turn, _ = _run(case)
         if turn.outcome in ("reply", "raised"):
             answered.append(case.id)
-    assert sorted(answered) == sorted(c.id for c in STUB_CASES)
+    assert sorted(answered) == sorted(
+        c.id for c in STUB_CASES if not (no_away and c.where == "away"))
 
 
 def _reply(case_id: str) -> str:
@@ -453,3 +457,39 @@ def test_corpus_patterns_have_no_control_characters() -> None:
 
     bad = sorted({c["id"] for c in raw["cases"] for s in strings(c) if any(ord(ch) < 32 for ch in s)})
     assert bad == [], f"control characters in cases {bad}: write regex escapes as two backslashes"
+
+
+# ─── Away chat (1.5.0): a phone's chat from away answers as at home ──────
+
+AWAY_CASES = [c for c in CASES if c.where == "away"]
+AWAY_PARITY = [
+    c for c in STUB_CASES
+    if c.where == "chat" and not c.needs_change and not c.before
+    and HOUSES[c.house].get("asker", "member") in ev.AWAY_ASKERS
+]
+
+
+def test_away_cases_have_no_guest_path() -> None:
+    """Shared screens and guest devices are refused at enrol: an away case
+    is the phone's own person, or a proven admin by a valid admin_grant."""
+    assert AWAY_CASES
+    for case in AWAY_CASES:
+        assert HOUSES[case.house].get("asker", "member") in ev.AWAY_ASKERS, case.id
+
+
+@pytest.mark.skipif(not ev.away_available(), reason="away chat isn't on this checkout")
+@pytest.mark.parametrize("case", [pytest.param(c, id=c.id) for c in AWAY_PARITY])
+def test_away_answers_match_home(case) -> None:
+    """Every stub chat case a phone could ask from away gets the same words
+    away as at home, run through the bridge's own request
+    (away_bridge.build_request) and the real guest rule."""
+    import dataclasses
+
+    home, _ = _run(case)
+    away, scored = _run(dataclasses.replace(case, where="away"))
+    assert scored.problems == [], f"{case.id} away -> {away.text!r}: {scored.problems}"
+    if case.one_of:
+        # A rotating line set (the ownership eggs): any line of the set, as at home.
+        assert away.outcome == home.outcome, case.id
+    else:
+        assert (away.outcome, away.text) == (home.outcome, home.text), case.id
