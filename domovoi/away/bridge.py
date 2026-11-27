@@ -60,12 +60,18 @@ _TOKEN: dict[str, Any] = {"value": None, "at": 0.0}
 def web_url() -> str:
     """The web process on this box: loopback, unless WEB_HOST names one
     address only."""
-    from domovoi import setup_qr
-
     host = (os.environ.get("WEB_HOST") or "").strip()
     if host in ("", "0.0.0.0", "::", "[::]"):
         host = "127.0.0.1"
-    return f"http://{host}:{setup_qr.web_port()}"
+    try:
+        port = int(os.environ.get("WEB_PORT", "") or 6369)
+    except ValueError:
+        port = 6369
+    if not 0 < port < 65536:
+        port = 6369
+    # Not setup_qr.web_port(): only the core's terminal output imports the
+    # setup-code module (test_setup_qr).
+    return f"http://{host}:{port}"
 
 
 def stop_all() -> None:

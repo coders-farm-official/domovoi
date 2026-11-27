@@ -37,7 +37,7 @@ const AwayChatPanel = () => {
   };
 
   const remove = async (p) => {
-    if (!window.confirm(`Remove chat from away for ${p.name}? It can set it up again at home.`)) return;
+    if (!await askConfirm(`Remove chat from away for ${p.name}? It can set it up again at home.`, { confirmLabel: 'Remove' })) return;
     setBusy(true);
     try {
       await apiDelete(`/api/away/phones/${encodeURIComponent(p.device_id)}`);
