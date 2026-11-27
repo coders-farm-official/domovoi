@@ -439,6 +439,31 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "A list holds up to 500 things. Clear the crossed-off ones, or delete some, then add again.",
         "lists",
     ),
+    # ── chat from away: setting it up on a phone (1.5.0) ─────────────────
+    "away_off": _e(
+        "Chat from away is turned off",
+        "An admin turned Chat from away off for the house (Settings → System → Chat from away). "
+        "Chat works at home as usual; an admin can turn it back on.",
+        "chat",
+    ),
+    "lan_only": _e(
+        "Set it up at home",
+        "Chat from away is set up only on the home network. Connect the phone to your home Wi-Fi "
+        "and try again from the app.",
+        "chat",
+    ),
+    "bad_key": _e(
+        "The phone's keys weren't accepted",
+        "The app sent keys the house couldn't use. Turn Chat from away off and on again in the "
+        "app's Settings; if it keeps happening, use Report a problem.",
+        "chat",
+    ),
+    "device_key_required": _e(
+        "This phone needs to register again",
+        "The house couldn't tell which phone this is (its device key is missing or out of date). "
+        "Open the app at home so it registers again, then set Chat from away up.",
+        "chat",
+    ),
 }
 
 

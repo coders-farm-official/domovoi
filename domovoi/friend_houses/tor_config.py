@@ -13,9 +13,11 @@ The folder (``<config dir>/friend-houses/tor``), as the daemon sees it::
     /var/lib/fh/hs-main/                    the house's onion (friends only)
     /var/lib/fh/hs-main/authorized_clients/ one <friend>.auth per friend
     /var/lib/fh/hs-pairing/                 the pairing onion (friend files)
+    /var/lib/fh/hs-away/                    the away onion (phones: away chat)
+    /var/lib/fh/hs-away/authorized_clients/ one <phone>.auth per enrolled phone
     /var/lib/fh/clientauth/                 one <friend>.auth_private per friend
     /run/fh/socks                           SOCKS, a unix socket
-    /run/fh/main.sock, /run/fh/pairing.sock the listeners, unix sockets
+    /run/fh/listen/{main,pairing,away}.sock the listener's unix sockets
 
 Rules learned in spike S1 (spike-s1/RESULTS.md, kept outside the repo):
 
@@ -27,6 +29,15 @@ Rules learned in spike S1 (spike-s1/RESULTS.md, kept outside the repo):
   unreachable,** so reloads are batched by the caller, never per friend.
 * **The pairing onion is meant to be open**: it exists only while a friend
   file is outstanding, and its listener checks the invite secret.
+
+Away chat (1.5.0) adds a third onion, ``hs-away``, for the household's own
+phones (domovoi/away/). The same S1 rules apply to it: it isn't configured
+until the first phone has enrolled (an onion with no clients is open), that
+change is a restart, and later client changes ride the batched reloads. It
+has its own ``authorized_clients``, so a friend's key can never reach the
+phones' endpoint and a phone's can never reach friend messaging. Tor runs
+for it alone when there's nothing else to do; the internet answer "never"
+or "Chat from away" turned off removes it.
 """
 
 from __future__ import annotations
@@ -49,6 +60,7 @@ RUN_MOUNT = "/run/fh"
 SOCKS_NAME = "socks"
 MAIN_SOCKET = "main.sock"
 PAIRING_SOCKET = "pairing.sock"
+AWAY_SOCKET = "away.sock"
 # The listener's sockets live in a folder of their own under the run
 # folder: the listener's container mounts only that one, never the folder
 # with Tor's SOCKS socket (audit R6 FH-12).
@@ -65,20 +77,25 @@ class Wanted:
     main_onion: bool
     pairing_onion: bool
     disguise: tuple[str, ...] = ()  # torrc lines for bridges, when switched on
+    away_onion: bool = False        # away chat's onion (phones), 1.5.0
 
 
 def wanted(*, enabled: bool, internet_policy: str, friends: int, open_invites: int,
-           disguise: tuple[str, ...] = ()) -> Wanted:
-    """The daemon runs only when an admin turned Friend Houses on, the
-    internet answer isn't "never", and there's something to do: a friend to
-    reach or be reached by, or a friend file waiting to be used. Otherwise it
-    is stopped: not idle, stopped (threat-model finding 26)."""
-    if not enabled or internet_policy == "never":
+           disguise: tuple[str, ...] = (), away_on: bool = False, away_phones: int = 0) -> Wanted:
+    """The daemon runs only when the internet answer isn't "never" and
+    there's something to do. For Friend Houses: an admin turned it on, and
+    there's a friend to reach or be reached by, or a friend file waiting to
+    be used. For away chat: "Chat from away" is on and at least one phone
+    has enrolled (it needs no friends, and not Friend Houses either).
+    Otherwise it is stopped: not idle, stopped (threat-model finding 26)."""
+    if internet_policy == "never":
         return Wanted(False, False, False)
-    main, pairing = friends > 0, open_invites > 0
-    if not (main or pairing):
+    main = enabled and friends > 0
+    pairing = enabled and open_invites > 0
+    away = away_on and away_phones > 0
+    if not (main or pairing or away):
         return Wanted(False, False, False)
-    return Wanted(True, main, pairing, disguise if (main or pairing) else ())
+    return Wanted(True, main, pairing, disguise if (main or pairing) else (), away)
 
 
 def render_torrc(w: Wanted) -> str:
@@ -102,6 +119,11 @@ def render_torrc(w: Wanted) -> str:
             f"HiddenServiceDir {DATA_MOUNT}/hs-pairing",
             f"HiddenServicePort 80 unix:{RUN_MOUNT}/{LISTEN_DIR}/{PAIRING_SOCKET}",
         ]
+    if w.away_onion:
+        lines += [
+            f"HiddenServiceDir {DATA_MOUNT}/hs-away",
+            f"HiddenServicePort 80 unix:{RUN_MOUNT}/{LISTEN_DIR}/{AWAY_SOCKET}",
+        ]
     lines += list(w.disguise)
     return "\n".join(lines) + "\n"
 
@@ -114,7 +136,8 @@ def plan_change(before: Wanted | None, after: Wanted) -> str:
         return "stop" if before is not None and before.run else "none"
     if before is None or not before.run:
         return "start"
-    if before.main_onion != after.main_onion or before.pairing_onion != after.pairing_onion:
+    if (before.main_onion != after.main_onion or before.pairing_onion != after.pairing_onion
+            or before.away_onion != after.away_onion):
         return "restart"
     if before.disguise != after.disguise:
         return "restart"
@@ -165,7 +188,8 @@ class TorFolder:
         # parents at the umask's mode.
         for d in (self.root, self.data, self.data / "tor", self.data / "clientauth",
                   self.data / "hs-main", self.data / "hs-main" / "authorized_clients",
-                  self.data / "hs-pairing", self.run, self.listen):
+                  self.data / "hs-pairing", self.data / "hs-away",
+                  self.data / "hs-away" / "authorized_clients", self.run, self.listen):
             d.mkdir(parents=True, exist_ok=True)
             _chmod(d, 0o700)
 
@@ -186,6 +210,10 @@ class TorFolder:
     def pairing_socket(self) -> Path:
         return self.listen / PAIRING_SOCKET
 
+    @property
+    def away_socket(self) -> Path:
+        return self.listen / AWAY_SOCKET
+
     def write_torrc(self, w: Wanted) -> None:
         _write_private(self.data / "torrc", render_torrc(w))
 
@@ -204,6 +232,29 @@ class TorFolder:
     def authorized(self) -> set[str]:
         folder = self.data / "hs-main" / "authorized_clients"
         return _friend_stems(folder, "*.auth")
+
+    # Away chat's phones: their own folder, never hs-main's.
+
+    def authorize_phone(self, phone_id: str, tor_auth_pub: str) -> None:
+        """Let an enrolled phone fetch the away onion's descriptor.
+        ``tor_auth_pub`` is the phone's key as it sent it (52 characters of
+        base32; :func:`domovoi.away.store.tor_auth_raw` checked it)."""
+        _check_id(phone_id)
+        line = f"descriptor:x25519:{tor_auth_pub}\n"
+        path = self.data / "hs-away" / "authorized_clients" / f"{phone_id}.auth"
+        try:
+            if path.read_text(encoding="ascii") == line:
+                return
+        except OSError:
+            pass
+        _write_private(path, line)
+
+    def deauthorize_phone(self, phone_id: str) -> None:
+        _check_id(phone_id)
+        (self.data / "hs-away" / "authorized_clients" / f"{phone_id}.auth").unlink(missing_ok=True)
+
+    def phones_authorized(self) -> set[str]:
+        return _friend_stems(self.data / "hs-away" / "authorized_clients", "*.auth")
 
     def hold_key_for(self, friend_id: str, onion_key: bytes, reach_private: bytes) -> None:
         """Keep the key this house uses to reach a friend's onion."""
@@ -265,7 +316,7 @@ def _write_private(path: Path, text: str | bytes) -> None:
     never through an existing name or a link."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     fd = os.open(tmp, flags, 0o600)
     try:
         try:

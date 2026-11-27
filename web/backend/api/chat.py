@@ -91,6 +91,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import contextvars
 import io
 import json
 import logging
@@ -138,6 +139,14 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 DEVICE = [Depends(require_device)]
 READ = [Depends(require_device_read)]
+
+#: "Stop this reply" for a reply the house itself is reading to its end
+#: (away chat, web/backend/away_bridge.py): the task driving the reply sets
+#: an Event here; once it is set, the model's stream ends at its next piece
+#: and the reply is stored with what it had, as one cut short. Unset (the
+#: home routes), nothing changes.
+REPLY_STOP: contextvars.ContextVar[asyncio.Event | None] = contextvars.ContextVar(
+    "chat_reply_stop", default=None)
 
 
 def _require_ai() -> None:
@@ -1233,6 +1242,9 @@ async def send_message(
         )
         await _notify_chat(s, "message")
         await s.commit()
+    # Which row the user turn is, for a server caller that built the
+    # request itself (away chat, web/backend/away_bridge.py).
+    request.state.chat_user_message_id = int(user_row_id)
 
     if video_jobs:
         # A video: the core watches it in the background; the reply says
@@ -1860,12 +1872,15 @@ async def _answer(
             held = ""
             holding = model_lookups or media_tool
             proposing = False
+            stop = REPLY_STOP.get()
             try:
                 async with contextlib.aclosing(ollama_client.chat_stream(
                     [system, *history], model=model, stats=ollama_stats,
                     num_predict=_reply_cap(), **stream_knobs,
                 )) as stream:
                     async for delta in stream:
+                        if stop is not None and stop.is_set():
+                            break   # away chat's stop: kept as far as it got
                         if first_token_ms is None:
                             first_token_ms = (time.monotonic() - started) * 1000
                         if holding:

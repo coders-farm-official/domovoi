@@ -789,6 +789,13 @@ see [Chat on the phone](#node:phone-chat).
 - **App:** a home-server chat's paperclip offers **a picture** and **a
   document (PDF, Word, sheet, text)**. The app turns HEIC phone photos
   into JPEG first.
+- **App: from away:** with **Chat from away** set up (the app offers it
+  after pairing, or in its Settings, on the home network), the app's
+  home-server chats work over mobile data too, text and pictures, through
+  the house's own private connection. *(admin)* [Settings → System → Chat
+  from away](#settings/away-chat) turns it off for the house and removes a
+  phone. See
+  [Chat from away](docs/FAQ.md#can-i-chat-with-domovoi-when-im-away-from-home).
 
 **If something's wrong**
 

@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Chat from away
+
+- **What changed.** A household member's phone can chat with the house
+  from away (text and pictures), through a Tor onion of the house's own
+  (`hs-away`) and the Friend Houses listener container, with no company
+  server in between. Migration **V087** adds `away_phones` and
+  `away_sends`; the setting is the household setting `away_chat`. New
+  routes: `/api/away/*` (API_REFERENCE.md 3.18b) and the core's
+  `/v1/away/reconcile`, `/v1/away/state`. The listener image now also
+  carries `domovoi/away/` (it is rebuilt by itself).
+- **What to know.** "Chat from away" is **on** by default, but nothing
+  runs until a phone sets it up at home; when one does, the house runs
+  Tor for it even with Friend Houses off. Turn it off in Settings →
+  System → Chat from away. The internet answer "never" turns it off.
+  SECURITY_PRIVACY.md, "Away chat".
+
 ## 1.5.0 (unreleased) — Offline kit: "AI chat" unticked still installs
 
 - **What changed.** Every offline kit carries Domovoi's own Ollama (Ollama
@@ -1005,8 +1021,8 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   ends (one extra restart of the virtual machine).
 - **What to know.** Keep the stick plugged in until Setup finishes. An
   install from a kit runs Domovoi's own Ollama, not one already on the
-  Mac. A Mac kit made without AI chat is refused: it has no Ollama for
-  macOS, which every Mac install needs. Nothing on the Mac reaches the
+  Mac. A kit made with AI chat unticked installs without the AI models
+  (every kit carries Ollama for its computer either way). Nothing on the Mac reaches the
   internet in kit mode: no download, no internet check, no wait for the
   virtual machine's internet. **Repair** uses a plugged-in kit of the
   release the Mac runs, and goes on without one of another release, saying

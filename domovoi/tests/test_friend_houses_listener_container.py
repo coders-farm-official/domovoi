@@ -65,7 +65,7 @@ def test_the_listener_imports_with_only_the_copied_modules(tmp_path) -> None:
 
     libs = str(Path(cryptography.__file__).parent.parent)  # wherever it is installed
     code = (f"import sys; sys.path.insert(0, {app!r}); sys.path.append({libs!r}); "
-            "import domovoi.friend_houses.listener; "
+            "import domovoi.friend_houses.listener; import domovoi.away.listener; "
             "bad = [n for n, m in sys.modules.items() if n.split('.')[0] == 'domovoi' "
             f"and not (getattr(m, '__file__', None) or {app!r}).startswith({app!r})]; "
             "assert not bad, bad")

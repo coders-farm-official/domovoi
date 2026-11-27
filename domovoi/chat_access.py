@@ -25,7 +25,11 @@ from an id the caller names:
   ``domovoi-device-key`` cookie (browsers). ``X-Device-Id``, the
   ``domovoi-device-id`` cookie, a body ``device_id`` and ``phone_id`` are
   all self-asserted and are ignored here. A wrong or missing key is a
-  **keyless** household caller;
+  **keyless** household caller. Away chat (1.5.0) is the one other way
+  in: a request the web's away bridge builds itself carries, in its
+  server-side state, the device the phone's away Noise key proved
+  (:data:`PROVEN_DEVICE_STATE`, :func:`request_device`); a client can't
+  set request state;
 * **admin**: a live admin Bearer (``check_admin_request == "ok"``, a
   phone's day grant included), or the admin cookie on a GET. Never the
   pre-setup grace: after ``--reset-admin`` anyone on the LAN would
@@ -300,6 +304,40 @@ def presented_device_key(request: Request | None) -> str | None:
     return raw[:200] or None
 
 
+#: Request state (server-side only: ``request.scope["state"]``) naming the
+#: device a request acts for, set by the away bridge on the request it
+#: builds for a phone's turn (web/backend/away_bridge.py). Nothing a client
+#: sends can set it.
+PROVEN_DEVICE_STATE = "domovoi_proven_device"
+
+
+def proven_device(request: Any) -> str | None:
+    """The device a server-built request names in its state, or None."""
+    scope = getattr(request, "scope", None)
+    state = scope.get("state") if isinstance(scope, dict) else None
+    value = state.get(PROVEN_DEVICE_STATE) if isinstance(state, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+async def request_device(s: Any, request: Any) -> tuple[str, bool] | None:
+    """``(device_id, shared_screen)`` of the caller's device: the one a
+    server-built request names (:func:`proven_device`, only while it still
+    holds a key), else the one whose key the request presents."""
+    proven = proven_device(request)
+    if proven is not None:
+        if not await has_device_keys(s):
+            return None
+        row = (
+            await s.execute(
+                text("SELECT device_id, COALESCE(shared_screen, false) FROM devices "
+                     "WHERE device_id = :d AND device_key_hash IS NOT NULL"),
+                {"d": proven},
+            )
+        ).first()
+        return (str(row[0]), bool(row[1])) if row is not None else None
+    return await device_for_key(s, presented_device_key(request))
+
+
 def key_matches(stored_hash: str | None, presented: str | None) -> bool:
     """Constant time: does ``presented`` hash to ``stored_hash``?"""
     if not stored_hash or not presented:
@@ -334,7 +372,7 @@ async def viewer_from_request(request: Request, s: Any) -> Viewer:
 
     state = await admin_auth.check_admin_request(request, s)
     admin = state == "ok" or (state == "cookie-only" and request.method in ("GET", "HEAD"))
-    found = await device_for_key(s, presented_device_key(request))
+    found = await request_device(s, request)
     if found is None:
         return Viewer(admin=admin)
     return Viewer(device_id=found[0], admin=admin, shared_screen=found[1])

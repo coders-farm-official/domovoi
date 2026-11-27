@@ -1654,7 +1654,7 @@ PhoneGrantRefusal = Literal["invalid", "expired"]
 
 
 async def exchange_phone_grant(
-    session: AsyncSession, grant: str, device_id: str
+    session: AsyncSession, grant: str, device_id: str, *, max_session_sec: int | None = None
 ) -> tuple[str, datetime] | PhoneGrantRefusal:
     """Swap a grant for a fresh admin session labelled ``phone: <label>``.
 
@@ -1664,7 +1664,9 @@ async def exchange_phone_grant(
     deleted and answers ``"expired"``. On success the grant's
     ``last_used_at`` is stamped and ``(token, grant_expires_at)`` returned.
     The row is locked for the swap, so a revoke racing it either lands
-    first (refused) or after (and ends the new session with the grant)."""
+    first (refused) or after (and ends the new session with the grant).
+    ``max_session_sec``: the session ends that soon at the latest, whatever
+    is left of the grant (away chat's one-turn session: 15 minutes)."""
     row = (
         await session.execute(
             text(
@@ -1686,9 +1688,14 @@ async def exchange_phone_grant(
         text("UPDATE admin_phone_grants SET last_used_at = now() WHERE id = :id"),
         {"id": row.id},
     )
+    hard = row.expires_at
+    if max_session_sec is not None:
+        from datetime import timedelta, timezone
+
+        hard = min(hard, datetime.now(timezone.utc) + timedelta(seconds=max_session_sec))
     token = await create_session(
         session, label=f"phone: {row.label}", phone_grant_id=row.id,
-        hard_expires_at=row.expires_at,
+        hard_expires_at=hard,
     )
     return token, row.expires_at
 
