@@ -1005,8 +1005,8 @@ people. The user guide is [PHOTOS_AND_VIDEOS.md](PHOTOS_AND_VIDEOS.md).
   ends (one extra restart of the virtual machine).
 - **What to know.** Keep the stick plugged in until Setup finishes. An
   install from a kit runs Domovoi's own Ollama, not one already on the
-  Mac. A Mac kit made without AI chat is refused: it has no Ollama for
-  macOS, which every Mac install needs. Nothing on the Mac reaches the
+  Mac. A kit made with AI chat unticked installs without the AI models
+  (every kit carries Ollama for its computer either way). Nothing on the Mac reaches the
   internet in kit mode: no download, no internet check, no wait for the
   virtual machine's internet. **Repair** uses a plugged-in kit of the
   release the Mac runs, and goes on without one of another release, saying

@@ -180,7 +180,8 @@ final class OfflineKitTests: XCTestCase {
         kit.remove(kind: "python-wheels")
         kit.remove(kind: "ollama-model", name: "qwen3:4b-instruct-2507-q4_K_M")
         try kit.write(to: root)
-        try refused(nil, "This kit is missing what Setup needs: Ollama for macOS (mac/ollama-darwin.tgz); the Python packages for aarch64 (python/cp314-aarch64); the AI model qwen3:4b-instruct-2507-q4_K_M")
+        try refused(nil, "This kit is missing Ollama for macOS. Make a new kit from an up-to-date house.")
+        try refused(nil, "This kit is missing what Setup needs: the Python packages for aarch64 (python/cp314-aarch64); the AI model qwen3:4b-instruct-2507-q4_K_M")
     }
 
     func testAPartThatIsNotThePinnedOneIsRefused() throws {
@@ -217,10 +218,11 @@ final class OfflineKitTests: XCTestCase {
         XCTAssertFalse(r.ai)
         XCTAssertEqual(src?.models, [])
         XCTAssertTrue(r.notes.joined().contains("The kit has no AI models"))
-        // As the kit builder makes one: Ollama for macOS comes with AI only.
+        // Every kit carries Ollama for macOS, AI ticked or not (1.5.0's kit
+        // builder): one without it is broken, whatever its AI answer.
         kit.remove(kind: "mac-part", name: "ollama-darwin.tgz")
         try kit.write(to: root)
-        try refused(try want(), "Ollama for macOS (mac/ollama-darwin.tgz), which a kit carries only with \"AI chat and questions\" ticked")
+        try refused(try want(), "This kit is missing Ollama for macOS. Make a new kit from an up-to-date house.")
     }
 
     func testTheHouseholdsOwnOllamaCantTakeAKit() throws {

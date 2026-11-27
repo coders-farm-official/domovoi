@@ -531,9 +531,14 @@ public enum OfflineKit {
         var used: [String] = []
         for (label, pin, path) in mac {
             guard let e = k.files[path] else {
-                // The kit builder puts Ollama for macOS on with AI chat only
-                // (its "ai" group), and every Mac install runs it.
-                missing.append(pin == p.ollama && !r.ai ? "\(label) (\(path)), which a kit carries only with \"AI chat and questions\" ticked" : "\(label) (\(path))")
+                // Every kit carries Ollama for its target, AI ticked or not
+                // (1.5.0's kit builder; a Mac kit is refused at build time
+                // without the macOS pin), so only a broken kit lacks it.
+                if pin == p.ollama {
+                    r.problems.append("This kit is missing Ollama for macOS. Make a new kit from an up-to-date house.")
+                } else {
+                    missing.append("\(label) (\(path))")
+                }
                 continue
             }
             if e.sha256 != pin.sha256 { wrong.append(path) }

@@ -275,7 +275,8 @@ part of this: the server updates from it in the dashboard (below).
 | This kit holds Domovoi 1.5.1, and this Setup installs Domovoi 1.5.0: they don't go together. Open the DomovoiSetup-mac.pkg on the stick... | Another release's package. |
 | This kit holds Domovoi 1.4.9, older than 1.5.0, and a kit never takes Domovoi back to an older release. | Newer kits only. |
 | This kit was made for a Windows or Linux PC only. | Make the kit again with "A Mac with an Apple chip" ticked. |
-| This kit is missing what Setup needs: ... | A part isn't on it. Ollama for macOS goes on a kit only with AI chat ticked, and every Mac install needs it. |
+| This kit is missing what Setup needs: ... | A part isn't on it. Make the kit again. |
+| This kit is missing Ollama for macOS. Make a new kit from an up-to-date house. | Every kit carries Ollama for its computer, AI ticked or not; one without it is broken. A kit with AI unticked installs without the AI models. |
 | This kit's mac/... isn't the one this Setup's release pins. | A file of another release. |
 | This stick has a damaged file: ... Make the stick again. | A checksum doesn't match. |
 | This stick holds what a kit never does, so Setup used nothing from it. ... | The stick was changed. |
