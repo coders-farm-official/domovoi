@@ -1299,6 +1299,12 @@ from domovoi.identity_backup_routes import router as identity_backup_router  # n
 
 app.include_router(identity_backup_router)
 
+# Away chat (1.5.0, domovoi/away/routes.py): the web says the phones
+# changed, and asks whether the away onion is up.
+from domovoi.away.routes import router as away_router  # noqa: E402
+
+app.include_router(away_router)
+
 
 @app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
 async def get_voice_activity() -> dict[str, Any]:

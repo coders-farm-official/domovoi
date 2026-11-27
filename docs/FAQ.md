@@ -435,6 +435,18 @@ The vision model isn't installed by default (a server set up by `scripts/linux/p
 
 The default vision model is the pick for a box without a GPU: a 1.9 GB download, about 3 GB of memory while it is loaded. With an NVIDIA GPU, `qwen2.5vl:7b` is the pick for the Vision row instead: quick on the GPU, but minutes per picture on a processor alone. A change in the Vision row reaches the dashboard's chat when the dashboard restarts.
 
+## Can I chat with Domovoi when I'm away from home?
+
+**Yes, from the phone app (1.5.0), if the house allows it.** **Chat from away** lets a household member's phone chat with the house's own assistant over mobile data or someone else's Wi-Fi, exactly as at home: the same chats (a chat you started stays private to your phone), the same answers, and an admin's sign-in on the phone counts as at home. Only text and pictures go: no voice and no video from away.
+
+- **Setting it up:** the app offers it after the phone pairs, and a phone that's already paired can turn it on in its Settings. Either way the phone must be on the home network then: it swaps keys with the house there, and never over the internet.
+- **How it reaches the house:** through a private Tor connection of the house's own, the same kind Friend Houses uses, with no Coders Farm server in between and no port opened on your router. It needs no friends and doesn't need Friend Houses turned on.
+- **Who decides:** it is **on** for the house unless an admin turns it off in **Settings → System → Chat from away**, which also lists the phones that set it up, each with **Remove**. It needs the internet setting to allow it: under **never** it is off, and the app says so when it's back home.
+- **Pictures:** the phone makes each one smaller (and drops its location and camera details) before sending it, at most 1 MB; the house reads the picture and saves a fresh copy of its own.
+- **When the phone drops out:** the house finishes the reply anyway and keeps it in the chat; there are no push notifications, so it's waiting when you open the chat again.
+
+Turning it off on the phone, removing the phone in Settings, marking it a shared screen or turning **Chat from away** off stops that phone at its next connection, and an open one within a few seconds. docs/SECURITY_PRIVACY.md, "Away chat", has how it's protected.
+
 ## Does Domovoi send my photos anywhere?
 
 **No.** When an admin turns on **Understand photos and videos** (Settings →

@@ -546,6 +546,145 @@ def _text_samples() -> list[bytes]:
             b"remind me to call mom at 5 pm tomorrow", b"\xf0play play "]
 
 
+# ─── Away chat's wire (domovoi/away/wire.py) ────────────────────────────
+
+_AWAY_CODES = frozenset({"bad_request", "too_large", "unsupported_picture"})
+
+
+def _away_round_trip(request) -> None:
+    from domovoi.away import wire
+
+    again = wire.parse_request(request.to_json())
+    assert again == request, (request, again)
+
+
+def away_wire(data: bytes) -> None:
+    """What a phone sends over the away onion, as the listener reads it
+    (lead byte % 6 picks): 0 a PHONE_HELLO, which re-encodes to itself; 1 a
+    message header, which re-encodes to itself; 2 a REQ's JSON (strict:
+    duplicate keys, depth, constants) and the closed request set, whose
+    answer round-trips through ``to_json``; 3 a REQ in pieces (the next
+    bytes cut it) with its 160 KiB cap; 4 a picture arriving in BLOBs (the
+    next bytes are its size and the pieces' lengths); 5 a whole stream of
+    messages through the header parser, the REQ assembler and the picture
+    sink, as a connection feeds them. A refusal is ``ProtocolError`` or
+    ``BadRequest`` with a known code; anything else is a finding."""
+    from domovoi.away import wire
+
+    variant, rest = _pick(data, (0, 1, 2, 3, 4, 5))
+    try:
+        with Timer("away_wire"):
+            if variant == 0:
+                hello = wire.parse_phone_hello(rest)
+                platform = {v: k for k, v in wire.PLATFORMS.items()}[hello.platform]
+                assert wire.encode_phone_hello(platform, hello.version) == rest
+            elif variant == 1:
+                msg = wire.parse_message(rest)
+                assert wire.encode_message(msg.kind, msg.req, msg.body, more=msg.more) == rest
+            elif variant == 2:
+                _away_round_trip(wire.parse_request_bytes(rest))
+            elif variant == 3:
+                cuts = sorted({b % (len(rest) + 1) for b in rest[:4]}) if rest else []
+                pieces, at = wire.RequestPieces(), 0
+                for cut in [*cuts[1:], len(rest)]:
+                    if cut > at:
+                        pieces.add(rest[at:cut])
+                        at = cut
+                _away_round_trip(pieces.finish())
+            elif variant == 4:
+                if len(rest) < 3:
+                    return
+                size = 1 + int.from_bytes(rest[:3], "big") % 4096
+                payload = rest[3:]
+                import hashlib
+
+                picture = wire.Picture("jpeg", size, hashlib.sha256(payload[:size]).hexdigest())
+                sink, offset = wire.PictureSink(picture), 0
+                while payload and not sink.complete:
+                    step = 1 + payload[0] % 97
+                    chunk, payload = payload[1:1 + step], payload[1 + step:]
+                    if not chunk:
+                        break
+                    sink.add(offset, chunk)
+                    offset += len(chunk)
+                if sink.complete:
+                    assert sink.received == size
+                    sink.finish()
+            else:
+                _away_stream(rest)
+    except wire.ProtocolError:
+        pass
+    except wire.BadRequest as e:
+        assert e.code in _AWAY_CODES, e.code
+
+
+def _away_stream(rest: bytes) -> None:
+    """A stream of length-prefixed messages (1-byte lengths) fed the way a
+    connection feeds them: REQ pieces assembled, a declared picture's BLOBs
+    reassembled, everything else parsed."""
+    from domovoi.away import wire
+
+    assembling: dict[int, wire.RequestPieces] = {}
+    sinks: dict[int, wire.PictureSink] = {}
+    while rest:
+        size, rest = rest[0], rest[1:]
+        chunk, rest = rest[:size], rest[size:]
+        msg = wire.parse_message(chunk)
+        if msg.kind == wire.REQ:
+            pieces = assembling.setdefault(msg.req, wire.RequestPieces())
+            pieces.add(msg.body)
+            if msg.more:
+                continue
+            del assembling[msg.req]
+            try:
+                request = pieces.finish()
+            except wire.BadRequest as e:
+                assert e.code in _AWAY_CODES, e.code
+                continue
+            _away_round_trip(request)
+            if request.picture is not None:
+                sinks[msg.req] = wire.PictureSink(request.picture)
+        elif msg.kind == wire.BLOB:
+            sink = sinks.get(msg.req)
+            if sink is None:
+                raise wire.ProtocolError("a piece for no picture")
+            if sink.add(*wire.parse_blob(msg.body)):
+                del sinks[msg.req]
+                try:
+                    sink.finish()
+                except wire.BadRequest as e:
+                    assert e.code in _AWAY_CODES, e.code
+
+
+def _away_samples() -> list[bytes]:
+    import json as _json
+
+    from domovoi.away import wire
+
+    send = _json.dumps({"op": "chat.send", "chat_id": None, "client_id": "6f1c2b9e-0d4a-4f7e-9c3b-2a1d5e8f7a60",
+                        "text": "What's on the shopping list?"}).encode()
+    pic = _json.dumps({"op": "chat.send", "chat_id": 12, "client_id": "6f1c2b9e-0d4a-4f7e-9c3b-2a1d5e8f7a61",
+                       "text": "", "picture": {"type": "jpeg", "size": 4,
+                                               "sha256": "0" * 64}}).encode()
+    stream = b""
+    for m in (wire.encode_message(wire.REQ, 7, send[:20], more=True), wire.encode_message(wire.REQ, 7, send[20:]),
+              wire.encode_message(wire.REQ, 8, pic), wire.encode_message(wire.BLOB, 8, wire.blob_body(0, b"\xff\xd8")),
+              wire.encode_message(wire.BLOB, 8, wire.blob_body(2, b"\xff\x00")),
+              wire.encode_message(wire.PING, 0)):
+        stream += bytes([len(m)]) + m if len(m) < 256 else b""
+    return [
+        b"\x00" + wire.encode_phone_hello(2, "1.5.0+3"),
+        b"\x01" + wire.encode_message(wire.REQ, 1, b'{"op":"chat.list"}', more=True),
+        b"\x02" + send,
+        b"\x02" + b'{"op":"chat.history","chat_id":12,"before_id":null,"limit":50}',
+        b"\x02" + b'{"op":"chat.list","op":"chat.list"}',
+        b"\x02" + b'{"op":"chat.stream","chat_id":[[[[[1]]]]]}',
+        b"\x03" + b"\x05\x09\x02\x10" + b'{"op":"chat.cancel","chat_id":3}',
+        b"\x04" + b"\x00\x00\x10" + bytes(range(256)) * 2,
+        b"\x05" + stream,
+    ]
+
+
 TARGETS: dict[str, Target] = {t.name: t for t in (
     Target("media_tags", media_tags, _files("media_tags/*.mp3", "media_tags/*.flac", "media_tags/*.ogg",
                                             "media_tags/*.opus", "media_tags/*.oga", "media_tags/*.m4a",
@@ -567,4 +706,6 @@ TARGETS: dict[str, Target] = {t.name: t for t in (
     Target("drafts", drafts, _phrase_seeds, "chat draft markdown blocks, link stripping, word diff"),
     Target("user_text", user_text, about="intent fast paths, router patterns and draft phrases on user text",
            samples=_text_samples),
+    Target("away_wire", away_wire, about="away chat's wire: hello, header, strict JSON requests, pieces, pictures",
+           samples=_away_samples),
 )}

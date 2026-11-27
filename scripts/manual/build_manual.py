@@ -96,6 +96,8 @@ ROUTES: dict[str, dict] = {
     # Queue history (1.4.0): admin, on the dashboard only.
     "settings/queue-history": {"dashboard": "#settings/queue-history", "app": {"dashboard": True}},
     "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
+    # Chat from away (1.5.0): a dashboard section for admins.
+    "settings/away-chat": {"dashboard": "#settings/away-chat", "app": {"dashboard": True}},
     "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},
     # the app's own: plain text on the dashboard
     "app/connection": {"dashboard": None, "app": {"screen": "Settings", "tab": "phones-and-browsers"}},

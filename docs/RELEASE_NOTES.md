@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Chat from away
+
+- **What changed.** A household member's phone can chat with the house
+  from away (text and pictures), through a Tor onion of the house's own
+  (`hs-away`) and the Friend Houses listener container, with no company
+  server in between. Migration **V087** adds `away_phones` and
+  `away_sends`; the setting is the household setting `away_chat`. New
+  routes: `/api/away/*` (API_REFERENCE.md 3.18b) and the core's
+  `/v1/away/reconcile`, `/v1/away/state`. The listener image now also
+  carries `domovoi/away/` (it is rebuilt by itself).
+- **What to know.** "Chat from away" is **on** by default, but nothing
+  runs until a phone sets it up at home; when one does, the house runs
+  Tor for it even with Friend Houses off. Turn it off in Settings →
+  System → Chat from away. The internet answer "never" turns it off.
+  SECURITY_PRIVACY.md, "Away chat".
+
 ## 1.5.0 (unreleased) — Offline kit: "AI chat" unticked still installs
 
 - **What changed.** Every offline kit carries Domovoi's own Ollama (Ollama

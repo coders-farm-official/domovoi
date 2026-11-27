@@ -235,8 +235,9 @@ image under that name is T1.
 
 It is expected **running** only while Friend Houses wants it: an admin
 turned Friend Houses on, the internet answer isn't No, and the house has
-a friend or an open friend file (`friend_houses.service.tor_wanted`).
-Otherwise it is expected **stopped**: no failure if it is gone or
+a friend or an open friend file, or (away chat, 1.5.0) "Chat from away"
+is on, the internet answer isn't No and a phone has set it up, whether or
+not Friend Houses is on (`friend_houses.service.tor_wanted`). Otherwise it is expected **stopped**: no failure if it is gone or
 stopped, but if it runs it must still run the core's image. While the
 core starts, restarts or reloads it, it is held (`core:friend-houses`).
 The core rebuilds the image when `Dockerfile.tor` changes and when it is

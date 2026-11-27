@@ -52,7 +52,7 @@ apps the connection is closed (L9). A CAPS is reported to core whenever it
 differs from the last one reported for that friend; only a repeat spends
 the CAPS budget (L8).
 
-Two sockets:
+Three sockets:
 
 ``main.sock``
     the house's own onion: friends only (:mod:`domovoi.friend_houses.session`).
@@ -62,6 +62,13 @@ Two sockets:
     the pairing onion, open while friend files are outstanding
     (:mod:`domovoi.friend_houses.pairing`): at most :data:`PAIRING_PER_HOUR`
     handshakes an hour, and only for an invite id in the open list.
+``away.sock``
+    away chat's onion (1.5.0): the household's own phones, each a key in
+    ``phones.json`` (written by core, read-only here), never a friend
+    (:mod:`domovoi.away.listener`). Its Noise key is the house's away key,
+    not the session key, and it is served whether or not Friend Houses is
+    on: the house keys and the two friends' sockets are only given when it
+    is (``--keys``).
 
 The files are re-read whenever they change, before each handshake, so
 removing a friend or cancelling a friend file takes effect on the next
@@ -80,6 +87,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from domovoi.friend_houses import budget as fb
 from domovoi.friend_houses import envelope as fe
@@ -157,7 +165,7 @@ class State:
     """What the listener knows, refreshed from core's files on change."""
 
     folder: Path
-    keys: fid.HouseKeys
+    keys: fid.HouseKeys | None  # None: away chat only (Friend Houses is off)
     _friends: _Cached = field(default_factory=_Cached)
     _invites: _Cached = field(default_factory=_Cached)
     _open: int = 0
@@ -602,46 +610,90 @@ async def _serve_unix(path: Path, handler) -> asyncio.AbstractServer:  # pragma:
     return server
 
 
-async def read_answers(reader: asyncio.StreamReader, state: State) -> None:
-    """Core's answers about messages, one line each, until stdin closes."""
+#: The longest line core writes on stdin: an away answer (a RESP of up to
+#: 1 MiB of JSON, escaped to ASCII) and room. A longer one is dropped.
+CORE_LINE_MAX = 8 * 1024 * 1024
+
+
+async def read_answers(reader: asyncio.StreamReader, state: State, away: Any = None) -> None:
+    """Core's answers, one line each, until stdin closes: about messages
+    (short ASCII lines, :meth:`State.answer`) and, starting ``away ``,
+    away chat's answers (:meth:`domovoi.away.listener.AwayState.from_core`)."""
     while True:
-        line = await reader.readline()
+        try:
+            line = await reader.readline()
+        except ValueError:  # a line over the reader's limit: dropped, never fatal
+            continue
         if not line:
             return
+        if line.startswith(b"away "):
+            if away is not None:
+                away.from_core(line[5:])
+            continue
         state.answer(line.decode("ascii", errors="ignore")[:80])
 
 
-async def serve(main_socket: Path, pairing_socket: Path, state: State) -> None:  # pragma: no cover
-    main = await _serve_unix(main_socket, lambda r, w: handle(r, w, state))
-    pairing = await _serve_unix(pairing_socket, lambda r, w: handle_pairing(r, w, state))
+async def serve(main_socket: Path | None, pairing_socket: Path | None, state: State,
+                away_socket: Path | None = None, away: Any = None) -> None:  # pragma: no cover
+    servers = []
+    if state.keys is not None and main_socket is not None and pairing_socket is not None:
+        servers.append(await _serve_unix(main_socket, lambda r, w: handle(r, w, state)))
+        servers.append(await _serve_unix(pairing_socket, lambda r, w: handle_pairing(r, w, state)))
+    if away is not None and away_socket is not None:
+        servers.append(await _serve_unix(away_socket, away.handle))
     loop = asyncio.get_running_loop()
-    stdin = asyncio.StreamReader()
+    stdin = asyncio.StreamReader(limit=CORE_LINE_MAX)
     await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(stdin), sys.stdin)
     emit("listening")
-    async with main, pairing:
+    watch = loop.create_task(away.watch()) if away is not None else None
+    try:
+        for server in servers:
+            await server.start_serving()
         # Serve until core goes away: its pipe closing is the signal to
         # stop, so a listener never outlives the core that started it.
-        await main.start_serving()
-        await pairing.start_serving()
-        await read_answers(stdin, state)
+        await read_answers(stdin, state, away)
         log.info("core closed the pipe; stopping")
+    finally:
+        if away is not None:
+            away.shutdown()
+            await asyncio.sleep(0.5)  # the BYEs out
+        if watch is not None:
+            watch.cancel()
+        for server in servers:
+            server.close()
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover — run by core
     parser = argparse.ArgumentParser(description="Friend Houses inbound listener")
-    parser.add_argument("--keys", type=Path, required=True)
+    parser.add_argument("--keys", type=Path, help="the house keys (Friend Houses on)")
     parser.add_argument("--folder", type=Path, required=True,
-                        help="friends.json, hello.bin and invites.json")
-    parser.add_argument("--socket", type=Path, required=True, help="the house's onion")
-    parser.add_argument("--pairing-socket", type=Path, required=True, help="the pairing onion")
+                        help="friends.json, hello.bin, invites.json and phones.json")
+    parser.add_argument("--socket", type=Path, help="the house's onion")
+    parser.add_argument("--pairing-socket", type=Path, help="the pairing onion")
+    parser.add_argument("--away-socket", type=Path, help="away chat's onion")
+    parser.add_argument("--away-key", type=Path, help="the house's away Noise key")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    keys = fid.load(args.keys)
-    if keys is None:
-        log.error("no house keys at %s", args.keys)
+    keys = None
+    if args.keys is not None:
+        keys = fid.load(args.keys)
+        if keys is None:
+            log.error("no house keys at %s", args.keys)
+            return 2
+    away = None
+    if args.away_socket is not None and args.away_key is not None:
+        from domovoi.away import listener as al
+
+        away = al.AwayState(args.folder, al.load_key(args.away_key))
+        if away.key is None:
+            log.error("no away key at %s", args.away_key)
+            return 2
+    if keys is None and away is None:
+        log.error("nothing to serve")
         return 2
-    asyncio.run(serve(args.socket, args.pairing_socket, State(args.folder, keys)))
+    asyncio.run(serve(args.socket, args.pairing_socket, State(args.folder, keys),
+                      args.away_socket, away))
     return 0
 
 

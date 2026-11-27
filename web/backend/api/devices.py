@@ -462,7 +462,9 @@ async def caller_device_row(
     claimed = "owner_claimed_at, claim_key_hash" if await _has_claim_keys(s) else "NULL, NULL"
     flag = "shared_screen" if await _has_shared_screen(s) else "FALSE"
     cols = f"device_id, {owner}, COALESCE({flag}, false), {claimed}"
-    found = await chat_access.device_for_key(s, chat_access.presented_device_key(request))
+    # The device key it presents, or the device a request the away bridge
+    # built for a phone's turn names (chat_access.request_device).
+    found = await chat_access.request_device(s, request)
     if found is not None:
         row = (await s.execute(text(f"SELECT {cols} FROM devices WHERE device_id = :d"),
                                {"d": found[0]})).first()
@@ -932,12 +934,33 @@ async def set_shared_screen(device_id: str, payload: DeviceSharedScreen) -> Devi
             {"id": ident, "shared": payload.shared_screen},
         )
         result = row.first()
+        # A shared screen is the household's, never a member's phone: it
+        # can't chat from away, so marking one removes its away keys
+        # (domovoi/away/store.py; the core is told below).
+        dropped_away = bool(result is not None and payload.shared_screen
+                            and await _drop_away(s, ident))
     if result is None:
         raise HTTPException(
             status_code=404,
             detail=f"device {ident!r} hasn't registered yet",
         )
+    if dropped_away:
+        from web.backend.api import away as away_api
+
+        await away_api.tell_core(None)
     return _row_to_device(result)
+
+
+async def _drop_away(s: Any, device_id: str) -> bool:
+    """Forget a device's away chat keys (V087), when the table is there."""
+    from domovoi.away import store as away_store
+
+    try:
+        async with s.begin_nested():
+            return await away_store.revoke(s, device_id)
+    except Exception as e:  # noqa: BLE001 — a database before V087
+        log.info("device %s: no away keys to drop (%s)", device_id, type(e).__name__)
+        return False
 
 
 @router.get("", response_model=list[Device], dependencies=[Depends(require_admin_read)])

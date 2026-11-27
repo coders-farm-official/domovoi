@@ -3424,6 +3424,92 @@ happen:
   better web answer; an external Kiwix URL on the internet is never asked
   as a local source.
 
+## Away chat (chatting with your house from away)
+
+A household member's paired phone can chat with its own house when it's
+away from home, over mobile data or anyone's Wi-Fi (1.5.0;
+`domovoi/away/`). It is a new way in from the internet, so it is built
+like Friend Houses, on the same plumbing, with keys of its own.
+
+**On by default, needs the internet answer.** "Chat from away" is on for
+the house unless an admin turns it off (Settings → System → Chat from
+away); nothing runs until a phone sets it up. The internet answer "never"
+turns it off and removes the onion. It needs no friends and doesn't need
+Friend Houses on: Tor runs for it alone (the same `domovoi-tor`
+container, the same firewall rules and the same "never" stop).
+
+**Setting it up happens at home only.** The phone makes two key pairs and
+sends the public halves to `POST /api/away/enroll` on the dashboard's
+port, which answers only a caller on the home network (a private,
+link-local or loopback address), only after an admin exists, and only a
+device proving itself with its device key (V086). A shared screen is the
+household's, never a member's, and can't set it up. The answer is the away
+onion's address and the house's away Noise key; both stay on the phone.
+
+**Who can find the house, and who gets in.** The away onion (`hs-away`)
+uses Tor client authorization with its own key folder: only enrolled
+phones can find it, a friend's key can never reach it, and a phone's key
+can never reach friend messaging. As Tor's rules require, the onion isn't
+configured at all until the first phone has enrolled (an onion with no
+authorized clients would be open), and that first change restarts Tor;
+later changes are batched. Tor's authorization only decides who can find
+it: every connection then runs a Noise IK handshake against the house's
+away key (never the Friend Houses session key), and the listener refuses
+any phone key that isn't on the **current** list core rewrites on every
+change and the listener re-reads before each handshake, whatever Tor
+still has cached. Everything before and around that is refused in
+silence, so a stranger who somehow has the address learns nothing.
+
+**What it can reach.** Five chat requests and nothing else: list its
+chats, read one, send a message (text, and a picture up to 1 MiB), pick
+up a reply still being written, and stop one. No dashboard, no media, no
+settings, no other API. The request set is closed and parsed strictly
+(`domovoi/away/wire.py`, fuzzed with the other parsers of outside input):
+a frame or message that breaks the protocol closes the connection; a
+well-formed request asking for something it may not gets a plain error.
+
+**Where it runs.** The bytes from the phone are read by the same sandboxed
+listener container as Friend Houses' (no network, a read-only root, no
+capabilities; audit R6 FH-12), on its own socket (`away.sock`) with its
+own key file. The listener passes core one bounded request at a time;
+core hands it to the dashboard process's chat code over loopback, where
+it is answered as a home chat from that phone would be: the private-chats
+rule (`domovoi/chat_access.py`), memory, help and lookups all see the
+phone's own device. Away chat is never a guest and never voice.
+
+**Admin turns.** A phone with the day's admin grant ("Admin on a phone:
+the day's grant") may send it with one message; the house checks it for
+that device, turns it into an admin session for that one turn, and ends
+the session when the reply ends. A wrong or expired grant sends nothing.
+
+**Pictures.** The phone shrinks each picture and strips its location
+before sending; the house checks its sha256 and that it is the JPEG or
+WebP it says, then decodes it (only that format, with the pixel limit of
+every chat picture) and writes a fresh JPEG with no metadata at all
+before anything reads it.
+
+**Limits.** Per phone: two connections (a third closes the oldest), four
+open requests on one, one reply being written, 10 messages a minute and
+200 an hour, 60 other requests a minute, 30 pictures and 20 MB an hour.
+Across the house: 16 phone connections and 60 handshakes a minute. A
+connection that says nothing for two minutes is closed.
+
+**Taking it away.** The phone turning it off, an admin's **Remove**,
+"Chat from away" off, the internet answer "never", marking the device a
+shared screen, or the device losing the key it enrolled with each stop
+the phone at its next connection, and close an open one within a few
+seconds (the listener checks its list every two seconds and on every
+message, and the dashboard's chat code checks again on every request).
+
+**Logs.** Nothing from a message's text or a picture is logged, by the
+listener, the core or the dashboard process: device ids, request kinds and
+error codes only.
+
+**What it doesn't protect against.** The phone holds the keys: a phone
+someone else has unlocked can chat as its owner until it is removed. Tor
+hides where the phone and the house are from each other and from the
+network in between, not from a phone that is already enrolled.
+
 ## Friend Houses (house to house, off by default)
 
 Messages and shared lists with friends’ houses, house to house, with no
