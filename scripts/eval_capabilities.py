@@ -207,6 +207,9 @@ class Case:
     # regex must match one action; ``did_not`` regexes must match none.
     did: list[str] = field(default_factory=list)
     did_not: list[str] = field(default_factory=list)
+    # A feature the case needs on this checkout ("chat_actions": typed chat's
+    # house commands, 1.5.0 wf/chat-actions); skipped without it.
+    requires: str | None = None
 
 
 def case_group(case_id: str) -> int:
@@ -241,6 +244,7 @@ def load_corpus(path: Path = DEFAULT_CORPUS) -> list[Case]:
                 not_one_of=_as_list(c.get("not_one_of")),
                 differs_from_before=bool(c.get("differs_from_before")),
                 did=_as_list(c.get("did")), did_not=_as_list(c.get("did_not")),
+                requires=c.get("requires"),
             )
         )
     return out
@@ -801,6 +805,13 @@ def reset_state(house: dict) -> None:
     STATE["sessions"] = {}     # conversation id -> its context (sessions.context)
     STATE["mic_sessions"] = {}  # chat thread name -> its conversation id
     STATE["list_items"] = []
+    STATE["saying"] = {}
+    try:
+        from domovoi import phone_voice
+
+        phone_voice._SESSIONS.clear()
+    except Exception:  # noqa: BLE001 - a checkout without the phone mic
+        pass
 
 
 def _mem_insert(h: dict, p: dict) -> list[dict[str, Any]]:
@@ -847,6 +858,24 @@ def _thread_rows(p: dict) -> list[dict[str, Any]]:
     return []
 
 
+def _thread_name(p: dict) -> str | None:
+    return next((n for n, tid in STATE["thread_ids"].items() if tid == int(p["t"])), None)
+
+
+def _recent_requests(h: dict, p: dict) -> list[dict[str, Any]]:
+    name = _thread_name(p)
+    said = [m["content"] for m in STATE["chat_log"].get(name, []) if m["role"] == "user"]
+    if name in STATE.get("saying", {}):
+        said.append(STATE["saying"][name])
+    now = time.time()
+    return [{"content": c, "at": now} for c in reversed(said)][:10]
+
+
+def _last_reply_stats(h: dict, p: dict) -> list[dict[str, Any]]:
+    rows = [r for r in _thread_rows(p) if r["id"] < int(p["u"]) and r["role"] == "assistant"]
+    return [{"stats": rows[-1].get("stats")}] if rows else []
+
+
 def _previous_chat_row(h: dict, p: dict) -> list[dict[str, Any]]:
     rows = [r for r in _thread_rows(p) if r["id"] < int(p["u"])]
     if not rows:
@@ -886,6 +915,14 @@ FIXTURE_READS: list[tuple[str, re.Pattern[str], Any]] = [
      _device_row),
     ("chat's previous row", re.compile(r"SELECT role, stats FROM chat_messages WHERE thread_id", re.I),
      _previous_chat_row),
+    # The intercom's "announce that" in a chat reads the person's own recent
+    # messages in the thread (phone_voice.recent_requests): user rows only,
+    # never a reply, newest first.
+    ("chat's recent requests", re.compile(r"SELECT content, EXTRACT\(EPOCH FROM created_at\) FROM chat_messages", re.I),
+     _recent_requests),
+    # The typed send's hop: did the house's last reply ask something back?
+    ("chat's last reply", re.compile(r"SELECT stats FROM chat_messages WHERE thread_id = :t AND role = 'assistant' AND id < :u", re.I),
+     _last_reply_stats),
     ("room board", re.compile(r"SELECT board FROM satellites", re.I),
      lambda h, p: [{"board": "android_room" if h.get("asker") == "room_mode_phone" else "pi"}]),
 ]
@@ -1068,6 +1105,9 @@ class _LiveState:
         self.active_sessions = {
             r["id"]: _LiveRoom(r["id"], board) for r in house.get("rooms") or [] if r.get("online", True)
         }
+        # No fixture room is in a drop-in: every routed turn asks whether
+        # its room is in a call (router, dropin_common.room_in_call).
+        self.active_dropins: dict = {}
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("__"):
@@ -1457,39 +1497,45 @@ async def run_voice_turn(utterance: str, ctx: Any) -> Turn:
     return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path)
 
 
-async def run_chat_mic_turn(utterance: str, house: dict, *, device: str | None, thread: str) -> Turn:
-    """The phone chat's mic (domovoi/phone_voice.py _answer) without speech:
-    route() as the phone (its PHONE_ROOM_PREFIX room, device_kind phone,
-    push to talk), credited to the device's person, one conversation per
-    chat thread. The fixture's rooms have music players and are connected;
-    what the turn does lands in Turn.actions (announcements from the reply,
-    timers and list items from their writes, music from its dispatch)."""
-    import asyncio
+def requirement_met(case: "Case") -> bool:
+    if case.requires is None:
+        return True
+    if case.requires == "chat_actions":
+        return chat_actions_available()
+    raise ValueError(f"{case.id}: unknown requires {case.requires!r}")
 
+
+def chat_actions_available() -> bool:
+    """Whether this checkout has typed chat's house commands (1.5.0
+    wf/chat-actions: chat._router_hop_kind, phone_voice._route_phone_turn)."""
+    from domovoi import phone_voice
+    from web.backend.api import chat as chat_api
+
+    return hasattr(phone_voice, "_route_phone_turn") and hasattr(chat_api, "_router_hop_kind")
+
+
+@contextlib.contextmanager
+def action_turn(house: dict) -> Iterator[Any]:
+    """A turn that may act on the house: the fixture's rooms have music
+    players and are connected (the live app it yields), ACTION_READS answer,
+    the room's music dispatch is recorded, and the turn's own stub players
+    leave nothing playing for a later case (2.19 once heard 25.4m's jazz)."""
     from domovoi import room_music
     from domovoi.clients import mpd as mpd_mod
-    from domovoi.models import Intent
-    from domovoi.phone_voice import phone_room
-    from domovoi.router import route
 
-    dev = next((d for d in house.get("devices") or [] if d["id"] == device), {})
-    room = phone_room(device or "phone")
-    ctx = build_context(house).model_copy(update={
-        "room_id": room, "device_kind": "phone", "trigger": "push_to_talk",
-        "person_id": dev.get("person_id"), "voice_outcome": None, "voice_candidates": [],
-        "presence_tier": None, "chat_thread_id": STATE["thread_ids"].setdefault(thread, len(STATE["thread_ids"]) + 1),
-        "session_id": STATE["mic_sessions"].get(thread),
-    })
-    live = ctx.app.state
+    app = LiveApp(house)
+    live = app.state
     live.satellite_full_duplex = {r: True for r in live.active_sessions}
     live.satellite_volume = {}
     live.active_dropins = {}
+    # The core's internet probe (phone_voice reads ``state.probe.online``).
+    import types
+
+    live.probe = types.SimpleNamespace(online=house.get("internet", "always") != "never")
 
     async def dispatch(app: Any, response: Any, room_id: str, *, start_paused: bool = False) -> None:
         STATE["actions"].append(f"music:{room_id}:{response.music_action}")
 
-    # The turn's own players: a stub player started here must not still be
-    # playing in a later case (2.19 "show me the queue" heard 25.4m's jazz).
     saved_ports, saved_dispatch = dict(mpd_mod._room_ports), room_music.dispatch_music
     saved_clients = dict(mpd_mod._clients)
     mpd_mod._clients.clear()
@@ -1498,12 +1544,8 @@ async def run_chat_mic_turn(utterance: str, house: dict, *, device: str | None, 
                                 for i, r in enumerate(house.get("rooms") or [])})
     room_music.dispatch_music = dispatch
     CURRENT["actions"] = True
-    before = len(STATE["actions"])
     try:
-        resp = await route(Intent(transcript=utterance, room_id=room, session_id=ctx.session_id),
-                           ctx, FixtureSession())
-        for _ in range(10):   # the room's music task runs after the reply
-            await asyncio.sleep(0)
+        yield app
     finally:
         CURRENT["actions"] = False
         room_music.dispatch_music = saved_dispatch
@@ -1511,11 +1553,112 @@ async def run_chat_mic_turn(utterance: str, house: dict, *, device: str | None, 
         mpd_mod._room_ports.update(saved_ports)
         mpd_mod._clients.clear()
         mpd_mod._clients.update(saved_clients)
-    STATE["mic_sessions"][thread] = resp.session_id
+
+
+async def _settle() -> None:
+    import asyncio
+
+    for _ in range(10):   # the room's music task and the fan-out run after the reply
+        await asyncio.sleep(0)
+
+
+def _did_from(resp: Any, before: int) -> list[str]:
     did = STATE["actions"][before:]
-    if resp.announce_to_rooms:
+    if resp is not None and resp.announce_to_rooms:
         did.insert(0, f"announce:{','.join(resp.announce_to_rooms)}:{resp.announce_text or ''}")
-    return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path, actions=did)
+    return did
+
+
+async def run_typed_command(
+    utterance: str, house: dict, *, device: str | None, thread: str, tid: int, user_row: int,
+) -> Turn | None:
+    """chat.send_message's router hop (web/backend/api/chat.py _router_turn)
+    and the core's typed turn (POST /v1/phone/text, phone_voice
+    run_phone_text_turn without its caller checks and row writes): the
+    reply the house writes, or None (the chat answers). The core is up and
+    the thread has nothing attached (the fixture has neither)."""
+    from domovoi import phone_voice
+    from web.backend.api import chat as chat_api
+
+    saved_snap, saved_attach = chat_api.get_cached_snapshot, chat_api._thread_reads_attachments
+
+    async def no_attachments(thread_id: int) -> bool:
+        return False
+
+    chat_api.get_cached_snapshot = lambda: {"fixture": True}
+    chat_api._thread_reads_attachments = no_attachments
+    t0 = time.perf_counter()
+    try:
+        kind = await chat_api._router_hop_kind(tid, utterance, user_row, None)
+    finally:
+        chat_api.get_cached_snapshot, chat_api._thread_reads_attachments = saved_snap, saved_attach
+    if kind is None:
+        return None
+    STATE["hop"] = {"kind": kind, "t0": t0}
+    dev = next((d for d in house.get("devices") or [] if d["id"] == device), {})
+    person = None if dev.get("shared_screen") else dev.get("person_id")
+    room = phone_voice.phone_room(device or f"chat-{tid}")
+    before = len(STATE["actions"])
+    with action_turn(house) as app:
+        resp, err = await phone_voice._route_phone_turn(
+            app, room=room, thread_id=tid, request=utterance, player={}, person_id=person,
+            trigger="typed", stages={}, defer_qa=True)
+        await _settle()
+    STATE["hop"]["ms"] = int((time.perf_counter() - t0) * 1000)
+    STATE["hop"]["acted"] = not (resp is not None and resp.matched_path == phone_voice.DEFERRED_PATH)
+    if resp is not None and resp.matched_path == phone_voice.DEFERRED_PATH:
+        return None   # no handler acted: the chat model answers, nothing written
+    if resp is None:
+        text = (err or {}).get("detail", "")
+        _chat_row(thread, "assistant", {"model_role": "action", "error": True})
+        return Turn("reply", text, None, "chat_action", actions=_did_from(None, before))
+    reply, _actions, _notes = phone_voice._typed_reply(resp, False)
+    stats = {"model_role": "action", "matched_handler": resp.matched_handler}
+    if resp.expect_followup:
+        stats["expect_followup"] = True
+    _chat_row(thread, "assistant", stats)
+    return Turn("reply", reply, resp.matched_handler, "chat_action", actions=_did_from(resp, before))
+
+
+async def run_chat_mic_turn(utterance: str, house: dict, *, device: str | None, thread: str) -> Turn:
+    """The phone chat's mic (domovoi/phone_voice.py _answer) without speech:
+    route() as the phone (its PHONE_ROOM_PREFIX room, device_kind phone,
+    push to talk), credited to the device's person, one conversation per
+    chat thread. The fixture's rooms have music players and are connected;
+    what the turn does lands in Turn.actions (announcements from the reply,
+    timers and list items from their writes, music from its dispatch)."""
+    from domovoi import phone_voice
+    from domovoi.models import Intent
+    from domovoi.phone_voice import phone_room
+    from domovoi.router import route
+
+    dev = next((d for d in house.get("devices") or [] if d["id"] == device), {})
+    room = phone_room(device or "phone")
+    tid = STATE["thread_ids"].setdefault(thread, len(STATE["thread_ids"]) + 1)
+    if hasattr(phone_voice, "_route_phone_turn"):
+        before = len(STATE["actions"])
+        with action_turn(house) as app:
+            resp, err = await phone_voice._route_phone_turn(
+                app, room=room, thread_id=tid, request=utterance, player={},
+                person_id=dev.get("person_id"), trigger="push_to_talk", stages={})
+            await _settle()
+        if resp is None:
+            return Turn("reply", (err or {}).get("detail", ""), None, "chat_mic", actions=_did_from(None, before))
+        return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path,
+                    actions=_did_from(resp, before))
+    # Before wf/chat-actions: the mic's Context, built as phone_voice._answer did.
+    with action_turn(house) as app:
+        ctx = build_context(house).model_copy(update={
+            "room_id": room, "device_kind": "phone", "trigger": "push_to_talk", "app": app,
+            "person_id": dev.get("person_id"), "voice_outcome": None, "voice_candidates": [],
+            "presence_tier": None, "chat_thread_id": tid, "session_id": STATE["mic_sessions"].get(thread),
+        })
+        before = len(STATE["actions"])
+        resp = await route(Intent(transcript=utterance, room_id=room, session_id=ctx.session_id),
+                           ctx, FixtureSession())
+        await _settle()
+    STATE["mic_sessions"][thread] = resp.session_id
+    return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path, actions=_did_from(resp, before))
 
 
 def _fixture_caller(house: dict, device: str | None) -> Any:
@@ -1625,6 +1768,19 @@ async def run_chat_turn(
     if egg is not None:
         _chat_row(thread, "assistant", {"model_role": "owner_easter_egg"})
         return Turn("reply", egg, "owner_easter_egg", "chat")
+    if chat_actions_available():
+        STATE.setdefault("saying", {})[thread] = utterance
+        try:
+            routed = await run_typed_command(utterance, house, device=device, thread=thread, tid=tid, user_row=user_row)
+        finally:
+            STATE["saying"].pop(thread, None)
+        hop = STATE.pop("hop", None)
+        note = (f"router hop: {hop['kind']}, {hop.get('ms', 0)} ms, "
+                f"{'acted' if hop.get('acted') else 'no action'}") if hop else ""
+        if routed is not None:
+            routed.detail = (routed.detail + "; " if routed.detail else "") + note
+            return routed
+        STATE["hop_note"] = note
     system = ollama_mod.chat_system_prompt(None)
     if help_answer.looks_like_help(utterance) or admin_tasks.match(utterance) is not None:
         from web.backend.api import help as help_api
@@ -1664,7 +1820,7 @@ async def run_chat_turn(
                   {"role": "user", "content": utterance}],
     )
     _chat_row(thread, "assistant", {"model_role": "chat"})
-    return Turn("reply", resp["message"]["content"], None, "chat")
+    return Turn("reply", resp["message"]["content"], None, "chat", STATE.pop("hop_note", ""))
 
 
 async def run_playbox_turn(utterance: str, house: dict) -> Turn:
@@ -1710,6 +1866,8 @@ async def run_case(
         return Turn("skipped", detail=case.skip_reason)
     if case.where == "away" and not away_available():
         return Turn("skipped", detail="away chat isn't on this checkout (web/backend/away_bridge.py)")
+    if not requirement_met(case):
+        return Turn("skipped", detail=f"needs {case.requires}, which isn't on this checkout")
     TOUCHES.clear()
     # Only the model is real in an --ollama run: state the fixture doesn't
     # hold is still "needs db" (answering it empty made fake failures:
@@ -1726,7 +1884,15 @@ async def run_case(
         if case.where == "playbox":
             return await run_playbox_turn(say, house)
         if case.where == "chat_mic":
-            return await run_chat_mic_turn(say, house, device=device or default_device(house), thread=thread)
+            STATE["saying"][thread] = say
+            try:
+                t = await run_chat_mic_turn(say, house, device=device or default_device(house), thread=thread)
+            finally:
+                STATE["saying"].pop(thread, None)
+            # The mic writes what was said in the thread too (its transcript row).
+            STATE["chat_log"].setdefault(thread, []).extend(
+                [{"role": "user", "content": say}, {"role": "assistant", "content": t.text or ""}])
+            return t
         t = await run_chat_turn(say, house, device=device or default_device(house),
                                 thread=thread, model_url=model_url, model=model,
                                 away=case.where == "away")
@@ -1804,6 +1970,7 @@ class Result:
     judge_score: int | None = None
     judge_reason: str = ""
     actions: list[str] = field(default_factory=list)
+    wall_ms: int = 0
     detail: str = ""
     # --runs N: how many scored runs passed, of how many; every run's own
     # status, reply and problems.
@@ -1832,8 +1999,8 @@ def combine(runs: list[Result]) -> Result:
     out = Result(**{k: v for k, v in asdict(worst).items() if k not in ("passes", "scored_runs", "runs")})
     out.passes = sum(1 for r in scored if r.status in ("pass", "fixed"))
     out.scored_runs = len(scored)
-    out.runs = [{"status": r.status, "text": r.text, "problems": r.problems, "detail": r.detail}
-                for r in runs]
+    out.runs = [{"status": r.status, "text": r.text, "problems": r.problems, "detail": r.detail,
+                 "path": r.path, "handler": r.handler, "wall_ms": r.wall_ms} for r in runs]
     return out
 
 
@@ -1996,8 +2163,11 @@ async def run_all(
         for _ in range(max(1, runs)):
             for case in cases:
                 house = houses[case.house]
+                t0 = time.perf_counter()
                 turn = await run_case(case, house, catalogue, model_url=model_url, model=model)
-                per_case[case.id].append(score(case, turn, house, tree, catalogue))
+                r = score(case, turn, house, tree, catalogue)
+                r.wall_ms = int((time.perf_counter() - t0) * 1000)
+                per_case[case.id].append(r)
     if judge_model and model_url:
         for rs in per_case.values():
             for r in rs:

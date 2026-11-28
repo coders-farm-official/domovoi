@@ -294,6 +294,8 @@ def _stub_param(case):
     marks = []
     if case.where == "away" and not ev.away_available():
         marks.append(pytest.mark.skip(reason="away chat isn't on this checkout"))
+    elif not ev.requirement_met(case):
+        marks.append(pytest.mark.skip(reason=f"needs {case.requires}, which isn't on this checkout"))
     elif case.needs_change:
         marks.append(pytest.mark.xfail(strict=False, reason=f"known gap {case.needs_change}"))
     elif case.id in STUB_FINDINGS:
@@ -316,13 +318,13 @@ def test_stub_flags_are_honest() -> None:
     answered = []
     no_away = not ev.away_available()
     for case in CASES:
-        if case.skip_reason or (no_away and case.where == "away"):
+        if case.skip_reason or (no_away and case.where == "away") or not ev.requirement_met(case):
             continue
         turn, _ = _run(case)
         if turn.outcome in ("reply", "raised"):
             answered.append(case.id)
     assert sorted(answered) == sorted(
-        c.id for c in STUB_CASES if not (no_away and c.where == "away"))
+        c.id for c in STUB_CASES if not (no_away and c.where == "away") and ev.requirement_met(c))
 
 
 def _reply(case_id: str) -> str:
@@ -493,3 +495,36 @@ def test_away_answers_match_home(case) -> None:
         assert away.outcome == home.outcome, case.id
     else:
         assert (away.outcome, away.text) == (home.outcome, home.text), case.id
+
+
+# ─── Typed chat's house commands (1.5.0): chat does what the chat mic does ──
+
+def _mic_twin(case):
+    """25.4w -> 25.4m: the chat mic's case for the same request."""
+    import re as _re
+
+    m = _re.fullmatch(r"(25\.\d+)[wa]?", case.id)
+    return next((c for c in CASES if m and c.id == m.group(1) + "m"), None)
+
+
+CHAT_ACTION_PAIRS = [
+    (c, _mic_twin(c)) for c in CASES
+    if c.id.startswith("25.") and c.where in ("chat", "away") and _mic_twin(c) is not None
+]
+
+
+def test_every_typed_command_has_a_mic_twin() -> None:
+    typed = [c for c in CASES if c.id.startswith("25.") and c.where in ("chat", "away")]
+    seeded = {c.id for c in typed if any("reply" in b for b in c.before)}
+    assert typed and {c.id for c, _ in CHAT_ACTION_PAIRS} == {c.id for c in typed} - seeded
+
+
+@pytest.mark.skipif(not ev.chat_actions_available(), reason="typed chat's house commands aren't on this checkout")
+@pytest.mark.parametrize("case,mic", [pytest.param(c, m, id=c.id) for c, m in CHAT_ACTION_PAIRS])
+def test_typed_command_matches_the_mic(case, mic) -> None:
+    """A house command typed in a chat (phone, web dashboard, away) gets
+    the chat mic's words and does what the mic does (Turn.actions)."""
+    typed, _ = _run(case)
+    said, _ = _run(mic)
+    assert typed.path == "chat_action", f"{case.id}: answered by {typed.handler or 'the model'} ({typed.path})"
+    assert (typed.text, typed.actions) == (said.text, said.actions), case.id
