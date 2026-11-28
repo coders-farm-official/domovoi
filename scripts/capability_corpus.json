@@ -3717,7 +3717,9 @@
           null,
           "call mom"
         ]
-      ]
+      ],
+      "needs_change": "N21",
+      "note": "Known gap N21 (Main 2026-11-28, post-1.5.0 with 21.8m): the chat model pretends a reminder (\"I'll make a note to call your mom\") in about 2 of 3 runs, on main too; the earlier check missed it. Wanted: no reminder claimed, nothing stored, and later a reminder offer on both paths."
     },
     {
       "id": "21.8m",
