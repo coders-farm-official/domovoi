@@ -20,3 +20,18 @@ github.com/coders-farm-official/domovoi-models; the checksums are upstream's
 `pod-archive-onnxruntime-c-1.24.2.zip`). To move to a newer ONNX Runtime,
 replace this folder with that version's files (and their checksum) from a
 source you trust, and keep this note current.
+
+## domovoi-tor (away chat's Tor: Arti)
+
+Not a third-party package: `DomovoiTor.xcframework` is built here, from the
+repository's own `native/domovoi-tor` crate (Arti 2.8.0, the Tor Project's
+Tor in Rust, MIT OR Apache-2.0, and the crates its `Cargo.lock` pins), by
+`native/domovoi-tor/build-ios.sh --install`: a static library for the
+iPhone (`ios-arm64`) and a universal one for the Simulator
+(`ios-arm64_x86_64-simulator`), each with `domovoi_tor.h` as the module
+`DomovoiTorFFI`. `SHA256SUMS` holds the bytes (`DomovoiTorLibraryTests`
+checks them), `BUILD-INFO.txt` says what built them, and `Package.swift`
+wraps it as the local package DomovoiKit depends on, iOS only. Rebuild it
+after any change to the crate; the build script compares with the committed
+hashes unless told to `--install`. Its licence notice is
+`ios/licences/notices/domovoi-tor/THIRD-PARTY-LICENSES.txt`.

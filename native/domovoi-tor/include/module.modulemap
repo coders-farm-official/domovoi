@@ -1,0 +1,4 @@
+module DomovoiTorFFI {
+    header "domovoi_tor.h"
+    export *
+}

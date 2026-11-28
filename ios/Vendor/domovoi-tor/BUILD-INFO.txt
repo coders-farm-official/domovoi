@@ -1,0 +1,6 @@
+DomovoiTor.xcframework (libdomovoi_tor.a), built by native/domovoi-tor/build-ios.sh
+rustc: rustc 1.100.1 (20ddd0171 2026-11-25)
+Xcode: Xcode 26.4 Build version 17E192
+arti-client: 0.48.0
+targets: aarch64-apple-ios; aarch64-apple-ios-sim x86_64-apple-ios (one universal Simulator library)
+IPHONEOS_DEPLOYMENT_TARGET: 18.0

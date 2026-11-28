@@ -26,7 +26,8 @@ negative `ERR_*` (`src/lib.rs`).
   `Cargo.lock` is committed and every build is `--locked`. Stable features
   only: tokio, rustls (ring), onion-service-client, vanguards, keymgr,
   static-sqlite, compression.
-- Rust 1.100.1, cargo-ndk 4.1.2, NDK r29 (29.0.14206865), Android API 26.
+- Rust 1.100.1, cargo-ndk 4.1.2, NDK r29 (29.0.14206865), Android API 26;
+  for the iPhone, Xcode and iOS 18.0.
 - Release profile: `opt-level = "z"`, LTO, one codegen unit, stripped;
   `panic = "unwind"` so each FFI entry's `catch_unwind` turns a panic into
   `ERR_PANIC` instead of ending the app.
@@ -57,7 +58,32 @@ the rest are permissive.
 
 ## iPhone
 
-The iPhone app builds the same crate as a static library. sysinfo 0.38.4
-(through tor-memquota) doesn't build for `aarch64-apple-ios` yet; the iOS
-build needs the one-line `[patch.crates-io]` fix the Tor spike made, which
-is not in this crate's Cargo.lock (Android doesn't need it).
+```bash
+bash native/domovoi-tor/build-ios.sh            # build, compare with the committed SHA256SUMS
+bash native/domovoi-tor/build-ios.sh --install  # ...and replace ios/Vendor/domovoi-tor
+```
+
+It builds the same crate as a static library (`cargo rustc --locked
+--crate-type staticlib`) for `aarch64-apple-ios` (the iPhone) and for
+`aarch64-apple-ios-sim` and `x86_64-apple-ios` (one universal Simulator
+library: the app's Simulator builds are both architectures), with
+`IPHONEOS_DEPLOYMENT_TARGET` set to the app's (18.0, checked against
+`ios/project.yml`), the same `--remap-path-prefix` and `SOURCE_DATE_EPOCH`
+as Android's (and `-ffile-prefix-map` for the C parts), then
+`strip -S -x` (a static library isn't linked, so the profile's `strip`
+doesn't reach it). It packages the two libraries with `include/`
+(`domovoi_tor.h` and the module map for `DomovoiTorFFI`) as
+`ios/Vendor/domovoi-tor/DomovoiTor.xcframework`, with `SHA256SUMS` and
+`BUILD-INFO.txt`. Needs Xcode and the three Rust targets (`rustup target
+add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`); about a
+minute per target on the owner's Mac. DomovoiKit links it on iOS only
+(`DomovoiTorEngine`).
+
+sysinfo 0.38.4 (through tor-memquota) doesn't build for iOS, so both
+platforms build it from `vendor/sysinfo-0.38.4` (`[patch.crates-io]`), a
+one-line fix upstream made in 0.40.0; `vendor/README.md` has the change and
+when to drop it. The iPhone app's licence notice is
+`python3 native/domovoi-tor/third_party_licences.py --ios`
+(ios/licences/notices/domovoi-tor/THIRD-PARTY-LICENSES.txt: the crates of
+all three targets); write it again after any `Cargo.lock` change, as
+Android's.
