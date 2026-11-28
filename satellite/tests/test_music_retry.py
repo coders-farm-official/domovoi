@@ -187,6 +187,9 @@ def make_sat(monkeypatch, plans, *, features=("speech_pause", "end_capture", "mu
     sat.MUSIC_CONNECT_GRACE_SEC = grace
     sat.frames = []
     sat._emit_text = lambda payload: sat.frames.append(payload) or True
+    # A session is up (the core is there to hear music_failed); with none,
+    # a give-up leaves the ring to the outage (test_mic_approval_gate).
+    sat.send_q = object()
     sat.procs = []
     plans = list(plans)
 

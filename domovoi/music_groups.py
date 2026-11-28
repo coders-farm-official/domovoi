@@ -35,7 +35,7 @@ The rules:
 * **Ends by itself** when the host's player stops (the queue ran out: the
   playback sweeper), and a member offline for 30 minutes leaves.
 * **A core restart** keeps a shared queue that was alive within two hours
-  (changed, or its host seen playing by the sweeper, :func:`_touch`);
+  (changed, or its host seen playing or paused by the sweeper, :func:`_touch`);
   older ones are ended.
 
 State is in memory (this process routes every music command) and mirrored
@@ -432,7 +432,9 @@ TOUCH_EVERY_SEC = 5 * 60.0
 
 
 async def _touch(sh: Share) -> None:
-    """Mark ``sh``'s row alive (``updated_at``) while its host plays, so
+    """Mark ``sh``'s row alive (``updated_at``) while its host plays or is
+    paused (a paused group's members stay on the host's stream, so ending
+    it at boot would orphan them on resume), so
     the boot rule (:func:`load`, STALE_AT_BOOT_SEC) measures how long the
     core was away, not how long the group has played. Without it a group
     that played for more than two hours was ended by a core restart while
