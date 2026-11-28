@@ -20,6 +20,7 @@ run is CI's.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 
@@ -372,3 +373,76 @@ async def test_replies_stream_over_a_real_socket_and_resume_after_a_drop(house, 
             assert kind == wire.RESP
             assert [m["content"] for m in history["messages"]] == ["count", "one two three four five six seven"]
     assert os.environ.get("WEB_PORT") == "16369" and "WEB_HOST" not in os.environ   # put back
+
+
+# ─── a send on a live house: both hops over real sockets ─────────────────
+
+
+@contextlib.asynccontextmanager
+async def _core_on_a_socket():
+    """The core app served by uvicorn on a free loopback port, in this
+    loop (the web's router hop reaches it as on a house)."""
+    import socket
+
+    import uvicorn
+
+    from domovoi.main import app as core_app
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(core_app, lifespan="off", log_level="warning", access_log=False,
+                                           timeout_graceful_shutdown=2))
+    server.capture_signals = contextlib.nullcontext  # type: ignore[method-assign]
+    task = asyncio.get_running_loop().create_task(server.serve(sockets=[sock]), name="away-test-core")
+    for _ in range(500):
+        if server.started or task.done():
+            break
+        await asyncio.sleep(0.01)
+    assert server.started
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(task, 10)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 — closing anyway
+            task.cancel()
+
+
+HELLO = "Hey domovoi! testing out the away from home chat feature"
+
+
+@pytest.mark.parametrize("said, reply", [
+    (HELLO, f"you said: {HELLO}"),
+    ("set a timer for 5 minutes", "Timer set for 5 minutes."),
+])
+async def test_a_send_on_a_live_house_reaches_the_phone(house, tmp_path, monkeypatch, said, reply) -> None:  # noqa: F811
+    """The owner's first away send (main 16b76bb4) showed "Your house is
+    busy": a NEW chat, on a house whose state poll has reached the core (so
+    the typed chat's router hop asks it). Phone -> listener -> the core's
+    relay -> the web on a real socket -> its hop to the core on a real
+    socket: the phone gets RESP, the reply, and only the wire's events."""
+    monkeypatch.setattr(chat_api, "get_cached_snapshot", lambda: {"active_rooms": []})
+    monkeypatch.setenv("WEB_PORT", "16369")
+    monkeypatch.delenv("WEB_HOST", raising=False)
+    async with _core_on_a_socket() as core_url:
+        monkeypatch.setattr(chat_api, "domovoi_url", lambda: core_url)
+        async with web_client() as c:
+            base, _, _ = await claimed(c)
+            p = await phone(c, base)
+            await enroll(c, p)
+            async with AwayLoopback(tmp_path / "listener", house_key=away_keys.noise_key(),
+                                    web_socket=True) as loop:
+                await svc._write_phones(loop.folder)
+                ph = loop.phone(p["noise"])
+                await ph.connect(loop.port)
+                await ph.request(1, {"op": "chat.send", "chat_id": None,
+                                     "client_id": "0b7c4a52-3f1e-4d6a-9e2b-7c1d0a9f8e40", "text": said})
+                out = await ph.answer(1, timeout=30)
+    kinds = [k for k, _ in out]
+    assert kinds[0] == wire.RESP and kinds[-1] == wire.EVENT, out
+    assert all(k == wire.EVENT and b["type"] in ("delta", "done", "error") for k, b in out[1:]), out
+    done = out[-1][1]
+    assert done["type"] == "done", out
+    assert done["message"]["content"] == reply

@@ -124,6 +124,8 @@ def on_event(event: dict[str, Any]) -> None:
         return
     tasks = _RELAYS.setdefault(conn, set())
     if len(tasks) >= MAX_RELAYS_PER_CONN or _count() >= MAX_RELAYS:
+        log.warning("away chat: too many requests open (%d on this connection, %d in all); one refused",
+                    len(tasks), _count())
         _spawn_line(conn, req, "err", {"code": "unavailable", "detail": "the house is busy; try again shortly"},
                     end=True)
         return
@@ -218,6 +220,9 @@ async def _relay(conn: int, req: int, payload: dict[str, Any]) -> None:
                     if end:
                         ended = True
                         return
+                # Each of the three ways a request ends as unavailable says
+                # so in the log (the phone shows "Your house is busy").
+                log.warning("away chat: the web's answer ended without its last line")
     except asyncio.CancelledError:
         ended = True  # the connection ended: the web's run carries on
         raise
