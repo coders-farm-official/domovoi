@@ -891,6 +891,20 @@ const ArtistsTab = ({ onOpen }) => {
   );
 };
 
+/* What a refused play in a room says: the server's own sentence, as it is
+ * ("The music player in the garage can't find "Mo'murda" yet. …"), never
+ * a status code, "play failed:" or JSON. null when the shared rule owns
+ * it (a blocked device, a dismissed or open pair / sign-in prompt) or the
+ * server gave no sentence — then reportMutationFailure speaks. */
+const roomPlayFailureText = (e) => {
+  if (!e || deviceBlockReason(e) || e.authCancelled || isAuthFailure(e)) return null;
+  const detail = e.detail && e.detail.detail;
+  if (typeof detail !== 'string') return null;
+  const text = detail.trim();
+  if (!text || text[0] === '{' || text[0] === '[') return null;
+  return clipSentence(text, 240);
+};
+
 /* A random order of `ids` (Fisher-Yates), for "shuffle". */
 const shuffledIds = (ids) => {
   const out = [...ids];
@@ -2531,7 +2545,7 @@ const MusicPage = () => {
   const [openArtist, setOpenArtist] = React.useState(null);
   // Genres tab: the genre whose drawer is open.
   const [openGenre, setOpenGenre] = React.useState(null);
-  const [fire, toastNode] = useToast();
+  const [fire, toastNode, dismissToast] = useToast();
 
   // App-level browser playback context (docked mini-player lives in the
   // shell, its expanded view opens from the bar; here we drive it from
@@ -2685,9 +2699,18 @@ const MusicPage = () => {
     const key = `${room_id}|${what}`;
     if (playsInFlight.current.has(key)) return;
     playsInFlight.current.add(key);
-    fire(startedMsg);
+    // The optimistic "playing … in garage…" carries a key, so a failure
+    // REPLACES it: the error alone, never beside a toast saying it plays.
+    const toastKey = `room-play|${key}`;
+    fire(startedMsg, { key: toastKey });
     try { await send(); refreshNP(); }
-    catch (e) { reportMutationFailure(fire, verb, e); }
+    catch (e) {
+      const plain = roomPlayFailureText(e);
+      if (plain) fire(plain, { help: { code: apiErrorCode(e) }, key: toastKey });
+      // A refusal the pair / sign-in prompt owns says nothing; the
+      // optimistic toast goes too.
+      else if (!reportMutationFailure(fire, verb, e, { key: toastKey })) dismissToast(toastKey);
+    }
     finally { playsInFlight.current.delete(key); }
   };
   // What every room start sends for its Up next: who is asking, whose

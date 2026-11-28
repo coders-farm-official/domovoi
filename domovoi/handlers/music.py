@@ -19,6 +19,7 @@ from domovoi.clients.mpd import (
     get_mpd_client_for,
     iter_mpd_clients,
     mpd_stream_url_for,
+    prepare_library_track,
 )
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
@@ -1500,20 +1501,11 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
                 data={"song": {"title": picked.get("title"), "artist": picked.get("artist")}},
             )
         mpd = get_mpd_client_for(ctx.room_id)
-        # Three-stage search, falling back on each miss:
-        #   1. Tag search by title+artist — works only when the file's
-        #      ID3 tags are populated AND MPD's tag DB has indexed
-        #      them. For manually-placed files with empty ID3, this
-        #      almost always misses.
-        #   2. Filename substring search using parsed title+artist as
-        #      substrings — works when both fragments appear in the
-        #      filename (e.g. row title="Sunny Day" + artist="Akon"
-        #      against file "Akon - Sunny Day.mp3").
-        #   3. Filename substring search using the basename of
-        #      `file_path` (the indexer stamped this when we walked
-        #      MUSIC_DIR). Bulletproof — the basename is exactly what
-        #      MPD sees in its file URI, so this always matches as
-        #      long as MPD's DB has the file. Last-resort fallback.
+        # The row's exact file first, then the three-stage search (tag →
+        # filename substrings → basename) only when the player refuses
+        # that path: see domovoi.clients.mpd.prepare_library_track. The
+        # exact path is what plays a row whose title metadata enrichment
+        # rewrote, or whose file name carries a bracketed video id.
         # Up to three picks, not one: a room's player can lag the library
         # (a file its database hasn't indexed yet), and one miss shouldn't
         # fail "play something" (owner's 1.3.0 device check, basement).
@@ -1535,28 +1527,9 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
                         break
                     row = nxt
                     tried.append(row.id)
-                if row.title and row.artist:
-                    song = await mpd.prepare_search({"title": row.title, "artist": row.artist})
-                elif row.title:
-                    song = await mpd.prepare_search({"title": row.title})
-                if song is None:
-                    substrings = [s for s in (row.title, row.artist) if s]
-                    if substrings:
-                        song = await mpd.prepare_filename(*substrings)
-                if song is None and row.file_path:
-                    # Final fallback: basename of the host path. MPD inside
-                    # Docker sees the same file at `/music/<basename>`, so
-                    # substring-matching the basename against MPD's URIs
-                    # always works as long as the file is indexed.
-                    from pathlib import PurePath
-                    basename = PurePath(row.file_path).name
-                    if basename:
-                        log.info(
-                            "play_random: tag + parsed-substring missed for "
-                            "%r by %r; falling back to basename %r",
-                            row.title, row.artist, basename,
-                        )
-                        song = await mpd.prepare_filename(basename)
+                song = await prepare_library_track(
+                    mpd, title=row.title, artist=row.artist, file_path=row.file_path,
+                )
                 if song:
                     break
         except Exception as e:
