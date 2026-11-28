@@ -3028,6 +3028,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 # request sees the new generation and steps aside.
                 self._music_gen += 1
                 run.supervised = True
+                # The music look again: whatever took the ring off it
+                # while this stream played on (a dropped session) is over.
+                self._leds.set_state("music")
                 return self._music_gen
             self._stop_music_locked()
         self._music_gen += 1
@@ -9800,7 +9803,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # A call still waiting for its announcement to finish is gone too.
         self._dropin_pending = None
         # Squash any deferred post-response LED state — we're forcing
-        # idle here, and don't want close_stream to overwrite it back to
+        # idle (or music) here, and don't want close_stream to overwrite it back to
         # "listening" once the (now-drained) stream closes.
         self._post_playback_state = None
         # Mark the disconnect for the wifi watcher's degraded-mode
@@ -9810,8 +9813,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # window measures the whole outage, not just the latest leg.
         if self._ws_disconnected_since is None:
             self._ws_disconnected_since = time.monotonic()
+        # The room's player plays on through a dropped session (its stream
+        # comes from the server's music player, which a core restart leaves
+        # running), so the ring goes back to the music look, not idle. On
+        # the XVF3800 idle is OFF: a group playing through a core restart
+        # came back with a dark ring while the music played (2026-11-28).
+        # The reconnect repaints this state (`_leds.resync`) once the
+        # no-server indicator lets go of the ring.
         try:
-            self._leds.set_state("idle")
+            self._leds.set_state("music" if self._is_music_playing() else "idle")
         except Exception:
             pass
 
