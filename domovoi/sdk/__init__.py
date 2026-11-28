@@ -85,7 +85,8 @@ from __future__ import annotations
 #         per-plugin friend ids; send_image() and FriendImage (a friend's
 #         picture as the core's own PNG); every reply of a friend_houses
 #         plugin's handlers filtered for speech, a stand-in in the history.
-API_VERSION = "1.19.0"
+# 1.20.0: sdk.speech.interim
+API_VERSION = "1.20.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,

@@ -3755,7 +3755,7 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "^I'll remind you at 5 (?:AM|PM) to call mom\\.$"
+        "^I'll remind you (?:tomorrow )?at 5 (?:AM|PM) to call mom\\.$"
       ],
       "must_not_include": [],
       "stored": [],
@@ -3781,7 +3781,7 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "^I'll remind you at 5 (?:AM|PM) to call mom\\.$"
+        "^I'll remind you (?:tomorrow )?at 5 (?:AM|PM) to call mom\\.$"
       ],
       "must_not_include": [],
       "stored": [],

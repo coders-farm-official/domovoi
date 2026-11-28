@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import random
@@ -66,6 +67,39 @@ def _stream_listener(ctx: Context):
     from domovoi.up_next import rooms as up_next_rooms
 
     return up_next_rooms.listening_as(getattr(ctx, "person_id", None))
+
+
+#: How long a play request's online search may take before the room hears
+#: :data:`STILL_LOOKING_TEXT`, and the line itself. It never names where
+#: the search goes.
+STILL_LOOKING_AFTER_SEC = 3.0
+STILL_LOOKING_TEXT = "Still looking…"
+
+
+async def _still_looking_after(ctx: Context, handler: str, work: Any) -> Any:
+    """Await ``work`` (a provider's search-and-play), saying
+    :data:`STILL_LOOKING_TEXT` in the room through the turn's interim line
+    (``ctx.speak_interim``: a voice turn only, once per turn, shared with
+    the cold-start notice) when it isn't done after
+    :data:`STILL_LOOKING_AFTER_SEC`. The work carries on meanwhile and its
+    result or error comes back as is."""
+    task = asyncio.ensure_future(work)
+    try:
+        speak = getattr(ctx, "speak_interim", None)
+        if callable(speak):
+            done, _ = await asyncio.wait({task}, timeout=STILL_LOOKING_AFTER_SEC)
+            if not done:
+                try:
+                    spoke = await speak(STILL_LOOKING_TEXT, handler=handler)
+                except Exception as e:  # noqa: BLE001 - the play goes on
+                    log.warning("still-looking line failed: %s", e)
+                    spoke = False
+                if spoke is True and isinstance(getattr(ctx, "interim_said", None), list):
+                    ctx.interim_said.append(STILL_LOOKING_TEXT)
+        return await task
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 class _PlayerUnreachable(Exception):
@@ -1253,7 +1287,11 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
         stream_response: Response | None = None
         try:
             with _stream_listener(ctx):
-                stream_response = await provider.stream(ctx.room_id, query=q_display)
+                # A plugin's slow search: "Still looking…" in the room
+                # after a few seconds, never naming the source.
+                stream_response = await _still_looking_after(
+                    ctx, self.name, provider.stream(ctx.room_id, query=q_display),
+                )
         except Exception as e:
             # The request itself is left out of the line (privacy).
             log.warning(
