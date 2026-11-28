@@ -1368,3 +1368,14 @@ async def test_remember_to_from_the_dashboard_is_the_houses_answer_and_stored_on
     async with SessionLocal() as s:
         stored = (await s.execute(text("SELECT count(*) FROM memories WHERE body ILIKE '%call mom%'"))).scalar_one()
     assert stored == 0
+
+
+def test_a_message_with_a_web_address_stays_with_the_chat() -> None:
+    """Voice fast paths were never written for links: the calculator read
+    the slashes of a URL as a sum and took a page question from the chat."""
+    from domovoi import typed_chat
+
+    assert not typed_chat.eligible("what is on zoo.example? see https://zoo.example/")
+    assert not typed_chat.eligible("read www.example.com for me")
+    assert typed_chat.eligible("what is 12 / 4")
+    assert typed_chat.eligible("set a timer for 5 minutes")

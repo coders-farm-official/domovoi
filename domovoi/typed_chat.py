@@ -62,11 +62,19 @@ ANSWERED_SQL = (
 MEDIA_HANDLERS = frozenset({"music", "playlist", "music_alias", "spoken_audio"})
 
 
+#: A web address in typed text. Nobody says one to the mic, and the voice
+#: fast paths were never written for them: the calculator reads the
+#: slashes of "what is on zoo.example? see https://zoo.example/" as sums.
+#: A message with one is the chat's (its page lookups).
+_LINK_RE = re.compile(r"(?:\bhttps?://|\bwww\.)\S", re.I)
+
+
 def eligible(text: str) -> bool:
     """Whether ``text`` may be a house command at all: some words, one line,
-    at most :data:`COMMAND_MAX_CHARS`."""
+    at most :data:`COMMAND_MAX_CHARS`, no web address."""
     q = (text or "").strip()
-    return bool(q) and len(q) <= COMMAND_MAX_CHARS and "\n" not in q and any(ch.isalnum() for ch in q)
+    return (bool(q) and len(q) <= COMMAND_MAX_CHARS and "\n" not in q
+            and any(ch.isalnum() for ch in q) and not _LINK_RE.search(q))
 
 
 def prose_question(handler_name: str, text: str) -> bool:

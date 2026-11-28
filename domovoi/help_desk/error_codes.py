@@ -66,6 +66,12 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "people",
     ),
     # ── chat replies (stats.error_code) ──────────────────────────────────
+    "thread_not_found": _e(
+        "That chat isn't there any more",
+        "The chat was deleted, or it's a private chat of someone else's that this phone or "
+        "browser can't see. Start a new chat, or open the chat from the list again.",
+        "chat",
+    ),
     "model_missing": _e(
         "The chat model isn't installed",
         "The model that answers chat isn't on this server yet. An admin installs it from "
