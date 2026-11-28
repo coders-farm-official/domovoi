@@ -81,6 +81,7 @@ from web.backend.api import support_sessions as support_sessions_api
 from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
 from web.backend.api import up_next_history as up_next_history_api
+from web.backend.api import media_details as media_details_api
 from web.backend.api import media_search as media_search_api
 from web.backend.api import media_understanding as media_understanding_api
 from web.backend.api import faces as faces_api
@@ -458,6 +459,9 @@ app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)
 app.include_router(media_understanding_api.router)
 app.include_router(media_search_api.router)
+# One photo's or video's details (the Photos Info sheet): household, the
+# search's tier; places and faces follow their switches and shared screens.
+app.include_router(media_details_api.router)
 # Faces and people (1.5.0): household views and trains, admin merges named
 # people; guests and shared screens get nothing.
 app.include_router(faces_api.router)

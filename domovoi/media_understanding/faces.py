@@ -1200,3 +1200,32 @@ def install() -> None:
 
     runner.register(FaceAnalyser())
     runner.register_housekeeping("faces", housekeeping)
+
+
+async def item_faces(s: Any, item_id: int, *, admin: bool, most: int = 200) -> list[dict[str, Any]]:
+    """The faces found in one photo or video, for its details sheet
+    (web/backend/api/media_details.py): who (a named person's name, or
+    the group), whether it was confirmed, and when in a video. A face in
+    a hidden group only for an admin. Never an embedding or a box: the
+    face tables are read here, by the faces code, and nowhere else
+    (tests/test_media_faces.py)."""
+    rows = (await s.execute(text(
+        "SELECT f.id, f.person_id, p.name, f.confirmed, f.group_id, f.at_s, f.end_s, "
+        "coalesce(g.hidden, false) AS hidden "
+        "FROM media_faces f LEFT JOIN face_groups g ON g.id = f.group_id "
+        "LEFT JOIN people p ON p.id = f.person_id "
+        "WHERE f.item_id = :i AND (:admin OR NOT coalesce(g.hidden, false)) "
+        "ORDER BY f.at_s NULLS FIRST, f.confirmed DESC, f.quality DESC NULLS LAST, f.id LIMIT :l"),
+        {"i": item_id, "admin": admin, "l": most})).mappings().all()
+    out = []
+    for r in rows:
+        out.append({
+            "person_id": r["person_id"],
+            "name": r["name"] if r["person_id"] is not None else None,
+            "confirmed": bool(r["confirmed"]),
+            "group_id": r["group_id"],
+            "hidden": bool(r["hidden"]),
+            "at_s": float(r["at_s"]) if r["at_s"] is not None else None,
+            "end_s": float(r["end_s"]) if r["end_s"] is not None else None,
+        })
+    return out
