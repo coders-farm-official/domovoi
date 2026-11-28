@@ -269,7 +269,13 @@ const PhotosDetails = ({ item, onClose, onPlayAt }) => {
             <PhotosSettingsLink/>
           </div>
         )}
-        {u.on && !analysed && (
+        {u.on && !analysed && (a.state === 'failed' || a.state === 'skipped') && (
+          <div className="photos-details-note">
+            <strong>{a.state === 'failed' ? 'Couldn’t be analysed' : 'Skipped'}</strong>
+            <div className="photos-muted">Domovoi tries again if the file changes.</div>
+          </div>
+        )}
+        {u.on && !analysed && a.state !== 'failed' && a.state !== 'skipped' && (
           <div className="photos-details-note">
             <strong>Not analysed yet</strong>
             <div className="photos-muted">Domovoi looks at photos and videos at night and when the house is quiet.</div>

@@ -186,6 +186,9 @@ def test_an_unanalysed_photo_says_so(driven) -> None:
 def test_a_failed_photo_shows_its_error_code(driven) -> None:
     blob = driven["failed"]["blob"]
     assert "couldn’t be read" in blob and "MU-PHOTO-3" in blob
+    # Not "Not analysed yet": a failed file waits for a change, not for tonight.
+    assert "Couldn’t be analysed" in blob and "tries again if the file changes" in blob
+    assert "Not analysed yet" not in blob
 
 
 def test_understanding_off_points_to_settings(driven) -> None:
@@ -237,6 +240,14 @@ def test_the_player_shows_info_only_when_it_can_do_something(driven) -> None:
     with_info = driven["overlay_with_info"]
     assert "Info" in with_info["buttons"] and with_info["fn"] == ["onInfo"]
     assert "Info" not in driven["overlay_without_info"]["buttons"]
+
+
+def test_the_players_header_wraps_rather_than_hide_the_title() -> None:
+    # At 320px the Info, start over and save buttons squeezed the title to
+    # nothing (a real-browser check): the row wraps, and the title keeps room.
+    src = (Path(__file__).resolve().parents[2] / "web" / "static" / "videos.jsx").read_text(encoding="utf-8")
+    assert "flexWrap: 'wrap', color: 'oklch(0.95 0.005 80)'" in src
+    assert "flex: '1 1 140px', minWidth: 0" in src
 
 
 def test_the_sheet_never_renders_html() -> None:
