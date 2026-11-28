@@ -340,7 +340,7 @@ public enum AwayTransports {
 
 #if DEBUG
 /// Plain TCP to a fixed host and port, for the tests and for a debug build
-/// talking to a loopback house (`ios/scripts/away-loopback-house.py`). The
+/// talking to a loopback house (`ios/scripts/away_loopback_house.py`). The
 /// onion and the client-auth key are ignored. **DEBUG only**: a Release build
 /// has no way to reach a house except through ``AwayTransports/forApp()``.
 public final class DirectAwayTransport: AwayTransport {

@@ -116,7 +116,7 @@ final class HouseholdRoot {
 
     /// Away chat's engine: the app's (``AwayTransports/forApp()``), except in
     /// a DEBUG build launched with `-domovoi-away-direct HOST:PORT`, which
-    /// talks plain TCP to a loopback house (`ios/scripts/away-loopback-house.py`)
+    /// talks plain TCP to a loopback house (`ios/scripts/away_loopback_house.py`)
     /// for the Simulator. A Release build has no such argument and no such
     /// transport.
     nonisolated static func awayTransport() -> any AwayTransport {
