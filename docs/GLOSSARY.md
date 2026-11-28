@@ -118,9 +118,11 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Setup code** — the 8-word one-time code written to `~/.domovoi/setup-code.txt` on first boot (and printed by the core only when it runs in a terminal, never into the journal). Entering it on the dashboard proves you control the server and lets you set the admin password; the file is deleted once used. `python -m domovoi.main --reset-admin` regenerates it.
 
-**Song recognition** — the library enricher identifying badly tagged songs by their audio fingerprint (AcoustID, with a free key in Settings → System → Advanced) and filling in names, year and genre from MusicBrainz. An answer is used only when it agrees with the song's own names (its artist, when the song has a real one), and never a cover, remix or instrumental the file doesn't name.
+**Song recognition** — the library enricher identifying badly tagged songs by their audio fingerprint (AcoustID, with a free key in Settings → System → Advanced) and filling in names, year and genre from MusicBrainz. An answer is used only when it agrees with the song's own names: its title (from the tags, or the file name), and its artist when the song has a real one; never a cover, remix or instrumental the file doesn't name. Every name it changes is kept in a change history, so a whole run can be undone (see **Tag change**).
 
 **Stub mode** — `USE_STUBS=true`: Whisper, Ollama, and TTS are replaced by deterministic fakes so the full test suite (and a hardware-less dev loop) runs without CUDA, models, or audio. The test config forces it on.
+
+**Tag change** — one row of `library_tag_changes` (V088): a track's names, MusicBrainz ids, year and genre before and after song recognition, its repair or the re-match changed them, under the batch id of that run. Undoing a batch puts the old names back on tracks that still have the new ones, never on a track someone edited by hand. The files' own tags are never written.
 
 **Tool routing** — the router's second tier: when no *fast path* matches, the tool-call model picks a handler and arguments from the handlers' tool schemas. Slower than a fast path, smarter about phrasing; logged as `matched_path = llm`.
 

@@ -9,7 +9,7 @@ a way that would otherwise get reported as a bug.
 - **What changed.** A reply to "Did you mean …?" that names no option is
   never handed to the language model: options are matched by how the
   reply sounds ("by Eminem", "the Sum 41 one", a misheard "biomina"), the
-  question is asked once more briefly ("Sum 41 or Eminem?"), and a second
+  question is asked once more briefly ("Which one, Sum 41 or Eminem?"), and a second
   miss says "Sorry, I didn't catch that." and brings the music back. That
   happens only on the open mic right after the question: a command with a
   fast path, a question, "shut up", a wake word (also one said over the
@@ -21,6 +21,52 @@ a way that would otherwise get reported as a bug.
 - **What to know.** Satellites show the thinking ring, not the speaking
   pulse, while a reply has gone quiet mid-answer (a cold model load):
   Upgrade satellite to get it.
+
+## 1.5.0 (unreleased) — Song recognition checks the title; name changes can be undone
+
+- **What changed.** A fingerprint answer was used whenever its artist
+  agreed with the track's, whatever its title, so a sweep could rename a
+  song to another one by the same artist ("Mo'murda" became "Ghetto
+  Cowboy", a file 20 s longer in the same folder). Now, when a track has a
+  real title (its tag title, or else its file name without the video id
+  and upload words such as "(Official Video)", "(Lyrics)", "- Remastered
+  2009" and an "Artist - " in front), the answer's title must be that
+  title too, compared without case, Unicode hyphens and quotes, "feat."
+  credits, "&"/"and" and version suffixes. Every recording the
+  fingerprint names is tried, so the right one is used when it is listed;
+  otherwise the track is marked `disagreed` and waits in "Needs review". A
+  file with no artist tag is held to its file name ("Track 3"-style names
+  still aren't). Migration **V088** adds `library_tag_changes`: every name
+  a sweep, the repair or the re-match changes is kept with what it was,
+  and a whole batch can be undone. Tag text that can't be decoded is no
+  longer stored as it is: it is decoded properly where possible (UTF-8 or
+  Windows-1252 bytes in a Latin-1 tag, a file name that isn't UTF-8),
+  otherwise the character becomes U+FFFD. New routes, on the security
+  tier (admin Bearer, nothing before setup):
+  `/v1/admin/library/enrich/rematch` (and its `/status`),
+  `/v1/admin/library/tag-changes/undo` and `/v1/admin/library/tag-changes`,
+  with their `/api/music/library/...` proxies (API_REFERENCE.md, §2.8 and
+  §3.5). **The repair is retired:** `POST /api/music/library/enrich/repair`
+  without a body now answers `410` and points at the re-match, because
+  under the stricter check it would rewrite that whole list at once,
+  unasked. Its `requeue_disagreed` window still works.
+- **What to do.** A library an earlier sweep renamed this way is fixed by
+  the re-match, in two steps, with the admin Bearer. First the dry run,
+  which changes nothing: `POST /api/music/library/enrich/rematch` with no
+  body. It lists each wrong track, what it holds and what the file says,
+  and the action it would take: "restore file names, then re-match", or
+  "restore only, needs review"; tracks whose names hold undecodable text
+  are listed as "bad encoding" and never changed. Then, to apply exactly
+  that list: the same call with `{"apply": true, "batch_id": "<the dry
+  run's batch_id>"}`, adding `"track_ids": [...]` to apply only the rows
+  you agree with (`409` if the library changed since: run the dry run
+  again). A dry run can take minutes: an answer of `202` means it is
+  still running, and `GET /api/music/library/enrich/rematch/status` gives
+  it once done. Sending the same apply twice changes nothing.
+  `POST /api/music/library/tag-changes/undo` with the apply's `batch_id`
+  puts the old names back; undoing a sweep's matches marks those tracks
+  for "Needs review" rather than queueing them to be matched again.
+  Tracks edited by hand are never touched.
 
 ## 1.5.0 (unreleased) — Chat from away
 

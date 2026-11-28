@@ -252,6 +252,16 @@ SECURITY_TIER = [
     ("POST", "/api/containers/incidents/{incident_id}/clear"),
     # A room's settings decide when and how long its microphone listens.
     ("PATCH", "/api/satellites/{room_id}/config"),
+    # The re-match and the undo of song recognition's name changes
+    # (2026-11-28): library-wide rewrites the owner approves.
+    ("POST", "/api/music/library/enrich/rematch"),
+    ("POST", "/api/music/library/tag-changes/undo"),
+]
+
+# Their reads: the batches of name changes, and the re-match job.
+SECURITY_READS = [
+    ("GET", "/api/music/library/tag-changes"),
+    ("GET", "/api/music/library/enrich/rematch/status"),
 ]
 
 
@@ -263,6 +273,23 @@ def test_pulling_code_and_lifting_the_freeze_are_on_the_security_tier(method, pa
     assert admin_auth.require_admin_security in calls
     assert admin_auth.require_admin_mutation not in calls
     assert admin_auth.require_device not in calls
+
+
+@pytest.mark.parametrize(
+    ("method", "path"), SECURITY_READS, ids=[f"{m} {p}" for m, p in SECURITY_READS]
+)
+def test_the_name_change_reads_are_security_reads(method, path) -> None:
+    # ROUTES holds the mutations only: walk the web app's GETs here.
+    from domovoi.tests.route_walk import iter_route_contexts
+    from web.backend.main import app as web_app
+
+    found = [rc for rc in iter_route_contexts(web_app.routes)
+             if getattr(rc, "path", None) == path and method in (getattr(rc, "methods", None) or ())]
+    assert found, f"{method} {path} is missing from the web app"
+    calls = list(_dependency_calls(found[0].dependant))
+    assert admin_auth.require_admin_security_read in calls
+    assert admin_auth.require_admin_read not in calls
+    assert admin_auth.require_device_read not in calls
 
 
 @pytest.mark.parametrize(

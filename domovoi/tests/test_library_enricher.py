@@ -270,15 +270,18 @@ async def test_enrich_library_updates_with_acoustid_match(
     enricher_db, monkeypatch, tmp_path,
 ) -> None:
     """Happy path: AcoustID returns a match, the row gets canonical
-    title/artist/MB-ID, enriched_at is stamped."""
-    f = tmp_path / "ugly_filename.mp3"
+    title/artist/MB-ID, enriched_at is stamped. The file is named like a
+    phone's recording, which names no song: since 2026-11-28 a file name
+    that DOES look like a song's title is held to as one
+    (test_enricher_strict_titles.py)."""
+    f = tmp_path / "AUD-20190101-WA0003.mp3"
     f.write_bytes(b"")
     await enricher_db.execute(
         text(
             "INSERT INTO library_tracks (file_path, title, artist) "
             "VALUES (:fp, :t, :a)"
         ),
-        {"fp": str(f), "t": "ugly_filename", "a": None},
+        {"fp": str(f), "t": "AUD-20190101-WA0003", "a": None},
     )
     await enricher_db.commit()
 
