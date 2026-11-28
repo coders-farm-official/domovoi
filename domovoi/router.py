@@ -29,6 +29,7 @@ from domovoi.db.repositories import (
     SessionRepository,
     WebSearchPrefsRepository,
 )
+from domovoi.dropin_common import END_STOP, END_WEAK, end_call_kind, room_in_call
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path, satellite_setting_refusal
 from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
@@ -411,6 +412,32 @@ def phone_refusal(handler: Handler, ctx: Context) -> Response | None:
     return None
 
 
+#: How recently a timer or alarm must have been announced in a room for a
+#: bare "stop" said there during a drop-in to silence it instead of ending
+#: the call (router._route_turn).
+IN_CALL_HEARD_SEC = 10.0
+
+#: Said instead of a handler that must not run during a live drop-in
+#: (``Handler.works_in_call`` False: learning a voice, an introduction).
+CALL_REFUSAL_TEXT = "That has to wait until the drop-in is over. Say hang up to end it."
+
+
+def call_refusal(handler: Handler, ctx: Context) -> Response | None:
+    """The reply a turn said during a live drop-in gets instead of a
+    handler that must not run in one (``Handler.works_in_call`` False:
+    the voice-profile flows, whose clips would hold the other room's voice
+    from this room's speaker), or None when it may run. Checked on every
+    way in: a fast path, a tool call, a parked choice or confirmation."""
+    if getattr(ctx, "in_call", False) and not getattr(handler, "works_in_call", True):
+        return Response(
+            text=CALL_REFUSAL_TEXT,
+            session_id=ctx.session_id,
+            matched_handler=handler.name,
+            expect_followup=False,
+        )
+    return None
+
+
 def ai_off_refusal(handler: Handler, fp: FastPath, ctx: Context) -> Response | None:
     """The reply a fast path gets instead of running when it needs AI
     (``Handler.needs_ai``, or the path's own ``needs_ai``) and the
@@ -450,7 +477,10 @@ async def run_fast_path(
     that hands a reply on to another command (a parked choice answered
     "no, play X"). The caller stamps and records the turn. None: the path
     declined the turn (see ``FastPath``)."""
-    refusal = phone_refusal(handler, ctx) or ai_off_refusal(handler, fp, ctx)
+    refusal = (
+        phone_refusal(handler, ctx) or call_refusal(handler, ctx)
+        or ai_off_refusal(handler, fp, ctx)
+    )
     if refusal is not None:
         return refusal
     if offline_blocked(handler, fp, ctx):
@@ -1114,6 +1144,98 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         )
         return response
 
+    # ── A live drop-in: "stop" / "hang up" end it, before anything else ──
+    # Said in a room that is in a call, these end the call — ahead of a
+    # parked question or an introduction collecting its clips (whose own
+    # "stop" would otherwise take the turn, and the call would stay up) and
+    # of music's bare "stop" (the call already holds the music). A parked
+    # question is dropped with the call: the next turn was its only chance.
+    # Outside a call nothing here applies: a bare "stop" stays the music's.
+    #
+    # Two ways a turn is "in the call" (Context.in_call). The streaming
+    # layer sets it for the satellite that is itself in the call (its own
+    # session, ``own_call`` below). Everyone else — a phone's chat mic, the
+    # dashboard's /v1/intent with a room picked, any caller — gets it from
+    # ``ctx.room_id`` alone (``room_in_call``), which is enough for the
+    # call-only refusals but not to hang up on a bare "stop": that one ends
+    # the call only from the call's own satellite. "Hang up" and the other
+    # explicit phrasings end it from anywhere the turn names that room
+    # (dropin_common.end_call_kind).
+    own_call = ctx.in_call
+    if not ctx.in_call and room_in_call(ctx.app, ctx.room_id):
+        ctx = ctx.model_copy(update={"in_call": True})
+    ending = end_call_kind(transcript) if ctx.in_call else None
+    if ending == END_STOP and not own_call:
+        ending = None
+    if ending == END_WEAK:
+        # "cancel", "that's enough": a parked question takes them first.
+        pending_now = (await session_repo.get_context(session_id) or {}).get(
+            PENDING_CONFIRMATION_KEY
+        )
+        if not own_call or pending_now:
+            ending = None
+    if ending == END_STOP and ctx.room_id and isinstance(session, AsyncSession):
+        # A timer or an alarm the room has just HEARD go off is silenced
+        # first, as a bare "stop" always does (handlers/music.py); the next
+        # one hangs up. Only one actually announced there in the last few
+        # seconds (IN_CALL_HEARD_SEC): during a call announcements are held,
+        # so a timer still waiting for the call to end was heard by nobody,
+        # and this "stop" is for the call — the timer keeps its turn and
+        # rings once the call is over.
+        from domovoi.room_display import stop_ringing_by_voice
+
+        if await stop_ringing_by_voice(
+            session, ctx.room_id, ctx.app, heard_within_sec=IN_CALL_HEARD_SEC,
+        ) is not None:
+            response = Response(
+                text="Okay.", session_id=session_id, matched_handler="music",
+                matched_path="fast", online=ctx.online, expect_followup=False,
+            )
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler="music",
+                matched_path="fast",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
+    if ending is not None:
+        dropin = HANDLER_BY_NAME.get("dropin")
+        if dropin is not None:
+            await session_repo.set_context_key(session_id, PENDING_CONFIRMATION_KEY, None)
+            take_parked_choice(session_id)
+            response = dropin._end(ctx)
+            response.matched_handler = dropin.name
+            response.matched_path = "fast"
+            response.session_id = session_id
+            response.online = ctx.online
+            response.expect_followup = False
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler=dropin.name,
+                matched_path="fast",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
+
+    async def _dropped_in_call(handler: Handler) -> bool:
+        """A parked question or confirmation whose handler must not run
+        during a call (an introduction collecting clips, "was that you?"):
+        dropped unanswered, and the turn routed as if nothing were parked.
+        Nothing said in a call is saved as somebody's voice."""
+        if call_refusal(handler, ctx) is None:
+            return False
+        await session_repo.set_context_key(session_id, PENDING_CONFIRMATION_KEY, None)
+        log.info("room=%s in a drop-in: dropped %s's parked question", ctx.room_id, handler.name)
+        return True
+
     # ── A parked choice ("did you mean X?") ───────────────────────────
     # A question whose reply may be free text — "no, play the other one",
     # a bare name — not just yes/no (Handler.choice_kinds). Checked BEFORE
@@ -1125,7 +1247,7 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         ctx_data = await session_repo.get_context(session_id) or {}
         pending = ctx_data.get(PENDING_CONFIRMATION_KEY)
         choice = dispatchable_choice(pending)
-        if choice is not None:
+        if choice is not None and not await _dropped_in_call(choice[0]):
             response = await _answer_choice(choice[0], choice[1], pending)
             if response is not None:
                 return response
@@ -1166,6 +1288,8 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
                 return response
             pending = None
         target = dispatchable_confirmation(pending, warn=True)
+        if target is not None and await _dropped_in_call(target[0]):
+            target = None
         if target is not None and target[1] in target[0].choice_kinds:
             # A choice CHOICE_PARKED didn't know about (the core restarted
             # since it was parked): the whole reply still goes to the
@@ -1254,7 +1378,10 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
             hit = None
     if hit is not None:
         handler, fp, m = hit
-        if offline_blocked(handler, fp, ctx) and phone_refusal(handler, ctx) is None:
+        if (
+            offline_blocked(handler, fp, ctx) and phone_refusal(handler, ctx) is None
+            and call_refusal(handler, ctx) is None
+        ):
             response = await handler.fallback_offline(intent, ctx, session)
             _after_claim(response, claim_line)
             response.matched_handler = handler.name
@@ -1290,7 +1417,10 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
             )
             return response
         try:
-            response = phone_refusal(handler, ctx) or ai_off_refusal(handler, fp, ctx)
+            response = (
+                phone_refusal(handler, ctx) or call_refusal(handler, ctx)
+                or ai_off_refusal(handler, fp, ctx)
+            )
             if response is None:
                 response, weather_plugin_failed = await weather.plugin_attempt(
                     handler, fp.method(handler, m, ctx, session), transcript
@@ -1432,7 +1562,7 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
                 if (handler.requires_network == "yes" and not ctx.online)
                 else "llm"
             )
-            refusal = phone_refusal(handler, ctx)
+            refusal = phone_refusal(handler, ctx) or call_refusal(handler, ctx)
             if refusal is not None:
                 response = refusal
             elif not tool_action_offered(handler, tool_call.get("args")):

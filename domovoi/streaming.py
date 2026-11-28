@@ -654,6 +654,7 @@ from domovoi.db.repositories import (
     SessionRepository,
 )
 from domovoi.db.session import session_scope
+from domovoi.dropin_common import starts_live_audio
 from domovoi.early_commit import TIER_A, early_commit_for
 from domovoi.endpointing import (
     FRAME_MS,
@@ -915,6 +916,18 @@ AUTHENTICATED_FEATURES: frozenset[str] = frozenset({"health", "log_push"})
 # playback after 8 s; this is the core's backstop for a `dropin_ready` that
 # never comes (2026-11-12: the call's audio used to cut the announcement off).
 DROPIN_READY_WAIT_SEC = 10.0
+
+# The hello boards of the Python satellite (satellite/client.py): a Pi names
+# none, a spare PC names its kind. Only these get the silent response that
+# ends a reply's wait during a call (StreamSession._needs_reply_release).
+PY_SATELLITE_BOARDS: frozenset[str | None] = frozenset({None, "linux_pc", "windows_pc"})
+# Phones in room mode (android_room, ios_room): they may end a capture with
+# no utterance_end at all (muted mid-command). See _quiet_capture_over_sec.
+ROOM_PHONE_BOARDS: frozenset[str] = frozenset({"android_room", "ios_room"})
+# In a call, audio coming again after a capture's audio stopped this long is
+# the call's, and the capture is over — for a device that always ends its
+# captures with utterance_end (a gap shorter than this is the link).
+QUIET_CAPTURE_OVER_SEC = 6.0
 
 # When a room can take an out-of-turn announcement (a timer or reminder
 # going off elsewhere, domovoi/timer_delivery.py): StreamSession.
@@ -1818,6 +1831,13 @@ async def run_voice_profile_hooks(
         maybe_ask_room_check,
         maybe_inject_third_party_ask,
     )
+    if getattr(ctx, "in_call", False) or starts_live_audio(response):
+        # A turn that opens a drop-in or an announcement asks nothing back
+        # (its follow-up listen and the call would fight over the mic and
+        # speaker), and a capture made during a call may hold the other
+        # room's voice from this room's speaker: nothing of it is buffered
+        # for an introduction, and no "was that you?" is asked.
+        return
     ctx_with_session = ctx.model_copy(
         update={"session_id": response.session_id}
     )
@@ -2076,6 +2096,13 @@ class StreamSession:
         # Only for a satellite whose hello declared `dropin_ready`.
         self._dropin_awaiting_ready: bool = False
         self._dropin_ready_task: asyncio.Task[None] | None = None
+        # The `utt` of a follow-up capture a drop-in took the mic from
+        # (`_drop_followup_capture`; "?" when it had none): its late
+        # utterance_end gets an empty reply instead of a turn.
+        self._dropped_followup_utt: Any = None
+        # The silent response after a reply in a call is going out
+        # (`_release_reply_wait_in_call`): no call audio to this room.
+        self._releasing_reply: bool = False
         # ── Conversational chat mode (Feature 8) ─────────────────────
         # In-memory mirror of sessions.context["conversational_mode"], refreshed
         # at the top of every turn so the tool bridge + watchdog can read it
@@ -2478,7 +2505,8 @@ class StreamSession:
     async def _on_audio(self, data: bytes) -> None:
         # Before any early return: announce_block reads it to tell a live
         # capture from one that went quiet without an utterance_end.
-        self._last_audio_at = time.monotonic()
+        now = time.monotonic()
+        previous_audio_at, self._last_audio_at = self._last_audio_at, now
         # 1.5.0: a quiet stream of another device's turn (wake_claims): to
         # the arbiter, which keeps it only until the pick.
         if self.quiet_stream is not None:
@@ -2497,6 +2525,17 @@ class StreamSession:
         # below and the command reaches the router (DropInHandler ends
         # the call). The peer's own frames keep flowing the other way.
         peer = self.dropin_peer
+        if (
+            peer is not None and self.utterance_active
+            and (self._response_task is None or self._response_task.done())
+            and now - previous_audio_at >= self._quiet_capture_over_sec()
+        ):
+            # Audio again after a capture went quiet with no utterance_end
+            # (a phone muted mid-command cancels its turn that way): that
+            # capture is over, and this is the call's audio. Left open, the
+            # room's mic would be buffered for a turn for the rest of the
+            # call instead of relayed.
+            await self._drop_followup_capture(self._utt_id, why="its capture went quiet")
         if peer is not None and not self.utterance_active:
             # Relay noise gate: don't forward near-silent frames (bounced
             # cross-room echo / room tone between nearby rooms), and DON'T
@@ -2509,6 +2548,16 @@ class StreamSession:
             if getattr(peer, "_dropin_awaiting_ready", False) is True:
                 # The peer is still playing the reply that announced the
                 # call: its speaker isn't the call's yet (`dropin_ready`).
+                return
+            holds = getattr(peer, "holds_call_audio", None)
+            if holds is not None and holds(now) is True:
+                # The other room is capturing a command ("hey jarvis, hang
+                # up"): this room's voice stays off its speaker until the
+                # capture ends, so the command's transcript, its voice ID
+                # and anything learned from it hold that room's speaker
+                # alone. Nor does it play over that room's reply, or come
+                # between the reply and the silent response that ends the
+                # satellite's wait for it (`holds_call_audio`).
                 return
             try:
                 await peer.ws.send_bytes(data)
@@ -4363,6 +4412,14 @@ class StreamSession:
             return
         if t == "utterance_start":
             self._dup_capture = False
+            self._dropped_followup_utt = None
+            if self.dropin_peer is not None and ctrl.get("trigger") == "followup":
+                # A follow-up listen during a call (a question's flag left
+                # armed on the satellite from before the call): the call
+                # owns this room's microphone, so nothing of it becomes a
+                # turn and its audio stays in the relay.
+                await self._drop_followup_capture(ctrl.get("utt"), why="the room is in a drop-in")
+                return
             if not await wake_claims.arbiter(self.ws.app).on_capture_start(self, ctrl):
                 # Another device's turn is capturing in this room's group:
                 # this capture is its duplicate. Nothing of it is kept.
@@ -4434,6 +4491,22 @@ class StreamSession:
                 })
                 return
             if not self.utterance_active:
+                dropped = self._dropped_followup_utt
+                if dropped is not None and (dropped == "?" or ctrl.get("utt") == dropped):
+                    # The end of a follow-up capture a drop-in took the mic
+                    # from: no turn, just let the satellite stop waiting —
+                    # the Python satellite with the silent response, any
+                    # other device with the bare end that answers a blank
+                    # capture.
+                    self._dropped_followup_utt = None
+                    if self._needs_reply_release():
+                        await self._release_reply_wait_in_call()
+                    else:
+                        await self._safe_send_text({
+                            "type": "response_end", "interrupted": False,
+                            "expect_followup": False,
+                        })
+                    return
                 # Late for a capture this server ended early (or a stray).
                 self._note_late_utterance_end(ctrl)
                 return
@@ -6031,18 +6104,25 @@ class StreamSession:
                 id_budget = asyncio.timeout(id_limit)
                 # Why there is no result, when there is none (V049).
                 id_outcome: str | None = None
+                # Captured during a live drop-in (or opened in one): the
+                # other room's voice may be in it, from this room's
+                # speaker. Scored as usual, but never learned from.
+                in_call = self.dropin_peer is not None or bool(
+                    (capture_meta or {}).get("in_call")
+                )
+                no_learning: dict[str, Any] = {"learn": False} if in_call else {}
                 try:
                     async with id_budget:
                         await self._copy_embedding(heard)
                         if heard.embedded:
                             ident = await identify(
                                 pcm_bytes, embedding=heard.embedding, room_id=self.room_id,
-                                satellite_id=self.satellite_id,
+                                satellite_id=self.satellite_id, **no_learning,
                             )
                         else:
                             ident = await identify(
                                 pcm_bytes, room_id=self.room_id,
-                                satellite_id=self.satellite_id,
+                                satellite_id=self.satellite_id, **no_learning,
                             )
                 except TimeoutError as e:
                     if not id_budget.expired():
@@ -6136,6 +6216,7 @@ class StreamSession:
                     capped_capture=capped_capture,
                     loud_command=loud_command,
                     answerable=not long_capture,
+                    in_call=in_call or self.dropin_peer is not None,
                 )
                 intent = Intent(
                     transcript=transcript,
@@ -6280,6 +6361,21 @@ class StreamSession:
             and not (getattr(response, "data", None) or {}).get("loud_confirm")
         ):
             log.info("stream %s: long capture: not listening for a follow-up", self.room_id)
+            response.expect_followup = False
+        # No follow-up listen in a call, or after a turn that opens one (or
+        # an announcement): the satellite's follow-up capture and the call
+        # would share one microphone and one speaker. The capture held the
+        # room's mic out of the call (its frames went to the turn, not the
+        # relay), took the other room's voice from the speaker for a reply,
+        # and a reply's own end then waited on a speaker the call never
+        # lets go of, leaving the room deaf until the call was ended from
+        # the dashboard. Cleared on the response, so the music hold agrees.
+        if (
+            response is not None and getattr(response, "expect_followup", False)
+            and (self.dropin_peer is not None or starts_live_audio(response))
+        ):
+            log.info("stream %s: drop-in or announcement: not listening for a follow-up",
+                     self.room_id)
             response.expect_followup = False
 
         # A reply that was spoken but whose record failed: the pending row
@@ -8274,6 +8370,103 @@ class StreamSession:
             pass
         if payload.get("type") == "response_end":
             self._note_response_end(payload)
+            if (
+                self.dropin_peer is not None
+                # Talked over: the satellite released its wait itself (an
+                # interrupted end is never deferred). A capture open now:
+                # an extra response_start would count as one from before it
+                # and end that capture's own wait early (its `_turn_mark`).
+                and not payload.get("interrupted")
+                and not self.utterance_active
+            ):
+                await self._release_reply_wait_in_call()
+
+    def _needs_reply_release(self) -> bool:
+        """Whether this device is the Python satellite (a Pi, a spare Linux
+        or Windows PC), whose wait for a reply's end a call never releases
+        (`_release_reply_wait_in_call`). A Pi's hello names no board; a
+        spare PC's says ``linux_pc`` / ``windows_pc``. A phone in room mode
+        (``android_room``, ``ios_room``) must NOT get the silent response:
+        its response_start resets the speaker and flushes the reply still
+        queued there, and it needs none (its wait ends on the response_end
+        while in a call). Any other board is not known to need it, so it
+        isn't sent."""
+        return self.board in PY_SATELLITE_BOARDS
+
+    def _quiet_capture_over_sec(self) -> float:
+        """How long a capture's audio must have stopped, in a call, before
+        audio arriving again is taken as the call's and the capture as
+        over (`_on_audio`). A phone in room mode cancels a command with no
+        utterance_end (muted mid-capture), so for it the freshness gap
+        itself (ANNOUNCE_CAPTURE_FRESH_SEC) is enough. The Python satellite
+        always ends a capture with utterance_end (or noisy_capture), so a
+        gap there is the link, not the end — a Wi-Fi hiccup in the middle
+        of "hang up" — and only a much longer one
+        (QUIET_CAPTURE_OVER_SEC) is taken as the capture being gone."""
+        if self.board in ROOM_PHONE_BOARDS:
+            return ANNOUNCE_CAPTURE_FRESH_SEC
+        return QUIET_CAPTURE_OVER_SEC
+
+    def holds_call_audio(self, now: float | None = None) -> bool:
+        """Whether the other room's call audio must not go to this room's
+        speaker right now: a command capture is live (the other room's
+        voice would land in its transcript and voice ID), or a turn of this
+        room's is being answered — its reply, and the silent response after
+        it (`_release_reply_wait_in_call`), go out with nothing of the call
+        between them: a relay frame between the silent start and end makes
+        a Pi's end wait for a drain the call never allows. Uses the capture
+        freshness check (`_capturing`), so a capture that ended with no
+        utterance_end (a phone muted mid-command) holds nothing."""
+        if now is None:
+            now = time.monotonic()
+        if self._releasing_reply or self._capturing(now):
+            return True
+        task = self._response_task
+        return task is not None and not task.done()
+
+    async def _release_reply_wait_in_call(self) -> None:
+        """A reply just ended in a room that is in a drop-in: let its
+        satellite stop waiting for it.
+
+        A satellite holds its mic thread until a reply has drained out of
+        the speaker (`response_end` with audio defers `response_done` to the
+        moment its output stream closes), and during a call the output
+        stream never closes: the call keeps it open for the other room's
+        audio. So after a command said in a call ("stop", "what time is
+        it") the mic thread waited for the whole rest of the call — it sent
+        the room nothing and heard no wake word, so a spoken "hang up" could
+        not end the call either. A second, silent response — a start with
+        no audio, at the call's own 16 kHz, then its end — is released at
+        once by the satellite (an end with no audio since its start is never
+        deferred), and leaves the speaker at the call's rate for the relay
+        that follows. The reply's own audio still plays out: it is already
+        queued. No call audio may come between the two frames
+        (`holds_call_audio`): a frame there counts as the silent response's
+        audio and defers its end too. Sent straight down the socket, not
+        through ``_safe_send_text``, so it is never taken for a spoken reply
+        (the echo filter, the reply guard, the response bookkeeping). Only
+        to the Python satellite (`_needs_reply_release`)."""
+        if not self._needs_reply_release():
+            return
+        self._releasing_reply = True
+        try:
+            for frame in (
+                {
+                    "type": "response_start",
+                    "text": "",
+                    "matched_handler": "dropin",
+                    "matched_path": "system",
+                    "online": True,
+                    "audio_sample_rate": PCM_INPUT_SAMPLE_RATE,
+                },
+                {"type": "response_end", "interrupted": False, "expect_followup": False},
+            ):
+                try:
+                    await self.ws.send_text(json.dumps(frame))
+                except Exception:
+                    return
+        finally:
+            self._releasing_reply = False
 
     async def notify_sounds_changed(self) -> None:
         """Tell this satellite its sound clips changed (greetings edited +
@@ -8665,6 +8858,37 @@ class StreamSession:
 
     # ── Two-way drop-in (Feature 4) ──────────────────────────────────────
 
+    async def _drop_followup_capture(self, utt: Any, *, why: str) -> None:
+        """Let go of a follow-up capture during a drop-in: nothing of it is
+        kept or answered, and the room's audio goes back to the relay.
+
+        A follow-up capture (the satellite listening for the answer to a
+        question, no wake word) can't share the room's microphone with a
+        call: while it is open `_on_audio` buffers the mic for the turn
+        instead of relaying it, and one nobody answers ends on the
+        satellite with no utterance_end at all, so it would never close. A
+        satellite that honours `end_capture` is told to stop listening;
+        its utterance_end then lands as a stray (`utterance_active` is
+        already False). An older one keeps capturing until its own
+        timeout, and those frames go to the call, which is where the
+        room's microphone belongs now."""
+        self.utterance_active = False
+        self.audio_buf.clear()
+        self.dropped_overflow = False
+        self._utterance_trigger = None
+        self._utterance_in_call = False
+        self._discard_speculation()
+        self._commit_on = False
+        self._clock = None
+        self._fastlane = fast_lane.close(self._fastlane)
+        log.info("stream %s: follow-up capture dropped: %s", self.room_id, why)
+        # Its utterance_end, if one comes, is answered with an empty reply
+        # (`_release_reply_wait_in_call`), so the satellite isn't left
+        # waiting for an answer that is never coming.
+        self._dropped_followup_utt = utt if utt is not None else "?"
+        if self._capture_control and utt is not None:
+            await self._safe_send_text({"type": "end_capture", "utt": utt})
+
     async def _begin_dropin(self, peer: "StreamSession") -> None:
         """Pair this session (initiator) with ``peer`` (target) for a live
         call. Sets the bidirectional ``dropin_peer`` link + the
@@ -8701,9 +8925,12 @@ class StreamSession:
             # never an opted-in room's command recording, even if the call
             # ends before that capture does. (getattr: the peer may be a
             # phone, which duck-types only the drop-in surface.)
+            stale_followups: list[StreamSession] = []
             for side in (self, peer):
                 if getattr(side, "utterance_active", False):
                     side._utterance_in_call = True
+                    if getattr(side, "_utterance_trigger", None) == "followup":
+                        stale_followups.append(side)
             # active_dropins is keyed by room_id (both directions, so a
             # membership check works for either participant). The value
             # carries enough for the web snapshot to render one row per
@@ -8719,6 +8946,14 @@ class StreamSession:
             now = asyncio.get_running_loop().time()
             self._dropin_last_audio = now
             peer._dropin_last_audio = now
+
+        # A follow-up capture open when the call starts (a question asked
+        # just before) is dropped: the call owns that mic now. Left open, it
+        # kept the room's audio out of the relay (`_on_audio` buffers a live
+        # capture), and one nobody answered never sends utterance_end, so
+        # the room stayed half in the call for good.
+        for side in stale_followups:
+            await side._drop_followup_capture(side._utt_id, why="a drop-in started")
 
         # Audit row — best-effort; a logging failure must never break a call.
         call_id: int | None = None

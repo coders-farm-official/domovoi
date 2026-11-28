@@ -39,7 +39,7 @@ from domovoi.dropin_common import (
 )
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.intercom import _resolve_target_rooms
-from domovoi.models import Context, Intent, Response
+from domovoi.models import Context, Intent, Response, is_phone_room
 
 log = logging.getLogger(__name__)
 
@@ -52,9 +52,15 @@ log = logging.getLogger(__name__)
 # stop. Only call-specific phrasings ("hang up", "end the call", "stop the
 # drop-in") match, and the start regex requires the explicit "drop in on" /
 # "connect me to" lead-in so it can't poach "play X" / "call mom".
+# "Drop into the dining room" is how Whisper often writes "drop in to": it
+# used to miss this path and wait on the tool model (a cold one said "I'm
+# waking up my language model" first), for an answer this handler gives
+# deterministically.
 _START_RE = re.compile(
-    r"^(?:drop[- ]?in (?:on|to)|connect me to) (?P<room>.+)$"
+    r"^(?:drop[- ]?in (?:on|to)|drop[- ]?into|connect me (?:to|with)) (?P<room>.+)$"
 )
+# A polite tail is not part of the room's name ("... the kitchen, please").
+_ROOM_TAIL_RE = re.compile(r"[\s,]+(?:please|now|for me)$")
 _END_RE = re.compile(
     r"^(?:hang up(?: the (?:call|phone))?"
     r"|end(?: the)? (?:call|drop[- ]?in)"
@@ -207,12 +213,15 @@ class DropInHandler(Handler):
             )
             return self._say(self._refusal_text("initiator_unpaired", ""), ctx)
 
+        if room_phrase:
+            room_phrase = _ROOM_TAIL_RE.sub("", room_phrase).strip() or room_phrase
         targets = _resolve_target_rooms(room_phrase)
         if targets is None:
             if not _mpd._room_ports:
                 return self._say("No rooms are connected yet.", ctx)
             return self._say(
-                f"I don't know which room you mean by {room_phrase!r}.", ctx
+                f"I don't know which room you mean by {room_phrase!r}."
+                + self._rooms_known_line(ctx), ctx
             )
         # _resolve_target_rooms returns ALL rooms for a broadcast phrase /
         # None — a drop-in needs exactly one target.
@@ -254,6 +263,25 @@ class DropInHandler(Handler):
                 dropin_action="end",
             )
         return self._say("You're not in a call right now.", ctx)
+
+    @staticmethod
+    def _rooms_known_line(ctx: Context) -> str:
+        """" I know the dining room and the garage.": the rooms a drop-in
+        could name (every provisioned room but this one), so an unknown
+        name is answered with what to say instead. Empty when there is no
+        other room. Never a guess at which one was meant."""
+        here = ctx.room_id or ""
+        rooms = sorted(
+            pretty_room(r) for r in _mpd._room_ports
+            if r != here and not is_phone_room(r)
+        )
+        if not rooms:
+            return ""
+        if len(rooms) > 6:
+            return f" I know {len(rooms)} rooms, like the {rooms[0]} and the {rooms[1]}."
+        named = [f"the {r}" for r in rooms]
+        listed = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
+        return f" I know {listed}."
 
     @staticmethod
     def _refusal_text(code: str, label: str) -> str:

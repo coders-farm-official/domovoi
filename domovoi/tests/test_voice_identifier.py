@@ -604,6 +604,25 @@ async def test_a_borderline_match_breaks_the_run(store, monkeypatch) -> None:
     assert store.count(1) == 2
 
 
+async def test_a_capture_made_in_a_drop_in_never_learns(store, monkeypatch) -> None:
+    """learn=False (a capture during a live drop-in, which may hold the
+    other room's voice from this room's speaker): named as usual, but no
+    run is counted and nothing is saved, and it breaks a run under way."""
+    monkeypatch.setattr(
+        voice_identifier.settings, "voice_profile_drift_reenroll_after", 2
+    )
+    store.enroll(1, _ALEX, "office")
+    clear = _unit(0.95, -0.2, 0.2397)
+    await identify(b"", embedding=clear, room_id="garage")            # one in the run
+    for _ in range(3):
+        result = await identify(b"", embedding=clear, room_id="garage", learn=False)
+        assert result.person_id == 1
+    assert store.count(1) == 1
+    assert _CONFIDENT_HITS == {}
+    await identify(b"", embedding=clear, room_id="garage")            # starts over
+    assert store.count(1) == 1
+
+
 async def test_no_room_no_learning(store, monkeypatch) -> None:
     monkeypatch.setattr(
         voice_identifier.settings, "voice_profile_drift_reenroll_after", 1

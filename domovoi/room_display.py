@@ -691,14 +691,22 @@ def poke_all(app: Any) -> None:
             feed.poke()
 
 
-async def stop_ringing_by_voice(session: Any, room_id: str, app: Any = None) -> int | None:
+async def stop_ringing_by_voice(
+    session: Any, room_id: str, app: Any = None, *, heard_within_sec: float | None = None,
+) -> int | None:
     """A bare "stop" said in ``room_id`` while a timer or alarm is ringing
     there: acknowledge it (and end its announcement) and return its id; None
     when nothing is ringing, so "stop" stops the music as before. Called
-    from the music handler's "stop" fast path."""
+    from the music handler's "stop" fast path, and from the router for a
+    "stop" said during a drop-in with ``heard_within_sec``: then only a fire
+    actually announced in the room that recently counts, never one held
+    for the call to end (ringing_fire's ``heard_only``)."""
     from domovoi.timer_delivery import ACK_WITHIN_SEC, ack_recent_fire, ringing_fire
 
-    fire = await ringing_fire(session, room_id)
+    if heard_within_sec is not None:
+        fire = await ringing_fire(session, room_id, heard_within_sec, heard_only=True)
+    else:
+        fire = await ringing_fire(session, room_id)
     if fire is None:
         return None
     acked = await ack_recent_fire(

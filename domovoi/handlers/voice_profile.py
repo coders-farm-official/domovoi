@@ -124,6 +124,7 @@ from domovoi.db.repositories import (
     VoiceProfilesRepository,
 )
 from domovoi.confirmations import request_confirmation
+from domovoi.dropin_common import starts_live_audio
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.shared.rooms import spoken_room
 from domovoi.log_privacy import said
@@ -965,6 +966,11 @@ def _room_check_wanted(ctx: Context, response: Response, ident) -> tuple[int, fl
     room = ctx.room_id
     if not room or is_phone_room(room) or ctx.from_phone or phone_chat_mic(ctx):
         return None
+    if ctx.in_call or starts_live_audio(response):
+        # A turn that opens a drop-in or an announcement (the question's
+        # follow-up listen would fight the call for the mic and speaker),
+        # or one heard during a call (the other room may be in the clip).
+        return None
     if ident is None or getattr(ident, "outcome", None) != OUTCOME_NO_MATCH:
         # Not scored (too short, no voiceprint), under music, two people
         # too close to call, an opt-out, or a match.
@@ -1085,6 +1091,10 @@ class VoiceProfileHandler(Handler):
         "core.self_intro", "core.name_sound_alike", "core.room_check",
     )
     requires_network = "no"
+    # Never during a live drop-in: an introduction or a "was that you?"
+    # yes would learn a clip that may hold the other room's voice, played
+    # on this room's speaker (router.call_refusal).
+    works_in_call = False
 
     def offers_tool(self, transcript: str) -> bool:
         """Withheld from a turn that talks about forgetting something other

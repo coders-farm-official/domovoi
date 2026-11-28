@@ -204,6 +204,12 @@ class Handler(ABC):
     # confirmation_kinds, with handle_choice_reply overridden; read the
     # reply with domovoi.sdk.choices.parse_choice_reply).
     choice_kinds: tuple[str, ...] = ()
+    # False: nothing of this handler runs on a turn said during a live
+    # drop-in (Context.in_call) — it answers "That has to wait until the
+    # drop-in is over" instead, and a question it parked is dropped
+    # (router.call_refusal). For the voice-profile flows: what the mic hears
+    # in a call may hold the other room's voice from this room's speaker.
+    works_in_call: bool = True
     # Plugin handlers get their slug stamped by the plugin loader (C3);
     # None marks a core handler (used by the registry tie-break).
     plugin_slug: str | None = None

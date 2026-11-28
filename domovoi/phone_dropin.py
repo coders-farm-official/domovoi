@@ -262,6 +262,12 @@ class PhoneDropinSession:
             # The room is still playing the reply that announced the call
             # (StreamSession._dropin_leg_ready opens it there).
             return
+        holds = getattr(peer, "holds_call_audio", None)
+        if holds is not None and holds() is True:
+            # The room is capturing a command ("hang up") or answering one:
+            # the phone's voice stays off its speaker until that is over,
+            # as in StreamSession._on_audio (StreamSession.holds_call_audio).
+            return
         try:
             await peer.ws.send_bytes(data)
         except Exception as e:  # noqa: BLE001

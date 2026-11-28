@@ -175,6 +175,12 @@ class Context(BaseModel):
     # change the house is asked about first ("Should I ...?") and runs
     # only on a yes. False everywhere else.
     loud_command: bool = False
+    # The room is in a live drop-in (or was when this capture opened):
+    # what the mic heard may hold the other room's voice, played on this
+    # room's speaker. No follow-up listen, no voice learning, no
+    # introduction; "stop" / "hang up" end the call first
+    # (router._route_turn). The streaming layer sets it; False elsewhere.
+    in_call: bool = False
     # "phone" for a push-to-talk turn from the app's chat mic
     # (domovoi/phone_voice.py); None for a satellite, /v1/intent and the
     # dashboard. A phone is its own device (owner decisions 2026-10-08):
