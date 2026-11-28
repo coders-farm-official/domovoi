@@ -1000,8 +1000,14 @@ async def test_dont_keep_prunes_again_a_minute_later(clean, monkeypatch) -> None
     assert await _listens() == []
     # A row a player landed after the first prune...
     await _insert(ids["t2"], ids["sam"])
-    await asyncio.sleep(0.6)
-    # ...goes with the second.
-    assert await _listens() == []
+    # ...goes with the second (waited for, not slept on: a busy CI runner
+    # ran the second prune later than a fixed 0.6 s).
+    left = await _listens()
+    for _ in range(100):
+        if not left:
+            break
+        await asyncio.sleep(0.05)
+        left = await _listens()
+    assert left == []
     for t in list(music_listens._PRUNE_TASKS):
         await t
