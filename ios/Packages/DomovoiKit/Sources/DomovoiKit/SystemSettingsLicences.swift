@@ -15,7 +15,7 @@ import Foundation
 /// **Most of that is not in this app.** The rows here are driven off
 /// ``Licences/rules``, the hand-kept list of every package this app *may*
 /// link, intersected with what it actually links — since batch 2026-11-14,
-/// ONNX Runtime 1.24.2 (room mode) and nothing else — so the batch that adds a
+/// ONNX Runtime 1.24.2 (room mode), and since 1.5.0 Arti (away chat's Tor) — so the batch that adds a
 /// package gets its row by adding its rule, the procedure
 /// `Licences.swift:11-13` already describes.
 ///
@@ -59,11 +59,12 @@ public struct SystemSettingsLicencePart: Equatable, Sendable {
 /// The identities of the packages this build actually links, lowercased as
 /// `Package.resolved` writes them.
 ///
-/// ONNX Runtime, since batch 2026-11-14 (DomovoiKit's `Package.swift`, its
-/// one dependency). The day another is added its identity comes here and its
-/// ``LicenceRule`` comes to ``Licences/rules``; `LicencesTests` fails until
-/// both are done, and checks this list against `Package.resolved`.
-public let systemSettingsLinkedIdentities: [String] = ["onnxruntime-swift-package-manager"]
+/// ONNX Runtime, since batch 2026-11-14 (DomovoiKit's `Package.swift`), and
+/// away chat's Tor (Arti, `ios/Vendor/domovoi-tor`), since 1.5.0. The day
+/// another is added its identity comes here and its ``LicenceRule`` comes to
+/// ``Licences/rules``; `LicencesTests` fails until both are done, and checks
+/// this list against `Package.resolved`.
+public let systemSettingsLinkedIdentities: [String] = ["onnxruntime-swift-package-manager", "domovoi-tor"]
 
 /// Apple's frameworks: part of the OS, like Android's own APIs, and not a
 /// dependency we ship (`ios/licences/README.md`'s first table row).

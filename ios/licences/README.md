@@ -8,8 +8,9 @@ metadata at all, so nothing in the build can work it out for us.
 
 - **Allowed:** MIT, BSD-2-Clause, BSD-3-Clause, ISC, Apache-2.0.
 - **MPL-2.0:** only for unmodified third-party code compiled into something
-  else — Eigen inside sherpa-onnx is the one case — and then its notice ships
-  with the app. Never the licence of a package we add ourselves.
+  else — Eigen inside sherpa-onnx and ONNX Runtime, and option-ext inside
+  Arti — and then its notice ships with the app. Never the licence of a
+  package we add ourselves.
 - **Never:** GPL, AGPL or LGPL, in any version.
 - **Never, whatever the licence:** anything that does analytics, advertising
   or crash reporting. The privacy card says this app does none of those, and
@@ -28,8 +29,9 @@ add its row below and its identity to `systemSettingsLinkedIdentities`.
 ## The parts
 
 Each licence below was read from the project's own licence file on 2026-10-21
-(plan section 3). **Linked today: ONNX Runtime 1.24.2 only** (batch
-2026-11-14, room mode; DomovoiKit's `Package.swift`). Each other row arrives
+(plan section 3). **Linked today: ONNX Runtime 1.24.2** (batch
+2026-11-14, room mode; DomovoiKit's `Package.swift`) **and Arti 2.8.0**
+(away chat's Tor, 1.5.0; `ios/Vendor/domovoi-tor`). Each other row arrives
 for real in the batch that adds the package.
 
 | Part | Licence | Shipped? | Where it was read |
@@ -37,6 +39,7 @@ for real in the batch that adds the package.
 | Apple's frameworks (SwiftUI, AVFoundation, MediaPlayer, CryptoKit, Network, Security, PDFKit, PhotosUI, AlarmKit, ActivityKit, WidgetKit, App Intents, CarPlay, MetricKit) | Part of the OS | No | — |
 | LiteRT-LM (`litert-lm`), the phone assistant's model runtime | Apache-2.0 | Yes | github.com/google-ai-edge/LiteRT-LM |
 | ONNX Runtime 1.24.2 (`onnxruntime-swift-package-manager`, exact pin) | MIT | **Yes, linked** (about 20.5 MB of the app binary uncompressed, 7.2 MB compressed; measured 2026-11-14) | github.com/microsoft/onnxruntime-swift-package-manager at tag 1.24.2 (`b7fb7f7d`); its binary target `pod-archive-onnxruntime-c-1.24.2.zip`, SHA-256 `f7100a99…600b54`, with ios-arm64, ios-arm64_x86_64-simulator and macos-arm64_x86_64 slices. Notices shipped: `notices/onnxruntime/LICENSE` and `ThirdPartyNotices.txt`, from microsoft/onnxruntime at v1.24.2; they list what is compiled in, Eigen (MPL-2.0, unmodified) among them |
+| Arti 2.8.0 (`domovoi-tor`: arti-client 0.48.0, exact pin), away chat's Tor | MIT OR Apache-2.0 | **Yes, linked** (iOS only: `ios/Vendor/domovoi-tor/DomovoiTor.xcframework`, built from `native/domovoi-tor` by its `build-ios.sh`) | gitlab.torproject.org/tpo/core/arti, and each of the 430 crates `Cargo.lock` pins for the iOS targets: `native/domovoi-tor/third_party_licences.py --ios` writes `notices/domovoi-tor/THIRD-PARTY-LICENSES.txt` from each crate's own licence files (run it again after any `Cargo.lock` change). Nearly all MIT or Apache-2.0; ring (Apache-2.0 AND ISC), SQLite (public domain), Zstandard (BSD-3-Clause), the Unicode tables (Unicode-3.0), a few ISC, Zlib, BSD, CC0 or Unlicense; **one MPL-2.0 crate, option-ext 0.2.0, unmodified and compiled in**, which the rule above allows as a shipped notice. sysinfo 0.38.4 (MIT) is built from `native/domovoi-tor/vendor/` with a one-line iOS fix, its LICENSE kept |
 | ZIPFoundation (`zipfoundation`), for .docx and .xlsx | MIT | Yes, if chosen (owner answer Q7) | github.com/weichsel/ZIPFoundation |
 | sherpa-onnx (`sherpa-onnx`) | Apache-2.0 | Only if the speech fallback is needed | github.com/k2-fsa/sherpa-onnx |
 | XcodeGen | MIT | No — a build tool on the Mac | github.com/yonaskolb/XcodeGen |

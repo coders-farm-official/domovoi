@@ -14,7 +14,8 @@ final class SystemSettingsLicencesTests: XCTestCase {
     /// package nobody links is a claim about software that is not there.
     func testNoRowNamesSomethingThisAppDoesNotLink() {
         let parts = systemSettingsLicenceParts()
-        XCTAssertEqual([SystemSettingsStrings.applesFrameworks, "ONNX Runtime 1.24.2"], parts.map(\.title))
+        XCTAssertEqual([SystemSettingsStrings.applesFrameworks, "ONNX Runtime 1.24.2",
+                        "Arti 2.8 (arti-client 0.48.0), the Tor Project's Tor in Rust"], parts.map(\.title))
         let text = parts.map { [$0.title, $0.licence, $0.source ?? "", $0.note ?? ""].joined(separator: " ") }
             .joined(separator: "\n")
             .lowercased()
@@ -30,7 +31,7 @@ final class SystemSettingsLicencesTests: XCTestCase {
     /// ONNX Runtime is linked (room mode), so the card draws its row, with
     /// both notices it ships, and not the "links nothing" sentence.
     func testOnnxRuntimeIsLinkedWithItsNotices() {
-        XCTAssertEqual(["onnxruntime-swift-package-manager"], systemSettingsLinkedIdentities)
+        XCTAssertEqual(["onnxruntime-swift-package-manager", "domovoi-tor"], systemSettingsLinkedIdentities)
         XCTAssertFalse(systemSettingsLinksNothing())
         let onnx = systemSettingsLicenceParts().first { $0.title == "ONNX Runtime 1.24.2" }
         XCTAssertEqual("MIT", onnx?.licence)
@@ -39,6 +40,17 @@ final class SystemSettingsLicencesTests: XCTestCase {
         // The sentence is still right for a build that links nothing.
         XCTAssertTrue(systemSettingsLinksNothing(linked: []))
         XCTAssertTrue(SystemSettingsStrings.licencesNothingLinked.contains("no third-party package"))
+    }
+
+    /// Away chat's Tor (Arti, ios/Vendor/domovoi-tor) is linked, so its row
+    /// is drawn with the notice of every crate built into it, the MPL-2.0 one
+    /// named.
+    func testArtiIsLinkedWithItsCratesNotice() {
+        let arti = systemSettingsLicenceParts().first { $0.title.hasPrefix("Arti ") }
+        XCTAssertEqual("MIT OR Apache-2.0", arti?.licence)
+        XCTAssertEqual("gitlab.torproject.org/tpo/core/arti", arti?.source)
+        XCTAssertEqual(["domovoi-tor/THIRD-PARTY-LICENSES.txt"], arti?.notices)
+        XCTAssertTrue(arti?.note?.contains("MPL-2.0, unmodified (option-ext)") == true)
     }
 
     /// `noticeChunks` (`LicencesCard.kt:274-275`): 40 lines a piece, nothing

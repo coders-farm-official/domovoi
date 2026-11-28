@@ -63,7 +63,7 @@ final class LicencesTests: XCTestCase {
                      "https://github.com/bugsnag/bugsnag-cocoa", "amplitude-swift"] {
             XCTAssertTrue(Licences.isForbiddenKind(name), name)
         }
-        for name in ["onnxruntime-swift-package-manager", "litert-lm", "zipfoundation", "sherpa-onnx"] {
+        for name in ["onnxruntime-swift-package-manager", "domovoi-tor", "litert-lm", "zipfoundation", "sherpa-onnx"] {
             XCTAssertFalse(Licences.isForbiddenKind(name), name)
         }
     }
@@ -132,6 +132,8 @@ final class LicencesTests: XCTestCase {
         }
         let onnx = Licences.rule(for: "onnxruntime-swift-package-manager")
         XCTAssertEqual(["onnxruntime/LICENSE", "onnxruntime/ThirdPartyNotices.txt"], onnx?.notices)
+        let tor = Licences.rule(for: "domovoi-tor")
+        XCTAssertEqual(["domovoi-tor/THIRD-PARTY-LICENSES.txt"], tor?.notices)
     }
 
     // ---- the card and the list stay together -------------------------------

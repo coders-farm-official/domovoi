@@ -63,6 +63,8 @@ public enum Licences {
     /// package of its own.
     public static let permissive: Set<String> = [
         "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Apache-2.0",
+        // A choice of two permissive licences (Arti's, and most Rust crates').
+        "MIT OR Apache-2.0",
     ]
 
     /// Never in this app, whatever its licence: the privacy card says the app
@@ -106,6 +108,26 @@ public enum Licences {
                 + "detection on this phone. Compiled in: the parts its third-party notice "
                 + "lists, Eigen (MPL-2.0, unmodified) among them.",
             notices: ["onnxruntime/LICENSE", "onnxruntime/ThirdPartyNotices.txt"]
+        ),
+        // Linked since 1.5.0 (away chat): ios/Vendor/domovoi-tor, the static
+        // library native/domovoi-tor/build-ios.sh builds from the shared Rust
+        // crate, Arti 2.8.0 and the crates Cargo.lock pins. Its notice is
+        // every one of those crates' own licence files, written by
+        // native/domovoi-tor/third_party_licences.py --ios (the same
+        // generator as Android's). One crate is MPL-2.0, option-ext,
+        // unmodified and compiled in, which the policy allows as a shipped
+        // notice, as Eigen's is.
+        LicenceRule(
+            title: "Arti 2.8 (arti-client 0.48.0), the Tor Project's Tor in Rust",
+            identities: ["domovoi-tor"],
+            licence: "MIT OR Apache-2.0",
+            source: "gitlab.torproject.org/tpo/core/arti",
+            note: "Chat from away: reaches your house's onion over Tor, only while that chat is open "
+                + "(native/domovoi-tor). Built in: 430 Rust crates, nearly all MIT or Apache-2.0; ring "
+                + "(Apache-2.0 AND ISC), SQLite (public domain), Zstandard (BSD-3-Clause), the Unicode tables "
+                + "(Unicode-3.0), a few under ISC, Zlib, BSD, CC0 or the Unlicense, and one under MPL-2.0, "
+                + "unmodified (option-ext). Each crate's own licence files are in the notice.",
+            notices: ["domovoi-tor/THIRD-PARTY-LICENSES.txt"]
         ),
         LicenceRule(
             title: "ZIPFoundation (.docx and .xlsx are ZIP files)",
