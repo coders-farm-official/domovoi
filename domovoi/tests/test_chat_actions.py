@@ -914,6 +914,88 @@ async def test_an_away_send_reaches_the_house_as_its_phone(away_db, monkeypatch,
         away_keys.reset_bridge_secret()
 
 
+HELLO = "Hey domovoi! testing out the away from home chat feature"
+
+
+TIMER = "set a timer for 5 minutes"
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("said, core, ends", [
+    # The core defers a greeting (handled: false): the chat's model answers.
+    (HELLO, None, ("done", "From the model.")),
+    (HELLO, "down", ("done", "From the model.")),
+    (HELLO, 403, ("done", "From the model.")),
+    (HELLO, 404, ("error", "thread_not_found")),
+    (TIMER, None, ("done", "Timer set for 5 minutes.")),
+    (TIMER, "down", ("done", "ROUTER_UNREACHABLE_TEXT")),
+    (TIMER, 403, ("done", "CHAT_CANT_TEXT")),
+])
+async def test_an_away_send_on_a_live_house_ends_with_its_reply(
+    away_db, monkeypatch, rooms, web, said, core, ends,
+) -> None:
+    """The owner's first away send (main 16b76bb4): a NEW chat, on a house
+    whose state poll has reached the core, so the typed chat's hop asks
+    it even for a greeting no core fast path takes ("maybe"). The phone
+    showed "Your house is busy" (``ERR unavailable``). Whatever the core
+    answers, the lines the phone gets are RESP, then only the wire's
+    events (delta, done, error: never the home page's ``status``), ending
+    with the reply."""
+    import web.backend.api.chat as chat_api
+    from domovoi.away import keys as away_keys
+    from domovoi.friend_houses import service as svc
+    from domovoi.friend_houses.noise import public_bytes
+    from domovoi.tests.auth_testkit import web_client
+    from domovoi.tests.away_kit import claimed, enroll, lines, phone
+    from web.backend.api import away as away_api
+
+    core_app.dependency_overrides.pop(admin_auth.require_device_after_setup, None)
+    monkeypatch.setattr(chat_api, "get_cached_snapshot", lambda: {"active_rooms": []})
+
+    async def tell(_request):
+        return True
+
+    async def state(_device):
+        return "ready"
+
+    monkeypatch.setattr(away_api, "tell_core", tell)
+    monkeypatch.setattr(away_api, "core_state", state)
+    monkeypatch.setattr(svc, "sys", SimpleNamespace(platform="linux"))
+    web.down = core == "down"
+    web.status = core if isinstance(core, int) else None
+    away_keys.reset_bridge_secret()
+    secret = away_keys.bridge_secret()
+    try:
+        async with web_client() as c:
+            base, _admin, _token = await claimed(c)
+            p = await phone(c, base)
+            await enroll(c, p)
+            body = {"device_id": p["id"], "noise_pub": public_bytes(p["noise"]).hex(),
+                    "request": {"op": "chat.send", "chat_id": None, "client_id": str(uuid.uuid4()),
+                                "text": said},
+                    "picture": ""}
+            r = await c.post("/api/away/bridge", json=body, headers={**base, away_api.BRIDGE_HEADER: secret})
+            assert r.status_code == 200, r.text
+            out = lines(r.content)
+        await _fanned_out()
+        # The hop was made, as the phone its away key proved.
+        assert _texts(web) == [said]
+        assert web.calls[0]["headers"][chat_access.AWAY_DEVICE_HEADER] == p["id"]
+        assert out[0]["k"] == "resp" and out[0]["b"]["user_message"]["content"] == said, out
+        assert all(x["k"] == "event" and x["b"]["type"] in ("delta", "done", "error") for x in out[1:]), out
+        assert [x["end"] for x in out] == [False] * (len(out) - 1) + [True], out
+        kind, want = ends
+        final = out[-1]["b"]
+        assert final["type"] == kind, out
+        if kind == "done":
+            assert final["message"]["content"] == getattr(chat_api, want, want)
+        else:
+            assert final["code"] == want
+    finally:
+        away_keys.reset_bridge_secret()
+
+
 # ─── The chat prompt's backstop ───────────────────────────────────────────
 
 

@@ -474,3 +474,74 @@ async def test_the_user_turn_id_comes_from_the_send_itself(house) -> None:
         hist = _final(await _away(c, h, {"op": "chat.history", "chat_id": first[0]["b"]["chat_id"]}))
         users = [m for m in hist["messages"] if m["role"] == "user"]
         assert first[0]["b"]["message_id"] == users[-1]["id"] == first[0]["b"]["user_message"]["id"]
+
+
+# ─── a failure never ends as a silent stream ─────────────────────────────
+
+
+@pytest.mark.parametrize("where", ["send", "gate", "list"])
+async def test_an_unexpected_failure_is_an_err_never_a_silent_stream(house, monkeypatch, caplog, where) -> None:
+    """A request whose answer just stopped was "unavailable" to the core
+    (domovoi/away/bridge.py: no last line), which the phone shows as "Your
+    house is busy": the failure is now said (ERR ``internal``, the last
+    line) and logged by its type, never its content."""
+    secret_words = "the secret words of the message"
+
+    async def boom(*_a, **_k):
+        raise RuntimeError(secret_words)
+
+    async with web_client() as c:
+        h = await _setup(c)
+        if where == "send":
+            monkeypatch.setattr(chat_api, "send_message", boom)
+            request = _send("hello there")
+        elif where == "gate":
+            monkeypatch.setattr(away_bridge, "gate", boom)
+            request = _send("hello there")
+        else:
+            monkeypatch.setattr(chat_api, "list_threads", boom)
+            request = {"op": "chat.list"}
+        with caplog.at_level("WARNING", logger="web.backend.away_bridge"):
+            out = await _away(c, h, request)
+    assert out == [{"k": "err", "b": {"code": "internal", "detail": "Something went wrong at the house."},
+                    "end": True}]
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in said and secret_words not in said
+    assert away_bridge.running_run(h["phone"]["id"]) is None
+
+
+async def test_only_the_wires_events_reach_the_phone(house, monkeypatch) -> None:
+    """The home send's other SSE events (``status``: the typed chat's
+    house_command, a draft's drafting; ``replace``; a job's) are the home
+    page's: the phone gets delta, done and error only, and ``replace`` still
+    sets the text a chat.stream catches up with."""
+    from fastapi.responses import StreamingResponse
+
+    async def send_message(thread_id, body, request, viewer=None):
+        async with session_scope() as s:
+            uid = (await s.execute(text(
+                "INSERT INTO chat_messages (thread_id, role, content, device_id) VALUES (:t, 'user', :c, :d) "
+                "RETURNING id"), {"t": thread_id, "c": body.content, "d": body.device_id})).scalar_one()
+            row = (await s.execute(text(
+                "INSERT INTO chat_messages (thread_id, role, content) VALUES (:t, 'assistant', 'Fixed.') "
+                "RETURNING id, role, content"), {"t": thread_id})).mappings().one()
+            await s.commit()
+        request.state.chat_user_message_id = int(uid)
+
+        async def sse():
+            yield f"event: status\ndata: {json.dumps({'state': 'house_command'})}\n\n"
+            yield f"event: delta\ndata: {json.dumps({'text': 'Wrong'})}\n\n"
+            yield f"event: replace\ndata: {json.dumps({'text': 'Fixed.'})}\n\n"
+            yield f"event: job\ndata: {json.dumps({'id': 1})}\n\n"
+            yield f"event: done\ndata: {json.dumps(dict(row))}\n\n"
+
+        return StreamingResponse(sse(), media_type="text/event-stream")
+
+    monkeypatch.setattr(chat_api, "send_message", send_message)
+    async with web_client() as c:
+        h = await _setup(c)
+        out = await _away(c, h, _send("set a timer for 5 minutes"))
+    assert [(x["k"], x["b"].get("type")) for x in out] == [("resp", None), ("event", "delta"), ("event", "done")]
+    assert out[-1]["b"]["message"]["content"] == "Fixed."
+    run = away_bridge._RUNS[h["phone"]["id"]]
+    assert run.text == "Fixed."

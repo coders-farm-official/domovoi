@@ -241,14 +241,14 @@ async def handle(device_id: str, noise_hex: str, raw_request: dict[str, Any], pi
         # never comes here, and is never taken for a send.
         yield err("bad_request", "away.leave is answered by the core")
         return
-    why = await gate(device_id, noise_hex)
-    if why is not None:
-        yield line("bye", {"code": why}, end=True)
-        return
-    viewer = Viewer(device_id=device_id)
-    async with session_scope() as s:
-        household = await admin_auth.get_device_token(s)
     try:
+        why = await gate(device_id, noise_hex)
+        if why is not None:
+            yield line("bye", {"code": why}, end=True)
+            return
+        viewer = Viewer(device_id=device_id)
+        async with session_scope() as s:
+            household = await admin_auth.get_device_token(s)
         if request.op == "chat.list":
             yield await _list(viewer, request)
         elif request.op == "chat.history":
@@ -268,6 +268,11 @@ async def handle(device_id: str, noise_hex: str, raw_request: dict[str, Any], pi
         yield err(code, detail)
     except admin_auth.AuthCheckUnavailable:
         yield err("unavailable", "Your house is busy. Try again shortly.")
+    except Exception as e:  # noqa: BLE001 — said to the phone, logged without content
+        # Never a stream that just stops: the core reads that as its own
+        # "unavailable" ("Your house is busy"), which hides what failed.
+        log.warning("away chat: a %s request failed (%s)", request.op, type(e).__name__)
+        yield err("internal", "Something went wrong at the house.")
 
 
 # ─── chat.list / chat.history ────────────────────────────────────────────
@@ -629,7 +634,8 @@ async def _drive(run: Run, response: Any) -> None:
     """Read the home send's reply to its end, whoever is listening: each
     SSE event as an away event (``delta``; ``done``; ``error`` then
     ``done`` as one ``error`` carrying the stored row), stored by the chat
-    code as at home. A stop ends it as ``error`` ``cancelled`` with the
+    code as at home. No other event goes to the phone (the wire defines
+    these three). A stop ends it as ``error`` ``cancelled`` with the
     partial reply."""
     from web.backend.api import chat as chat_api
 
@@ -657,8 +663,13 @@ async def _drive(run: Run, response: Any) -> None:
                                  "detail": pending_error.get("detail") or "", "message": message}
                     else:
                         final = {"type": "done", "message": message}
-                else:
-                    run.publish({**data, "type": name})
+                elif name == "replace":
+                    # The text so far, replaced (a lookup's answer): what a
+                    # chat.stream catches up with; ``done`` carries the row.
+                    run.text = str(data.get("text", ""))
+                # Every other home event (``status``: house_command,
+                # drafting, checking; a lookup's or a job's own) is the
+                # home page's: the wire's events are delta, done and error.
         if final is None and pending_error is not None:
             final = {"type": "error", "code": pending_error.get("code") or "internal",
                      "detail": pending_error.get("detail") or ""}
