@@ -1418,6 +1418,65 @@ async def phone_voice_turn(
         return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})
 
 
+class _PhoneTextBody(BaseModel):
+    # What was typed (domovoi/phone_voice.py MAX_TEXT_CHARS).
+    text: str = Field(..., max_length=2000)
+    # The app's device id: names the routing session (phone-<id>), as on
+    # the voice turn; a caller with a device key may only name its own.
+    phone_id: str = Field(..., max_length=64)
+    # chat_threads.id is a BIGINT: anything past it is refused (422).
+    thread_id: int = Field(..., ge=1, le=2**63 - 1)
+    # The typed row already in the thread (the web's send wrote it): only
+    # the reply is written. Omitted: both rows are.
+    user_message_id: int | None = Field(None, ge=1, le=2**63 - 1)
+    # What the client's own player is doing ({"title", "artist", "kind",
+    # "playing"}), for "what's playing".
+    player: dict[str, Any] | None = None
+    # True: the client plays the returned actions itself, as the app does
+    # for the mic. False (the web): media for a phone's player isn't
+    # played, and the reply says so.
+    plays_here: bool = False
+    # True (the web's typed chat): only the router's fast tiers (a parked
+    # question, a core or plugin fast path), never a model and never the
+    # chat's own handlers; a turn none takes is not answered here
+    # (handled: false, nothing written) and the client's model answers it.
+    fast_paths_only: bool = False
+
+
+@app.post(
+    "/v1/phone/text",
+    # The voice turn's gate: the device tier without the pre-setup grace.
+    dependencies=[Depends(admin_auth_mod.require_device_after_setup)],
+)
+async def phone_text_turn(body: _PhoneTextBody, request: Request, viewer: Any = chat_access.VIEWER) -> Any:
+    """One TYPED turn from a chat, answered as the chat mic answers a
+    spoken one (``/v1/phone/voice``) without speech-to-text or
+    text-to-speech: the same router, the phone's session for this thread,
+    confirmations, guests and private chats. The web's typed send hands
+    house commands here (web/backend/api/chat.py). See
+    ``domovoi/phone_voice.py`` ``run_phone_text_turn``."""
+    from domovoi import phone_voice
+
+    try:
+        # The web's hop for a phone's away turn names the device its away
+        # key proved (chat_access.bridge_viewer); anyone else is as resolved.
+        viewer = await chat_access.bridge_viewer(request, viewer)
+        player = phone_voice.parse_player(json.dumps(body.player)) if body.player else {}
+        return await phone_voice.run_phone_text_turn(
+            app,
+            phone_id=body.phone_id,
+            thread_id=body.thread_id,
+            text_=body.text,
+            player=player,
+            viewer=viewer,
+            user_message_id=body.user_message_id,
+            plays_here=body.plays_here,
+            fast_paths_only=body.fast_paths_only,
+        )
+    except phone_voice.PhoneTurnRefused as e:
+        return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})
+
+
 # ─── Lookups (assistant plan part 5, W1; domovoi/lookup_web.py) ──────────
 
 

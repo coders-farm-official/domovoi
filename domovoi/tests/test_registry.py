@@ -228,6 +228,8 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
             "core.letter_author", "core.letter_dictation",
         },
         "memory": {"core.forget_what"},
+        # N20: "announce that" with nothing to point at: "What should I announce?"
+        "intercom": {"core.intercom_what"},
         # M2: "How long should it be?" / "What time should it go off?" (ask_detail).
         "timer": {"core.timer_how_long"},
         "reminder": {"core.alarm_what_time", "core.reminder_what_when"},
@@ -263,6 +265,8 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.letter_author", "core.letter_dictation",
         },
         "media_search": {"core.media_send"},
+        # N20: "What should I announce?", and typed chat's read-back of the reply.
+        "intercom": {"core.intercom_what", "core.intercom_confirm"},
         "timer": {"core.timer_how_long"},
         "reminder": {"core.alarm_what_time", "core.reminder_what_when"},
     }
