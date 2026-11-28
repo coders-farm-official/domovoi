@@ -469,6 +469,9 @@ app.include_router(home_location_api.router)
 # Groups (V060): /api/music/groups — named sets of rooms and the shared
 # queues; its own literal prefix, proxied to the core.
 app.include_router(music_groups_api.router)
+# Listen along (1.5.0): /api/music/listen — a paired phone plays a room's
+# music itself; proxied to the core like the groups.
+app.include_router(music_groups_api.listen_router)
 # Lyrics (V021): the household tier's synced-lyrics reads. Its own module,
 # like the names above, so /api/music/lyrics/* and the /lyrics leaves stay
 # clear of music_api's /library/{track_id} matchers.

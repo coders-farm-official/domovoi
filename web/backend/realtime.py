@@ -1012,6 +1012,9 @@ async def _snapshot_now_playing() -> dict[str, dict[str, Any]]:
             "song": np_model.song.model_dump() if np_model.song else None,
             # elapsed_sec deliberately omitted — see docstring above.
             "stream_url": np_model.stream_url,
+            # A phone joining or leaving (listen along) is a change the
+            # cards show ("… is listening along").
+            "listeners": [x.device_id for x in np_model.listeners],
         }
     return out
 

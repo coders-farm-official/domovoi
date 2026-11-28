@@ -650,6 +650,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi import music_groups
 
     await music_groups.load()
+    # Listen along (domovoi/music_listeners.py): the phones that listened
+    # before the restart, each given a minute to send its heartbeat.
+    from domovoi import music_listeners
+
+    await music_listeners.load()
     # §12 milestone: MPD image/room warm has been attempted (best-effort
     # by design) — plugin hooks with after="core.mpd_provisioner" run.
     _WORKERS_EARLY.mark_core_hook_done("core.mpd_provisioner")

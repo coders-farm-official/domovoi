@@ -873,6 +873,33 @@ garage, stop the music").
   `STOP_ONLY_RE`; owner 2026-11-15). Memory is the truth; the tables mirror
   it for the web process (now-playing and the queue show `group`) and for
   a restart.
+* **Listen along** (1.5.0, `music_listeners.py`, V089): a paired phone at
+  home plays a room's music itself, as a LISTENER keyed by its
+  `device_id` — never a member, so routing (`host_of`), voice, the
+  hand-off order and "the last room plays on alone" are untouched, and a
+  listener neither keeps a shared queue alive nor ends one. Join records
+  the host of what the room hears; the phone plays that player's live MP3
+  stream (`own_stream_url_for` through `lan_address.stream_url_for_peer`
+  with the address it dialed, as a satellite does), so a skip, a new
+  "play X" or a queue edit reaches it with no resync, a second or three
+  behind the rooms. A hand-off (`music_groups._hand_off`) moves the
+  listeners to the new host, and so does a room playing alone joining
+  another room's shared queue; a member room leaving, or the dashboard
+  ending the shared queue, doesn't. A person's stop reaching the host (the
+  voice reply's `music_stop`, `room_music.dispatch_music`) marks them
+  `stopped` (`ended` for a skip past the last song, whose reply carries
+  `data.queue_ended`); the host's player found stopped by itself for a few
+  seconds (the sweeper, `music_groups.upkeep` ending a group, or a
+  heartbeat) marks them `ended`; each phone hears it on its next 15-second
+  heartbeat. The end of a join and every heartbeat check the host again
+  (`music_listeners.follow`). At most 32 phones listen at once; device ids
+  must have the devices tier's shape. A phone with no heartbeat for 60 s
+  is dropped; a restart reloads the mirror and gives each phone 60 s from
+  boot. Memory changes never wait; each mirror write then copies memory as
+  it is (`_sync`), so racing changes can't leave a row behind. Household tier only (a guest
+  phone can't listen along in 1.5.0), home network only (away chat has no
+  op for it). The cards and the group list carry
+  `listeners: [{device_id, name}]` from the mirror.
 * **Podcasts and audiobooks** (`handlers/spoken_audio_rooms.py`, the
   first fast path of `spoken_audio` at band 270, which would otherwise
   read the place as part of a show's or a book's name): "play the latest

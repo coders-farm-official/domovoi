@@ -718,6 +718,11 @@ async def _hand_off(app: Any, old: str, new: str) -> _HandOff:
         await src.stop()
     except Exception as e:  # noqa: BLE001
         log.debug("groups: %s's player didn't stop after the hand-off: %s", old, e)
+    # Phones listening along follow the music to its new host (the stream
+    # URL their next heartbeat answers changes; domovoi/music_listeners.py).
+    from domovoi import music_listeners
+
+    await music_listeners.move_host(old, new)
     log.info("groups: shared queue handed from room=%s to room=%s", old, new)
     return _HandOff(ok=True, session_id=session_id)
 
@@ -763,6 +768,13 @@ async def share(
             other = share_of(room)
             if other is not None:
                 await _leave_locked(app, room, silence=False)
+            else:
+                # Phones listening along to this room's own music go on
+                # with what the room plays now, as on a hand-off; its own
+                # player only waits, paused (domovoi/music_listeners.py).
+                from domovoi import music_listeners
+
+                await music_listeners.move_host(room, host, follow_room=False)
             await _pause_own(room)
             _forget_own_pause(app, room)
             sh.joined_at[room] = _joined_now(sh)
@@ -839,6 +851,9 @@ async def _leave_locked(app: Any, room_id: str, *, silence: bool) -> Left | None
             await own_mpd_client(old).stop()
         except Exception as e:  # noqa: BLE001
             log.debug("groups: %s's player didn't stop: %s", old, e)
+        from domovoi import music_listeners
+
+        await music_listeners.host_stopped(old, music_listeners.REASON_STOPPED)
         return Left(share=sh, was_host=True, new_host=None, ended=True)
     session_id = handed.session_id
     sh.members.remove(new)
@@ -942,6 +957,10 @@ async def upkeep(app: Any) -> None:
             sh.stopped_looks += 1
             if sh.stopped_looks >= STOPPED_LOOKS_TO_END:
                 await end(app, sh.id, silence_members=True)
+                # Its queue ran out: phones listening along stop too.
+                from domovoi import music_listeners
+
+                await music_listeners.host_stopped(sh.host, music_listeners.REASON_ENDED)
                 continue
         elif state is not None:
             sh.stopped_looks = 0

@@ -1776,6 +1776,9 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
                 music_action="stop",
+                # Phones listening along hear "ended", not "stopped": the
+                # queue is over (domovoi/music_listeners.py).
+                data={"queue_ended": True},
             )
         return Response(
             text="Next track.",

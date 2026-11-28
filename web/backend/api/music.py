@@ -985,10 +985,19 @@ async def now_playing(request: Request) -> list[NowPlaying]:
     rooms = await _list_provisioned_rooms()
     cards = [await _now_playing_for(r) for r in rooms]
     await _attach_queue_provenance(cards)
-    if any(c.added_by is not None for c in cards):
+    # The phones listening along are named the same way (1.5.0): to the
+    # household, never to the open kiosk read.
+    names_devices = any(
+        c.added_by is not None or c.listeners or (c.group is not None and c.group.listeners)
+        for c in cards
+    )
+    if names_devices:
         if await check_device_request(request) not in _READS_QUEUE_PROVENANCE:
             for card in cards:
                 card.added_by = None
+                card.listeners = []
+                if card.group is not None:
+                    card.group.listeners = []
     return cards
 
 
@@ -2316,11 +2325,14 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
     room_id, control_port, http_port = room
     from domovoi import lan_address
     from domovoi.config import settings as core_settings
-    from web.backend.api.music_groups import live_groups
+    from web.backend.api.music_groups import live_groups, live_listeners
 
     # A room in a shared queue (a group) hears its host's player: the card
     # is the host's song, with the group named (V060).
     group = (await live_groups()).get(room_id)
+    # The phones listening along (V089) hear the host's player too.
+    host_room = group["host_room"] if group is not None else room_id
+    listeners = list((await live_listeners()).get(host_room, []))
     stamp_room = room_id
     if group is not None and group["host_room"] != room_id:
         ports = await _host_ports(group["host_room"])
@@ -2379,6 +2391,7 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
         source_ref=source_ref,
         song_id=song_id,
         group=group,
+        listeners=listeners,
     )
 
 
