@@ -736,6 +736,18 @@ _RECENT_FIRE_SQL = """
          AND f.fired_at >= now() - make_interval(secs => :pending_within))
 """
 
+# Narrower: actually announced in this room in the last ``within`` seconds
+# (sending, spoken or interrupted) — what ringing_fire(heard_only=True)
+# reads. Never a delivery still waiting its turn, nor the timer's own room
+# by origin alone: during a drop-in nothing can ring there (announcements
+# are held), so a "stop" meant for the call must not cancel a held timer
+# nobody heard.
+_HEARD_FIRE_SQL = """
+        d.outcome IN ('sending', 'spoken', 'interrupted')
+        AND COALESCE(d.finished_at, d.started_at)
+            >= now() - make_interval(secs => :within)
+"""
+
 # A timer, or an alarm: a reminder with the label the reminder handler gives
 # an alarm ("7 AM alarm", "20 minute alarm"). Never any other reminder: its
 # words are household speech (the room display shows neither).
@@ -780,15 +792,22 @@ class Ringing:
 
 
 async def ringing_fire(
-    session: AsyncSession, room_id: str, within_sec: int = ACK_WITHIN_SEC,
+    session: AsyncSession, room_id: str, within_sec: float = ACK_WITHIN_SEC,
+    *, heard_only: bool = False,
 ) -> Ringing | None:
     """The timer or alarm going off for ``room_id`` that nobody has
     acknowledged yet: the newest fire :func:`ack_recent_fire` would take
     here (same window), a timer or an alarm only, with ``acked_at`` still
     empty. None when there is none or V018 is missing. Read by the room
-    display (domovoi/room_display.py) for its "ringing" card."""
+    display (domovoi/room_display.py) for its "ringing" card.
+
+    ``heard_only``: only a fire actually announced in this room in the last
+    ``within_sec`` seconds (:data:`_HEARD_FIRE_SQL`) — not one still waiting
+    its turn there, nor the timer's own room by origin alone. A bare "stop"
+    said during a drop-in reads it that way (router._route_turn)."""
     if not await _v018_present(session):
         return None
+    recent = _HEARD_FIRE_SQL if heard_only else _RECENT_FIRE_SQL
     row = (
         await session.execute(
             text(
@@ -799,7 +818,7 @@ async def ringing_fire(
                     ON d.fire_id = f.id AND d.room_id = :room
                  WHERE f.acked_at IS NULL
                    AND {_TIMER_OR_ALARM_SQL}
-                   AND ({_RECENT_FIRE_SQL})
+                   AND ({recent})
                  ORDER BY f.fired_at DESC, f.id DESC
                  LIMIT 1
                 """
