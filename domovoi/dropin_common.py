@@ -32,16 +32,16 @@ OK = "ok"
 #:   the call only when nothing else is waiting for an answer there (a
 #:   parked question takes "cancel" for itself).
 END_STOP, END_EXPLICIT, END_WEAK = "stop", "explicit", "weak"
-_END_STOP_RE = re.compile(r"^(?:stop|stop it|stop that|stop now)(?: stop)*(?: please)?$")
+_END_STOP_RE = re.compile(r"^(?:stop|stop it|stop that|stop now)(?: stop)*(?: please)?\Z")
 _END_EXPLICIT_RE = re.compile(
     r"^(?:hang up(?: now)?(?: the (?:call|phone|drop[- ]?in))?"
     r"|end (?:the )?(?:call|drop[- ]?in)(?: now)?"
     r"|stop (?:the )?(?:call|drop[- ]?in)"
     r"|leave (?:the )?(?:call|drop[- ]?in)"
     r"|cancel (?:the )?(?:call|drop[- ]?in))"
-    r"(?: please)?$"
+    r"(?: please)?\Z"
 )
-_END_WEAK_RE = re.compile(r"^(?:end it|disconnect|that's enough|cancel)(?: please)?$")
+_END_WEAK_RE = re.compile(r"^(?:end it|disconnect|that's enough|cancel)(?: please)?\Z")
 
 
 def end_call_kind(transcript: str) -> str | None:
