@@ -240,13 +240,20 @@ async def leave(device_id: str, noise_hex: str) -> bool:
     /api/away/enroll`` at home, and only for itself (the row goes only when
     the device AND its Noise key match: :func:`domovoi.away.store.revoke_own`).
 
-    The listener's ``phones.json`` is rewritten before this returns (by its
-    one writer, from the database), so the phone's next handshake is
-    refused. True when a row went; a phone already gone is answered the
-    same. Tor's client keys follow in the reconcile :func:`_leave` asks for
-    once the phone has its answer: a batched reload, or, for the last
-    phone, the restart or stop that takes ``hs-away`` away (an onion with no
-    clients is open, so one is never left configured: tor_config, S1)."""
+    Once the DELETE has committed there is no row for that device and key,
+    whatever else happens: the web's gate refuses the phone from then on,
+    so it is answered ``RESP {}`` (this returns) even when rewriting the
+    listener's ``phones.json`` fails; that rewrite, normally done here so
+    the phone's next handshake is refused at once, is then left to the
+    reconcile. True when a row went; a phone already gone is answered the
+    same. Only a database that can't be reached raises (``ERR
+    unavailable``: nothing happened, the phone may ask again).
+
+    Tor's client keys follow in a reconcile (:func:`_kick_later`, asked for
+    as soon as the row is gone): a batched reload, or, for the last phone,
+    the restart or stop that takes ``hs-away`` away. Until then the phone's
+    ``.auth`` file stays on disk, so the onion is never left configured
+    with no clients (an onion with no clients is open: tor_config, S1)."""
     from domovoi.away import store as away_store
     from domovoi.db.session import session_scope
     from domovoi.friend_houses import service as svc
@@ -254,27 +261,60 @@ async def leave(device_id: str, noise_hex: str) -> bool:
     noise = bytes.fromhex(noise_hex)
     async with session_scope() as s:
         dropped = await away_store.revoke_own(s, device_id, noise)
-    await svc.write_listener_files()
     if dropped:
         log.info("away chat: device %r turned it off from away", device_id)
+        _kick_later()
+    try:
+        await svc.write_listener_files()
+    except Exception as e:  # noqa: BLE001 — the reconcile writes it again
+        log.warning("away chat: the phone list wasn't rewritten after a leave (%s)", type(e).__name__)
     return dropped
 
 
-def _kick_if(task: asyncio.Task) -> None:
-    """Reconcile (Tor's keys) after a leave that removed a phone."""
+#: How long after a leave the reconcile runs. With no friends, the last
+#: phone's reconcile stops the listener and Tor at once: the phone's RESP
+#: and BYE must have gone out through them first.
+LEAVE_KICK_DELAY_SEC = 5.0
+_KICK_LATER: dict[str, asyncio.TimerHandle | None] = {"handle": None}
+
+
+def _kick_later() -> None:
+    """Reconcile (Tor's keys) :data:`LEAVE_KICK_DELAY_SEC` from now. A
+    leave while one is waiting moves it on, so every leave's answer goes
+    out before the reconcile that may stop the listener (it reads the
+    phones fresh, so one serves them all)."""
     from domovoi.away import routes
 
-    if not task.cancelled() and task.exception() is None and task.result():
-        routes.kick()
+    handle = _KICK_LATER["handle"]
+    if handle is not None:
+        handle.cancel()
+    _KICK_LATER["handle"] = asyncio.get_running_loop().call_later(LEAVE_KICK_DELAY_SEC, _kick_now, routes)
+
+
+def _kick_now(routes: Any) -> None:
+    _KICK_LATER["handle"] = None
+    routes.kick()
+
+
+def _retrieved(task: asyncio.Task) -> None:
+    """A leave whose connection ended: its failure, if any, is logged in
+    :func:`leave` already."""
+    if not task.cancelled():
+        task.exception()
 
 
 async def _leave(conn: int, req: int, device_id: str, noise_hex: str) -> None:
-    """One ``away.leave`` request: :func:`leave` (in a task of its own: a
-    connection that drops meanwhile doesn't stop it), then ``RESP {}``,
-    after which the listener closes the phone's connections, then the
-    reconcile. ``ERR unavailable`` when the house couldn't do it (the phone
-    may ask again)."""
+    """One ``away.leave`` request: :func:`leave` (in a task of its own,
+    held in the service's task set: a connection that drops meanwhile
+    doesn't stop it), then ``RESP {}``, after which the listener closes the
+    phone's connections. ``ERR unavailable`` when the database couldn't be
+    reached (the phone may ask again)."""
+    from domovoi.friend_houses import service as svc
+
     work = asyncio.get_running_loop().create_task(leave(device_id, noise_hex), name="away-chat-leave")
+    svc._PENDING.add(work)
+    work.add_done_callback(svc._PENDING.discard)
+    work.add_done_callback(_retrieved)
     ended = False
     try:
         await asyncio.shield(work)
@@ -292,9 +332,6 @@ async def _leave(conn: int, req: int, device_id: str, noise_hex: str) -> None:
                                                "detail": "Your house is busy. Try again shortly."}, end=True)
             except Exception:  # noqa: BLE001 — the listener is gone
                 pass
-        # After the answer: the reconcile may stop the listener (the last
-        # phone), and the phone hears its RESP first.
-        work.add_done_callback(_kick_if)
 
 
 class _Unavailable(Exception):

@@ -87,7 +87,7 @@ async def test_a_phone_chats_from_away(house, tmp_path) -> None:  # noqa: F811
             bye = await ph.recv()
             assert (bye.kind, bye.json()) == (wire.HOUSE_BYE, {"code": "revoked"})
             assert await ph.closed()
-            with pytest.raises(Exception):
+            with pytest.raises(asyncio.IncompleteReadError):
                 await loop.phone(p["noise"]).connect(loop.port)
 
 
@@ -112,12 +112,18 @@ async def test_a_revoked_phone_mid_connection_gets_bye_from_the_house(house, tmp
 
 @pytest.fixture
 def kicked(monkeypatch):
-    """Each reconcile a leave asks for (Tor's keys), recorded, not run."""
+    """Each reconcile a leave asks for (Tor's keys), recorded, not run,
+    with its delay shortened to half a second."""
     from domovoi.away import routes
 
     calls: list[int] = []
     monkeypatch.setattr(routes, "kick", lambda: calls.append(1))
-    return calls
+    monkeypatch.setattr(bridge, "LEAVE_KICK_DELAY_SEC", 0.5)
+    yield calls
+    handle = bridge._KICK_LATER["handle"]
+    if handle is not None:
+        handle.cancel()
+    bridge._KICK_LATER["handle"] = None
 
 
 async def _enrolled(device_id: str) -> bool:
@@ -150,6 +156,9 @@ async def test_a_phone_leaves_from_away_and_only_it(house, tmp_path, monkeypatch
             bye = await leaver.recv()
             assert (bye.kind, bye.json()) == (wire.HOUSE_BYE, {"code": "revoked"})
             assert await leaver.closed()
+            # The reconcile (which, for the last phone, stops the listener)
+            # comes after the answer and the BYE are out, not before.
+            assert kicked == []
             # Only the caller: its row is gone, the other phone's stays.
             assert not await _enrolled(p["id"]) and await _enrolled(q["id"])
             listed = json.loads((loop.folder / "phones.json").read_text())
@@ -159,7 +168,7 @@ async def test_a_phone_leaves_from_away_and_only_it(house, tmp_path, monkeypatch
             await stayer.request(2, {"op": "chat.list"})
             assert (await stayer.answer(2))[0][0] == wire.RESP
             # Coming back after leaving is refused in silence.
-            with pytest.raises(Exception):
+            with pytest.raises(asyncio.IncompleteReadError):
                 await loop.phone(p["noise"]).connect(loop.port)
             # At home, the phone hears it is no longer enrolled.
             r = await c.get("/api/away/status", headers=p["headers"])
@@ -208,7 +217,68 @@ async def test_the_last_phone_leaving_takes_hs_away_away(house, tmp_path, monkey
     assert not after_alone.run and tc.plan_change(alone, after_alone) == "stop"
     assert not after_friends.away_onion and tc.plan_change(with_friends, after_friends) == "restart"
     assert "hs-away" not in tc.render_torrc(after_friends)
-    assert kicked == []                                   # bridge.leave alone asks for nothing
+    # The reconcile that applies it comes a moment later, and once.
+    assert kicked == []
+    await _settle(lambda: kicked == [1])
+    await asyncio.sleep(0.6)
+    assert kicked == [1]
+
+
+async def test_a_leave_whose_list_rewrite_fails_still_happens(house, tmp_path, monkeypatch, kicked) -> None:  # noqa: F811
+    """Once the row is gone the leave has happened (the web's gate refuses
+    the phone): RESP {}, the BYE, and the reconcile, which writes the
+    listener's list again, even though rewriting it here failed."""
+    async with web_client() as c:
+        base, _, _ = await claimed(c)
+        p = await phone(c, base)
+        await enroll(c, p)
+        async with AwayLoopback(tmp_path / "listener", house_key=away_keys.noise_key()) as loop:
+            await svc._write_phones(loop.folder)
+
+            async def broken() -> None:
+                raise OSError("disk full")
+
+            monkeypatch.setattr(svc, "write_listener_files", broken)
+            ph = loop.phone(p["noise"])
+            await ph.connect(loop.port)
+            await ph.request(1, {"op": "away.leave"})
+            assert await ph.answer(1) == [(wire.RESP, {})]
+            assert (await ph.recv()).json() == {"code": "revoked"}
+            assert not await _enrolled(p["id"])
+            await _settle(lambda: kicked == [1])
+            # A second leave (the phone never heard): the same answer, and
+            # nothing left to remove.
+            assert not await bridge.leave(p["id"], public_bytes(p["noise"]).hex())
+            # The stale list still has it, but the web's gate refuses it.
+            again = loop.phone(p["noise"])
+            await again.connect(loop.port)
+            await again.request(2, {"op": "chat.list"})
+            assert (await again.recv(30)).json() == {"code": "revoked"}
+
+
+async def test_a_leave_the_database_refuses_is_unavailable_and_nothing_changes(
+        house, tmp_path, monkeypatch, kicked) -> None:  # noqa: F811
+    async with web_client() as c:
+        base, _, _ = await claimed(c)
+        p = await phone(c, base)
+        await enroll(c, p)
+        async with AwayLoopback(tmp_path / "listener", house_key=away_keys.noise_key()) as loop:
+            await svc._write_phones(loop.folder)
+
+            async def down(*_a, **_k) -> bool:
+                raise OSError("database unavailable")
+
+            monkeypatch.setattr(away_store, "revoke_own", down)
+            ph = loop.phone(p["noise"])
+            await ph.connect(loop.port)
+            await ph.request(1, {"op": "away.leave"})
+            (kind, body), = await ph.answer(1)
+            assert (kind, body["code"]) == (wire.ERR, "unavailable")
+            await ph.send(wire.PING)
+            assert (await ph.recv()).kind == wire.PONG                 # still connected
+            assert await _enrolled(p["id"])
+            await asyncio.sleep(0.6)
+            assert kicked == []
 
 
 # ─── streaming over a real socket ────────────────────────────────────────
@@ -245,6 +315,9 @@ async def test_replies_stream_over_a_real_socket_and_resume_after_a_drop(house, 
             yield (" " if i else "") + w
 
     monkeypatch.setattr(chat_api.ollama_client, "chat_stream", stream)
+    # What the environment said before: the loopback puts it back.
+    monkeypatch.setenv("WEB_PORT", "16369")
+    monkeypatch.delenv("WEB_HOST", raising=False)
     async with web_client() as c:
         base, _, _ = await claimed(c)
         p = await phone(c, base)
@@ -298,4 +371,4 @@ async def test_replies_stream_over_a_real_socket_and_resume_after_a_drop(house, 
             (kind, history), = await again.answer(3)
             assert kind == wire.RESP
             assert [m["content"] for m in history["messages"]] == ["count", "one two three four five six seven"]
-    assert os.environ.get("WEB_PORT") != str(loop.web_port)            # put back
+    assert os.environ.get("WEB_PORT") == "16369" and "WEB_HOST" not in os.environ   # put back
