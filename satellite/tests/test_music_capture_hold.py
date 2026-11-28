@@ -1222,6 +1222,59 @@ def test_a_reply_the_device_refused_is_still_released(monkeypatch):
     assert sat.playback_q.empty()
 
 
+def test_a_reply_gone_quiet_mid_response_shows_thinking_until_it_speaks_again(monkeypatch):
+    """2026-11-28: a which-one answer went to a cold Q&A model; the core
+    said "Just a moment, I'm waking up my language model." and then worked
+    for minutes, and the ring pulsed blue ("speaking") all along. Once the
+    reply's audio has run out with its response still open, the ring shows
+    the core thinking; the answer's audio gives it back to speaking, and the
+    turn's end releases it as before."""
+    RecordingOut.written = []
+    monkeypatch.setattr(client.Satellite, "REPLY_QUIET_RING_SEC", 0.3)
+    sat = _playback_sat(monkeypatch, RecordingOut)
+    chunk = b"\x01\x00" * 1600                      # 0.1 s at 16 kHz
+    sat.playback_active.set()                       # response_start
+    sat._leds.state = "speaking"
+    sat.playback_q.put((16000, chunk))              # the interim line
+    t = threading.Thread(target=sat._playback_thread_run, daemon=True)
+    t.start()
+    try:
+        deadline = time.monotonic() + 3
+        while sat._leds.state != "thinking" and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert sat._leds.state == "thinking"
+        sat.playback_q.put((16000, chunk))          # the answer
+        deadline = time.monotonic() + 3
+        while sat._leds.state != "speaking" and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert sat._leds.state == "speaking"
+        sat._post_playback_state = "idle"           # response_end: deferred
+        sat.playback_active.clear()
+        assert sat.response_done.wait(3)
+    finally:
+        sat.shutdown_event.set()
+        t.join(3)
+    assert sat._leds.state == "idle"
+
+
+def test_a_short_gap_between_sentences_keeps_the_speaking_ring(monkeypatch):
+    RecordingOut.written = []
+    sat = _playback_sat(monkeypatch, RecordingOut)
+    chunk = b"\x01\x00" * 1600
+    sat.playback_active.set()
+    sat._leds.state = "speaking"
+    sat.playback_q.put((16000, chunk))
+    t = threading.Thread(target=sat._playback_thread_run, daemon=True)
+    t.start()
+    try:
+        time.sleep(0.6)                              # well under REPLY_QUIET_RING_SEC
+        assert sat._leds.state == "speaking"
+    finally:
+        sat.shutdown_event.set()
+        t.join(3)
+    assert client.Satellite.REPLY_QUIET_RING_SEC >= 2.0
+
+
 def test_a_reply_the_device_refused_leaves_the_speaker_free(monkeypatch):
     """The reply's response_start marked the speaker busy; no stream ever
     opened, so nothing marked it free again — and every music_start after

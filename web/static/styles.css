@@ -875,6 +875,17 @@ html.mp-docked { --player-h: 64px; }
   font: inherit; font-size: 12px; height: 32px; padding: 0 6px;
   border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg);
 }
+/* "Playing on …" under the transport: a 44px chip that takes you to the
+   "play on" list at the sheet's foot. */
+.mp-sheet .mp-sheet-where {
+  align-self: center; display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+  min-height: 44px; padding: 0 14px; border-radius: var(--r-full);
+  font-size: 13px; color: var(--fg-muted);
+}
+.mp-sheet .mp-sheet-where span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-sheet .mp-sheet-where b { color: var(--fg); font-weight: 600; }
+.mp-sheet-on:focus { outline: none; }
+.mp-sheet-on:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .mp-sheet-sec {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
   box-shadow: var(--inner-highlight); overflow: hidden;
