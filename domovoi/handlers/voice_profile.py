@@ -105,6 +105,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 import numpy as np
 from sqlalchemy import text as sql_text
@@ -555,6 +556,9 @@ INTRO_SPEECH_TARGET_SEC = 8.0
 # instead of stopping at "I already know you".
 #: The payload key of a room-learning collection's room.
 _LEARN_ROOM_KEY = "learn_room"
+#: The payload key of the "was that you, X?" score a room-learning
+#: collection started from that question checks each clip against.
+_CHECK_SCORE_KEY = "check_score"
 
 #: The introduction's stages after the name (``stage`` in its payload):
 #: "How do you spell that?" (the name not yet settled), then, the voice
@@ -998,6 +1002,14 @@ _REPLY_FILLER_RE = re.compile(r"^(?:(?:hey|um|uh|oh|so|well|alright|ok|okay)\b[\
 _REPLY_WORD_RE = re.compile(r"[a-z0-9']+")
 
 
+def _score_of(data: dict) -> float | None:
+    """The asking turn's score for X a room check parked, or None."""
+    try:
+        return None if data.get("score") is None else float(data.get("score"))
+    except (TypeError, ValueError):
+        return None
+
+
 def _answer_words(name: str) -> frozenset[str]:
     """:data:`_BARE_YES_WORDS`, X's name and the assistant's own names."""
     extra = set(_REPLY_WORD_RE.findall((name or "").lower()))
@@ -1022,29 +1034,95 @@ def _drop_answer_words(text: str, name: str) -> str:
     return " ".join(words)
 
 
-def reply_rest(said: str, affirmative: bool, name: str = "") -> str | None:
-    """What a yes or a no to a parked question said besides the answer, as
-    a turn of its own, or None when it said only the answer. ``said`` is
-    normalized (router.normalize_transcript) and starts with the answer,
-    perhaps after an "um" or an "okay".
+#: Words that take a yes back ("yeah, no", "yes — no wait, that was Sam").
+_TAKE_BACK_WORDS = frozenset(
+    "no nope nah not wasn't wasnt isn't isnt wait actually never".split()
+)
+#: "… that was Sam", "my name is Sam": the yes names somebody.
+_NAMES_SOMEONE_RE = re.compile(
+    r"\b(?:my name(?:'s| is)|i'm|i am|call me|this is|that was|that's|it was|it's|it is)"
+    r" (?P<name>[a-z][a-z'\-]+)"
+)
+#: A rest that is plainly a question ("yes. what's the capital of France"):
+#: routed even when no fast path takes it.
+_QUESTION_START_RE = re.compile(
+    r"^(?:what|what's|whats|who|who's|whos|where|where's|when|why|how|how's|which|whose)\b"
+    r"|^(?:is|are|was|were|can|could|do|does|did|will|would|should|shall)\b(?: \S+){2,}"
+)
+#: The handlers whose fast paths a yes's own words would wrongly start:
+#: an introduction ("yes, I'm in the kitchen"), a dismissal ("yes, that's
+#: fine"). Their phrasings in a yes are part of the answer.
+_ANSWER_HANDLERS = frozenset(("voice_profile", "dismiss"))
 
-    A request inside the rest that a fast path takes is the rest ("yes,
-    wrong song though. Play X" → "play X"; "yeah it was, turn it up" →
-    "turn it up"); the comma in "play, X" is dropped, as Whisper puts one
-    there. A yes whose rest no fast path takes, and is more than the yes
-    ("yes, what's the capital of France"), is routed whole. A no's rest is
-    only ever a fast path's request ("no, play X"): "no, it was my sister"
-    stays a no."""
+
+class ReplyParts(NamedTuple):
+    """A yes or a no to a parked question, read (:func:`read_reply`)."""
+
+    #: The answer: False for a no, and for a yes that took itself back.
+    affirmative: bool
+    #: What the turn asked for besides the answer, as a turn of its own,
+    #: or None when it said only the answer.
+    rest: str | None
+    #: A yes that took itself back ("yeah, no", "yes, my name is Sam").
+    took_back: bool = False
+
+
+def _takes_back(text: str, name: str) -> bool:
+    """Whether the words after a yes take it back: a no ("yeah, no", "yes,
+    no wait"), or somebody other than ``name`` named ("yes, that was Sam",
+    "yes, my name is Sam")."""
+    if set(_REPLY_WORD_RE.findall(text)) & _TAKE_BACK_WORDS:
+        return True
+    allowed = _answer_words(name)
+    for m in _NAMES_SOMEONE_RE.finditer(text):
+        word = m.group("name")
+        if word in allowed or _clean_name(word) is None or not _not_a_command(word):
+            continue
+        return True
+    return False
+
+
+def _is_question(text: str) -> bool:
+    """Whether ``text`` (normalized, filler-stripped) is plainly a question."""
+    from domovoi.handlers.shared.tool_gate import answers_without_tools
+
+    return "?" in text or bool(_QUESTION_START_RE.match(text)) or answers_without_tools(text)
+
+
+def read_reply(said: str, affirmative: bool, name: str = "", *, questions: bool = True) -> ReplyParts:
+    """A yes or a no to a parked question, and what else it said. ``said``
+    is normalized (router.normalize_transcript) and starts with the answer,
+    perhaps after an "um" or an "okay"; ``affirmative`` is how the router
+    read it (router._parse_yes_no).
+
+    The rest is kept only when it is plainly something more:
+
+    * a request a fast path takes ("yes, wrong song though. Play X" →
+      "play X"; "yeah it was, turn it up" → "turn it up"; "no, play X"); the
+      comma in "play, X" is dropped, as Whisper puts one there. Not an
+      introduction's or a dismissal's fast path (:data:`_ANSWER_HANDLERS`):
+      "yes, I'm in the kitchen", "yes, that's fine" are a yes;
+    * after a yes, and only when ``questions``, a plain question ("yes.
+      What's the capital of France?").
+
+    Anything else is the answer alone: "yes please", "sure, go ahead",
+    "yes, sorry" are a bare yes (as early_commit's ``_COMPLETE_YES_RE``
+    reads "yes please"); "no, it was my sister" is a bare no.
+
+    A yes whose own words take it back (:func:`_takes_back`: "yeah, no",
+    "yes, no wait, that was Sam", "yes, my name is Sam" when ``name`` isn't
+    Sam) reads as a no."""
     from domovoi.router import _NO_RE, _YES_RE, first_fast_path, strip_leading_filler
 
     text = _REPLY_FILLER_RE.sub("", said or "")
     head = (_YES_RE if affirmative else _NO_RE).match(text)
     if head is None:
-        return None
+        return ReplyParts(affirmative, None)
     rest = text[head.end():]
     if not rest.strip(" ,.;:!?-"):
-        return None
+        return ReplyParts(affirmative, None)
     starts = [0] + [m.end() for m in _REPLY_BOUNDARY_RE.finditer(rest)]
+    request, answer = None, rest
     for pos in starts:
         tail = rest[pos:].replace(",", " ")
         for cand in (tail, _drop_answer_words(tail, name)):
@@ -1052,17 +1130,35 @@ def reply_rest(said: str, affirmative: bool, name: str = "") -> str | None:
             if not cand:
                 continue
             hit = first_fast_path(cand)
-            if hit is not None and hit[0].name not in (VoiceProfileHandler.name, "dismiss"):
-                return cand
-    if not affirmative or _only_answer(rest, name):
-        return None
-    # No fast path: the rest after the answer's own clauses, as said.
+            if hit is not None and hit[0].name not in _ANSWER_HANDLERS:
+                request, answer = cand, rest[:pos]
+                break
+        if request is not None:
+            break
+    took_back = affirmative and _takes_back(answer, name)
+    if took_back:
+        affirmative = False
+    if request is not None:
+        return ReplyParts(affirmative, request, took_back)
+    if not affirmative or not questions or _only_answer(rest, name):
+        return ReplyParts(affirmative, None, took_back)
+    # No fast path: a plain question after the answer's own clauses.
     keep = rest
     for pos in starts:
         if _only_answer(rest[:pos], name):
             keep = rest[pos:]
-    keep = " ".join(keep.split()).strip(" ,.;:!?-")
-    return keep or None
+    keep = strip_leading_filler(" ".join(keep.split()).strip(" ,.;:!?-"))
+    if not keep or not _is_question(keep):
+        return ReplyParts(affirmative, None)
+    hit = first_fast_path(keep)
+    if hit is not None and hit[0].name in _ANSWER_HANDLERS:
+        return ReplyParts(affirmative, None)
+    return ReplyParts(affirmative, keep)
+
+
+def reply_rest(said: str, affirmative: bool, name: str = "") -> str | None:
+    """:func:`read_reply`'s rest alone."""
+    return read_reply(said, affirmative, name).rest
 
 
 def _room_check_wanted(ctx: Context, response: Response, ident) -> tuple[int, float] | None:
@@ -2408,6 +2504,7 @@ class VoiceProfileHandler(Handler):
         *,
         claimed_by: int | None,
         lead: str,
+        check_score: float | None = None,
     ) -> Response | None:
         """Park a room-learning collection for ``person_id`` in ``room_id``,
         seeded with ``clips``: "<lead> Let me learn your voice better here:
@@ -2415,15 +2512,22 @@ class VoiceProfileHandler(Handler):
         the room's sample in place of ``here`` (:meth:`_save_learned_room`),
         and only when it holds more speech than the best of them, so a
         collection that ends early, short or not at all keeps them. None:
-        it couldn't be parked."""
+        it couldn't be parked.
+
+        ``check_score``: the score of the "was that you, X?" turn that led
+        here. Each clip the collection hears must then also pass that
+        check's voice rule (:meth:`_room_check_voice`), not only resemble
+        the clips so far."""
+        extra = {
+            _LEARN_ROOM_KEY: room_id,
+            "replace_ids": [int(i) for i, _s in here],
+            "have_secs": max([float(s or 0.0) for _i, s in here], default=0.0),
+            _CLAIMED_BY_KEY: claimed_by,
+        }
+        if check_score is not None:
+            extra[_CHECK_SCORE_KEY] = float(check_score)
         parked = await self._park_collect(
-            _STAGE_COUNT, name, person_id, None, clips, ctx, session,
-            extra={
-                _LEARN_ROOM_KEY: room_id,
-                "replace_ids": [int(i) for i, _s in here],
-                "have_secs": max([float(s or 0.0) for _i, s in here], default=0.0),
-                _CLAIMED_BY_KEY: claimed_by,
-            },
+            _STAGE_COUNT, name, person_id, None, clips, ctx, session, extra=extra,
         )
         if not parked:
             return None
@@ -2581,6 +2685,17 @@ class VoiceProfileHandler(Handler):
         added = clip is not None and _resembles(clips, clip) and not await self._is_denylisted(
             _decode_b64_embedding(clip[0]), session,
         )
+        if added and learning and _score_of({"score": data.get(_CHECK_SCORE_KEY)}) is not None:
+            # Learning a room after "was that you, X?": the clip must be X's
+            # by that question's rule too (as much like X as the asking
+            # turn, give or take ROOM_CHECK_YES_SLACK, and nobody closer).
+            verdict = await self._room_check_voice(
+                {"score": data.get(_CHECK_SCORE_KEY)}, person_id, str(data.get(_LEARN_ROOM_KEY)),
+                ctx, session,
+            )
+            if verdict != "theirs":
+                log.info("learning a room: a clip refused (%s voice)", verdict)
+                added = False
         if added:
             clips.append(clip)
         finished = _speech_of(clips) >= INTRO_SPEECH_TARGET_SEC or stage == _STAGE_SENTENCE
@@ -2605,7 +2720,9 @@ class VoiceProfileHandler(Handler):
             )
             return self._say(_thanks_text(name), ctx)
         learn_keys = {
-            k: data[k] for k in (_LEARN_ROOM_KEY, "replace_ids", "have_secs", _CLAIMED_BY_KEY)
+            k: data[k] for k in (
+                _LEARN_ROOM_KEY, "replace_ids", "have_secs", _CLAIMED_BY_KEY, _CHECK_SCORE_KEY,
+            )
             if k in data
         } if learning else None
         if not await self._park_collect(
@@ -2789,11 +2906,12 @@ class VoiceProfileHandler(Handler):
         tell whose, saves nothing. No: nothing. Anything else isn't an
         answer (None: routed as usual), and saves nothing either.
 
-        A yes or a no that says more (:func:`reply_rest`: "yes, wrong song
+        A yes or a no that says more (:func:`read_reply`: "yes, wrong song
         though. Play X") is answered the same way, without the learning
         and with nothing more said than "Thanks, X." for a saved clip; the
         rest goes back to the router as a turn of its own
-        (``Response.then_route``)."""
+        (``Response.then_route``). A yes that takes itself back ("yeah,
+        no"; "yes, my name is Sam") is a no."""
         from domovoi.router import _parse_yes_no, normalize_transcript, strip_leading_filler
 
         said = normalize_transcript(transcript or "")
@@ -2806,7 +2924,11 @@ class VoiceProfileHandler(Handler):
         if _asked_on_the_phone(data) or phone_chat_mic(ctx) or ctx.from_phone or room_id != ctx.room_id:
             return None
         name = str(data.get("name") or "")
-        rest = reply_rest(said, affirmative, name)
+        parts = read_reply(said, affirmative, name)
+        affirmative, rest = parts.affirmative, parts.rest
+        if parts.took_back:
+            # "Yeah, no", "yes, my name is Sam": a no, and nothing is saved.
+            log.info("room check: the yes took itself back; a no")
         if rest is not None:
             log.info(
                 "room check: the %s carried a request; routing it on",
@@ -2872,7 +2994,7 @@ class VoiceProfileHandler(Handler):
                 log.info("room check: person_id=%d confirmed in room=%s, learning it", person_id, room_id)
                 learn = await self._start_room_learning(
                     person_id, name, room_id, short, clips, ctx, session,
-                    claimed_by=None, lead=f"Thanks, {name}.",
+                    claimed_by=None, lead=f"Thanks, {name}.", check_score=_score_of(data),
                 )
             else:
                 learn = await self._offer_room_learning(
@@ -2969,31 +3091,41 @@ class VoiceProfileHandler(Handler):
         room and not in somebody else's voice (:meth:`_room_check_voice`):
         the "count from one to ten" learning starts
         (:meth:`_start_room_learning`). A no, a late yes, or a yes that asks
-        for something else too ("yes, but play X first": routed on) ends
-        the offer, and the room doesn't offer it again for a week. Anything
-        else isn't an answer (None: routed as usual) and ends it as well."""
+        for something else too ("yes, but play X first": routed on; only a
+        fast path's request counts, :func:`read_reply` with no questions)
+        ends the offer, and the room doesn't offer it again for a week.
+        Anything else isn't an answer (None: routed as usual) and ends it as
+        well. Whenever it ends without the learning, the clip X already
+        said was theirs is kept as a short sample (:meth:`_keep_offer_seed`),
+        as a yes in the offer's quiet week keeps it."""
         from domovoi.router import _parse_yes_no, normalize_transcript, strip_leading_filler
 
         said = normalize_transcript(transcript or "")
         affirmative = _parse_yes_no(said)
         if affirmative is None:
             affirmative = _parse_yes_no(strip_leading_filler(said))
-        if affirmative is None:
-            return None
         room_id = data.get(_ORIGIN_ROOM_KEY)
-        if _asked_on_the_phone(data) or phone_chat_mic(ctx) or ctx.from_phone or room_id != ctx.room_id:
+        if affirmative is None or (
+            _asked_on_the_phone(data) or phone_chat_mic(ctx) or ctx.from_phone
+            or room_id != ctx.room_id
+        ):
+            await self._keep_offer_seed(data, ctx, session)
             return None
         name = str(data.get("name") or "")
-        rest = reply_rest(said, affirmative, name)
+        parts = read_reply(said, affirmative, name, questions=False)
+        affirmative, rest = parts.affirmative, parts.rest
         if rest is not None:
+            await self._keep_offer_seed(data, ctx, session)
             return self._then("", rest, ctx)
         if not affirmative:
+            await self._keep_offer_seed(data, ctx, session)
             return self._say("Okay, I'll leave it.", ctx)
         try:
             expired = time.time() > float(data.get("expires_at"))
         except (TypeError, ValueError):
             expired = True
         if expired:
+            await self._keep_offer_seed(data, ctx, session)
             return self._say("That was a while ago, so I'll leave it for now.", ctx)
         try:
             person_id = int(data.get("person_id"))
@@ -3010,6 +3142,7 @@ class VoiceProfileHandler(Handler):
         if verdict == "someone else":
             log.info("room check: a yes to the learning offer for person_id=%d refused (%s voice)",
                      person_id, verdict)
+            await self._keep_offer_seed(data, ctx, session)
             return self._say(f"That didn't sound like {name}, so I'll leave it for now.", ctx)
         short = await self._short_room_samples(person_id, room_id, ctx, session, clips)
         if short is None:
@@ -3021,11 +3154,46 @@ class VoiceProfileHandler(Handler):
         log.info("room check: person_id=%d said yes to learning room=%s", person_id, room_id)
         learn = await self._start_room_learning(
             person_id, name, room_id, short, clips, ctx, session,
-            claimed_by=None, lead="Great.",
+            claimed_by=None, lead="Great.", check_score=_score_of(data),
         )
         if learn is None:
+            await self._keep_offer_seed(data, ctx, session)
             return self._say("Something went wrong there, so I'll leave it for now.", ctx)
         return learn
+
+    async def _keep_offer_seed(self, data: dict, ctx: Context, session: AsyncSession) -> bool:
+        """The clip a learning offer was seeded with — the turn X said yes,
+        that was them — saved as the room's short sample for X
+        (:meth:`_add_room_sample`: claimed, the opt-out list first), unless
+        the room has :data:`ROOM_CHECK_CAP` of them already. For an offer
+        that ends without the learning. Best-effort; True when saved."""
+        try:
+            person_id = int(data.get("person_id"))
+            room_id = str(data.get(_ORIGIN_ROOM_KEY) or "")
+            clip = (data.get("clips") or [])[0]
+            embedding = _decode_b64_embedding(str(clip[0]))
+            secs = None if clip[1] is None else max(0.0, float(clip[1]))
+        except (TypeError, ValueError, IndexError):
+            return False
+        if embedding is None or not room_id or is_phone_room(room_id) or _asked_on_the_phone(data):
+            return False
+        try:
+            here = await VoiceProfilesRepository(session).room_sample_count(
+                person_id, room_id, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+            )
+        except Exception as e:
+            log.warning("room check: counting the room's samples failed: %s", e)
+            return False
+        if here >= ROOM_CHECK_CAP:
+            return False
+        saved: list = []
+        await self._add_room_sample(
+            person_id, str(data.get("name") or ""), embedding, room_id, ctx, session,
+            sample_seconds=secs or None, saved=saved,
+        )
+        if saved:
+            log.info("room check: kept person_id=%d's confirmed clip in room=%s", person_id, room_id)
+        return bool(saved)
 
     async def _room_check_voice(
         self, data: dict, person_id: int, room_id: str, ctx: Context, session: AsyncSession,

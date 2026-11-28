@@ -235,6 +235,19 @@ def with_lead(lead: str | None, text: str | None) -> str:
     return f"{_end_sentence(lead)} {text}"
 
 
+def said_slice(said: str, rest: str) -> str:
+    """``rest`` — words of ``said`` as a handler read them (normalized:
+    lowercased, a comma between two words dropped) — in ``said``'s own
+    casing ("yes, announce Dinner is ready" → "announce Dinner is ready"),
+    so the routed rest reads as it was said. ``rest`` itself when its words
+    can't be found in ``said`` in that order."""
+    words = (rest or "").split()
+    if not words:
+        return rest
+    found = re.search(r"[\s,]+".join(f"({re.escape(w)})" for w in words), said or "", re.IGNORECASE)
+    return " ".join(found.groups()) if found else rest
+
+
 # Yes/no detection for the multi-turn confirmation flow. Tight on
 # purpose — anything not clearly affirmative or negative falls through
 # to normal routing rather than getting accidentally wired into a
@@ -1183,8 +1196,9 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         rest_ctx = ctx.model_copy(update={
             "answered_first": (intent.transcript, lead), "stream_qa": False,
         })
+        rest = said_slice(intent.transcript, str(answer.then_route))
         routed = await _route_turn(
-            intent.model_copy(update={"transcript": str(answer.then_route)}), rest_ctx, session,
+            intent.model_copy(update={"transcript": rest}), rest_ctx, session,
         )
         routed.text = with_lead(lead, routed.text)
         if routed.history_text is not None:
