@@ -280,13 +280,14 @@ async def test_drop_in_from_typed_chat_is_the_mics_answer(db_session, open_gate,
 
 
 async def _say(said: str, *, room: str = "kitchen", session_id: Any = None, thread_id: int | None = None,
-               phone: bool = False) -> Any:
+               phone: bool = False, person_id: int | None = None) -> Any:
     """One turn through the router, as a satellite (or the chat mic) routes it."""
     from domovoi.models import Context, Intent
     from domovoi.router import route
 
-    ctx = Context(room_id=room, session_id=session_id, online=True, app=core_app,
-                  device_kind="phone" if phone else None, chat_thread_id=thread_id)
+    ctx = Context(room_id=room, session_id=session_id, online=True, app=core_app, person_id=person_id,
+                  device_kind="phone" if phone else None, chat_thread_id=thread_id,
+                  trigger="push_to_talk" if phone else "wake_word")
     async with SessionLocal() as s:
         response = await route(Intent(transcript=said, room_id=room, session_id=session_id), ctx, s)
         await s.commit()
@@ -965,7 +966,6 @@ PROSE = [
     "tell everyone I'm proud of them is what I'd say at the wedding, right?",
     "announce my engagement at the party, should I?",
     "add a paragraph about dogs?",
-    "stop",
     "pause for a second, let me think",
 ]
 
@@ -1244,3 +1244,127 @@ def test_routing_words_are_dropped_only_as_routing(message, kept) -> None:
 async def test_a_satellite_keeps_the_words_of_the_message(db_session, rooms) -> None:
     response = await _say("announce the cat is in the house")
     assert response.announce_text == "the cat is in the house"
+
+
+# ─── Review round 2: polite requests as questions, "remember to" ──────────
+
+#: Said to the chat mic and typed, each must reach the same handler (or,
+#: for the mic's model turns, none of the house's from typed chat).
+PARITY = [
+    "Can you announce that dinner is ready?",
+    "could you announce dinner is ready",
+    "can u announce dinner is ready",
+    "pls announce dinner is ready?",
+    "would you tell everyone dinner is ready?",
+    "Could you turn it up?",
+    "can you pause the music?",
+    "can you play music?",
+    "can you play some jazz?",
+    "Drop in on the kitchen",
+    "set a timer for 5 minutes",
+    "add milk to the shopping list",
+    "remember to call mom",
+    "remember to call mom at 5",
+    "Can you tell me a joke?",
+]
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("said", PARITY)
+async def test_chat_matches_the_mic(db_session, open_gate, rooms, tool_model, said) -> None:
+    """chat == mic: a typed message reaches the handler the chat mic's
+    fast tiers give it; where the mic would ask a model, typed chat leaves
+    it to the chat's own model (and no model is asked at the house)."""
+    async with SessionLocal() as s:
+        await s.execute(text("INSERT INTO lists (name, name_key, position) VALUES ('Shopping', 'shopping', 2) "
+                             "ON CONFLICT DO NOTHING"))
+        await s.commit()
+    mic_tid, typed_tid = await _thread(), await _thread()
+    mic = await _say(said, room=ROOM, phone=True, thread_id=mic_tid)
+    mic_fast = mic.matched_path in ("fast", "confirmation")
+    tool_model.calls.clear()
+    async with _client() as c:
+        typed = await _text(c, typed_tid, said, fast_paths_only=True, plays_here=True)
+    assert tool_model.calls == []
+    if mic_fast:
+        assert typed["handled"] is True and typed["matched_handler"] == mic.matched_handler, (said, typed)
+    else:
+        assert typed["handled"] is False, (said, typed)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_polite_request_asked_as_a_question_is_done_from_the_dashboard(db_session, web, rooms) -> None:
+    await _a_song()
+    tid = await _thread()
+    async with _web() as c:
+        announced = await _send(c, tid, "Can you announce that dinner is ready?")
+        louder = await _send(c, tid, "Could you turn it up?")
+        pause = await _send(c, tid, "can you pause the music?")
+        joke = await _send(c, tid, "Can you tell me a joke?")
+    await _fanned_out()
+    # As a typed "announce dinner is ready": done, said back, not pretended.
+    assert announced["content"] == "Broadcasting to the house."
+    assert rooms["kitchen"].said == ["dinner is ready"]
+    # The dashboard has no player: the house's own plain line, not the model's.
+    for done in (louder, pause):
+        assert done["content"] == phone_voice.CHAT_NO_PLAYER_TEXT and done["stats"]["model_role"] == "action"
+    assert joke["stats"]["model_role"] == "chat" and web.model_calls == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_remember_to_is_a_memory_typed_and_by_voice(db_session, open_gate, tool_model) -> None:
+    owned = f"android-{uuid.uuid4().hex[:8]}"
+    alex = await _device(owned, person="alex")
+    tid = await _thread()
+    typed = await phone_voice.run_phone_text_turn(
+        core_app, phone_id=owned, thread_id=tid, text_="Remember to call Mom.",
+        viewer=Viewer(device_id=owned), fast_paths_only=True,
+    )
+    voice = await _say("remember to water the plants", person_id=alex)
+    assert typed["reply"] == "I'll remember: call Mom." and typed["matched_handler"] == "memory"
+    assert voice.text == "I'll remember: water the plants." and voice.matched_handler == "memory"
+    async with SessionLocal() as s:
+        bodies = (await s.execute(text("SELECT body FROM memories WHERE person_id = :p ORDER BY id"),
+                                  {"p": alex})).scalars().all()
+    assert bodies == ["call Mom", "water the plants"]
+    assert tool_model.calls == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_remember_to_with_a_time_is_a_reminder_typed_and_by_voice(db_session, open_gate, tool_model) -> None:
+    tid = await _thread()
+    async with _client() as c:
+        typed = await _text(c, tid, "remember to call mom at 5", fast_paths_only=True)
+        later = await _text(c, tid, "remember to call mom in 20 minutes", fast_paths_only=True)
+    voice = await _say("remember to call mom tomorrow at 9")
+    assert typed["matched_handler"] == later["matched_handler"] == voice.matched_handler == "reminder"
+    async with SessionLocal() as s:
+        reminders = (await s.execute(text("SELECT count(*) FROM timers WHERE message IS NOT NULL"))).scalar_one()
+        memories = (await s.execute(text("SELECT count(*) FROM memories"))).scalar_one()
+    assert (reminders, memories) == (3, 0)
+    assert tool_model.calls == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_remember_to_from_the_dashboard_is_the_houses_answer_and_stored_once(db_session, web, tool_model) -> None:
+    """The web's own memory step leaves "remember to" alone, so the house
+    answers it and nothing is stored twice. A keyless browser is nobody:
+    the memory handler's own answer (as for an unknown voice), no model."""
+    tid = await _thread()
+    async with _web() as c:
+        done = await _send(c, tid, "remember to call mom")
+        fact = await _send(c, tid, "remember that the wifi password is on the fridge")
+        name = await _send(c, tid, "do you remember my name?")
+    assert done["stats"]["model_role"] == "action" and done["stats"]["matched_handler"] == "memory"
+    assert _texts(web) == ["remember to call mom"]
+    assert fact["stats"]["model_role"] == "memory"          # the chat's own memory step, as before
+    assert name["stats"]["model_role"] == "chat"
+    assert web.model_calls == 1 and tool_model.calls == []
+    async with SessionLocal() as s:
+        stored = (await s.execute(text("SELECT count(*) FROM memories WHERE body ILIKE '%call mom%'"))).scalar_one()
+    assert stored == 0

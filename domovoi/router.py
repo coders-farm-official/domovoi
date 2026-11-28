@@ -250,8 +250,8 @@ _LEADING_FILLER_RE = re.compile(
     r"^(?:"
     r"(?:hey|um|uh|so|well|alright)[,\s]+"
     r"|(?:yeah|yes|yep|ok|okay)[,\s]+"
-    r"|please[,\s]+"
-    r"|(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+"
+    r"|(?:please|pls|plz)[,\s]+"
+    r"|(?:can|could|would|will) (?:you|u)(?:[,\s]+(?:please|pls|plz))?[,\s]+"
     r")+"
 )
 

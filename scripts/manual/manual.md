@@ -369,6 +369,7 @@ voices](#node:people)).
 - "jot down buy milk and eggs"
 - "read my notes" · "what was my last note"
 - "remember that I parked on level 3"
+- "remember to call the dentist"
 - "my favorite band is Weezer"
 - "what do you remember about me"
 - "forget that I parked on level 3"

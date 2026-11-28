@@ -1104,12 +1104,12 @@ def _typed_reply(
     """The reply a typed turn writes, the actions handed back, and what the
     stats note about it; None when the chat's own model should answer
     instead. A satellite's own setting gets a fixed line. With no player of
-    the client's own (``plays_here`` false, the dashboard): a play that
-    would have gone to the phone's player gets a fixed line (and nothing of
-    it was recorded: ``Context.no_player``); anything else about the
-    phone's player (transport, volume, "what's playing", a play that found
-    nothing: "play chess with me") is the chat's. A chat must not say it
-    did what it can't."""
+    the client's own (``plays_here`` false, the dashboard): a play,
+    transport or volume command for the phone's player gets a fixed line
+    (and nothing of a play was recorded: ``Context.no_player``); the
+    player's other answers ("what's playing", a play that found nothing:
+    "play chess with me") are the chat's. A chat must not say it did what
+    it can't."""
     text_ = response.text or ""
     actions = list(response.device_actions or [])
     if text_ == SATELLITE_SETTING_TEXT:
@@ -1118,7 +1118,9 @@ def _typed_reply(
         return text_, actions, {}
     dropped = {"fixed_reply": "no_player", "actions_dropped": [str(a.get("type")) for a in actions]}
     if response.matched_handler in typed_chat.MEDIA_HANDLERS and not _room_targeted(response):
-        if any(a.get("type") == "play" for a in actions):
+        if actions or response.failure == "not_playing":
+            # A play, transport or volume for the phone's player ("can you
+            # pause the music?" asks it even with nothing playing there).
             return CHAT_NO_PLAYER_TEXT, [], dropped
         return None
     if actions:

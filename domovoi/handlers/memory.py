@@ -42,6 +42,7 @@ from domovoi.db.repositories import (
 )
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.dismiss import _ack
+from domovoi.handlers.intercom import _recase as _recased  # the words in the casing they were said
 from domovoi.house_facts import FORGET_YES, GENERIC_OBJECT, MEMORY_YES, is_generic_object
 from domovoi.models import Context, Intent, Response
 from domovoi.voice_identifier import UNHEARD, unheard_text
@@ -69,6 +70,17 @@ _REMEMBER_RE = re.compile(
     r"(?:that |this[:\-]?\s*|the (?:fact|thing) that )?"
     r"(?P<body>.+)$"
 )
+
+# "remember to call mom" with no time: kept as a memory, said back as "I'll
+# remember: call mom." (1.5.0: the rule that a chat never claims what it
+# didn't do; until then it went to the tool model). With a time or a delay
+# ("remember to call mom at 5", "... in 20 minutes", "... tomorrow at 9")
+# it is a reminder: ReminderHandler's grammars take it first (band 140).
+_REMEMBER_TO_RE = re.compile(
+    r"^(?:i want you to |i'd like you to |)remember to (?P<body>.+)$"
+)
+#: The reply to "remember to <task>".
+REMEMBER_TO_REPLY = "I'll remember: {body}."
 
 # "forget that I like jazz" / "forget the fact about my dog" /
 # "stop remembering that I'm allergic" / "stop saving that I work nights".
@@ -327,6 +339,9 @@ class MemoryHandler(Handler):
         # blows up with a TypeError on every turn (F-V002).
         self.fast_paths = [
             FastPath(_REMEMBER_RE, MemoryHandler._add_memory_from_match),
+            # Typed chat takes this one too (domovoi/typed_chat.py
+            # TYPED_OWN_FAST_PATHS); the web's own memory step doesn't.
+            FastPath(_REMEMBER_TO_RE, MemoryHandler._remember_to_from_match),
             # Tier B, as these phrases were under dismiss: "forget that" is
             # also how "forget that I like jazz" starts, so a pause after it
             # gets the longer hold (domovoi/early_commit.py).
@@ -477,6 +492,17 @@ class MemoryHandler(Handler):
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
         return await self._add_memory(m.group("body"), ctx, session)
+
+    async def _remember_to_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        """ "remember to call mom": a memory, said back in the person's words
+        ("I'll remember: call mom.") with the casing they used."""
+        body = _recased(m.group("body"), ctx.said).strip().rstrip(".,!?").strip()
+        response = await self._add_memory(body, ctx, session)
+        if isinstance(response.data, dict) and response.data.get("memory_id") is not None:
+            response.text = REMEMBER_TO_REPLY.format(body=body)
+        return response
 
     async def _add_memory(
         self, body: str, ctx: Context, session: AsyncSession

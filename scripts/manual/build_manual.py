@@ -313,6 +313,7 @@ PHRASES: dict[str, tuple] = {
     "read my notes": ("voice_notes", "fast", {}),
     "what was my last note": ("voice_notes", "fast", {}),
     "remember that I parked on level 3": ("memory", "fast", {}),
+    "remember to call the dentist": ("memory", "fast", {}),
     "my favorite band is Weezer": ("memory", "fast", {}),
     "what do you remember about me": ("memory", "fast", {}),
     "forget that I parked on level 3": ("memory", "fast", {}),

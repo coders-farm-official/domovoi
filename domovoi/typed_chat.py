@@ -29,14 +29,23 @@ CHAT_OWN_HANDLERS = frozenset({
     "voice_profile", "repeat", "dismiss", "chat_mode",
 })
 
+#: The chat's own handlers' fast paths typed chat DOES take, as
+#: ``(handler, fast path method)``: "remember to call mom" (no time) is
+#: stored by the memory handler, as by voice, never left to a model.
+TYPED_OWN_FAST_PATHS = frozenset({("memory", "_remember_to_from_match")})
+
 #: Handlers whose fast paths also take ordinary prose, so a message to them
 #: that ends in "?" (a question about saying it, not a command) stays the
-#: chat's: "tell everyone I'm proud of them is what I'd say, right?".
+#: chat's: "tell everyone I'm proud of them is what I'd say, right?". A
+#: polite request asked as a question ("Can you announce that dinner is
+#: ready?") is a request, as by voice: see :func:`prose_question`.
 _PROSE_PRONE = {
     "intercom": None,
-    "music": re.compile(r"^(?:please\s+)?(?:play|shuffle)\b", re.I),
-    "lists": re.compile(r"^(?:please\s+)?add\b", re.I),
+    "music": re.compile(r"^(?:play|shuffle)\b"),
+    "lists": re.compile(r"^add\b"),
 }
+#: "please" anywhere makes it a request, not a question.
+_PLEASE_RE = re.compile(r"\b(?:please|pls|plz)\b", re.I)
 
 #: SQL: whether user row ``:u`` of thread ``:t`` already has its reply, an
 #: assistant row after it and before the thread's next user row. The one
@@ -61,11 +70,32 @@ def eligible(text: str) -> bool:
 
 
 def prose_question(handler_name: str, text: str) -> bool:
-    """A message a prose-prone handler's fast path took that ends in "?"."""
-    if handler_name not in _PROSE_PRONE or not (text or "").strip().endswith("?"):
+    """A message a prose-prone handler's fast path took that ends in "?"
+    and is no polite request. Read as voice reads it
+    (``router.normalize_transcript`` and ``strip_leading_filler``, the
+    polite opener voice drops: "can you", "could you", "would you", "will
+    you", "can u", "please"): a message that loses an opener there, or says
+    "please" anywhere, is a request ("Can you announce that dinner is
+    ready?") and goes where voice sends it."""
+    raw = (text or "").strip()
+    if handler_name not in _PROSE_PRONE or not raw.endswith("?"):
+        return False
+    from domovoi.router import normalize_transcript, strip_leading_filler
+
+    said = normalize_transcript(raw)
+    request = strip_leading_filler(said)
+    if request != said or _PLEASE_RE.search(raw):
         return False
     rx = _PROSE_PRONE[handler_name]
-    return rx is None or bool(rx.match(text.strip()))
+    return rx is None or bool(rx.match(request))
+
+
+def _typed_own(plan: Any) -> bool:
+    """``plan`` is one of the chat's own handlers' fast paths typed chat
+    takes (:data:`TYPED_OWN_FAST_PATHS`)."""
+    name = getattr(getattr(plan, "handler", None), "name", None)
+    method = getattr(getattr(getattr(plan, "fast_path", None), "method", None), "__name__", None)
+    return (name, method) in TYPED_OWN_FAST_PATHS
 
 
 def skip_handlers(plan: Any, text: str) -> tuple[str, ...]:
@@ -74,8 +104,11 @@ def skip_handlers(plan: Any, text: str) -> tuple[str, ...]:
     a question to a prose-prone handler."""
     skip = set(CHAT_OWN_HANDLERS)
     name = getattr(getattr(plan, "handler", None), "name", None)
-    if getattr(plan, "path", None) == "fast" and name and prose_question(name, text):
-        skip.add(name)
+    if getattr(plan, "path", None) == "fast" and name:
+        if _typed_own(plan):
+            skip.discard(name)
+        elif prose_question(name, text):
+            skip.add(name)
     return tuple(sorted(skip))
 
 
