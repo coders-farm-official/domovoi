@@ -598,3 +598,161 @@ def test_the_phone_list_is_read_again_when_replaced_with_the_same_time_and_size(
     os.utime(new, ns=(st.st_atime_ns, st.st_mtime_ns))
     os.replace(new, path)
     assert list(state.phones().by_key.values()) == ["android-2"]
+
+
+# ─── away.leave (the phone turns away chat off for itself) ───────────────
+
+
+async def _other(house):
+    """A second household phone, on the list beside android-alex."""
+    other = X25519PrivateKey.generate()
+    house.set_phones({_pub(house.key): "android-alex", _pub(other): "android-sam"})
+    phone = house.phone(other)
+    await phone.connect(house.port)
+    return phone
+
+
+async def test_a_leave_goes_to_core_and_its_resp_closes_only_that_phone(house) -> None:
+    first, second = await _phone(house), await _phone(house)
+    other = await _other(house)
+    await first.request(7, {"op": "away.leave"})
+    (event,) = await _events(house)
+    assert (event["device"], event["noise"], json.loads(event["request"])) == (
+        "android-alex", _pub(house.key).hex(), {"op": "away.leave"})
+    # Core has taken it off the list before it answers: the listener's
+    # watch doesn't cut the leaving connection before the answer lands.
+    house.set_phones({_pub(other.key): "android-sam"})
+    house.state.watch_once()
+    assert (await second.recv()).json() == {"code": "revoked"}   # not leaving: cut as any removal
+    _core(house, event, "resp", {})
+    assert await first.answer(7) == [(wire.RESP, {})]
+    bye = await first.recv()
+    assert (bye.kind, bye.json()) == (wire.HOUSE_BYE, {"code": "revoked"})
+    assert await first.closed() and await second.closed()
+    # Another phone stays.
+    await other.send(wire.PING)
+    assert (await other.recv()).kind == wire.PONG
+    # Coming back after leaving is refused in silence.
+    with pytest.raises(asyncio.IncompleteReadError):
+        await house.phone(house.key).connect(house.port)
+    other.close()
+
+
+async def test_a_leave_core_refuses_leaves_the_connection_open(house) -> None:
+    phone = await _phone(house)
+    await phone.request(1, {"op": "away.leave"})
+    (event,) = await _events(house)
+    _core(house, event, "err", {"code": "unavailable", "detail": "Your house is busy. Try again shortly."})
+    assert (await phone.answer(1))[0][1]["code"] == "unavailable"
+    await phone.send(wire.PING)
+    assert (await phone.recv()).kind == wire.PONG
+    assert not house.state.conns[int(event["conn"])].leaving
+    phone.close()
+
+
+async def test_a_leave_naming_anything_but_its_op_is_refused(house) -> None:
+    phone = await _phone(house)
+    await phone.request(1, {"op": "away.leave", "device_id": "android-sam"})
+    assert (await phone.answer(1))[0][1]["code"] == "bad_request"
+    assert [e for e in house.events if e["event"] == "away"] == []
+    phone.close()
+
+
+async def test_leaves_have_a_rate_limit_of_their_own(house) -> None:
+    phone = await _phone(house)
+    for n in range(5):
+        await phone.request(n + 1, {"op": "away.leave"})
+        await _events(house, n=n + 1)
+        _core(house, house.events[-1], "err", {"code": "unavailable", "detail": "test"})
+        await phone.answer(n + 1)
+    await phone.request(99, {"op": "away.leave"})
+    (kind, body), = await phone.answer(99)
+    assert kind == wire.ERR and body["code"] == "rate" and 1 <= body["retry_after"] <= 60
+    await phone.request(100, {"op": "chat.list"})                 # other requests still go
+    assert len(await _events(house, n=6)) == 6
+    phone.close()
+
+
+async def test_the_relay_answers_a_leave_itself_never_the_web(relay, monkeypatch) -> None:
+    from domovoi.friend_houses import service as svc
+
+    left, held = [], []
+
+    async def leave(device, noise):
+        held.append(any(t.get_name() == "away-chat-leave" for t in svc._PENDING))
+        left.append((device, noise))
+        return True
+
+    monkeypatch.setattr(relay.bridge, "leave", leave)
+    relay.bridge.on_event(_event(req=3, request={"op": "away.leave"}))
+    await asyncio.sleep(0.05)
+    assert relay.started == []                                       # not relayed to the web
+    assert left == [("android-alex", "ab" * 32)]
+    assert relay.sent == [{"c": 1, "r": 3, "k": "resp", "b": {}, "end": True}]
+    assert held == [True]                                            # a strong reference while it runs
+
+
+async def test_the_reconcile_after_a_leave_waits_and_leaves_close_together_share_it(monkeypatch) -> None:
+    from domovoi.away import bridge, routes
+
+    kicked: list[float] = []
+    monkeypatch.setattr(routes, "kick", lambda: kicked.append(asyncio.get_running_loop().time()))
+    monkeypatch.setattr(bridge, "LEAVE_KICK_DELAY_SEC", 0.3)
+    monkeypatch.setitem(bridge._KICK_LATER, "handle", None)
+    start = asyncio.get_running_loop().time()
+    bridge._kick_later()
+    await asyncio.sleep(0.15)
+    bridge._kick_later()                                             # a second leave moves it on
+    assert bridge._KICK_LATER["handle"] is not None                 # held, not dropped
+    await asyncio.sleep(0.2)
+    assert kicked == []
+    await asyncio.sleep(0.3)
+    assert len(kicked) == 1 and kicked[0] - start >= 0.44
+    assert bridge._KICK_LATER["handle"] is None
+
+
+async def test_a_leave_the_database_refuses_is_unavailable(relay, monkeypatch) -> None:
+    async def leave(device, noise):
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(relay.bridge, "leave", leave)
+    relay.bridge.on_event(_event(req=3, request={"op": "away.leave"}))
+    await asyncio.sleep(0.05)
+    assert [(s["k"], s["b"]["code"]) for s in relay.sent] == [("err", "unavailable")]
+
+
+async def test_a_leave_closes_only_the_connections_with_its_key(house) -> None:
+    """A leave sent on an old key's connection, racing the same device
+    enrolling again with a new key, closes the old key's only."""
+    new_key = X25519PrivateKey.generate()
+    house.set_phones({_pub(house.key): "android-alex", _pub(new_key): "android-alex"})
+    old = await _phone(house)
+    new = house.phone(new_key)
+    await new.connect(house.port)
+    await old.request(1, {"op": "away.leave"})
+    (event,) = await _events(house)
+    house.set_phones({_pub(new_key): "android-alex"})               # the new key is the current one
+    _core(house, event, "resp", {})
+    assert await old.answer(1) == [(wire.RESP, {})]
+    assert (await old.recv()).json() == {"code": "revoked"}
+    house.state.watch_once()
+    await new.send(wire.PING)
+    assert (await new.recv()).kind == wire.PONG                     # the new key's connection stays
+    new.close()
+
+
+async def test_the_leaving_grace_runs_out(house, monkeypatch) -> None:
+    """Should core never answer a leave, the connection doesn't outlive
+    its removal by more than the grace."""
+    monkeypatch.setattr(al, "LEAVING_GRACE_SEC", 0.3)
+    phone = await _phone(house)
+    await phone.request(1, {"op": "away.leave"})
+    await _events(house)
+    house.set_phones({})
+    house.state.watch_once()
+    await phone.send(wire.PING)
+    assert (await phone.recv()).kind == wire.PONG                   # still within the grace
+    await asyncio.sleep(0.4)
+    house.state.watch_once()
+    assert (await phone.recv()).json() == {"code": "revoked"}
+    assert await phone.closed()

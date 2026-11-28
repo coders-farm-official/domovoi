@@ -34,7 +34,8 @@ The rules:
   shared queue ends.
 * **Ends by itself** when the host's player stops (the queue ran out: the
   playback sweeper), and a member offline for 30 minutes leaves.
-* **A core restart** keeps a shared queue that changed within two hours;
+* **A core restart** keeps a shared queue that was alive within two hours
+  (changed, or its host seen playing or paused by the sweeper, :func:`_touch`);
   older ones are ended.
 
 State is in memory (this process routes every music command) and mirrored
@@ -274,6 +275,9 @@ class Share:
     joined_at: dict[str, datetime] = field(default_factory=dict)
     #: sweeper looks in a row that found the host stopped.
     stopped_looks: int = 0
+    #: monotonic: when the sweeper last marked the database row alive
+    #: (:func:`_touch`); 0 until it first does.
+    touched: float = 0.0
 
     @property
     def rooms(self) -> list[str]:
@@ -421,6 +425,33 @@ async def _persist(sh: Share, *, ended: bool = False) -> None:
                 )
     except Exception as e:  # noqa: BLE001 — memory decides; the mirror is best-effort
         log.warning("groups: couldn't save shared queue %s: %s", sh.id, e)
+
+
+#: How often the sweeper marks a playing shared queue's row alive.
+TOUCH_EVERY_SEC = 5 * 60.0
+
+
+async def _touch(sh: Share) -> None:
+    """Mark ``sh``'s row alive (``updated_at``) while its host plays or is
+    paused (a paused group's members stay on the host's stream, so ending
+    it at boot would orphan them on resume), so
+    the boot rule (:func:`load`, STALE_AT_BOOT_SEC) measures how long the
+    core was away, not how long the group has played. Without it a group
+    that played for more than two hours was ended by a core restart while
+    its rooms played on: the member rooms kept hearing the host's stream,
+    and the core, the dashboard and the room's buttons took them for rooms
+    playing alone (2026-11-28)."""
+    if not PERSIST:
+        return
+    try:
+        async with _session_scope() as s:
+            await s.execute(
+                text("UPDATE shared_queues SET updated_at = now() "
+                     "WHERE id = :id AND ended_at IS NULL"),
+                {"id": sh.id},
+            )
+    except Exception as e:  # noqa: BLE001 — best-effort, like _persist
+        log.debug("groups: couldn't mark shared queue %s alive: %s", sh.id, e)
 
 
 async def load() -> None:
@@ -913,6 +944,9 @@ async def upkeep(app: Any) -> None:
                 continue
         elif state is not None:
             sh.stopped_looks = 0
+            if now - sh.touched >= TOUCH_EVERY_SEC:
+                sh.touched = now
+                await _touch(sh)
         for room in list(sh.members):
             if room in sessions:
                 sh.offline_since.pop(room, None)

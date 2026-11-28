@@ -134,6 +134,8 @@ def away(house, tmp_path, monkeypatch):  # noqa: F811 — the imported fixture
     monkeypatch.setattr(svc, "_start_away_watch", lambda: None)
     monkeypatch.setitem(svc._AWAY, "state", None)
     monkeypatch.setitem(svc._AWAY, "authorized", frozenset())
+    monkeypatch.setitem(svc._AWAY, "keys", frozenset())
+    monkeypatch.setitem(svc._AWAY, "publishing", {})
     monkeypatch.setitem(svc._LISTENER, "mode", (True, False))
     return house
 
@@ -154,7 +156,8 @@ async def test_the_first_phone_starts_tor_with_its_key_already_there(away) -> No
     assert (tor / "hs-away" / "hostname").read_text().strip() == away_keys.onion_address(away_keys.onion_seed())
     phones = json.loads((away.root / "friend-houses" / "listener" / al.PHONES_FILE).read_text())
     assert phones == {"on": True, "phones": {(bytes([1]) * 32).hex(): "android-1"}}
-    assert svc.away_status("android-1") == "ready" and svc.away_status("android-2") == "starting"
+    # Tor has its key; the descriptor carrying it is still on its way.
+    assert svc.away_status("android-1") == "publishing" and svc.away_status("android-2") == "starting"
     # Friend Houses stays off: no house keys, its status says off.
     assert not (away.root / "friend-houses" / "house-keys.json").exists()
     assert svc.status()["status"] == "off"
@@ -261,8 +264,10 @@ async def test_the_state_route_says_what_the_core_knows(monkeypatch) -> None:
     from domovoi.away import routes
 
     monkeypatch.setitem(svc._AWAY, "state", "ready")
-    monkeypatch.setitem(svc._AWAY, "authorized", frozenset({_phone(1).file_id}))
+    monkeypatch.setitem(svc._AWAY, "authorized", frozenset({_phone(1).file_id, _phone(2).file_id}))
+    monkeypatch.setitem(svc._AWAY, "publishing", {_phone(2).file_id: (svc.time.monotonic() + 60, "")})
     assert await routes.away_state("android-1") == {"state": "ready"}
+    assert await routes.away_state("android-2") == {"state": "publishing"}
     assert await routes.away_state("android-9") == {"state": "starting"}  # its key waits for a reload
     monkeypatch.setitem(svc._AWAY, "state", None)
     assert await routes.away_state("android-1") == {"state": None}
@@ -280,3 +285,100 @@ async def test_no_torrc_names_the_away_onion_without_a_client_key_on_disk(away, 
     assert not torrc.exists() or "hs-away" not in torrc.read_text()
     assert away.docker.calls == []
     assert svc._STATE["status"] == "error"
+
+
+# ─── "publishing": a new key's descriptor on its way ─────────────────────
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """The service's monotonic clock, moved by hand."""
+    import time as real_time
+
+    now = [1000.0]
+    monkeypatch.setattr(svc, "time", SimpleNamespace(monotonic=lambda: now[0], time=real_time.time))
+    return now
+
+
+async def test_a_new_key_is_publishing_for_its_window_then_ready(away, clock) -> None:
+    away.phones.append(_phone(1))
+    await svc.reconcile()                                            # a start: the longer window
+    assert svc.away_status("android-1") == "publishing"
+    clock[0] += svc.AWAY_PUBLISH_AFTER_START_SEC - 1
+    assert svc.away_status("android-1") == "publishing"
+    clock[0] += 2
+    assert svc.away_status("android-1") == "ready"
+    away.phones.append(_phone(2))
+    await svc.reconcile()                                            # a batched reload
+    assert away.docker.calls == ["start", "reload"]
+    assert (svc.away_status("android-1"), svc.away_status("android-2")) == ("ready", "publishing")
+    clock[0] += svc.AWAY_PUBLISH_AFTER_RELOAD_SEC + 1
+    assert svc.away_status("android-2") == "ready"
+    # Enrolling again with a new Tor key: that phone waits out a window again.
+    away.phones[1] = Phone("android-2", "B" * 52, bytes([9]) * 32)
+    await svc.reconcile()
+    assert (svc.away_status("android-1"), svc.away_status("android-2")) == ("ready", "publishing")
+    # A reload with nothing new starts no window.
+    clock[0] += svc.AWAY_PUBLISH_AFTER_RELOAD_SEC + 1
+    await svc.reconcile()
+    assert (svc.away_status("android-1"), svc.away_status("android-2")) == ("ready", "ready")
+    # The house without a device asked about: the onion's own state.
+    assert svc.away_status(None) == "ready"
+
+
+async def test_a_restart_republishes_every_phone(away, clock) -> None:
+    away.phones.append(_phone(1))
+    await svc.reconcile()
+    clock[0] += svc.AWAY_PUBLISH_AFTER_START_SEC + 1
+    assert svc.away_status("android-1") == "ready"
+    away.enable()
+    away.friends.append(_friend(1))                                  # the house onion appears
+    await svc.reconcile()
+    assert away.docker.calls == ["start", "restart"]
+    assert svc.away_status("android-1") == "publishing"
+
+
+async def test_a_request_from_the_phone_ends_publishing_early(away, clock) -> None:
+    away.phones.append(_phone(1))
+    await svc.reconcile()
+    svc.away_reached("android-1", (bytes([7]) * 32).hex())           # not its key: no proof
+    svc.away_reached("android-2", (bytes([1]) * 32).hex())
+    assert svc.away_status("android-1") == "publishing"
+    svc.away_reached("android-1", (bytes([1]) * 32).hex())
+    assert svc.away_status("android-1") == "ready"
+
+
+async def test_the_away_onion_going_forgets_the_windows(away, clock) -> None:
+    away.phones.append(_phone(1))
+    await svc.reconcile()
+    away.away["on"] = False
+    await svc.reconcile()
+    assert svc._AWAY["publishing"] == {} and svc._AWAY["keys"] == frozenset()
+    assert svc.away_status("android-1") is None
+
+
+# ─── the last phone leaving (S1: an onion with no clients is open) ────────
+
+
+async def test_the_last_phone_leaving_stops_tor_when_nothing_else_runs(away) -> None:
+    away.phones.append(_phone(1))
+    await svc.reconcile()
+    away.phones.clear()                                              # what away.leave leaves behind
+    await svc.reconcile()
+    assert away.docker.calls == ["start", "stop"]                    # never a reload with no clients
+    assert svc.away_status("android-1") is None and svc._AWAY["authorized"] == frozenset()
+
+
+async def test_the_last_phone_leaving_restarts_tor_without_hs_away(away) -> None:
+    away.enable()
+    away.friends.append(_friend(1))
+    away.phones.append(_phone(1))
+    await svc.reconcile()
+    assert "hs-away" in (_tor(away) / "torrc").read_text()
+    away.phones.clear()
+    await svc.reconcile()
+    assert away.docker.calls == ["start", "restart"]                 # never a reload
+    assert "hs-away" not in (_tor(away) / "torrc").read_text()
+    assert tc.TorFolder(_tor(away).parent).phones_authorized() == set()
+    phones = json.loads((away.root / "friend-houses" / "listener" / al.PHONES_FILE).read_text())
+    assert phones == {"on": True, "phones": {}}

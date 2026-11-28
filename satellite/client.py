@@ -3028,6 +3028,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 # request sees the new generation and steps aside.
                 self._music_gen += 1
                 run.supervised = True
+                # The music look again: whatever took the ring off it
+                # while this stream played on (a dropped session) is over.
+                self._leds.set_state("music")
                 return self._music_gen
             self._stop_music_locked()
         self._music_gen += 1
@@ -3265,7 +3268,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
         log.error(
             "music: giving up on %s after %d attempt(s): %s", run.url, attempts, reason,
         )
-        self._leds.set_state_if("music", "idle")
+        # With no session the ring is the outage's (the no-server colour,
+        # drawn straight onto the ring): a stream that ends then must not
+        # turn it off. The hand-back (`_repaint_ring`) drops the music look.
+        if self.send_q is not None:
+            self._leds.set_state_if("music", "idle")
         if "music_failed" in self._core_features:
             self._emit_text({
                 "type": "music_failed",
@@ -3304,6 +3311,36 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 self._give_up_music_locked(
                     run, _music_exit_reason(rc, run.stderr_tail), run.attempt,
                 )
+
+    def _music_holds_ring(self) -> bool:
+        """Whether the ring at rest should show music: a stream playing, or
+        one this satellite is still trying to play (`_music_run` lives
+        through `_supervise_music`'s retry gap, when no mpg123 runs). The
+        room player counts while its output is open — which, briefly, also
+        covers a spoken answer; the next hand-back settles it. False when
+        it can't tell."""
+        try:
+            with self._music_lock:
+                if self._music_run is not None:
+                    return True
+            return self._is_music_playing()
+        except Exception:  # noqa: BLE001 — a ring decision, never fatal
+            return False
+
+    def _repaint_ring(self) -> None:
+        """Repaint the ring when it is handed back (a session accepted, the
+        wake word armed), with its resting state matched to the player
+        first. The room's player runs on through an outage (the server's
+        music players outlive a core restart) and nothing from the core
+        redraws the ring until the next turn: 2026-11-28, a group's dining
+        room stayed dark while its music played. Only the resting states
+        (idle, music) are judged; anything else (a call, a turn) is left to
+        its owner."""
+        if self._music_holds_ring():
+            self._leds.set_state_if("idle", "music")
+        else:
+            self._leds.set_state_if("music", "idle")
+        self._leds.resync()
 
     def _is_music_playing(self) -> bool:
         """True if a music mpg123 subprocess is currently running. Checked at
@@ -8367,7 +8404,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         log.info("wake word armed (listening for %r)", self._wake_word)
         if self._ring_handoff_pending:
             self._ring_handoff_pending = False
-            self._leds.resync()
+            self._repaint_ring()
 
         while not self.shutdown_event.is_set():
             self._wake_heartbeat = time.monotonic()
@@ -9719,7 +9756,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return      # a mic thread is still loading; the ring is its job
         self._ring_handoff_pending = False
         if self.fatal_error is None and not self._voice_gate_closed:
-            self._leds.resync()
+            self._repaint_ring()
 
     def _on_session_ended(self) -> None:
         """Wake any thread waiting on a response that's not coming.
@@ -9743,7 +9780,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
         in `__init__`) rather than piling into a queue nothing drains.
         """
         log.info("session ended; signaling mic thread to drop back to wake-word listen")
-        if getattr(self, "_conn_state", None) == "connected":
+        was_connected = getattr(self, "_conn_state", None) == "connected"
+        if was_connected:
             self._set_conn("offline", "the session with the core ended")
         # First, so a frame the mic thread emits while the rest of this
         # runs is dropped rather than queued. Idempotent: on a failed
@@ -9800,7 +9838,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # A call still waiting for its announcement to finish is gone too.
         self._dropin_pending = None
         # Squash any deferred post-response LED state — we're forcing
-        # idle here, and don't want close_stream to overwrite it back to
+        # idle (or music) here, and don't want close_stream to overwrite it back to
         # "listening" once the (now-drained) stream closes.
         self._post_playback_state = None
         # Mark the disconnect for the wifi watcher's degraded-mode
@@ -9810,10 +9848,22 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # window measures the whole outage, not just the latest leg.
         if self._ws_disconnected_since is None:
             self._ws_disconnected_since = time.monotonic()
-        try:
-            self._leds.set_state("idle")
-        except Exception:
-            pass
+        # The room's player plays on through a dropped session (its stream
+        # comes from the server's music player, which a core restart leaves
+        # running), so the ring goes back to the music look, not idle. On
+        # the XVF3800 idle is OFF: a group playing through a core restart
+        # came back with a dark ring while the music played (2026-11-28).
+        # The reconnect repaints this state (`_leds.resync`) once the
+        # no-server indicator lets go of the ring.
+        # Only when a session the core accepted ended (it held the ring): a
+        # failed attempt (a handshake timeout while the core boots) runs
+        # this again, and by then the ring shows the no-server colour,
+        # which a repaint here would cover.
+        if was_connected:
+            try:
+                self._leds.set_state("music" if self._music_holds_ring() else "idle")
+            except Exception:
+                pass
 
     _house_pairing: Any = None
     _house_status: str | None = None

@@ -135,6 +135,17 @@ async def revoke(s: Any, device_id: str) -> bool:
     return row is not None
 
 
+async def revoke_own(s: Any, device_id: str, noise_pub: bytes) -> bool:
+    """``away.leave``: forget the away keys of the phone that proved
+    ``noise_pub`` over the onion, and only that phone's: nothing is removed
+    unless both the device and its Noise key match. True when a row went."""
+    row = (await s.execute(
+        text("DELETE FROM away_phones WHERE device_id = :d AND noise_pub = :n RETURNING 1"),
+        {"d": device_id, "n": noise_pub},
+    )).first()
+    return row is not None
+
+
 async def is_enrolled(s: Any, device_id: str) -> bool:
     row = (await s.execute(text(f"SELECT 1 {_CURRENT_SQL} AND a.device_id = :d"),
                            {"d": device_id})).first()

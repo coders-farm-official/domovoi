@@ -153,6 +153,7 @@ def test_each_op_with_its_defaults() -> None:
     assert (h.chat_id, h.before_id, h.limit) == (12, None, 50)
     assert wire.parse_request({"op": "chat.stream", "chat_id": 3}).chat_id == 3
     assert wire.parse_request({"op": "chat.cancel", "chat_id": 3}).chat_id == 3
+    assert wire.parse_request({"op": "away.leave"}) == wire.Request("away.leave")
     s = wire.parse_request(_send(admin_grant="a" * 64))
     assert (s.chat_id, s.client_id, s.text, s.admin_grant) == (None, UUID, "hello", "a" * 64)
 
@@ -161,7 +162,7 @@ def test_each_op_with_its_defaults() -> None:
     {"op": "chat.list"}, {"op": "chat.list", "archived": True, "limit": 1, "cursor": "abc_-1"},
     {"op": "chat.history", "chat_id": 1, "before_id": 9, "limit": 50},
     _send(), _send(chat_id=12, text="", picture={"type": "webp", "size": 1, "sha256": "a" * 64}),
-    {"op": "chat.stream", "chat_id": 2**63 - 1},
+    {"op": "chat.stream", "chat_id": 2**63 - 1}, {"op": "away.leave"},
 ])
 def test_to_json_round_trips(doc: dict) -> None:
     req = wire.parse_request(doc)
@@ -195,9 +196,21 @@ def test_to_json_round_trips(doc: dict) -> None:
     _send(picture={"type": "jpeg", "size": 1, "sha256": "a" * 64, "name": "x.jpg"}),
     _send(picture="yes"),
     _send(device_id="android-123"),                          # identity is never named
+    # away.leave takes nothing but its op: it can only ever be the caller's.
+    {"op": "away.leave", "device_id": "android-123"}, {"op": "away.leave", "chat_id": 1},
+    {"op": "away.leave", "noise_pub": "00" * 32}, {"op": "away.leave", "all": True},
+    {"op": "Away.Leave"}, {"op": "away.leave "},
 ])
 def test_bad_requests(doc: dict) -> None:
     _bad(doc)
+
+
+def test_the_request_set_is_six_ops_and_leave_carries_only_its_op() -> None:
+    assert wire.OPS == ("chat.list", "chat.history", "chat.send", "chat.stream", "chat.cancel", "away.leave")
+    assert set(wire._KEYS) == set(wire._REQUIRED) == set(wire.OPS)
+    assert wire.parse_request({"op": "away.leave"}).to_json() == {"op": "away.leave"}
+    assert wire.parse_request_bytes(b'{"op":"away.leave"}').op == wire.LEAVE
+    _bad(b'{"op":"away.leave","op":"away.leave"}')               # strict JSON as ever
 
 
 def test_too_large_fields() -> None:

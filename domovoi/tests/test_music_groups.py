@@ -224,6 +224,33 @@ async def test_a_group_whose_host_ran_dry_ends(house) -> None:
     assert {"type": "music_stop"} in app.state.active_sessions["dining_room"].frames
 
 
+async def test_the_sweeper_marks_a_playing_or_paused_group_alive(house, monkeypatch) -> None:
+    touched: list[str] = []
+
+    async def touch(sh) -> None:
+        touched.append(sh.id)
+
+    monkeypatch.setattr(music_groups, "_touch", touch)
+    app = _app()
+    await _playing(house, "garage")
+    sh = await music_groups.share(app, "garage", ["dining_room"])
+    await music_groups.upkeep(app)
+    await music_groups.upkeep(app)  # within TOUCH_EVERY_SEC: not again
+    assert touched == [sh.id]
+    sh.touched = 0.0
+    await house.clients["garage"].pause()  # a paused group stays alive
+    await music_groups.upkeep(app)
+    assert touched == [sh.id, sh.id]
+
+    async def no_answer():
+        raise ConnectionError("not answering")
+
+    sh.touched = 0.0
+    monkeypatch.setattr(house.clients["garage"], "state", no_answer)
+    await music_groups.upkeep(app)  # can't tell: not marked
+    assert touched == [sh.id, sh.id]
+
+
 async def test_a_member_offline_for_30_minutes_leaves(house, monkeypatch) -> None:
     app = _app(online=[r for r in ("garage", "dining_room", "jordan_office")])
     await _playing(house, "garage")
@@ -576,6 +603,45 @@ async def test_groups_and_shared_queues_survive_a_restart_and_the_web_reads_them
     music_groups.reset()
     await music_groups.load()
     assert music_groups.groups() == [] and music_groups.shares() == []
+
+
+@requires_db
+async def test_a_group_playing_for_hours_survives_a_restart(house, db_session) -> None:
+    """The boot rule ends a shared queue nobody touched for two hours. The
+    sweeper marks a playing one alive, so a group that has played for three
+    hours is still a group after a core restart, while its rooms play on
+    (2026-11-28: ended at boot, the members kept hearing the host's stream
+    and the core took them for rooms playing alone)."""
+    from sqlalchemy import text as sql
+
+    from domovoi.db.session import session_scope
+
+    music_groups.PERSIST = True
+    app = _app()
+    await _playing(house, "garage")
+    sh = await music_groups.share(app, "garage", ["dining_room"])
+
+    async def age_it() -> None:
+        async with session_scope() as s:
+            await s.execute(sql(
+                "UPDATE shared_queues SET updated_at = now() - interval '3 hours' WHERE id = :id"
+            ), {"id": sh.id})
+
+    await age_it()
+    await music_groups.upkeep(app)  # the host plays: marked alive
+    music_groups.reset()  # a restart
+    await music_groups.load()
+    assert music_groups.host_of("dining_room") == "garage"
+
+    # Not marked again until TOUCH_EVERY_SEC has passed; untouched, the
+    # boot rule still ends it.
+    live = music_groups.share_of("garage")
+    live.touched = time.monotonic()
+    await age_it()
+    await music_groups.upkeep(app)
+    music_groups.reset()
+    await music_groups.load()
+    assert music_groups.share_of("garage") is None
 
 
 # ─── the core routes ──────────────────────────────────────────────────────

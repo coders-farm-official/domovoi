@@ -91,7 +91,10 @@ MAX_GRANT = 256
 MAX_CURSOR = 200
 MAX_VERSION = 32
 
-OPS = ("chat.list", "chat.history", "chat.send", "chat.stream", "chat.cancel")
+#: The closed request set. ``away.leave`` (the phone turns away chat off for
+#: itself, from away) is answered by the core, never the chat code.
+OPS = ("chat.list", "chat.history", "chat.send", "chat.stream", "chat.cancel", "away.leave")
+LEAVE = "away.leave"
 PICTURE_TYPES = ("jpeg", "webp")
 
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
@@ -353,7 +356,7 @@ class Request:
                                   "sha256": self.picture.sha256}
             if self.admin_grant is not None:
                 out["admin_grant"] = self.admin_grant
-        else:
+        elif self.op in ("chat.stream", "chat.cancel"):
             out["chat_id"] = self.chat_id
         return out
 
@@ -364,6 +367,7 @@ _KEYS: dict[str, frozenset[str]] = {
     "chat.send": frozenset({"op", "chat_id", "client_id", "text", "picture", "admin_grant"}),
     "chat.stream": frozenset({"op", "chat_id"}),
     "chat.cancel": frozenset({"op", "chat_id"}),
+    LEAVE: frozenset({"op"}),
 }
 _REQUIRED: dict[str, frozenset[str]] = {
     "chat.list": frozenset({"op"}),
@@ -371,7 +375,9 @@ _REQUIRED: dict[str, frozenset[str]] = {
     "chat.send": frozenset({"op", "client_id"}),
     "chat.stream": frozenset({"op", "chat_id"}),
     "chat.cancel": frozenset({"op", "chat_id"}),
+    LEAVE: frozenset({"op"}),
 }
+assert set(_KEYS) == set(_REQUIRED) == set(OPS)
 _PICTURE_KEYS = frozenset({"type", "size", "sha256"})
 
 
@@ -417,6 +423,8 @@ def parse_request(doc: dict[str, Any]) -> Request:
         raise _bad("unknown key")
     if _REQUIRED[op] - keys:
         raise _bad("a required key is missing")
+    if op == LEAVE:
+        return Request(op)
     if op == "chat.list":
         archived = doc.get("archived", False)
         if not isinstance(archived, bool):
