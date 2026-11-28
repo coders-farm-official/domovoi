@@ -66,6 +66,8 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Letta** — the self-hosted agent framework that backs *chat mode*, running in its own container with its own database, entirely on the local Ollama. Only conversational turns touch it; normal commands never do.
 
+**Listen along** — a paired phone at home playing the music of a room itself, on its speaker or headphones, as a listener of that room's queue (1.5.0). A listener is never one of a group's rooms: it follows the music when the queue moves to another room, stops when the music stops, and changes nothing when it leaves. The room's card shows "Sam's phone is listening along".
+
 **Listening history** — the songs each room, browser and phone played, and for whom; what *Up next* learns from. Kept 1 year by default (Settings → Privacy → Listening history: 90 days, or Don't keep).
 
 **Local-first** — Domovoi's core contract: the voice pipeline (wake word, STT, routing, LLM, local TTS) runs entirely on your hardware, every handler declares its network needs, and anything that needs the internet must degrade honestly when it's absent. See the [FAQ](FAQ.md#does-it-work-offline).

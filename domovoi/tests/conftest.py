@@ -294,6 +294,8 @@ TABLES_TO_TRUNCATE = [
     "room_groups",
     "shared_queue_rooms",
     "shared_queues",
+    # Listen along (V089): the phones listening to a room's music.
+    "music_listeners",
 ]
 
 
@@ -437,12 +439,14 @@ def _mpd_clients_rebound():
 def _no_groups():
     """No test starts with another test's groups or shared queues
     (domovoi/music_groups.py keeps them in memory, as the core does)."""
-    from domovoi import music_groups
+    from domovoi import music_groups, music_listeners
 
     def _reset() -> None:
         # Not mirrored to the database unless a test turns it back on
-        # (music_groups.PERSIST): unit tests share one test database.
+        # (music_groups.PERSIST): unit tests share one test database. The
+        # phones listening along (music_listeners.PERSIST) likewise.
         music_groups.reset(persist=False)
+        music_listeners.reset(persist=False)
         web_groups = sys.modules.get("web.backend.api.music_groups")
         if web_groups is not None:
             web_groups.forget()

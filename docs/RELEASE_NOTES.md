@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Listen along on a phone
+
+- **What changed.** A paired phone at home can join the music playing in a
+  room and play it itself, on its speaker or headphones, as a listener of
+  that room's queue: it plays the room's live stream, about one to three
+  seconds behind the room. It follows the music when a group's queue moves
+  to another room, stops when someone stops the music or the queue runs
+  out, and leaving changes nothing in any room. A listener is never one of
+  a group's rooms. The dashboard's now-playing card says "Sam's phone is
+  listening along". New household-tier routes (API_REFERENCE.md):
+  `POST /api/music/listen/join`, `/leave` and `/heartbeat`, proxied to
+  `/v1/admin/music/listen/…` on the core; refusals carry
+  `detail: {code, message}`. `GET /api/music/now-playing` and the group
+  list gain `listeners: [{device_id, name}]` (named only to the household,
+  like `added_by`). Migration **V089** adds `music_listeners`.
+- **What to know.** Home network only in 1.5.0 (not from away chat), and a
+  guest phone can't listen along. The phone apps that offer it ship
+  separately.
+
 ## 1.5.0 (unreleased) — Music questions stay with the music
 
 - **What changed.** A reply to "Did you mean …?" that names no option is
