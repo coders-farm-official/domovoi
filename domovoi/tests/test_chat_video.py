@@ -203,7 +203,8 @@ def test_a_live_capture_counts_as_voice_activity_from_the_wake_word() -> None:
 def test_the_wake_word_registers_the_capture_in_streaming() -> None:
     src = (Path(__file__).resolve().parents[1] / "streaming.py").read_text(encoding="utf-8")
     start = src.index('if t == "utterance_start":')
-    assert "voice_activity.watch_capture(self)" in src[start:start + 2000]
+    end = src.index('if t == ', start + 1)  # the next frame type's branch
+    assert "voice_activity.watch_capture(self)" in src[start:end]
 
 
 async def test_an_ffmpeg_pass_is_held_still_while_a_turn_runs() -> None:

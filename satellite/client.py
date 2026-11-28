@@ -8041,6 +8041,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     # doesn't immediately re-trigger.
                     self.audio_sample_rate = self._dropin_rate
                     self._prebuffer_active = False
+                    # And the call's solid red again: the command's reply
+                    # moved the ring through "speaking" (and its end, from
+                    # an older core, to idle).
+                    self._leds.set_state("dropin")
                     self._drain_mic()
                     try:
                         while True:
@@ -8533,34 +8537,40 @@ class Satellite(pc_engine.SpareDeviceEngine):
                             else type(payload).__name__,
                         )
                 else:
-                    # Binary — TTS audio chunk at the rate from response_start.
-                    self._note_reply_frame("audio")
-                    if not self.stop_playback.is_set():
-                        self._response_audio_received.set()
-                        if self._prebuffer_active:
-                            # Hold this chunk in the prebuffer until the
-                            # target accumulates (or response_end forces a
-                            # flush). Releases all queued chunks at once
-                            # when the target is met, so the playback
-                            # thread starts with N seconds of cushion.
-                            self._prebuffer_buffer.append(msg)
-                            self._prebuffer_accumulated += len(msg)
-                            if self._prebuffer_accumulated >= self._prebuffer_target_bytes:
-                                self._flush_prebuffer()
-                        else:
-                            # During a drop-in, BOUND the playback backlog so
-                            # call latency can't grow: if the consumer is
-                            # behind, drop oldest queued audio to catch up
-                            # (live audio prefers low latency to completeness).
-                            if self.dropin_active.is_set():
-                                while self.playback_q.qsize() > self._DROPIN_MAX_PLAYBACK_FRAMES:
-                                    try:
-                                        self.playback_q.get_nowait()
-                                    except queue.Empty:
-                                        break
-                            self.playback_q.put((self.audio_sample_rate, msg))
+                    self._handle_binary_frame(msg)
         except ConnectionClosed:
             return
+
+    def _handle_binary_frame(self, msg: bytes) -> None:
+        """Receiver side: one binary frame — a reply's audio at the rate
+        from response_start, or a call's relayed audio during a drop-in.
+        Either counts as the current response's audio (a response_end then
+        waits for the drain before it releases the mic thread)."""
+        self._note_reply_frame("audio")
+        if not self.stop_playback.is_set():
+            self._response_audio_received.set()
+            if self._prebuffer_active:
+                # Hold this chunk in the prebuffer until the
+                # target accumulates (or response_end forces a
+                # flush). Releases all queued chunks at once
+                # when the target is met, so the playback
+                # thread starts with N seconds of cushion.
+                self._prebuffer_buffer.append(msg)
+                self._prebuffer_accumulated += len(msg)
+                if self._prebuffer_accumulated >= self._prebuffer_target_bytes:
+                    self._flush_prebuffer()
+            else:
+                # During a drop-in, BOUND the playback backlog so
+                # call latency can't grow: if the consumer is
+                # behind, drop oldest queued audio to catch up
+                # (live audio prefers low latency to completeness).
+                if self.dropin_active.is_set():
+                    while self.playback_q.qsize() > self._DROPIN_MAX_PLAYBACK_FRAMES:
+                        try:
+                            self.playback_q.get_nowait()
+                        except queue.Empty:
+                            break
+                self.playback_q.put((self.audio_sample_rate, msg))
 
     # Once per this many seconds per process: a reconnect storm must not
     # become a sudo storm, and a clock does not drift that fast.
@@ -8921,7 +8931,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 # along with the LED transition once the stream drains.
             else:
                 self.playback_active.clear()
-                if next_state == "listening":
+                if self.dropin_active.is_set():
+                    # A reply said during a call (a command after the wake
+                    # word): the ring goes back to the call's solid red,
+                    # never to idle while the call is still up.
+                    self._leds.set_state("dropin")
+                elif next_state == "listening":
                     self._leds.set_state("listening")
                 else:
                     # If the mic thread already moved us to "listening" via

@@ -9,6 +9,7 @@ streaming layer can all share the same feasibility logic.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Feasibility result codes. "ok" means a drop-in can be opened right now;
@@ -16,10 +17,86 @@ from typing import Any
 # (DropInHandler) or an HTTP status (the admin endpoint).
 OK = "ok"
 
+#: What ends a drop-in when it is said in a room that is in one
+#: (:func:`end_call_kind`). Outside a call none of this is special: a bare
+#: "stop" stays the music's (handlers/dropin.py's own ``_END_RE`` never
+#: takes it). Three kinds, because they are not equally sure:
+#:
+#: * ``END_STOP`` — a bare "stop" ("stop it", "stop stop"): ends the call
+#:   only when said by the satellite that is in it, after a timer or alarm
+#:   ringing there has been silenced first;
+#: * ``END_EXPLICIT`` — "hang up", "end / stop / leave the drop-in" or the
+#:   call: always about the call, from wherever it is said for that room,
+#:   and ahead of any parked question;
+#: * ``END_WEAK`` — "cancel", "that's enough", "end it", "disconnect": end
+#:   the call only when nothing else is waiting for an answer there (a
+#:   parked question takes "cancel" for itself).
+END_STOP, END_EXPLICIT, END_WEAK = "stop", "explicit", "weak"
+_END_STOP_RE = re.compile(r"^(?:stop|stop it|stop that|stop now)(?: stop)*(?: please)?\Z")
+_END_EXPLICIT_RE = re.compile(
+    r"^(?:hang up(?: now)?(?: the (?:call|phone|drop[- ]?in))?"
+    r"|end (?:the )?(?:call|drop[- ]?in)(?: now)?"
+    r"|stop (?:the )?(?:call|drop[- ]?in)"
+    r"|leave (?:the )?(?:call|drop[- ]?in)"
+    r"|cancel (?:the )?(?:call|drop[- ]?in))"
+    r"(?: please)?\Z"
+)
+_END_WEAK_RE = re.compile(r"^(?:end it|disconnect|that's enough|cancel)(?: please)?\Z")
+
+
+def end_call_kind(transcript: str) -> str | None:
+    """Which way ``transcript`` (already lowercased by the router's
+    ``normalize_transcript``) asks to end a live drop-in — ``END_STOP``,
+    ``END_EXPLICIT`` or ``END_WEAK`` (see above) — or None. Punctuation
+    and a leading "okay" / "please" don't count: "Stop.", "okay, hang up
+    please"."""
+    t = re.sub(r"[.!?,;:]+", " ", (transcript or "").lower())
+    t = " ".join(t.split())
+    for lead in ("okay ", "ok ", "please ", "hey ", "um ", "uh "):
+        if t.startswith(lead):
+            t = t[len(lead):]
+    if _END_EXPLICIT_RE.match(t):
+        return END_EXPLICIT
+    if _END_STOP_RE.match(t):
+        return END_STOP
+    if _END_WEAK_RE.match(t):
+        return END_WEAK
+    return None
+
+
+def end_call_phrase(transcript: str) -> bool:
+    """Whether ``transcript`` is any of :func:`end_call_kind`'s phrases."""
+    return end_call_kind(transcript) is not None
+
+
+def room_in_call(app: Any, room_id: str | None) -> bool:
+    """Whether ``room_id`` is in a live drop-in right now
+    (``app.state.active_dropins``, kept by the streaming layer)."""
+    if app is None or not room_id:
+        return False
+    active = getattr(getattr(app, "state", None), "active_dropins", None) or {}
+    return room_id in active
+
+
+def starts_live_audio(response: Any) -> bool:
+    """Whether this reply hands the room's speaker or microphone to
+    something else the moment it has been said: a drop-in being opened,
+    accepted or ended (``dropin_action``), or an announcement going out to
+    other rooms (``announce_to_rooms``). Such a turn never asks anything
+    back ("By the way, was that you, X?") and never opens a follow-up
+    listen: the follow-up capture and the call (or the announcement) would
+    fight over the same microphone and speaker."""
+    if response is None:
+        return False
+    return bool(getattr(response, "dropin_action", None)) or bool(
+        getattr(response, "announce_to_rooms", None)
+    )
+
 
 def pretty_room(room_id: str) -> str:
-    """Spoken form of a room_id — ``living_room`` → ``living room``."""
-    return room_id.replace("_", " ")
+    """Spoken form of a room_id — ``living_room`` → ``living room``,
+    ``dining-room`` → ``dining room``."""
+    return room_id.replace("_", " ").replace("-", " ")
 
 
 def room_may_reach_other_rooms(app: Any, room_id: str | None) -> bool:
