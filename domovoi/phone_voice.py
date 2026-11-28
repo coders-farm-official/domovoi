@@ -1,4 +1,5 @@
-"""Phone push-to-talk turns — the chat mic (``POST /v1/phone/voice``).
+"""Phone turns in a chat — the chat mic (``POST /v1/phone/voice``) and
+typed house commands (``POST /v1/phone/text``).
 
 The Android chat screen has a mic button that opens a hold-to-talk view
 (android ``ui/screens/chat/VoiceView.kt``): press and hold records, release
@@ -48,6 +49,22 @@ REQUEST (multipart/form-data):
               text-to-speech here, and ``audio`` comes back null
 
 RESPONSE (200, JSON): see :func:`run_phone_turn`.
+
+TYPED TURNS (``POST /v1/phone/text``, 1.5.0). The same turn without
+speech-to-text or text-to-speech (:func:`run_phone_text_turn`; one routing
+function, :func:`_route_phone_turn`, serves both): the web's typed send
+hands it a house command, so typed chat does what the mic does. Same
+session per phone and thread (a question asked by voice can be answered
+typed, and back), same thread checks and refusals. Credited to the person
+the caller's device KEY belongs to (no voice to identify); ``trigger``
+``typed``, so it never adds a voice sample. The reply row is
+``source = 'typed'``, ``stats.model_role = 'action'``; the typed row is
+the web's (``user_message_id``), so nothing is written twice. A
+satellite's own setting and media for a player the client doesn't have
+get fixed lines (:data:`CHAT_ROOM_SETTING_TEXT`,
+:data:`CHAT_NO_PLAYER_TEXT`). ``actions_only``: a turn no handler acts on
+comes back ``handled: false`` with nothing written, and the web's own
+chat model answers it (``Context.defer_qa``).
 
 AUTHENTICATION. The device tier with no pre-setup grace
 (``admin_auth.require_device_after_setup``), as the drop-in socket: the

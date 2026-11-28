@@ -8,8 +8,8 @@ Three parts:
   :data:`SQL_ALLOWED`, with its reason. A new one fails with "route it
   through chat_access or add it here with a reason". Route handlers and
   the ``visible_sql`` lists must also call ``chat_access`` themselves.
-* **(b) Routes.** Every route under ``/api/chat``, ``/api/help/deliveries``
-  and ``/v1/phone/voice`` in both processes carries the
+* **(b) Routes.** Every route under ``/api/chat``, ``/api/help/deliveries``,
+  ``/v1/phone/voice`` and ``/v1/phone/text`` in both processes carries the
   ``chat_access.chat_viewer`` dependency, or is on :data:`ROUTES_ALLOWED`.
 * **(c) Behaviour**, generated from the route list: every route with a
   thread id or a child id (a draft, a job, a message, a file token) is
@@ -87,6 +87,11 @@ SQL_ALLOWED: dict[str, tuple[str, str]] = {
     "domovoi/media_understanding/faces.py::strip_chat_results": (ADMIN, "removes a forgotten face's results from every chat"),
     "domovoi/phone_voice.py::<module>": (HELPER, "the row columns the checked turn returns"),
     "domovoi/phone_voice.py::_write_turn": (HELPER, "the turn into the thread run_phone_turn checked"),
+    "domovoi/phone_voice.py::_insert_user_row": (HELPER, "the person's row, from _write_turn"),
+    "domovoi/phone_voice.py::_check_user_row": (HELPER, "the typed row of the thread run_phone_text_turn checked"),
+    # "announce that" in a chat: ctx.chat_thread_id is set only by the phone
+    # turns (voice and typed), after their chat_access check.
+    "domovoi/handlers/intercom.py::_thread_request": (VOICE, "the checked phone chat's recent user rows"),
     "domovoi/voice_docs/letters.py::_say_line": (VOICE, "a line into the letter chat it made"),
     "domovoi/voice_docs/letters.py::_start_thread": (VOICE, "a room's letter chat, shared (chat_access.create_columns)"),
     "domovoi/voice_docs/letters.py::write_and_save": (VOICE, "the letter's draft in the chat it made"),
@@ -103,6 +108,9 @@ SQL_ALLOWED: dict[str, tuple[str, str]] = {
     "web/backend/api/chat.py::_select_threads": (HELPER, "the list's SELECT: list_threads hands it visible_sql, "
                                                          "_one_thread a thread its route checked"),
     "web/backend/api/chat.py::_answer": (HELPER, "the reply stream of a checked send"),
+    # The typed send's router hop (1.5.0), reached from _answer for its send.
+    "web/backend/api/chat.py::_awaits_house_answer": (HELPER, "the checked send's thread's last reply"),
+    "web/backend/api/chat.py::_assistant_row": (HELPER, "the reply the core wrote into the checked thread"),
     "web/backend/api/chat.py::_answer._finish_retry": (HELPER, "the reply stream of a checked retry"),
     "web/backend/api/chat.py::_answer._reply_events": (HELPER, "the reply stream of a checked send"),
     "web/backend/api/chat.py::_allowed_sites": (HELPER, "the checked thread's earlier lookups"),
@@ -258,7 +266,8 @@ CHAT_SUBROUTERS = ("chat_documents", "chat_drafts", "chat_doc_jobs", "chat_lette
 
 
 def _is_chat_path(path: str) -> bool:
-    return path.startswith("/api/chat") or path == "/api/help/deliveries" or path == "/v1/phone/voice"
+    return (path.startswith("/api/chat") or path == "/api/help/deliveries"
+            or path in ("/v1/phone/voice", "/v1/phone/text"))
 
 
 def _contexts(app: Any) -> list[Any]:
@@ -330,6 +339,7 @@ def test_every_chat_route_in_both_processes_carries_chat_access() -> None:
         f"ROUTES_ALLOWED with a reason: {bare}"
     )
     assert ("POST", "/v1/phone/voice") in seen
+    assert ("POST", "/v1/phone/text") in seen
     assert ("GET", "/api/help/deliveries") in seen
     assert set(ROUTES_ALLOWED) <= seen, f"stale ROUTES_ALLOWED: {sorted(set(ROUTES_ALLOWED) - seen)}"
 

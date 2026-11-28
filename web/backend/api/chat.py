@@ -61,6 +61,18 @@ identification heard (``speaker_person_id`` / ``speaker_confidence``).
 Every row read out says its ``source``; a voice row adds the speaker's
 name and whether the match was clear (``speaker_confident``).
 
+House commands typed into a chat (1.5.0): before any model is asked, a
+typed message that is a house command ("announce dinner is ready", "set a
+timer", a reply to a question the house just asked) goes to the core's
+``POST /v1/phone/text`` (domovoi/phone_voice.py ``run_phone_text_turn``),
+the chat mic's turn without speech, with the caller's credentials. The
+core routes it as this device's phone turn in this thread and writes the
+reply row (``stats.model_role = 'action'``, never retryable); a core that
+is down, busy or refusing gets a fixed line, never the model. The chat's
+own steps that must win come first (memory, house facts, the owner joke,
+drafts and print, the photo search); see "House commands typed into the
+chat" above :func:`send_voice` for the rules.
+
 History and titles (V034, assistant plan part 7): a thread is titled
 with the first five words of its first message, then, once a reply has
 finished, by the chat model in the background (:func:`_write_title`); a
@@ -1182,6 +1194,13 @@ async def send_message(
     thread, gets a fixed answer with no model asked: the steps when THIS
     request carries a live admin sign-in (``help.request_is_proven_admin``,
     checked every turn), else who can do it and where. Words only.
+
+    House commands (1.5.0): a typed command ("announce dinner is ready",
+    "set a timer for 10 minutes") is done by the house's router through the
+    core's ``POST /v1/phone/text``, as the chat mic does it, and the reply
+    is the house's (``stats.model_role: "action"``, not retryable). When
+    the core can't be reached or refuses, the reply is a fixed line ("I
+    can't do that from chat yet. …"), never the model's.
     """
     images = [
         {"token": i.get("token", ""), "name": str(i.get("name", ""))[:200]}

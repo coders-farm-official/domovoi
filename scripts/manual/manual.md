@@ -786,6 +786,12 @@ see [Chat on the phone](#node:phone-chat).
   and [Letters](#node:letters).
 - **Online:** Domovoi can look things up, after asking. See [Look things
   up](#node:lookups).
+- **House commands:** type what you would say to a room, like "announce
+  dinner is ready", "set a timer for 10 minutes" or "add milk to the
+  shopping list", and Domovoi does it, as the app's chat mic does. Timers
+  and reminders set from chat are for the whole house. Chat has no music
+  player of its own, so name a room: "play jazz in the kitchen". "announce
+  that" makes your last announcement again.
 - **App:** a home-server chat's paperclip offers **a picture** and **a
   document (PDF, Word, sheet, text)**. The app turns HEIC phone photos
   into JPEG first.
@@ -803,6 +809,9 @@ see [Chat on the phone](#node:phone-chat).
   → Chat & AI → Models](#settings/models).
 - Chat isn't there, or says "chat is off": AI chat and questions are off
   for your home. See [When AI is off](#node:ai-off).
+- "I can't do that from chat yet": that command works only in a room (a
+  room speaker's own settings), or the house's service wasn't answering,
+  so nothing was done. Say it to a room, or try again in a moment.
 - The dashboard refuses a HEIC phone photo: send it from the app, which
   converts it.
 
