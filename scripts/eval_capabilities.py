@@ -1488,7 +1488,11 @@ async def run_chat_mic_turn(utterance: str, house: dict, *, device: str | None, 
     async def dispatch(app: Any, response: Any, room_id: str, *, start_paused: bool = False) -> None:
         STATE["actions"].append(f"music:{room_id}:{response.music_action}")
 
+    # The turn's own players: a stub player started here must not still be
+    # playing in a later case (2.19 "show me the queue" heard 25.4m's jazz).
     saved_ports, saved_dispatch = dict(mpd_mod._room_ports), room_music.dispatch_music
+    saved_clients = dict(mpd_mod._clients)
+    mpd_mod._clients.clear()
     mpd_mod._room_ports.clear()
     mpd_mod._room_ports.update({r["id"]: (6600 + 2 * i, 6601 + 2 * i)
                                 for i, r in enumerate(house.get("rooms") or [])})
@@ -1505,6 +1509,8 @@ async def run_chat_mic_turn(utterance: str, house: dict, *, device: str | None, 
         room_music.dispatch_music = saved_dispatch
         mpd_mod._room_ports.clear()
         mpd_mod._room_ports.update(saved_ports)
+        mpd_mod._clients.clear()
+        mpd_mod._clients.update(saved_clients)
     STATE["mic_sessions"][thread] = resp.session_id
     did = STATE["actions"][before:]
     if resp.announce_to_rooms:
