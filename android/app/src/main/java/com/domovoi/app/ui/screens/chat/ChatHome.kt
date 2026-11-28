@@ -101,7 +101,7 @@ import java.time.Instant
  * then, and [awayLine] says when they come back.
  */
 @Composable
-fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
+fun ChatScreen(away: Boolean = false, awayLine: String? = null, awayChat: Boolean = false) {
     val app = LocalApp.current
     val caps = LocalCapabilities.current
     val shared = LocalSharedScreen.current
@@ -122,9 +122,15 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
         phoneEngine = phoneEngine,
         phoneCapable = phoneTier != DeviceTier.Unsupported,
         shared = shared,
+        awayChat = awayChat,
     )
     val listed = listedPlaces(facts)
-    val server = if (ChatPlaceKind.Server in listed) rememberServerChatPlace() else null
+    // Away from home, the server's chats come over its away onion (AwayChatPlace.kt).
+    val server = when {
+        ChatPlaceKind.Server !in listed -> null
+        away -> rememberAwayChatPlace()
+        else -> rememberServerChatPlace()
+    }
     val phone = if (ChatPlaceKind.Phone in listed && assistant != null) rememberPhoneChatPlace(assistant) else null
     val places = listOfNotNull(server, phone)
     val startable = startablePlaces(facts)
@@ -158,7 +164,13 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
         onPin = app.prefs::setChatPinned,
         onShare = { title, text -> shareText(context, title, text) },
         serverShareSeen = serverShareSeen || serverKeyed,
-        awayLine = awayLine?.takeIf { away },
+        awayLine = if (away && server != null) {
+            val link by app.away.link.collectAsState()
+            val notes by app.prefs.awayNotes.collectAsState()
+            awayListLine(link, notes[ServerCredentials.normalize(serverUrl)])
+        } else {
+            awayLine?.takeIf { away }
+        },
         subtitle = chatSubtitle(startable),
         emptyHint = emptyHint(startable, unsupported),
         onUsed = { kind ->

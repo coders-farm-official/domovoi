@@ -76,8 +76,17 @@ class Prefs(
         PrefsVaultStore(context, DEVICE_KEYS_FILE),
         KeystoreSealer(DEVICE_KEYS_ALIAS, DEVICE_KEYS_AAD),
     ) { Log.w(TAG, it.replace("token", "device key")) },
+    /** Away chat's keys (1.5.0, away/AwayKeys.kt), per server: the Tor
+     *  client-auth and Noise private keys with the house's answer, sealed
+     *  under a Keystore key of their own, in a file of their own, outside
+     *  every backup and transfer like the tokens. */
+    private val awayVault: TokenVault = TokenVault(
+        PrefsVaultStore(context, AWAY_KEYS_FILE),
+        KeystoreSealer(AWAY_KEYS_ALIAS, AWAY_KEYS_AAD),
+    ) { Log.w(TAG, it.replace("token", "away key")) },
 ) : IdentityGate.PinStore, DeveloperOptions.Store, TokenHealth.RejectedBook, ClaimBook,
-    com.domovoi.app.calendarshare.CalendarKeys, com.domovoi.app.net.GrantShelf, DeviceKeyBook {
+    com.domovoi.app.calendarshare.CalendarKeys, com.domovoi.app.net.GrantShelf, DeviceKeyBook,
+    com.domovoi.app.away.AwayKeyBook {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val kServer = stringPreferencesKey("server_url")
@@ -129,6 +138,13 @@ class Prefs(
     private val kVoiceChoice = stringPreferencesKey("voice_choice")
     private val kVoiceInfo = stringPreferencesKey("voice_server_info")
     private val kDeveloperOptions = booleanPreferencesKey("developer_options")
+    /** Away chat (away/): servers whose away link went silent (or said
+     *  revoked / away_off) and want `GET /api/away/status` asked at home;
+     *  the line to show for each until then; servers whose offer after
+     *  pairing was answered. No key in any of them. */
+    private val kAwayRecheck = stringPreferencesKey("away_recheck")
+    private val kAwayNotes = stringPreferencesKey("away_notes")
+    private val kAwayOffered = stringPreferencesKey("away_offered")
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl
@@ -193,6 +209,23 @@ class Prefs(
      *  says about privacy. Carries no key. */
     private val _deviceKeysChanged = MutableStateFlow(0)
     val deviceKeysChanged: StateFlow<Int> = _deviceKeysChanged
+
+    /** Away chat's enrolments by server (JSON records; never logged). */
+    @Volatile
+    private var awayRecords: Map<String, String> = emptyMap()
+
+    /** Bumped whenever away chat is set up or wiped somewhere. Carries no key. */
+    private val _awayChanged = MutableStateFlow(0)
+    val awayChanged: StateFlow<Int> = _awayChanged
+
+    private val _awayRecheck = MutableStateFlow<Set<String>>(emptySet())
+    val awayRecheck: StateFlow<Set<String>> = _awayRecheck
+
+    private val _awayNotes = MutableStateFlow<Map<String, String>>(emptyMap())
+    val awayNotes: StateFlow<Map<String, String>> = _awayNotes
+
+    private val _awayOffered = MutableStateFlow<Set<String>>(emptySet())
+    val awayOffered: StateFlow<Set<String>> = _awayOffered
 
     /** Device ids by server, where one differs from [baseDeviceId]. */
     @Volatile
@@ -362,6 +395,10 @@ class Prefs(
             claimKeys = claimVault.read()
             calendarKeys = calendarKeyVault.read()
             deviceKeys = deviceKeyVault.read()
+            awayRecords = awayVault.read()
+            _awayRecheck.value = ServerCredentials.decodeTrusted(p[kAwayRecheck])
+            _awayNotes.value = ServerCredentials.decodeOwners(p[kAwayNotes])
+            _awayOffered.value = ServerCredentials.decodeTrusted(p[kAwayOffered])
             deviceIds = ServerCredentials.decodeOwners(p[kDeviceIds])
             var picks = ServerCredentials.decodeOwners(p[kListenerPicks])
             val legacyPick = p[kListener]
@@ -427,6 +464,8 @@ class Prefs(
         _serverUrl.value = clean
         // L57: an admin sign-in belongs to the server it was made on.
         if (switched) AdminSessions.forgetAll()
+        // Away chat's link (and Tor) belongs to the server it was opened for.
+        if (switched) com.domovoi.app.away.AwayLinks.stopAll()
         _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, clean)
         recomputeListener()
         scope.launch { context.dataStore.edit { it[kServer] = clean } }
@@ -471,6 +510,11 @@ class Prefs(
     fun setDeviceToken(token: String?) = setDeviceTokenFor(_serverUrl.value, token)
 
     fun setDeviceTokenFor(url: String, token: String?) {
+        // Unpaired, or paired again with another token (a changed household
+        // token cuts every phone's away chat off: AWAY-CHAT-WIRE §8 item 8):
+        // the away keys made under the old one go.
+        val held = ServerCredentials.tokenFor(deviceTokens, url)
+        if (held != null && held != token?.trim()) forgetAway(url)
         val next = ServerCredentials.withToken(deviceTokens, url, token)
         deviceTokens = next
         // A new token (or none) is not the one the server refused.
@@ -565,6 +609,7 @@ class Prefs(
         // The device key too: it was issued by the identity the person just
         // replaced, and must not go to whatever holds the new one.
         forgetDeviceKey(url)
+        forgetAway(url)
         pin(key, pin)
         setTrustDecided(trustDecided + key)
     }
@@ -615,6 +660,7 @@ class Prefs(
         val url = _serverUrl.value.takeIf { it.isNotBlank() } ?: return null
         _serverUrl.value = ""
         AdminSessions.forgetAll()
+        com.domovoi.app.away.AwayLinks.stopAll()
         _deviceToken.value = null
         scope.launch { context.dataStore.edit { it[kServer] = "" } }
         removeKnownServer(url)
@@ -640,6 +686,9 @@ class Prefs(
         // forgotten server is a new start (it never gets a key it can't
         // tell from a new one).
         forgetDeviceKey(url)
+        // Away chat's keys and notes: its onion is that house's.
+        forgetAway(url)
+        setAwayOffered(url, false)
     }
 
     // ── Shared screen ──────────────────────────────────────────────────
@@ -875,6 +924,75 @@ class Prefs(
         scope.launch { context.dataStore.edit { it[kDeviceIds] = ServerCredentials.encodeOwners(next) } }
     }
 
+    // ── Away chat (away/AwayKeyBook) ───────────────────────────────────
+
+    override fun awayEnrolmentFor(server: String): com.domovoi.app.away.AwayEnrolment? =
+        com.domovoi.app.away.AwayKeys.decode(awayRecords[ServerCredentials.normalize(server)])
+
+    /** Whether away chat is set up on this phone for [server]. */
+    fun holdsAway(server: String): Boolean = awayEnrolmentFor(server) != null
+
+    /** Written at once (commit): the house answered for these keys only. */
+    @Synchronized
+    override fun rememberAwayEnrolment(server: String, e: com.domovoi.app.away.AwayEnrolment?): Boolean {
+        val clean = ServerCredentials.normalize(server)
+        if (clean.isBlank()) return false
+        val next = ServerCredentials.withToken(awayRecords, clean, e?.let { com.domovoi.app.away.AwayKeys.encode(it) })
+        if (next != awayRecords) {
+            if (e == null) com.domovoi.app.away.AwayLinks.stopAll()
+            awayRecords = next
+            _awayChanged.value += 1
+        }
+        // Set up again, or turned off here: what was said before is over.
+        setAwayRecheck(clean, false)
+        setAwayNote(clean, null)
+        return awayVault.write(next)
+    }
+
+    /** Wipe away chat's keys for [url] (and stop its link). */
+    @Synchronized
+    fun forgetAway(url: String) {
+        val clean = ServerCredentials.normalize(url)
+        if (clean.isBlank()) return
+        if (clean in awayRecords) {
+            com.domovoi.app.away.AwayLinks.stopAll()
+            awayRecords = awayRecords - clean
+            _awayChanged.value += 1
+            val snapshot = awayRecords
+            scope.launch { awayVault.write(snapshot) }
+        }
+        setAwayRecheck(clean, false)
+        setAwayNote(clean, null)
+    }
+
+    fun setAwayRecheck(server: String, on: Boolean) {
+        val next = if (on) ServerCredentials.withTrusted(_awayRecheck.value, server)
+        else ServerCredentials.withoutTrusted(_awayRecheck.value, server)
+        if (next == _awayRecheck.value) return
+        _awayRecheck.value = next
+        scope.launch { context.dataStore.edit { it[kAwayRecheck] = ServerCredentials.encodeTrusted(next) } }
+    }
+
+    /** The away line kept for [server] (a status re-check's answer). */
+    fun awayNoteFor(server: String): String? = _awayNotes.value[ServerCredentials.normalize(server)]
+
+    fun setAwayNote(server: String, line: String?) {
+        val next = ServerCredentials.withOwner(_awayNotes.value, server, line)
+        if (next == _awayNotes.value) return
+        _awayNotes.value = next
+        scope.launch { context.dataStore.edit { it[kAwayNotes] = ServerCredentials.encodeOwners(next) } }
+    }
+
+    fun awayOfferedFor(server: String): Boolean = ServerCredentials.isTrusted(_awayOffered.value, server)
+
+    fun setAwayOffered(server: String, offered: Boolean) {
+        val next = if (offered) ServerCredentials.withTrusted(_awayOffered.value, server)
+        else ServerCredentials.withoutTrusted(_awayOffered.value, server)
+        if (next == _awayOffered.value) return
+        _awayOffered.value = next
+        scope.launch { context.dataStore.edit { it[kAwayOffered] = ServerCredentials.encodeTrusted(next) } }
+    }
+
     // ── "Listening as" ────────────────────────────────────────────────
 
     /** Pick who the phone listens as on the active server: a person id, or
@@ -950,6 +1068,9 @@ class Prefs(
         const val DEVICE_KEYS_FILE = "domovoi-device-keys"
         const val DEVICE_KEYS_ALIAS = "domovoi-device-keys"
         val DEVICE_KEYS_AAD: ByteArray = "domovoi-device-keys-v1".toByteArray(Charsets.UTF_8)
+        const val AWAY_KEYS_FILE = "domovoi-away-keys"
+        const val AWAY_KEYS_ALIAS = "domovoi-away-keys"
+        val AWAY_KEYS_AAD: ByteArray = "domovoi-away-keys-v1".toByteArray(Charsets.UTF_8)
 
         private val deviceOwnersSerializer = MapSerializer(String.serializer(), DeviceOwner.serializer())
 

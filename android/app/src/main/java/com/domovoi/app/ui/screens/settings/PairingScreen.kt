@@ -176,6 +176,9 @@ internal fun CheckedPairingField(label: String = "pair", onSaved: () -> Unit) {
                     when (check) {
                         TokenCheck.Accepted -> {
                             app.prefs.setDeviceToken(candidate)
+                            // Chat from away is offered once, right after
+                            // pairing (AwayChatCard.kt AwayHomeHost).
+                            app.awayOffer.value = app.prefs.serverUrl.value
                             app.api.clearPairingRequired()
                             token = ""
                             result = null

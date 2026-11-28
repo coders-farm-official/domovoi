@@ -551,6 +551,10 @@ private fun ShellContent(
             WindowWidthSizeClass.MEDIUM -> RailShell(route, navigate, counts)
             else -> DrawerShell(route, navigate, counts)
         }
+        // Chat from away (1.5.0): the offer right after pairing, and the
+        // status re-check when home again after the away link went quiet.
+        // The workspace shows only while the server answers here: home.
+        com.domovoi.app.ui.screens.settings.AwayHomeHost(atHome = true)
     }
 }
 
@@ -723,7 +727,20 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
             runCatching { app.books.list().isNotEmpty() }.getOrDefault(false)
         }
     }
-    val tabs = remember(shared, savedBooks) { localTabs(shared = shared, savedBooks = savedBooks) }
+    // Chat from away (1.5.0, away/): the saved server's chats over its away
+    // onion, when it is set up for it and this phone is off the home
+    // network (nothing answered there, or something else did). Not when the
+    // web answers without its core (that is home), nor when the person chose
+    // this phone's media with the server right there.
+    val awayTick by app.prefs.awayChanged.collectAsState()
+    val awayNotes by app.prefs.awayNotes.collectAsState()
+    val offHome = choice is ServerChoice.Unreachable || choice is ServerChoice.Looking || choice is ServerChoice.NotOurs
+    // Set up, or set up until the house said it no longer is (its line,
+    // "needs setting up again at home", shows in Chat).
+    val awayChat = offHome && !shared && savedServer.isNotBlank() &&
+        (remember(savedServer, awayTick) { app.prefs.holdsAway(savedServer) } ||
+            awayNotes[ServerCredentials.normalize(savedServer)] == com.domovoi.app.away.AwayText.SET_UP_AGAIN)
+    val tabs = remember(shared, savedBooks, awayChat) { localTabs(shared = shared, savedBooks = savedBooks, awayChat = awayChat) }
     // The tab is kept by route, not by place in the bar: the bar is one
     // shorter for a moment after the app is rebuilt (the saved-book check is
     // still out), and a kept index was reset to Music by that, or showed a
@@ -944,6 +961,7 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
                 // listed again once it is in reach (ChatPlace.kt).
                 Route.Chat -> com.domovoi.app.ui.screens.chat.ChatScreen(
                     away = true,
+                    awayChat = awayChat,
                     awayLine = when {
                         serverName == null -> null
                         outOfReach != null -> com.domovoi.app.ui.screens.chat.AWAY_LINE

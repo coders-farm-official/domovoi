@@ -76,6 +76,7 @@ a 64-bit process whose class loader finds `liblitertlm_jni.so`).
 | `libsherpa-onnx-jni.so` (speech recognition, voice detection) | yes | yes | yes | yes | built here, `native/sherpa-onnx/` |
 | `libandroidx.graphics.path.so`, `libdatastore_shared_counter.so` | yes | yes | yes | yes | AndroidX |
 | `libimage_processing_util_jni.so`, `libsurface_util_jni.so` (room mode's QR scanner) | yes | yes | yes | yes | CameraX 1.4.2 |
+| `libdomovoi_tor.so` (chat from away's Tor: Arti) | yes | yes | yes | yes | built here, `../native/domovoi-tor/` |
 
 **16 KB pages.** Every 64-bit library is built with 16 KB aligned LOAD
 segments and stored uncompressed at a 16 KB offset in the APK, so it maps
@@ -1296,6 +1297,45 @@ shared lists (`ui/screens/friendhouses/`, `friendhouses/`).
   first) and numbers. The phone keeps only house keys and numbers
   (`friend_houses` preferences: the last unread count and message id
   seen per conversation).
+
+## Chat from away
+
+Chat reaches the home server's chats when the phone is away from home
+(1.5.0; the house side is `domovoi/away/`, the wire is AWAY-CHAT-WIRE v1):
+the same list and conversation, with an "away" marker in the header, over
+the house's own Tor onion service, which only enrolled phones can find
+(client authorization) and which checks every connection with a Noise IK
+handshake against the phone's key.
+
+- **Setting up**, at home only: right after pairing the app asks "Chat
+  with your house when you're away? You can turn this off any time.";
+  Settings → Chat & AI → Chat has the same switch. The phone makes two
+  X25519 key pairs (Tor client auth, Noise static) and sends the public
+  halves with `POST /api/away/enroll` (household token and device key);
+  the private halves stay in a vault of their own (Keystore-sealed, out of
+  every backup, `data/Prefs.kt`), with the onion and the house's key. They
+  are wiped when away chat is turned off (`DELETE /api/away/enroll`), the
+  phone unpairs or pairs with a new token, the server is forgotten or
+  proves a different identity.
+- **Tor** is [Arti](https://gitlab.torproject.org/tpo/core/arti) in the
+  app's own process (`libdomovoi_tor.so`, built from source by
+  `native/domovoi-tor/build-android.sh`; no Orbot). It runs only while
+  Chat is open AND the saved server isn't answering on this network, and
+  stops 20 seconds after Chat closes or the app leaves the screen; it
+  never runs in the background (`away/AwaySession.kt`). On the home
+  network Chat uses its HTTP path as always.
+- **The protocol** (`away/`): the `DAC1` preface, Noise
+  IK_25519_ChaChaPoly_SHA256 (Bouncy Castle's X25519 and ChaCha20-Poly1305;
+  checked against the cacophony vectors), framed requests (`chat.list`,
+  `chat.history`, `chat.send` with its streamed reply, `chat.stream` to pick
+  a reply up again, `chat.cancel`), a PING every 45 s. Pictures go at 1024
+  px, JPEG quality 80, no metadata, at most 1 MB; pictures in a chat's
+  history show as a placeholder away (v1). No push: a reply finished while
+  the app was closed is in the chat when it opens.
+- When the house goes quiet (silence, or `BYE revoked` / `away_off`), the
+  app asks `GET /api/away/status` the next time it is home and says why;
+  `enrolled: false` (a new household token, or the phone was removed)
+  offers setting up again.
 
 ## Room mode
 
