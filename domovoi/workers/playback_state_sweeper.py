@@ -69,6 +69,14 @@ class PlaybackStateSweeper(Worker):
             await music_groups.upkeep(self.app)
         except Exception as e:  # noqa: BLE001 — never stops the sweep
             log.warning("sweeper: groups upkeep failed: %s", e)
+        # Listen along (domovoi/music_listeners.py): a phone silent for a
+        # minute is dropped, and a host whose queue ran out stops its phones.
+        from domovoi import music_listeners
+
+        try:
+            await music_listeners.upkeep(self.app)
+        except Exception as e:  # noqa: BLE001 — never stops the sweep
+            log.warning("sweeper: listen-along upkeep failed: %s", e)
         # A room whose player was playing when the core's start found it on
         # an older mpd.conf is made again once it stops, one per tick
         # (mpd_provisioner, "the settings a room's player was made with").

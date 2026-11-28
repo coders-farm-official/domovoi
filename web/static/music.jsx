@@ -210,6 +210,23 @@ const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onSt
           )}
           {/* The room's current timed line (lyrics.jsx), household tier only. */}
           {(playing || paused) && typeof LyricsRoomLine === 'function' && <LyricsRoomLine np={np} tick={tick}/>}
+          {/* Phones listening along (1.5.0): they play this room's music
+              themselves. A footnote like "added by", household tier only
+              (the server leaves the list empty for anyone else). */}
+          {(playing || paused) && np.listeners && np.listeners.length > 0 && (
+            <div title={np.listeners.map((l) => l.name).join(', ')}
+                 style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, fontSize: 11,
+                          color: 'var(--fg-faint)', minWidth: 0 }}>
+              <Icon name="headphones" size={11}/>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {np.listeners.length === 1
+                  ? `${np.listeners[0].name} is listening along`
+                  : np.listeners.length === 2
+                    ? `${np.listeners[0].name} and ${np.listeners[1].name} are listening along`
+                    : `${np.listeners[0].name} and ${np.listeners.length - 1} more are listening along`}
+              </span>
+            </div>
+          )}
         </div>
       </div>
       {(playing || paused) ? (

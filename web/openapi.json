@@ -6196,6 +6196,126 @@
         }
       }
     },
+    "/api/music/listen/join": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Listen Join",
+        "description": "This phone listens along to the music in ``room_id`` (the core's\nanswer as is: ``room_id``, ``host_room``, ``stream_url``, ``state``,\n``group``, ``listeners``, ``heartbeat_sec``; refusals carry\n``detail: {code, message}``).",
+        "operationId": "listen_join_api_music_listen_join_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListenJoinBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/listen/leave": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Listen Leave",
+        "description": "This phone stops listening along (``{left: <host_room>}``; 404\n``not_listening``).",
+        "operationId": "listen_leave_api_music_listen_leave_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListenDeviceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/listen/heartbeat": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Listen Heartbeat",
+        "description": "Every ``heartbeat_sec`` while listening: ``listening: true`` with the\njoin's fields, or ``listening: false`` with ``reason`` and ``message``.\nA ``device_id`` that is missing or not the devices tier's shape was\nnever listening: answered here, as the core would.",
+        "operationId": "listen_heartbeat_api_music_listen_heartbeat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListenDeviceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -32355,6 +32475,24 @@
         ],
         "title": "ListPatch"
       },
+      "ListenDeviceBody": {
+        "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "title": "ListenDeviceBody"
+      },
       "ListenIn": {
         "properties": {
           "track_id": {
@@ -32465,6 +32603,36 @@
           "outcome"
         ],
         "title": "ListenIn"
+      },
+      "ListenJoinBody": {
+        "properties": {
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "title": "ListenJoinBody"
       },
       "ListensIn": {
         "properties": {
@@ -33731,6 +33899,13 @@
                 "type": "null"
               }
             ]
+          },
+          "listeners": {
+            "items": {
+              "$ref": "#/components/schemas/NowPlayingListener"
+            },
+            "type": "array",
+            "title": "Listeners"
           }
         },
         "type": "object",
@@ -33783,6 +33958,13 @@
             "type": "boolean",
             "title": "Everywhere",
             "default": false
+          },
+          "listeners": {
+            "items": {
+              "$ref": "#/components/schemas/NowPlayingListener"
+            },
+            "type": "array",
+            "title": "Listeners"
           }
         },
         "type": "object",
@@ -33793,6 +33975,25 @@
         ],
         "title": "NowPlayingGroup",
         "description": "The shared queue a room hears (a group, V060): its player is the\nhost's (``host_room``), heard in every room of ``rooms`` (host first).\n``name`` is the named group's (\"Upstairs\"), \"Everywhere\", or null for\nrooms joined one by one. ``id`` is the shared queue's (for\n``POST /api/music/groups/shared/{id}/end``)."
+      },
+      "NowPlayingListener": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "name"
+        ],
+        "title": "NowPlayingListener",
+        "description": "A phone listening along to a room's music (1.5.0, V089): it plays\nthe room's stream itself. ``name`` is the device's name, else\n\"A phone\"."
       },
       "NowPlayingSong": {
         "properties": {

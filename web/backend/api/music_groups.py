@@ -8,6 +8,10 @@ so owns them).
 * :func:`live_groups` reads the shared queues playing now straight from the
   database (V060), for the now-playing cards and the room queue: a member
   room shows its host's song, and its queue's "who added it" is the host's.
+* ``/api/music/listen/…`` proxies listening along (1.5.0: a paired phone
+  plays a room's music itself), on the household tier; and
+  :func:`live_listeners` reads the phones listening now (V089) for the
+  cards' "Sam's phone is listening along".
 """
 
 from __future__ import annotations
@@ -45,19 +49,57 @@ DEVICE_READ = [Depends(require_device_read)]
 #: once per room, and the satellites list once per room too.
 _MEMO_SEC = 1.0
 _memo: tuple[float, dict[str, dict[str, Any]]] | None = None
+_listeners_memo: tuple[float, dict[str, list[dict[str, str]]]] | None = None
+
+#: A listener's name when its device has none on record (the core's
+#: music_listeners.DEFAULT_NAME).
+LISTENER_DEFAULT_NAME = "A phone"
 
 
 def forget() -> None:
     """Drop the memo (tests, and after this process changed a group)."""
-    global _memo
+    global _memo, _listeners_memo
     _memo = None
+    _listeners_memo = None
+
+
+async def live_listeners() -> dict[str, list[dict[str, str]]]:
+    """host room id -> the phones listening along to its player, in the
+    order they joined: ``[{device_id, name}]`` (V089, the core's mirror of
+    domovoi/music_listeners.py). ``name`` is the device's name, else
+    "A phone". Empty when the database can't answer."""
+    global _listeners_memo
+    now = time.monotonic()
+    if _listeners_memo is not None and now - _listeners_memo[0] < _MEMO_SEC:
+        return _listeners_memo[1]
+    out: dict[str, list[dict[str, str]]] = {}
+    try:
+        async with session_scope() as s:
+            rows = (await s.execute(text(
+                "SELECT l.host_room_id, l.device_id, d.name FROM music_listeners l "
+                "LEFT JOIN devices d ON d.device_id = l.device_id "
+                "ORDER BY l.joined_at, l.device_id"
+            ))).all()
+    except Exception as e:  # noqa: BLE001 — the cards show no listeners
+        log.debug("listen along: couldn't read listeners: %s", e)
+        rows = []
+    for host, device_id, name in rows:
+        if not host or not device_id:
+            continue
+        out.setdefault(host, []).append({
+            "device_id": device_id,
+            "name": " ".join(str(name or "").split()) or LISTENER_DEFAULT_NAME,
+        })
+    _listeners_memo = (now, out)
+    return out
 
 
 async def live_groups() -> dict[str, dict[str, Any]]:
     """room id -> the shared queue it hears, for every room in one:
-    ``{id, name, host_room, rooms, group_id, everywhere}`` (the core's
-    ``Share.to_dict``; ``rooms`` lists the host first). Empty when the
-    database can't answer: the cards then read each room's own player."""
+    ``{id, name, host_room, rooms, group_id, everywhere, listeners}`` (the
+    core's ``Share.to_dict``, ``rooms`` listing the host first, plus the
+    phones listening along to its host). Empty when the database can't
+    answer: the cards then read each room's own player."""
     global _memo
     now = time.monotonic()
     if _memo is not None and now - _memo[0] < _MEMO_SEC:
@@ -78,6 +120,7 @@ async def live_groups() -> dict[str, dict[str, Any]]:
     except Exception as e:  # noqa: BLE001 — the cards read without groups
         log.debug("groups: couldn't read shared queues: %s", e)
         rows = []
+    listeners = await live_listeners() if rows else {}
     for sid, host, gid, everywhere, gname, members in rows:
         members = [m for m in (members or []) if m and m != host]
         if not members:
@@ -90,6 +133,7 @@ async def live_groups() -> dict[str, dict[str, Any]]:
             "rooms": [host, *members],
             "group_id": gid,
             "everywhere": bool(everywhere),
+            "listeners": list(listeners.get(host, [])),
         }
         for room in info["rooms"]:
             out.setdefault(room, info)
@@ -213,3 +257,93 @@ async def end_shared(share_id: str, request: Request):
         f"/v1/admin/music/shared/{share_id}/end", headers=auth_forward_headers(request),
     )
     return _done(status, payload)
+
+
+# ─── Listening along (1.5.0) ─────────────────────────────────────────────
+#
+# A paired phone plays a room's music itself (domovoi/music_listeners.py).
+# The household tier, like the groups: a guest can't listen along in 1.5.0.
+
+listen_router = APIRouter(prefix="/api/music/listen", tags=["music"])
+
+
+class ListenJoinBody(BaseModel):
+    room_id: str | None = Field(default=None, max_length=64)
+    device_id: str | None = Field(default=None, max_length=128)
+
+
+class ListenDeviceBody(BaseModel):
+    device_id: str | None = Field(default=None, max_length=128)
+
+
+def _listen_headers(request: Request) -> dict[str, str]:
+    """The caller's credentials, plus the address it dialed: the core
+    builds the stream URL on it (``lan_address.stream_url_for_peer``), as it
+    does for a room's satellite — the address the phone already reached is
+    the one that works. An IPv6 address goes bracketed, as in a Host."""
+    headers = auth_forward_headers(request)
+    host = request.url.hostname
+    if host:
+        headers["X-Forwarded-Host"] = f"[{host.strip('[]')}]" if ":" in host else host
+    return headers
+
+
+def _bad_device(raw: str | None):
+    """The core's refusal for a ``device_id`` that is missing or not the
+    devices tier's shape (``_DEVICE_ID_RE``), answered at this hop already;
+    None when it is fine."""
+    from fastapi.responses import JSONResponse
+
+    from web.backend.api.devices import _DEVICE_ID_RE
+
+    device_id = (raw or "").strip()
+    if not device_id:
+        code, message = "no_device", "This phone didn't say which phone it is."
+    elif not _DEVICE_ID_RE.match(device_id):
+        code, message = "bad_device", "This phone's id isn't one Domovoi can use."
+    else:
+        return None
+    return JSONResponse(status_code=400, content={"detail": {"code": code, "message": message}})
+
+
+@listen_router.post("/join", dependencies=DEVICE)
+async def listen_join(body: ListenJoinBody, request: Request):
+    """This phone listens along to the music in ``room_id`` (the core's
+    answer as is: ``room_id``, ``host_room``, ``stream_url``, ``state``,
+    ``group``, ``listeners``, ``heartbeat_sec``; refusals carry
+    ``detail: {code, message}``)."""
+    refused = _bad_device(body.device_id)
+    if refused is not None:
+        return refused
+    status, payload = await post_admin(
+        "/v1/admin/music/listen/join", body.model_dump(), headers=_listen_headers(request),
+    )
+    return _done(status, payload)
+
+
+@listen_router.post("/leave", dependencies=DEVICE)
+async def listen_leave(body: ListenDeviceBody, request: Request):
+    """This phone stops listening along (``{left: <host_room>}``; 404
+    ``not_listening``)."""
+    refused = _bad_device(body.device_id)
+    if refused is not None:
+        return refused
+    status, payload = await post_admin(
+        "/v1/admin/music/listen/leave", body.model_dump(), headers=_listen_headers(request),
+    )
+    return _done(status, payload)
+
+
+@listen_router.post("/heartbeat", dependencies=DEVICE)
+async def listen_heartbeat(body: ListenDeviceBody, request: Request):
+    """Every ``heartbeat_sec`` while listening: ``listening: true`` with the
+    join's fields, or ``listening: false`` with ``reason`` and ``message``.
+    A ``device_id`` that is missing or not the devices tier's shape was
+    never listening: answered here, as the core would."""
+    if _bad_device(body.device_id) is not None:
+        return {"listening": False, "reason": "not_listening",
+                "message": "This phone isn't listening along any more."}
+    status, payload = await post_admin(
+        "/v1/admin/music/listen/heartbeat", body.model_dump(), headers=_listen_headers(request),
+    )
+    return bridge_response(status, payload)

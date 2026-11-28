@@ -6544,6 +6544,11 @@ class StreamSession:
                 # and must not find it while this music_stop is on its way.
                 resumable.pop(self.room_id, None)
                 note_paused_by_person(self.ws.app, self.room_id, False)
+                # Phones listening along to this room's player stop with
+                # it (domovoi/music_listeners.py).
+                from domovoi import music_listeners
+
+                await music_listeners.note_stopped(self.room_id, response)
                 # Generic now-playing stamp pop (design §4.7) — no
                 # provider-specific state dicts to clear.
                 NOW_PLAYING.clear(self.room_id)

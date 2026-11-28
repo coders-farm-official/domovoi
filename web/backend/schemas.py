@@ -279,6 +279,14 @@ class NowPlayingSong(BaseModel):
     duration_sec: int | None = None
 
 
+class NowPlayingListener(BaseModel):
+    """A phone listening along to a room's music (1.5.0, V089): it plays
+    the room's stream itself. ``name`` is the device's name, else
+    "A phone"."""
+    device_id: str
+    name: str
+
+
 class NowPlayingGroup(BaseModel):
     """The shared queue a room hears (a group, V060): its player is the
     host's (``host_room``), heard in every room of ``rooms`` (host first).
@@ -291,6 +299,8 @@ class NowPlayingGroup(BaseModel):
     rooms: list[str]
     group_id: int | None = None
     everywhere: bool = False
+    #: The phones listening along to the host's player.
+    listeners: list[NowPlayingListener] = Field(default_factory=list)
 
 
 class NowPlaying(BaseModel):
@@ -331,6 +341,10 @@ class NowPlaying(BaseModel):
     # The shared queue this room hears, or null. A member room's card is
     # its host's song (state, song, elapsed, stream_url are the host's).
     group: NowPlayingGroup | None = None
+    # The phones listening along to what this room hears (its own player,
+    # or its shared queue's host's), in the order they joined. Named only
+    # to a caller holding a household credential, like ``added_by``.
+    listeners: list[NowPlayingListener] = Field(default_factory=list)
 
 
 class FavoriteNowPlayingResult(BaseModel):

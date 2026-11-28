@@ -68,6 +68,11 @@ DEVICE_TIER = [
     # The queue's add / remove / move take a guest on a playing room too
     # (GUEST_TIER below); clear stops the room and stays here.
     ("POST", "/api/music/queue/{room_id}/clear"),
+    # listen along (1.5.0): a paired phone plays a room's music itself;
+    # never a guest's
+    ("POST", "/api/music/listen/join"),
+    ("POST", "/api/music/listen/leave"),
+    ("POST", "/api/music/listen/heartbeat"),
     # devices: a client introducing itself, and renaming itself
     ("POST", "/api/devices/register"),
     ("PATCH", "/api/devices/{device_id}"),

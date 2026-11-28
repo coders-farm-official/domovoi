@@ -82,6 +82,11 @@ DEVICE_TIER = [
     ("POST", "/v1/admin/music/shared/join"),
     ("POST", "/v1/admin/music/shared/leave"),
     ("POST", "/v1/admin/music/shared/{share_id}/end"),
+    # Listen along (1.5.0): a paired phone plays a room's music itself.
+    # The household's only: never a guest's (test_music_listeners.py).
+    ("POST", "/v1/admin/music/listen/join"),
+    ("POST", "/v1/admin/music/listen/leave"),
+    ("POST", "/v1/admin/music/listen/heartbeat"),
 ]
 
 # The device tier AND a guest on a playing room (owner decisions
