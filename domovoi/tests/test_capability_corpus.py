@@ -509,9 +509,9 @@ def _mic_twin(case):
 
 # Where typed chat differs from the mic on purpose (Main 2026-11-28): the
 # typed answer to "What should I announce?" is read back before it goes out
-# (25.11, then 25.12's yes), a message ending in "?" never acts (25.13), and
+# (25.11, then 25.12's yes), and
 # a play that finds nothing with no player here is the chat model's (25.14).
-TYPED_ONLY = ("25.11", "25.12", "25.13", "25.14")
+TYPED_ONLY = ("25.11", "25.12", "25.14")
 
 
 def _typed_only(case) -> bool:

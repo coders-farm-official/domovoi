@@ -3706,20 +3706,21 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_not_include": [
-        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind|\\b(?:I'll|I will|I'm going to|let me)\\b[^.?!]*\\b(?:remind|reminder|a note|schedule|notif)"
+        "\\b(?:remind|reminder|a note|schedule|notif)"
       ],
-      "judge": true,
-      "rubric": "Not a memory command: the model answers, and claims no reminder set and nothing remembered.",
       "device": "ana-phone",
-      "stored": [],
-      "not_stored": [
+      "stored": [
         [
           null,
-          "call mom"
+          "^call mom$"
         ]
       ],
-      "needs_change": "N21",
-      "note": "Known gap N21 (Main 2026-11-28, post-1.5.0 with 21.8m): the chat model pretends a reminder (\"I'll make a note to call your mom\") in about 2 of 3 runs, on main too; the earlier check missed it. Wanted: no reminder claimed, nothing stored, and later a reminder offer on both paths."
+      "not_stored": [],
+      "note": "one house memory and exactly this line, no model, on chat and voice alike (Main 76c3e92f, Core's rule 2026-11-28). Closes N21.",
+      "must_include": [
+        "^I'll remember: call mom\\.$"
+      ],
+      "stub": true
     },
     {
       "id": "21.8m",
@@ -3729,8 +3730,33 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_not_include": [
-        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind|\\b(?:I'll|I will|I'm going to|let me)\\b[^.?!]*\\b(?:remind|reminder|a note|schedule|notif)"
+        "\\b(?:remind|reminder|a note|schedule|notif)"
       ],
+      "stored": [
+        [
+          null,
+          "^call mom$"
+        ]
+      ],
+      "not_stored": [],
+      "requires": "chat_actions",
+      "note": "one house memory and exactly this line, no model, on chat and voice alike (Main 76c3e92f, Core's rule 2026-11-28). Closes N21.",
+      "must_include": [
+        "^I'll remember: call mom\\.$"
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.11",
+      "utterance": "remember to call mom at 5",
+      "where": "chat",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^I'll remind you at 5 (?:AM|PM) to call mom\\.$"
+      ],
+      "must_not_include": [],
       "stored": [],
       "not_stored": [
         [
@@ -3739,8 +3765,37 @@
         ]
       ],
       "requires": "chat_actions",
-      "needs_change": "N21",
-      "note": "the chat mic's twin of 21.8. Model-dependent: the 14B tool model picks the memory tool, so voice stores 'call mom' and says so (honest, but not what was asked). N21, post-1.5.0 with the 'remember to X' reminder offer on both paths (Core 2026-11-28). Typed chat (21.8) stores nothing."
+      "stub": true,
+      "note": "with a time, 'remember to X' sets a reminder through the reminder path, not a memory (Main 76c3e92f); chat and voice alike",
+      "device": "ana-phone",
+      "did": [
+        "^timer:\\d+$"
+      ]
+    },
+    {
+      "id": "21.11m",
+      "utterance": "remember to call mom at 5",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^I'll remind you at 5 (?:AM|PM) to call mom\\.$"
+      ],
+      "must_not_include": [],
+      "stored": [],
+      "not_stored": [
+        [
+          null,
+          "call mom"
+        ]
+      ],
+      "requires": "chat_actions",
+      "stub": true,
+      "note": "with a time, 'remember to X' sets a reminder through the reminder path, not a memory (Main 76c3e92f); chat and voice alike",
+      "did": [
+        "^timer:\\d+$"
+      ]
     },
     {
       "id": "21.9",
@@ -5473,20 +5528,20 @@
       "where": "chat",
       "house": "base",
       "requires": "chat_actions",
-      "expect": "DEPENDS",
-      "kind": "question",
-      "must_include": [],
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
       "must_not_include": [
         "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
       ],
-      "did": [],
-      "did_not": [
-        "^announce"
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
       ],
-      "stub": false,
-      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced",
-      "judge": true,
-      "rubric": "Nothing was announced (a question never acts from typed chat): says plainly it wasn't announced and suggests saying it again or in a room; never announces in its reply or says it did or will."
+      "did_not": [],
+      "stub": true,
+      "note": "a polite 'can you ... ?' is a command (Core 2026-11-28): typed chat broadcasts at once, as voice (25.13m) does; the reply never pretends"
     },
     {
       "id": "25.14",
@@ -5565,20 +5620,20 @@
       "where": "chat",
       "house": "proven-admin",
       "requires": "chat_actions",
-      "expect": "DEPENDS",
-      "kind": "question",
-      "must_include": [],
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
       "must_not_include": [
         "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
       ],
-      "did": [],
-      "did_not": [
-        "^announce"
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
       ],
-      "stub": false,
-      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced",
-      "judge": true,
-      "rubric": "Nothing was announced (a question never acts from typed chat): says plainly it wasn't announced and suggests saying it again or in a room; never announces in its reply or says it did or will."
+      "did_not": [],
+      "stub": true,
+      "note": "a polite 'can you ... ?' is a command (Core 2026-11-28): typed chat broadcasts at once, as voice (25.13m) does; the reply never pretends"
     },
     {
       "id": "25.14w",
@@ -5657,20 +5712,20 @@
       "where": "away",
       "house": "base",
       "requires": "chat_actions",
-      "expect": "DEPENDS",
-      "kind": "question",
-      "must_include": [],
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
       "must_not_include": [
         "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
       ],
-      "did": [],
-      "did_not": [
-        "^announce"
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
       ],
-      "stub": false,
-      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced",
-      "judge": true,
-      "rubric": "Nothing was announced (a question never acts from typed chat): says plainly it wasn't announced and suggests saying it again or in a room; never announces in its reply or says it did or will."
+      "did_not": [],
+      "stub": true,
+      "note": "a polite 'can you ... ?' is a command (Core 2026-11-28): typed chat broadcasts at once, as voice (25.13m) does; the reply never pretends"
     },
     {
       "id": "25.14a",
