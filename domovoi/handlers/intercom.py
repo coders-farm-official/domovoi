@@ -426,7 +426,7 @@ class IntercomHandler(Handler):
             message = last["text"]
             room_phrase = (pointer.group("room") or "").strip() or room_phrase or last.get("room")
         else:
-            message = _clean_message(message, ctx.said)
+            message = _clean_message(message, getattr(ctx, "said", None))
         response = self._build_response(room_phrase, message, ctx)
         await _remember_announcement(response, room_phrase, ctx, session)
         return response
@@ -496,7 +496,7 @@ class IntercomHandler(Handler):
             return Response(text=NOTHING_ANNOUNCED_TEXT, session_id=ctx.session_id, matched_handler=self.name)
         if _pointer(said) is not None:
             return None
-        raw = (ctx.said or said).strip()
+        raw = (getattr(ctx, "said", None) or said).strip()
         if raw.endswith("?") or _QUESTION_START_RE.match(said) or len(raw) > WHAT_MAX_CHARS:
             # A question, or a long message, is not what to announce: it is
             # an ordinary turn (the question is dropped).
@@ -508,7 +508,7 @@ class IntercomHandler(Handler):
             # A command after all ("stop the music", "announce dinner is
             # ready"): routed as one, never read out.
             return None
-        message = _clean_message(request, ctx.said)
+        message = _clean_message(request, getattr(ctx, "said", None))
         if not message:
             return None
         room = data.get("room") if isinstance(data.get("room"), str) else None

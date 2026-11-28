@@ -498,7 +498,7 @@ class MemoryHandler(Handler):
     ) -> Response:
         """ "remember to call mom": a memory, said back in the person's words
         ("I'll remember: call mom.") with the casing they used."""
-        body = _recased(m.group("body"), ctx.said).strip().rstrip(".,!?").strip()
+        body = _recased(m.group("body"), getattr(ctx, "said", None)).strip().rstrip(".,!?").strip()
         response = await self._add_memory(body, ctx, session)
         if isinstance(response.data, dict) and response.data.get("memory_id") is not None:
             response.text = REMEMBER_TO_REPLY.format(body=body)
