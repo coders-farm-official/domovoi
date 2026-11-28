@@ -388,6 +388,6 @@ async def test_admin_repair_route_requeues_a_window(monkeypatch) -> None:
                 assert (await client.post("/v1/admin/library/enrich/repair", json=bad)).status_code == 422
             assert requeue.await_count == 1
 
-            # No body (or {}): the repair, as before.
+            # No body (or {}): the repair is retired (410, use the re-match).
             r = await client.post("/v1/admin/library/enrich/repair", json={})
-            assert r.json() == {"queued": True, "worker": "library_enricher_repair"}
+            assert r.status_code == 410 and r.json()["detail"]["reason"] == "retired"

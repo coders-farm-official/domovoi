@@ -2326,7 +2326,7 @@
           "music"
         ],
         "summary": "Enrich Repair",
-        "description": "Put the file's own names back on tracks song recognition renamed\nto a song that isn't theirs. Admin tier at both hops, like the\nenrich it repairs after; hand-edited tracks are never touched. With\n``requeue_disagreed: {since, until}``: instead put the tracks marked\n``disagreed`` in that window back in the enrichment queue (the undo\nfor a repair that marked tracks wrongly).",
+        "description": "Without a body: RETIRED (2026-11-28), the core answers ``410``\npointing at ``/library/enrich/rematch`` (a dry run the owner approves).\nWith ``requeue_disagreed: {since, until}``: put the tracks marked\n``disagreed`` in that window back in the enrichment queue (the undo\nfor a repair that marked tracks wrongly). Admin tier at both hops.",
         "operationId": "enrich_repair_api_music_library_enrich_repair_post",
         "requestBody": {
           "content": {
@@ -2345,6 +2345,157 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library/enrich/rematch": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Enrich Rematch",
+        "description": "Hold every track song recognition matched to the strict name check.\nNo body: the dry run (changes nothing; lists each failing track with\nits proposed action and a ``batch_id``). ``{\"apply\": true,\n\"batch_id\": ..., \"track_ids\": [...]?}``: apply exactly that list, or\nthose tracks of it. ``202`` while the job still runs (see\n``/library/enrich/rematch/status``). Security tier at both hops.",
+        "operationId": "enrich_rematch_api_music_library_enrich_rematch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EnrichRematchBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library/enrich/rematch/status": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Enrich Rematch Status",
+        "description": "The running or last re-match job (dry run, apply or undo) and, once\ndone, its answer. Security read at both hops.",
+        "operationId": "enrich_rematch_status_api_music_library_enrich_rematch_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library/tag-changes/undo": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Tag Changes Undo",
+        "description": "Undo one batch of song-recognition name changes (a sweep, a repair,\na re-match or an undo); tracks edited by hand are never touched.\n``202`` while the job still runs. Security tier at both hops.",
+        "operationId": "tag_changes_undo_api_music_library_tag_changes_undo_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagChangesUndoBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library/tag-changes": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Tag Changes",
+        "description": "The most recent batches of song-recognition name changes, for the\nundo. Security read at both hops.",
+        "operationId": "tag_changes_api_music_library_tag_changes_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -30160,6 +30311,46 @@
         ],
         "title": "EditBody"
       },
+      "EnrichRematchBody": {
+        "properties": {
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
+          "track_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 20000,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EnrichRematchBody"
+      },
       "EnrichRepairBody": {
         "properties": {
           "requeue_disagreed": {
@@ -37991,6 +38182,21 @@
         },
         "type": "object",
         "title": "SubscribeRequest"
+      },
+      "TagChangesUndoBody": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Batch Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "batch_id"
+        ],
+        "title": "TagChangesUndoBody"
       },
       "TargetIn": {
         "properties": {

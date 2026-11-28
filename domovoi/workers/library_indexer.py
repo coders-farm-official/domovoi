@@ -175,6 +175,73 @@ def _no_nul(text: str | None) -> str | None:
     return cleaned or None
 
 
+# A lone UTF-16 surrogate (U+D800-U+DFFF): what Python's surrogateescape
+# makes of a byte that isn't UTF-8 in a POSIX file name ("Ne\udc90Yo"). No
+# database can store one (Postgres refuses it, so the row isn't written).
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+# A C1 control character (U+0080-U+009F): never text. One in a tag means
+# the tagger wrote UTF-8 or Windows-1252 bytes into a frame marked
+# Latin-1 ("Neâ\x80\x90Yo" is "Ne‐Yo" in UTF-8, "Don\x92t" is "Don’t" in
+# Windows-1252).
+_C1_RE = re.compile("[\x80-\x9f]")
+_REPLACEMENT = "�"
+
+
+def clean_tag_text(text: str | None) -> tuple[str | None, bool]:
+    """A tag or file-name string as it may be stored: ``(text, bad)``.
+
+    * Lone surrogates from surrogateescape are turned back into their
+      bytes and decoded as UTF-8 (then Windows-1252); what still doesn't
+      decode becomes U+FFFD.
+    * Latin-1 text that is really UTF-8 ("Neâ\\x80\\x90Yo") is decoded as
+      UTF-8 ("Ne‐Yo").
+    * A remaining C1 control character is read as Windows-1252 ("\\x92" →
+      "’") where that names a character, else becomes U+FFFD.
+
+    ``bad`` is True when anything had to become U+FFFD: the text lost a
+    character, and the row is listed as "bad encoding" by the re-match's
+    dry run. Never returns a lone surrogate. Pure."""
+    if text is None:
+        return None, False
+    s, bad = text, False
+    if _SURROGATE_RE.search(s):
+        try:
+            raw = s.encode("utf-8", "surrogateescape")
+        except UnicodeError:
+            raw = None
+        if raw is None:
+            s, bad = _SURROGATE_RE.sub(_REPLACEMENT, s), True
+        else:
+            for codec in ("utf-8", "cp1252"):
+                try:
+                    s = raw.decode(codec)
+                    break
+                except UnicodeError:
+                    continue
+            else:
+                s, bad = raw.decode("utf-8", "replace"), True
+    if _C1_RE.search(s) or (s and max(s) <= "\xff" and any(ch >= "\x80" for ch in s)):
+        try:
+            fixed = s.encode("latin-1").decode("utf-8")
+        except UnicodeError:
+            fixed = None
+        if fixed is not None and fixed != s and not _C1_RE.search(fixed):
+            s = fixed
+    if _C1_RE.search(s):
+        out = []
+        for ch in s:
+            if "\x80" <= ch <= "\x9f":
+                try:
+                    out.append(bytes([ord(ch)]).decode("cp1252"))
+                except UnicodeError:
+                    out.append(_REPLACEMENT)
+                    bad = True
+            else:
+                out.append(ch)
+        s = "".join(out)
+    return s, bad
+
+
 #: What :func:`_read_tags` gives for a file with none of the V058 fields.
 _NO_IDS: dict[str, Any] = {
     "mb_recording_id": None, "mb_release_id": None, "mb_release_group_id": None,
@@ -220,12 +287,24 @@ def _read_tags(path: Path) -> dict[str, Any]:
     if tags is None:
         return out
 
-    out["title"] = _no_nul(tags.first("TIT2", "title", "©nam", "Title"))
+    bad = False
+
+    def _text(*keys: str) -> str | None:
+        nonlocal bad
+        cleaned, lost = clean_tag_text(_no_nul(tags.first(*keys)))
+        bad = bad or lost
+        return cleaned
+
+    out["title"] = _text("TIT2", "title", "©nam", "Title")
     # WMA keeps the artist in Author and the album in WM/AlbumTitle, and
     # MP4 the album artist in aART (read since 2026-10-15).
-    out["artist"] = _no_nul(tags.first("TPE1", "artist", "©ART", "Artist", "Author", "albumartist",
-                                       "TPE2", "aART", "WM/AlbumArtist"))
-    out["album"] = _no_nul(tags.first("TALB", "album", "©alb", "Album", "WM/AlbumTitle"))
+    out["artist"] = _text("TPE1", "artist", "©ART", "Artist", "Author", "albumartist",
+                          "TPE2", "aART", "WM/AlbumArtist")
+    out["album"] = _text("TALB", "album", "©alb", "Album", "WM/AlbumTitle")
+    if bad:
+        out["bad_encoding"] = True
+        log.warning("library indexer: %s: a tag held text that couldn't be decoded "
+                    "(kept with U+FFFD in its place)", path.name)
     # A file whose genre or date is malformed still gives its title.
     try:
         from domovoi.library_genres import display_genre, genre_keys
@@ -345,15 +424,24 @@ def _resolve_metadata_for(
     tags = _read_tags(path)
     title = tags.get("title")
     artist = tags.get("artist")
+    bad = bool(tags.get("bad_encoding"))
     if not title or not artist:
         fn_artist, fn_title = _fallback_filename_parse(path, known_artists)
+        # A POSIX file name that isn't UTF-8 reaches Python with lone
+        # surrogates (surrogateescape): never stored as they are.
+        fn_artist, lost_a = clean_tag_text(fn_artist)
+        fn_title, lost_t = clean_tag_text(fn_title)
+        if (not title and lost_t) or (not artist and lost_a):
+            bad = True
         title = title or fn_title
         artist = artist or fn_artist
     if not title:
-        title = path.stem
+        title, lost = clean_tag_text(path.stem)
+        bad = bad or lost
     return {
         "title": title,
         "artist": artist,
+        "bad_encoding": bad,
         "album": tags.get("album"),
         "duration_sec": tags.get("duration_sec"),
         "genre": tags.get("genre"),

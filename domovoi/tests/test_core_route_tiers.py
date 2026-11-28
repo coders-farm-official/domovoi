@@ -115,6 +115,7 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/library/reindex"),
     ("POST", "/v1/admin/music/tracks-removed"),
     ("POST", "/v1/admin/library/enrich"),
+    # Retired without a body (410, 2026-11-28); its requeue mode stays.
     ("POST", "/v1/admin/library/enrich/repair"),
 ]
 
@@ -137,6 +138,17 @@ LIVE_MIC_TIER = [
 SECURITY_TIER = [
     ("POST", "/v1/admin/version/pull"),
     ("POST", "/v1/admin/containers/incidents/{incident_id}/clear"),
+    # The re-match (dry run and apply) and the undo of a batch of song
+    # recognition's name changes (2026-11-28): library-wide name rewrites
+    # the owner approves, so no pre-setup grace.
+    ("POST", "/v1/admin/library/enrich/rematch"),
+    ("POST", "/v1/admin/library/tag-changes/undo"),
+]
+
+# The reads beside them: the library's names as they were, and the job.
+SECURITY_READ_TIER = [
+    ("GET", "/v1/admin/library/tag-changes"),
+    ("GET", "/v1/admin/library/enrich/rematch/status"),
 ]
 
 # ADD-1 — an admin READ: the dashboard cookie may render it, nothing less.
@@ -302,6 +314,30 @@ def test_pulling_code_and_lifting_the_freeze_are_on_the_security_tier(method, pa
 
 
 @pytest.mark.parametrize(
+    ("method", "path"), SECURITY_READ_TIER, ids=[f"{m} {p}" for m, p in SECURITY_READ_TIER]
+)
+def test_security_reads_wear_the_security_read_gate(method, path) -> None:
+    gates = _gates_for(method, path)
+    assert admin_auth.require_admin_security_read in gates
+    assert admin_auth.require_admin_read not in gates
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path"), SECURITY_READ_TIER, ids=[f"{m} {p}" for m, p in SECURITY_READ_TIER]
+)
+async def test_security_reads_are_closed_before_setup(method, path, monkeypatch) -> None:
+    install_fake_db(monkeypatch, admin=False)
+    async with _client() as c:
+        assert (await c.get(path)).status_code == 501
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client() as c:
+        assert (await c.get(path)).status_code == 401
+        c.cookies.set(COOKIE, ADMIN_TOKEN)
+        assert (await c.get(path)).status_code in (401, 403)
+
+
+@pytest.mark.parametrize(
     ("method", "path"), ADMIN_READ_TIER, ids=[f"{m} {p}" for m, p in ADMIN_READ_TIER]
 )
 def test_satellite_logs_are_an_admin_read(method, path) -> None:
@@ -402,6 +438,7 @@ BODIES: dict[str, dict[str, Any]] = {
     "/v1/admin/music/queue/{room_id}/add": {"track_ids": [1]},
     "/v1/admin/music/queue/{room_id}/remove": {"song_ids": [1]},
     "/v1/admin/music/queue/{room_id}/move": {"song_id": 1, "to_position": 0},
+    "/v1/admin/library/tag-changes/undo": {"batch_id": "6f3e2a1c-5b7d-4c8e-9a0f-1d2c3b4a5e61"},
 }
 
 GATED_POSTS = DEVICE_TIER + ADMIN_TIER + LIVE_MIC_TIER + SECURITY_TIER
