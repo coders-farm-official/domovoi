@@ -1091,7 +1091,11 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
     ) -> None:
         """What a room's play records, for a phone's: the session's last
         track (for "add it to my library" and "what's this") and one
-        media_plays row under the phone's own room id."""
+        media_plays row under the phone's own room id. Nothing for a client
+        with no player of its own (``ctx.no_player``, the dashboard's typed
+        chat): nothing will play there."""
+        if ctx.no_player:
+            return
         get = row.get if isinstance(row, dict) else (lambda k, d=None: getattr(row, k, d))
         song = {"title": get("title"), "artist": get("artist"), "file": get("file_path")}
         if ctx.session_id:

@@ -35,8 +35,8 @@ MAX_WAKE_PHRASE_CHARS = 120
 # may resolve it to a room's music player or speak into it.
 PHONE_ROOM_PREFIX = "phone-"
 
-# ``Response.matched_path`` of a typed chat turn no handler acted on
-# (``Context.defer_qa``): never recorded, since the chat's model answers it.
+# ``Response.matched_path`` of a typed chat turn no fast tier took
+# (``Context.fast_paths_only``): never recorded, the chat's model answers it.
 DEFERRED_PATH = "deferred"
 
 
@@ -201,12 +201,21 @@ class Context(BaseModel):
     # (domovoi/phone_voice.py), so "print it" there means that chat's draft
     # (handlers/printing.py, documents plan D4). None everywhere else.
     chat_thread_id: int | None = None
-    # A TYPED chat turn (the text turn, domovoi/phone_voice.py) whose chat
-    # answers questions with its own model: when no handler acts on the
-    # turn, route() stops before the Q&A model and answers with
-    # ``matched_path`` :data:`DEFERRED_PATH` and no text, writing nothing,
-    # and the chat's model answers it instead. False everywhere else.
-    defer_qa: bool = False
+    # A TYPED chat turn (the text turn, domovoi/phone_voice.py): route()
+    # takes only its fast tiers (a parked choice or confirmation, a fast
+    # path) and never asks a model. When none takes the turn it stops
+    # right after the fast paths and answers with ``matched_path``
+    # :data:`DEFERRED_PATH` and no text, recording nothing, and the chat's
+    # own model answers it (domovoi/typed_chat.py). False everywhere else.
+    fast_paths_only: bool = False
+    # Handlers whose fast paths this turn must not take (a typed turn: the
+    # chat's own, domovoi/typed_chat.py); the turn goes on as if the path
+    # hadn't matched. Empty everywhere else.
+    skip_handlers: tuple[str, ...] = ()
+    # The client has no player of its own (the dashboard's typed chat): a
+    # media handler that would hand the phone a play records nothing of it
+    # (no listening history, no "last played"). False everywhere else.
+    no_player: bool = False
     # The turn's words as said (or typed), before normalization: set by
     # route() from the Intent. The fast paths match the lowercased form;
     # a handler that says words back (the intercom's announcement) takes

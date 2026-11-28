@@ -165,11 +165,15 @@ _TELL_RE = re.compile(
 # "that" introducing a clause (two words or more after it), so "announce
 # that" alone is a pointer, never the word "that".
 _THAT_CLAUSE_RE = re.compile(r"^that\s+(?P<clause>\S+\s+\S.*)$")
-# Routing words and "please" at the end of the message.
-_TRAILING_ROUTE_RE = re.compile(
-    r"(?:,?\s+(?:please|(?:to|in)\s+(?:the\s+)?(?:rooms|house|whole\s+house|everyone|everybody"
-    r"|every\s+room|all(?:\s+the)?\s+rooms)))+\s*$"
+# Who an announcement is for, said as a routing phrase.
+_EVERYONE = (
+    r"(?:the\s+)?(?:rooms|house|whole\s+house|everyone|everybody|every\s+room|all(?:\s+the)?\s+rooms)"
 )
+# A routing phrase straight after the verb ("announce to everyone dinner's
+# ready"), and at the very end only with "to" ("..., to the rooms please"):
+# "announce the cat is in the house" keeps its words.
+_LEADING_ROUTE_RE = re.compile(r"^(?:to|in)\s+" + _EVERYONE + r"\s*[,:]?\s+(?=\S)")
+_TRAILING_ROUTE_RE = re.compile(r"(?:,?\s+(?:please|to\s+" + _EVERYONE + r"))+\s*$")
 _POINTER_RE = re.compile(
     r"^(?:that|it|this)(?:\s+(?:to|in)\s+(?P<room>.+?))?"
     r"(?:,?\s+(?:please|again|now|for me|for us|too|as well))*$"
@@ -185,6 +189,13 @@ LAST_ANNOUNCEMENT_KEY = "intercom_last_announcement"
 ANNOUNCE_AGAIN_WINDOW_SEC = 300.0
 #: The parked question (a choice: its reply is the announcement).
 WHAT_KIND = "core.intercom_what"
+#: Typed chat reads the reply back first ("Announce "X" to every room?").
+CONFIRM_KIND = "core.intercom_confirm"
+#: How long "What should I announce?" (and its read-back) stays answerable.
+WHAT_TTL_SEC = 60.0
+#: A reply this long, or shaped as a question, is not an announcement.
+WHAT_MAX_CHARS = 200
+_QUESTION_START_RE = re.compile(r"^(?:who|whom|whose|what|why|where|how|when|which)\b", re.I)
 #: Asked for a pointer with nothing to point at.
 WHAT_TO_ANNOUNCE_TEXT = "What should I announce?"
 NOTHING_ANNOUNCED_TEXT = "Okay, I won't announce anything."
@@ -210,6 +221,7 @@ def _clean_message(message: str, said: str | None = None) -> str:
     m = _THAT_CLAUSE_RE.match(msg)
     if m:
         msg = m.group("clause").strip()
+    msg = _LEADING_ROUTE_RE.sub("", msg)
     msg = _TRAILING_ROUTE_RE.sub("", msg).strip()
     return _recase(msg, said)
 
@@ -316,7 +328,7 @@ class IntercomHandler(Handler):
     requires_network = "no"
     # "announce that" with nothing to point at: "What should I announce?",
     # and the next turn's words are the announcement.
-    confirmation_kinds = (WHAT_KIND,)
+    confirmation_kinds = (WHAT_KIND, CONFIRM_KIND)
     choice_kinds = (WHAT_KIND,)
 
     tool_schema = {
@@ -428,7 +440,7 @@ class IntercomHandler(Handler):
             await request_confirmation(
                 session, ctx.session_id, kind=WHAT_KIND, handler=self.name,
                 data={"room": (room_phrase or "").strip() or None,
-                      "expires_at": time.time() + ANNOUNCE_AGAIN_WINDOW_SEC},
+                      "expires_at": time.time() + WHAT_TTL_SEC},
                 prompt=WHAT_TO_ANNOUNCE_TEXT,
             )
             asked = True
@@ -438,12 +450,40 @@ class IntercomHandler(Handler):
         )
 
     async def handle_confirmation(self, kind, data, affirmative, ctx, session) -> Response:
-        """A bare yes or no to "What should I announce?" (the router hands a
-        choice's reply to :meth:`handle_choice_reply` first): no is "nothing",
-        yes asks again, since a yes is not what to announce."""
-        if not affirmative:
+        """A yes or no: to the read-back ("Announce "X" to every room?"),
+        yes announces it; to "What should I announce?" (the router hands a
+        choice's reply to :meth:`handle_choice_reply` first), yes asks again,
+        since a yes is not what to announce. No, or a question gone stale,
+        is nothing."""
+        room = data.get("room") if isinstance(data.get("room"), str) else None
+        fresh = float(data.get("expires_at") or 0) >= time.time()
+        if not affirmative or not fresh:
             return Response(text=NOTHING_ANNOUNCED_TEXT, session_id=ctx.session_id, matched_handler=self.name)
-        return await self._ask_what(data.get("room") if isinstance(data.get("room"), str) else None, ctx, session)
+        if kind == CONFIRM_KIND:
+            message = str(data.get("text") or "").strip()
+            if not message:
+                return Response(text=NOTHING_ANNOUNCED_TEXT, session_id=ctx.session_id, matched_handler=self.name)
+            response = self._build_response(room, message, ctx)
+            await _remember_announcement(response, room, ctx, session)
+            return response
+        return await self._ask_what(room, ctx, session)
+
+    async def _read_back(self, room: str | None, message: str, ctx: Context, session: AsyncSession) -> Response:
+        """Typed chat: "Announce "X" to every room?", parked for a yes, before
+        what was typed after "What should I announce?" is broadcast."""
+        from domovoi.confirmations import request_confirmation
+
+        where = "to every room" if room is None or _normalize_room_phrase(room) in _BROADCAST_TARGETS \
+            else f"in the {_normalize_room_phrase(room)}"
+        await request_confirmation(
+            session, ctx.session_id, kind=CONFIRM_KIND, handler=self.name,
+            data={"room": room, "text": message, "expires_at": time.time() + WHAT_TTL_SEC},
+            prompt="announce read-back",
+        )
+        return Response(
+            text=f"Announce \u201c{message}\u201d {where}?", session_id=ctx.session_id,
+            matched_handler=self.name, expect_followup=True,
+        )
 
     async def handle_choice_reply(self, kind, data, transcript, ctx, session) -> Response | None:
         """The reply to "What should I announce?": its words are the
@@ -456,6 +496,11 @@ class IntercomHandler(Handler):
             return Response(text=NOTHING_ANNOUNCED_TEXT, session_id=ctx.session_id, matched_handler=self.name)
         if _pointer(said) is not None:
             return None
+        raw = (ctx.said or said).strip()
+        if raw.endswith("?") or _QUESTION_START_RE.match(said) or len(raw) > WHAT_MAX_CHARS:
+            # A question, or a long message, is not what to announce: it is
+            # an ordinary turn (the question is dropped).
+            return None
         from domovoi.router import first_fast_path, strip_leading_filler
 
         request = strip_leading_filler(said)
@@ -467,6 +512,8 @@ class IntercomHandler(Handler):
         if not message:
             return None
         room = data.get("room") if isinstance(data.get("room"), str) else None
+        if ctx.trigger == "typed" and session is not None and ctx.session_id is not None:
+            return await self._read_back(room, message, ctx, session)
         response = self._build_response(room, message, ctx)
         await _remember_announcement(response, room, ctx, session)
         return response

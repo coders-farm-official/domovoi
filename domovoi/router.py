@@ -1238,6 +1238,8 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
     # True), so a degraded handler's offline-capable paths keep running
     # and its `fallback_offline` is genuinely reachable for the rest.
     hit = first_fast_path(transcript)
+    if hit is not None and hit[0].name in ctx.skip_handlers:
+        hit = None  # not this turn's to take (a typed turn: Context.skip_handlers)
     # A weather plugin's handler failed this turn: core weather may step in
     # at the Q&A step below (domovoi/weather.py).
     weather_plugin_failed = False
@@ -1321,6 +1323,13 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         # turn goes on to the tool model and the Q&A model as if no fast
         # path had matched.
         log.info("fast path %s declined %r; routing on", handler.name, said(transcript))
+
+    if ctx.fast_paths_only:
+        # A typed chat turn no fast tier took (phone_voice's text turn): no
+        # model is asked, nothing is said or recorded here; the chat's own
+        # model answers it.
+        return Response(text="", session_id=session_id, matched_handler=None,
+                        matched_path=DEFERRED_PATH, online=ctx.online)
 
     # Answers the house's settings decide, before any model is asked: what
     # Domovoi can't do here, and why, never depends on the small model.
@@ -1465,13 +1474,6 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
             # The tool declined the call (it was not about what the tool
             # does after all): the Q&A model answers it below.
             log.info("tool %s declined %r; answering as Q&A", handler.name, said(intent.transcript))
-
-    if ctx.defer_qa:
-        # A typed chat turn no handler acted on (phone_voice's text turn):
-        # the chat answers it with its own model, so nothing is said or
-        # recorded here.
-        return Response(text="", session_id=session_id, matched_handler=None,
-                        matched_path=DEFERRED_PATH, online=ctx.online)
 
     # 3. General Q&A (Ollama is local, so always available). Pass recent
     # turns from session context so multi-turn QA actually feels stateful —

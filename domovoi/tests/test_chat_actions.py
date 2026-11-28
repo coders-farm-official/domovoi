@@ -10,7 +10,8 @@ was announced: typed chat never reached the router. Pinned here:
 * the core's text turn: the same router as the chat mic, the phone's
   session per thread, the reply row (``source = 'typed'``, ``model_role =
   'action'``), the device's person, the private-chats rule, fixed lines for
-  a satellite's setting and for media with no player, ``actions_only``;
+  a satellite's setting and for media with no player, ``fast_paths_only``
+  (no model is ever asked, the chat's own handlers never run);
 * the announce sequence ("announce that" and "announce it to the rooms"
   make the last announcement again, never the words "that" or "it to the
   rooms please"), a timer, a list, music;
@@ -194,13 +195,50 @@ async def test_announce_that_with_nothing_announced_asks_what(db_session, open_g
         assert body["reply"] == "What should I announce?" == WHAT_TO_ANNOUNCE_TEXT
         assert body["expect_followup"] is True
         assert all(sat.said == [] for sat in rooms.values())
-        # The next turn's words are the announcement.
-        reply = await _text(c, tid, "Dinner is ready")
+        # The next turn's words are the announcement: typed chat reads it
+        # back first, and a yes broadcasts it.
+        back = await _text(c, tid, "Dinner is ready")
+        await _fanned_out()
+        assert back["reply"] == "Announce \u201cDinner is ready\u201d to every room?"
+        assert back["expect_followup"] is True and rooms["kitchen"].said == []
+        reply = await _text(c, tid, "yes")
     await _fanned_out()
     assert reply["reply"] == "Broadcasting to the house."
     assert (reply["matched_handler"], reply["matched_path"]) == ("intercom", "confirmation")
     assert rooms["kitchen"].said == ["Dinner is ready"]
     assert (await _rows(tid))[1]["stats"]["expect_followup"] is True
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", [
+    "who is coming tonight?", "what time is it", "How long until dinner", "is that ok?", "x " * 120,
+])
+async def test_a_question_or_a_long_message_after_the_ask_is_never_broadcast(
+    db_session, open_gate, rooms, reply,
+) -> None:
+    tid = await _thread()
+    async with _client() as c:
+        await _text(c, tid, "Announce that", fast_paths_only=True)
+        body = await _text(c, tid, reply.strip(), fast_paths_only=True)
+        later = await _text(c, tid, "yes", fast_paths_only=True)
+    await _fanned_out()
+    assert all(sat.said == [] for sat in rooms.values())
+    assert not body.get("reply", "").startswith("Announce")
+    assert later["matched_handler"] != "intercom" or "Broadcasting" not in later["reply"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_no_to_the_read_back_announces_nothing(db_session, open_gate, rooms) -> None:
+    tid = await _thread()
+    async with _client() as c:
+        await _text(c, tid, "Announce that")
+        await _text(c, tid, "The pizza is here")
+        no = await _text(c, tid, "no")
+    await _fanned_out()
+    assert no["reply"] == "Okay, I won't announce anything."
+    assert all(sat.said == [] for sat in rooms.values())
 
 
 @requires_db
@@ -219,7 +257,8 @@ async def test_announce_that_reads_the_persons_request_never_an_old_pretend_repl
         ), {"t": tid, "q": SHOT})
         await s.commit()
     async with _client() as c:
-        body = await _text(c, tid, "Announce that")
+        # A keyless caller, as the web names one: its rows have no device.
+        body = await _text(c, tid, "Announce that", phone_id=f"chat-{tid}")
     await _fanned_out()
     assert body["reply"] == "Broadcasting to the house."
     assert rooms["kitchen"].said == ["Alex, Sam and Jo need another shot"]
@@ -400,10 +439,10 @@ async def test_a_satellite_setting_is_the_fixed_line(db_session, open_gate) -> N
 
 @requires_db
 @pytest.mark.asyncio
-async def test_actions_only_leaves_a_question_to_the_chat_and_writes_nothing(db_session, open_gate) -> None:
+async def test_fast_paths_only_leaves_a_question_to_the_chat_and_writes_nothing(db_session, open_gate) -> None:
     tid = await _thread()
     async with _client() as c:
-        body = await _text(c, tid, "write me a poem about cats", actions_only=True)
+        body = await _text(c, tid, "write me a poem about cats", fast_paths_only=True)
         answered = await _text(c, tid, "write me a poem about cats")
     assert body["handled"] is False and body["messages"] == [] and body["matched_path"] == "deferred"
     # Without it the house's own Q&A answers, as for the mic.
@@ -563,7 +602,8 @@ def web(monkeypatch, open_gate):
     ``hop.status`` makes it answer that), its model a stub that records."""
     import web.backend.api.chat as chat_api
 
-    hop = SimpleNamespace(calls=[], down=False, status=None, model_calls=0)
+    hop = SimpleNamespace(calls=[], down=False, status=None, model_calls=0, timeout=None, before=None,
+                          late=[])
 
     class _Hop:
         async def __aenter__(self):
@@ -577,10 +617,23 @@ def web(monkeypatch, open_gate):
 
         async def post(self, url, **kw):
             hop.calls.append({"url": url, "json": kw.get("json"), "headers": kw.get("headers") or {}})
+            if hop.before is not None:
+                await hop.before()
             if hop.down:
                 raise httpx.ConnectError("connection refused")
             if hop.status is not None:
                 return httpx.Response(hop.status, json={"detail": "x", "code": "busy" if hop.status == 409 else "x"})
+            if hop.timeout == "never":
+                raise httpx.ReadTimeout("the core took too long")
+            if hop.timeout == "late":
+                # The core answers a moment after the web gave up on it.
+                async def answer_late():
+                    await asyncio.sleep(0.2)
+                    async with AsyncClient(transport=ASGITransport(app=core_app), base_url="http://test") as c2:
+                        await c2.post(url, **kw)
+
+                hop.late.append(asyncio.create_task(answer_late()))
+                raise httpx.ReadTimeout("the core took too long")
             return await self.c.post(url, **kw)
 
     async def _stream(messages, model, **kw):
@@ -596,6 +649,21 @@ def web(monkeypatch, open_gate):
     monkeypatch.setattr(chat_api.ollama_client, "tags_or_none", _tags)
     monkeypatch.setattr(chat_api, "schedule_title_job", lambda *_a, **_k: None)
     return hop
+
+
+@pytest.fixture
+def tool_model(monkeypatch):
+    """Every call the core makes to the tool model (the router's tool
+    tier): typed chat must make none."""
+    calls: list[str] = []
+    real = ollama.OllamaStubClient.route
+
+    async def route(self, transcript, *a, **kw):
+        calls.append(transcript)
+        return await real(self, transcript, *a, **kw)
+
+    monkeypatch.setattr(ollama.OllamaStubClient, "route", route)
+    return SimpleNamespace(calls=calls)
 
 
 def _web() -> AsyncClient:
@@ -631,7 +699,7 @@ async def test_the_owners_announce_sequence_from_the_dashboard(db_session, web, 
         assert done["retryable"] is False and done["source"] == "typed"
     assert web.model_calls == 0
     assert _texts(web) == [SHOT, "Announce that", "Announce it to the rooms please"]
-    assert web.calls[0]["json"]["actions_only"] is True and web.calls[0]["json"]["plays_here"] is False
+    assert web.calls[0]["json"]["fast_paths_only"] is True and web.calls[0]["json"]["plays_here"] is False
     for sat in rooms.values():
         assert sat.said == ["Alex, Sam and Jo need another shot"] * 3
     # One row each: the typed one (the web's) and the reply (the core's).
@@ -646,9 +714,13 @@ async def test_a_bare_announce_that_asks_and_the_next_message_is_announced(db_se
     async with _web() as c:
         asked = await _send(c, tid, "Announce that")
         told = await _send(c, tid, "Dinner is ready")   # no command words: the follow-up takes it there
+        await _fanned_out()
+        assert rooms["kitchen"].said == []
+        done = await _send(c, tid, "yes")
     await _fanned_out()
     assert asked["content"] == "What should I announce?"
-    assert told["content"] == "Broadcasting to the house."
+    assert told["content"] == "Announce \u201cDinner is ready\u201d to every room?"
+    assert done["content"] == "Broadcasting to the house."
     assert rooms["kitchen"].said == ["Dinner is ready"]
     assert web.model_calls == 0
 
@@ -706,7 +778,7 @@ async def test_the_core_down_busy_or_refusing_is_a_fixed_line_never_the_model(db
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_plain_question_still_goes_to_the_model(db_session, web, monkeypatch) -> None:
+async def test_a_plain_question_still_goes_to_the_model(db_session, web, monkeypatch, tool_model) -> None:
     import web.backend.api.chat as chat_api
 
     tid = await _thread()
@@ -715,15 +787,16 @@ async def test_a_plain_question_still_goes_to_the_model(db_session, web, monkeyp
         # The state poll hasn't reached the core: no speculative hop.
         hello = await _send(c, tid, "hello there")
         monkeypatch.setattr(chat_api, "get_cached_snapshot", lambda: {"active_rooms": []})
-        # The core is up: the tool model is asked, acts on nothing, and the
-        # chat's model answers; nothing of the house's is written.
+        # The core is up: it is asked (a plugin's fast path only it knows),
+        # takes only its fast tiers, asks no model, and the chat's model
+        # answers; nothing of the house's is written.
         poem = await _send(c, tid, "write me a poem about cats")
         web.down = True
         offline = await _send(c, tid, "write me a poem about dogs")
     for done in (world, hello, poem, offline):
         assert done["content"] == "From the model." and done["stats"]["model_role"] == "chat"
     assert _texts(web) == ["write me a poem about cats", "write me a poem about dogs"]
-    assert web.model_calls == 4
+    assert web.model_calls == 4 and tool_model.calls == []
     rows = await _rows(tid)
     assert [r["role"] for r in rows] == ["user", "assistant"] * 4
 
@@ -845,8 +918,329 @@ async def test_an_away_send_reaches_the_house_as_its_phone(away_db, monkeypatch,
 
 def test_the_chat_prompt_never_claims_a_house_action() -> None:
     p = ollama.chat_system_prompt()
-    assert "You can't do anything in the house yourself" in p
-    assert "never say you did one or that you will" in p
+    assert "If you were asked to do something in the house, it wasn't done" in p
+    assert "never say you did it or will" in p and "saying it in a room" in p
+    # No feature named (so it never says it can't set timers or print), and
+    # no "Domovoi does those" in the third person.
+    assert "timer" not in p.lower() and "does those" not in p
     # The memory and printing sentences stay.
     assert "You can't save or delete memories yourself" in p and "never say you can't print" in p
-    assert "can't do anything in the house" not in ollama.voice_qa_system_prompt()
+    assert "something in the house" not in ollama.voice_qa_system_prompt()
+
+
+# ─── Review round 1: no model from typed chat, prose, guards ──────────────
+
+#: Chit-chat a fast path or the tool model could take for a command: the
+#: chat's model answers it, nothing is done, no model is asked by the house.
+CHIT_CHAT = [
+    "thanks",
+    "I'm thinking of announcing my engagement",
+    "remind me what we talked about",
+    "I need to add milk to my diet",
+    "it's too dark in here",
+    "delete everything",
+    "I'm sad today",            # voice_profile's "I'm <name>": the chat's own
+    "forget me",                # voice_profile, never from typed chat
+    "my name is Bob",
+    "call me Bob",
+    "never mind",
+    "say that again",
+    "help",
+    "how do I fix a leaky faucet?",
+    "cancel my subscription to netflix, how do I do it?",
+    "I hate when people tell me what to do",
+    "remind me what you said earlier",
+    "stop being so formal",
+    "it's too cold, I'm cold",
+]
+
+#: Prose a music, intercom or lists fast path takes: never acted on.
+PROSE = [
+    "play a game with me",
+    "play chess with me",
+    "play the role of a pirate",
+    "play devil's advocate",
+    "play the devil's advocate for me",
+    "shuffle the words in this sentence",
+    "tell everyone I'm proud of them is what I'd say at the wedding, right?",
+    "announce my engagement at the party, should I?",
+    "add a paragraph about dogs?",
+    "stop",
+    "pause for a second, let me think",
+]
+
+
+async def _no_house_action(tid: int, rooms: dict | None = None) -> None:
+    rows = await _rows(tid)
+    assert all((r["stats"] or {}).get("model_role") != "action" for r in rows if r["role"] == "assistant"), rows
+    async with SessionLocal() as s:
+        plays = (await s.execute(text("SELECT count(*) FROM media_plays"))).scalar_one()
+        timers = (await s.execute(text("SELECT count(*) FROM timers"))).scalar_one()
+    assert (plays, timers) == (0, 0)
+    for sat in (rooms or {}).values():
+        assert sat.said == []
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("said", CHIT_CHAT + PROSE)
+async def test_chit_chat_and_prose_go_to_the_model_with_no_action_and_no_model_call(
+    db_session, web, rooms, tool_model, monkeypatch, said,
+) -> None:
+    import web.backend.api.chat as chat_api
+
+    await _a_song()
+    # The core answers (so a message no core fast path takes is asked about
+    # a plugin's): still no model call there, nothing done.
+    monkeypatch.setattr(chat_api, "get_cached_snapshot", lambda: {"active_rooms": []})
+    tid = await _thread()
+    async with _web() as c:
+        done = await _send(c, tid, said)
+    await _fanned_out()
+    assert done["stats"]["model_role"] != "action", (said, done)
+    assert tool_model.calls == []
+    await _no_house_action(tid, rooms)
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("said", ["forget me", "remember that jo likes tulips", "my name is jo", "help",
+                                  "say that again", "never mind", "let's have a chat",
+                                  "could you let everyone know dinner is ready", "what is a mortgage"])
+async def test_the_core_never_runs_the_chats_own_handlers_or_a_model_for_typed_chat(
+    db_session, open_gate, tool_model, said,
+) -> None:
+    tid = await _thread()
+    async with _client() as c:
+        body = await _text(c, tid, said, fast_paths_only=True)
+    assert body["handled"] is False and body["messages"] == [], body
+    assert tool_model.calls == []
+    async with SessionLocal() as s:
+        logged = (await s.execute(text("SELECT count(*) FROM intents_log"))).scalar_one()
+        people = (await s.execute(text("SELECT count(*) FROM people"))).scalar_one()
+        memories = (await s.execute(text("SELECT count(*) FROM memories"))).scalar_one()
+    assert (logged, people, memories) == (0, 0, 0)
+    assert await _rows(tid) == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_long_or_multi_line_messages_never_reach_the_house(db_session, web, monkeypatch) -> None:
+    import web.backend.api.chat as chat_api
+
+    monkeypatch.setattr(chat_api, "get_cached_snapshot", lambda: {"active_rooms": []})
+    tid = await _thread()
+    async with _web() as c:
+        long_ = await _send(c, tid, "announce " + "dinner is ready " * 30)
+        lines = await _send(c, tid, "set a timer\nfor 5 minutes")
+    assert _texts(web) == []
+    assert long_["stats"]["model_role"] == lines["stats"]["model_role"] == "chat"
+    async with _client() as core:
+        body = await _text(core, tid, "set a timer for 5 minutes " + "x" * 400, fast_paths_only=True)
+    assert body["handled"] is False
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_documents_help_and_lookups_beat_fast_paths(db_session, web, monkeypatch) -> None:
+    import web.backend.api.chat as chat_api
+
+    monkeypatch.setattr(chat_api, "get_cached_snapshot", lambda: {"active_rooms": []})
+    docs = await _thread()
+    async with SessionLocal() as s:
+        await s.execute(text(
+            "INSERT INTO chat_messages (thread_id, role, content, documents) VALUES "
+            "(:t, 'user', 'here it is', CAST(:d AS JSONB))"
+        ), {"t": docs, "d": json.dumps([{"token": uuid.uuid4().hex, "name": "notes.txt"}])})
+        await s.commit()
+    helped = await _thread()
+    async with SessionLocal() as s:
+        await s.execute(text("UPDATE chat_threads SET title = 'Help: timers' WHERE id = :t"), {"t": helped})
+        await s.commit()
+    plain = await _thread()
+    async with _web() as c:
+        read = await _send(c, docs, "read it to me")
+        doc_timer = await _send(c, docs, "set a timer for 5 minutes")
+        help_q = await _send(c, plain, "how do I set a timer on my oven?")
+        help_thread = await _send(c, helped, "set a timer for 5 minutes")
+        lookup = await _send(c, plain, "what time is it")
+    assert _texts(web) == []
+    for done in (read, doc_timer, help_q, help_thread, lookup):
+        assert done["stats"].get("model_role") != "action", done
+    assert read["stats"]["model_role"] == doc_timer["stats"]["model_role"] == "documents"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_keyless_caller_cant_name_a_keyed_phone(db_session, open_gate) -> None:
+    keyed = f"android-{uuid.uuid4().hex[:8]}"
+    async with SessionLocal() as s:
+        await s.execute(text("INSERT INTO devices (device_id, name, device_key_hash) VALUES (:d, :d, :h)"),
+                        {"d": keyed, "h": uuid.uuid4().hex * 2})
+        await s.commit()
+    tid = await _thread()
+    for turn in (
+        phone_voice.run_phone_text_turn(core_app, phone_id=keyed, thread_id=tid, text_="what time is it",
+                                        viewer=Viewer()),
+        phone_voice.run_phone_turn(core_app, phone_id=keyed, thread_id=tid, audio=b"\\0" * 64, viewer=Viewer()),
+    ):
+        with pytest.raises(phone_voice.PhoneTurnRefused) as e:
+            await turn
+        assert (e.value.status, e.value.code) == (403, "not_this_phone")
+    # The web's own name for a keyless caller, and the phone with its key.
+    ok = await phone_voice.run_phone_text_turn(core_app, phone_id=f"chat-{tid}", thread_id=tid,
+                                               text_="what time is it", viewer=Viewer())
+    mine = await phone_voice.run_phone_text_turn(core_app, phone_id=keyed, thread_id=tid,
+                                                 text_="what time is it", viewer=Viewer(device_id=keyed))
+    assert ok["matched_handler"] == mine["matched_handler"] == "clock"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_hop_that_times_out_picks_up_the_cores_late_reply(db_session, web, monkeypatch) -> None:
+    import web.backend.api.chat as chat_api
+
+    monkeypatch.setattr(chat_api, "ROUTER_LATE_GRACE_SEC", 5.0)
+    monkeypatch.setattr(chat_api, "_ROUTER_LATE_POLL_SEC", 0.05)
+    web.timeout = "late"   # the core answers a moment after the web gave up
+    tid = await _thread()
+    async with _web() as c:
+        r = await c.post(f"/api/chat/threads/{tid}/messages", json={"content": "set a timer for 5 minutes"})
+    events = _sse(r.text)
+    assert events[0] == ("status", {"state": "house_command"})
+    done = _done(r.text)
+    assert done["stats"]["model_role"] == "action" and done["stats"]["matched_handler"] == "timer"
+    assert [x["role"] for x in await _rows(tid)] == ["user", "assistant"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_hop_that_times_out_writes_nothing_and_says_it_is_still_working(db_session, web, monkeypatch) -> None:
+    import web.backend.api.chat as chat_api
+
+    monkeypatch.setattr(chat_api, "ROUTER_LATE_GRACE_SEC", 0.2)
+    monkeypatch.setattr(chat_api, "_ROUTER_LATE_POLL_SEC", 0.05)
+    web.timeout = "never"
+    tid = await _thread()
+    async with _web() as c:
+        r = await c.post(f"/api/chat/threads/{tid}/messages", json={"content": "set a timer for 5 minutes"})
+    errors = [d for e, d in _sse(r.text) if e == "error"]
+    assert errors == [{"detail": chat_api.ROUTER_STILL_WORKING_TEXT, "code": "core_timeout"}]
+    assert "nothing was done" not in r.text
+    rows = await _rows(tid)
+    assert [x["role"] for x in rows] == ["user"]
+    # The core's reply, when it lands, is the only one.
+    async with _client() as core:
+        late = await _text(core, tid, "set a timer for 5 minutes", user_message_id=rows[0]["id"],
+                           fast_paths_only=True)
+    assert late["matched_handler"] == "timer"
+    assert [x["role"] for x in await _rows(tid)] == ["user", "assistant"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_one_reply_per_message_whoever_writes_first(db_session, web) -> None:
+    """The web's fixed line went in (the core was down): the core's own
+    reply to that row, arriving later, is refused, not written twice."""
+    tid = await _thread()
+    web.down = True
+    async with _web() as c:
+        down = await _send(c, tid, "set a timer for 5 minutes")
+    assert down["stats"]["error_code"] == "core_unreachable"
+    user_id = (await _rows(tid))[0]["id"]
+    async with _client() as core:
+        r = await core.post("/v1/phone/text", json={"text": "set a timer for 5 minutes", "phone_id": PHONE,
+                                                     "thread_id": tid, "user_message_id": user_id})
+    assert r.status_code == 409 and r.json()["code"] == "already_answered"
+    assert [x["role"] for x in await _rows(tid)] == ["user", "assistant"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_chat_deleted_mid_hop_is_a_clean_not_found(db_session, web) -> None:
+    tid = await _thread()
+    web.before = lambda: _delete_thread(tid)
+    async with _web() as c:
+        r = await c.post(f"/api/chat/threads/{tid}/messages", json={"content": "set a timer for 5 minutes"})
+    assert r.status_code == 200
+    errors = [d for e, d in _sse(r.text) if e == "error"]
+    assert errors and errors[-1]["code"] == "thread_not_found"
+
+
+async def _delete_thread(tid: int) -> None:
+    async with SessionLocal() as s:
+        await s.execute(text("DELETE FROM chat_threads WHERE id = :t"), {"t": tid})
+        await s.commit()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_before_setup_a_house_command_says_so_plainly(db_session, web) -> None:
+    import web.backend.api.chat as chat_api
+
+    web.status = 501
+    tid = await _thread()
+    async with _web() as c:
+        done = await _send(c, tid, "set a timer for 5 minutes")
+    assert done["content"] == chat_api.ROUTER_SETUP_TEXT and done["stats"]["error_code"] == "core_not_set_up"
+    assert "setup is finished" in done["content"] and web.model_calls == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_play_with_no_player_records_nothing(db_session, open_gate) -> None:
+    await _a_song()
+    tid = await _thread()
+    async with _client() as c:
+        body = await _text(c, tid, "play glass harbor", fast_paths_only=True)
+        nothing = await _text(c, tid, "play the song about purple elephants", fast_paths_only=True)
+    assert body["reply"] == phone_voice.CHAT_NO_PLAYER_TEXT
+    # Nothing found: the chat's model answers it, not the house's line.
+    assert nothing["handled"] is False
+    async with SessionLocal() as s:
+        plays = (await s.execute(text("SELECT count(*) FROM media_plays"))).scalar_one()
+        ctx_rows = (await s.execute(text("SELECT context FROM sessions WHERE room_id = :r"), {"r": ROOM})).all()
+    assert plays == 0
+    assert all("last_played_track" not in (dict(r[0] or {})) for r in ctx_rows)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_announce_that_reads_only_this_phones_own_requests(db_session, open_gate, rooms) -> None:
+    mine, other = f"android-{uuid.uuid4().hex[:8]}", f"android-{uuid.uuid4().hex[:8]}"
+    await _device(mine)
+    await _device(other)
+    tid = await _thread()
+    async with SessionLocal() as s:
+        await s.execute(text(
+            "INSERT INTO chat_messages (thread_id, role, content, device_id) VALUES (:t, 'user', :q, :d), "
+            "(:t, 'user', 'Please announce that the cake is ready', NULL)"
+        ), {"t": tid, "q": SHOT, "d": other})
+        await s.commit()
+    body = await phone_voice.run_phone_text_turn(core_app, phone_id=mine, thread_id=tid, text_="Announce that",
+                                                 viewer=Viewer(device_id=mine), fast_paths_only=True)
+    await _fanned_out()
+    assert body["reply"] == "What should I announce?"
+    assert all(sat.said == [] for sat in rooms.values())
+
+
+@pytest.mark.parametrize(("message", "kept"), [
+    ("the cat is in the house", "the cat is in the house"),
+    ("dinner is ready in the house", "dinner is ready in the house"),
+    ("to everyone dinner is ready", "dinner is ready"),
+    ("in every room, the movie starts now", "the movie starts now"),
+    ("dinner is ready to everyone please", "dinner is ready"),
+    ("dinner is ready, please", "dinner is ready"),
+    ("that the car is here, to the house", "the car is here"),
+])
+def test_routing_words_are_dropped_only_as_routing(message, kept) -> None:
+    from domovoi.handlers.intercom import _clean_message
+
+    assert _clean_message(message) == kept
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_satellite_keeps_the_words_of_the_message(db_session, rooms) -> None:
+    response = await _say("announce the cat is in the house")
+    assert response.announce_text == "the cat is in the house"

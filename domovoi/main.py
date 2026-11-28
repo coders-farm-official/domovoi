@@ -1436,9 +1436,11 @@ class _PhoneTextBody(BaseModel):
     # for the mic. False (the web): media for a phone's player isn't
     # played, and the reply says so.
     plays_here: bool = False
-    # True: a turn no handler acts on is not answered here (handled:
-    # false, nothing written); the client's own chat model answers it.
-    actions_only: bool = False
+    # True (the web's typed chat): only the router's fast tiers (a parked
+    # question, a core or plugin fast path), never a model and never the
+    # chat's own handlers; a turn none takes is not answered here
+    # (handled: false, nothing written) and the client's model answers it.
+    fast_paths_only: bool = False
 
 
 @app.post(
@@ -1469,7 +1471,7 @@ async def phone_text_turn(body: _PhoneTextBody, request: Request, viewer: Any = 
             viewer=viewer,
             user_message_id=body.user_message_id,
             plays_here=body.plays_here,
-            actions_only=body.actions_only,
+            fast_paths_only=body.fast_paths_only,
         )
     except phone_voice.PhoneTurnRefused as e:
         return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})

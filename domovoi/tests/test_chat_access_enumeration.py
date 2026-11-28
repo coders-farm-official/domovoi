@@ -88,6 +88,7 @@ SQL_ALLOWED: dict[str, tuple[str, str]] = {
     "domovoi/phone_voice.py::<module>": (HELPER, "the row columns the checked turn returns"),
     "domovoi/phone_voice.py::_write_turn": (HELPER, "the turn into the thread run_phone_turn checked"),
     "domovoi/phone_voice.py::_insert_user_row": (HELPER, "the person's row, from _write_turn"),
+    "domovoi/typed_chat.py::<module>": (HELPER, "ANSWERED_SQL, run only by the two writers of a checked turn's reply"),
     "domovoi/phone_voice.py::_check_user_row": (HELPER, "the typed row of the thread run_phone_text_turn checked"),
     # "announce that" in a chat: ctx.chat_thread_id is set only by the phone
     # turns (voice and typed), after their chat_access check.
@@ -111,6 +112,7 @@ SQL_ALLOWED: dict[str, tuple[str, str]] = {
     # The typed send's router hop (1.5.0), reached from _answer for its send.
     "web/backend/api/chat.py::_awaits_house_answer": (HELPER, "the checked send's thread's last reply"),
     "web/backend/api/chat.py::_assistant_row": (HELPER, "the reply the core wrote into the checked thread"),
+    "web/backend/api/chat.py::_insert_reply_once": (HELPER, "the web's fixed reply into the checked send's thread"),
     "web/backend/api/chat.py::_answer._finish_retry": (HELPER, "the reply stream of a checked retry"),
     "web/backend/api/chat.py::_answer._reply_events": (HELPER, "the reply stream of a checked send"),
     "web/backend/api/chat.py::_allowed_sites": (HELPER, "the checked thread's earlier lookups"),

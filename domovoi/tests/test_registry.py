@@ -265,7 +265,8 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.letter_author", "core.letter_dictation",
         },
         "media_search": {"core.media_send"},
-        "intercom": {"core.intercom_what"},
+        # N20: "What should I announce?", and typed chat's read-back of the reply.
+        "intercom": {"core.intercom_what", "core.intercom_confirm"},
         "timer": {"core.timer_how_long"},
         "reminder": {"core.alarm_what_time", "core.reminder_what_when"},
     }

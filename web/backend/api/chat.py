@@ -66,9 +66,10 @@ typed message that is a house command ("announce dinner is ready", "set a
 timer", a reply to a question the house just asked) goes to the core's
 ``POST /v1/phone/text`` (domovoi/phone_voice.py ``run_phone_text_turn``),
 the chat mic's turn without speech, with the caller's credentials. The
-core routes it as this device's phone turn in this thread and writes the
-reply row (``stats.model_role = 'action'``, never retryable); a core that
-is down, busy or refusing gets a fixed line, never the model. The chat's
+core routes it through the router's fast tiers only (never a model) as
+this device's phone turn in this thread and writes the reply row
+(``stats.model_role = 'action'``, never retryable); a core that is down,
+busy or refusing gets a fixed line, never the model. The chat's
 own steps that must win come first (memory, house facts, the owner joke,
 drafts and print, the photo search); see "House commands typed into the
 chat" above :func:`send_voice` for the rules.
@@ -134,6 +135,7 @@ from domovoi.profile_context import build_profile_prefix
 # typed send's house-command hop. Imported here, at load: the web process's
 # import guard (plugin_host) refuses a domovoi.* import made later.
 from domovoi import router as core_router
+from domovoi import typed_chat
 from domovoi.away import keys as away_keys
 from domovoi.voice_identifier import speaker_is_confident
 from domovoi.doc_qa import headsup as _headsup
@@ -1548,6 +1550,7 @@ async def _answer(
     skip_row_id: int | None = None,
     revise_draft: int | None = None,
     device_id: str | None = None,
+    no_router: bool = False,
 ) -> StreamingResponse:
     """The SSE reply to the thread's last question (:func:`send_message`,
     and :func:`retry_reply` with ``replace_id``: the reply it replaces,
@@ -1588,16 +1591,23 @@ async def _answer(
             mturn = await _media.answer(mreq.q, request, mreq)
             return await _immediate_reply(thread_id, mturn.text, {"model_role": "media", "media": mturn.media})
     if (dturn is None and not has_images and replace_id is None and not documents and revise_draft is None
-            and user_row_id is not None and skip_row_id is None):
+            and user_row_id is not None and skip_row_id is None and not no_router):
         # A house command ("announce dinner is ready", "set a timer"): done
         # by the house's router, as the chat mic does it, and its reply is
         # the house's (the router hop, above :func:`send_voice`). After the
         # chat's own steps that win (memory, house facts, drafts and print,
         # the photo search); ahead of documents, help, lookups and the model.
-        routed = await _router_turn(thread_id, question, user_row_id, request,
-                                    thread_title=thread_title, device_id=device_id)
-        if routed is not None:
-            return routed
+        kind = await _router_hop_kind(thread_id, question, user_row_id, thread_title)
+        if kind is not None:
+            async def rest() -> StreamingResponse:
+                # The house left it to the chat: the rest of this answer.
+                return await _answer(
+                    thread_id, person_id, has_images=has_images, override=override, question=question,
+                    thread_title=thread_title, request=request, documents=documents, user_row_id=user_row_id,
+                    heads_up=heads_up, revise_draft=revise_draft, device_id=device_id, no_router=True,
+                )
+
+            return _router_stream(kind, thread_id, question, user_row_id, request, device_id, rest)
     if not has_images and replace_id is None and dturn is None:
         previous = await _docs.previous_question(thread_id, before_id=user_row_id)
         plan = await _docs.plan_reply(thread_id, question, documents or [], previous, heads_up)
@@ -2989,46 +2999,50 @@ async def _write_title(thread_id: int) -> None:
 # reached the router, and the chat model wrote "I'll let them know…" while
 # nothing was announced.
 #
-# Decided here before any model is asked (:func:`_router_hop_kind`), after
-# the chat's own steps that must win (send_message: memory, house facts,
-# the owner joke; _answer: drafts and print, the photo search):
+# Only the router's FAST tiers, never a model (``fast_paths_only``;
+# domovoi/typed_chat.py holds the shared rules). Decided here before any
+# model is asked (:func:`_router_hop_kind`), after the chat's own steps that
+# must win (send_message: memory, house facts, the owner joke; _answer:
+# drafts and print, the photo search), and never in a thread whose
+# attachments the chat answers from (documents, videos, photo results), a
+# help thread, or for a lookup:
 #
 # * "followup": the last reply in the thread was the house's and asked a
 #   question (stats.expect_followup): "yes", "the second one" answer it;
-# * "fast": a router fast path takes the message (router.plan_route, pure),
-#   unless it is one the chat answers itself (CHAT_OWN_HANDLERS);
-# * "tool": no fast path, but the router would ask its tool model
-#   (router.goes_to_the_tool_model), not a plain question about the world
-#   or a request for a story, in a thread with nothing attached that the
-#   chat reads (documents, videos, photo results), and not help, a lookup
-#   or a privacy question. The core is asked to act only
-#   (``actions_only``): when no handler acts, nothing is written and the
-#   chat model answers as before. Skipped while the core isn't answering
-#   (the state poll's snapshot is gone).
+# * "fast": a core fast path takes the message (router.plan_route, pure),
+#   unless it is one the chat answers itself, or a question to a handler
+#   whose fast paths also take prose ("tell everyone ... right?");
+# * "maybe": no core fast path, but a plugin's may take it, which only the
+#   core knows. Asked only while the core answers (the state poll's
+#   snapshot); the core takes only its fast tiers, so a turn none takes
+#   costs no model call, writes nothing, and the chat model answers it.
 #
 # The reply row is the core's (``source = 'typed'``, ``stats.model_role =
-# 'action'``, the handler in ``stats.matched_handler``; never retryable).
-# When the core can't be reached or refuses a "fast" or "followup" turn,
-# the reply is a fixed line written here, never the model's; a "tool" turn
-# then goes to the model (it was never known to be a command).
+# 'action'``, the handler in ``stats.matched_handler``; never retryable),
+# written only while the typed row has none (typed_chat.ANSWERED_SQL), and
+# streamed after a ``status`` event (``house_command``). When the core
+# can't be reached, isn't set up, is busy or refuses a "fast" or
+# "followup" turn, the reply is a fixed line written here, never the
+# model's; a "maybe" turn then goes to the model. When the core is too
+# slow, nothing is written here: the stream ends with ``core_timeout`` and
+# the core's reply shows when it lands (``chat_changed``).
 
-#: A house command is short and one line; a longer or pasted message is
-#: never handed to the router (words in a pasted email are not commands).
-COMMAND_MAX_CHARS = 400
-#: Fast paths the chat answers itself (its help, lookups, memory and house
-#: facts), or that only make sense spoken (voice enrollment, "say that
-#: again", "never mind", open-mic chat mode).
-CHAT_OWN_HANDLERS = frozenset({
-    "help", "help_desk", "house_facts", "memory", "double_check",
-    "voice_profile", "repeat", "dismiss", "chat_mode",
-})
 #: The typed chat's fixed replies when the house didn't do it.
 CHAT_CANT_TEXT = "I can't do that from chat yet."
 ROUTER_UNREACHABLE_TEXT = (
     CHAT_CANT_TEXT + " Domovoi's house service isn't answering right now, so nothing was done. "
     "Try again in a moment, or say it to a room."
 )
+ROUTER_SETUP_TEXT = (
+    CHAT_CANT_TEXT + " House commands from chat work once Domovoi's setup is finished, when an "
+    "admin has set the admin password."
+)
 ROUTER_BUSY_TEXT = "I'm still doing your last request, so nothing was done this time. Try again in a moment."
+#: Said (never stored) when the core is still answering at the timeout.
+ROUTER_STILL_WORKING_TEXT = "Still working on that. The answer will appear here."
+#: How long after a hop timeout the core's late reply is waited for.
+ROUTER_LATE_GRACE_SEC = 10.0
+_ROUTER_LATE_POLL_SEC = 0.5
 #: The roles of a reply written by the house's router (typed or spoken).
 ROUTER_ROLES = frozenset({"action", "voice"})
 
@@ -3052,7 +3066,8 @@ async def _awaits_house_answer(thread_id: int, user_row_id: int) -> bool:
 
 async def _thread_reads_attachments(thread_id: int) -> bool:
     """Whether the thread has documents, videos or photo results the chat
-    answers follow-up questions from: those stay the chat's."""
+    answers follow-up questions from: those stay the chat's ("read it to
+    me" in a thread with a document)."""
     try:
         if await _docs.thread_documents(thread_id):
             return True
@@ -3067,54 +3082,79 @@ async def _thread_reads_attachments(thread_id: int) -> bool:
 async def _router_hop_kind(
     thread_id: int, question: str, user_row_id: int, thread_title: str | None,
 ) -> str | None:
-    """"followup", "fast" or "tool" for a typed message the house's router
-    should have, or None (the chat answers). See the section above."""
+    """"followup", "fast" or "maybe" for a typed message the house's router
+    may have, or None (the chat answers). See the section above."""
     q = (question or "").strip()
-    if not q or len(q) > COMMAND_MAX_CHARS or "\n" in q:
+    if not typed_chat.eligible(q):
         return None
     if await _awaits_house_answer(thread_id, user_row_id):
         return "followup"
     if lookup_answer.fast_path(q) is not None or lookup_answer.is_bare_followup(q):
         return None
-    plan = core_router.plan_route(q)
-    if plan is not None:
-        return None if plan.handler.name in CHAT_OWN_HANDLERS else "fast"
-    if not core_router.goes_to_the_tool_model(q):
-        return None
-    if core_router.is_question_about_the_world(q) or core_router.is_request_for_a_story(q):
-        return None
-    if get_cached_snapshot() is None:
-        return None
-    if ((thread_title or "").startswith(help_delivery.TITLE_PREFIX) or help_answer.looks_like_help(q)
-            or help_admin_tasks.match(q) is not None or house_facts.wants_facts(q)):
+    if (thread_title or "").startswith(help_delivery.TITLE_PREFIX):
         return None
     if await _thread_reads_attachments(thread_id):
         return None
-    return "tool"
+    plan = core_router.plan_route(q)
+    if plan is not None:
+        return "fast" if typed_chat.hands_to_router(plan, q) else None
+    if get_cached_snapshot() is None:
+        return None
+    return "maybe"
 
 
 async def _assistant_row(thread_id: int, *, row_id: int | None = None, after_id: int | None = None) -> Any:
-    """An assistant row as the message reads: by id, or the first one after
-    ``after_id`` (the reply the core wrote to that message)."""
-    where = "m.id = :id" if row_id is not None else "m.id > :id"
+    """An assistant row as the message reads: by id, or the reply to user
+    row ``after_id`` (after it, before the thread's next user row)."""
+    if row_id is not None:
+        where, params = "m.id = :id", {"t": thread_id, "id": row_id}
+    else:
+        where = ("m.id > :u AND NOT EXISTS (SELECT 1 FROM chat_messages n WHERE n.thread_id = :t "
+                 "AND n.role = 'user' AND n.id > :u AND n.id < m.id)")
+        params = {"t": thread_id, "u": after_id}
     async with session_scope() as s:
         return (await s.execute(text(
             "SELECT {cols}, NULL::text AS device_name, NULL::text AS speaker_name FROM chat_messages m "
             "WHERE m.thread_id = :t AND m.role = 'assistant' AND {where} ORDER BY m.id LIMIT 1".format(
                 cols=_MSG_COLUMNS, where=where)
-        ), {"t": thread_id, "id": row_id if row_id is not None else after_id})).mappings().first()
+        ), params)).mappings().first()
 
 
-def _stored_reply(row: Any) -> StreamingResponse:
-    """A reply already in the thread, as the send's SSE."""
+class _ThreadGone(Exception):
+    """The chat was deleted while its message was being answered."""
+
+
+async def _insert_reply_once(thread_id: int, user_row_id: int, content: str, stats: dict[str, Any]) -> Any:
+    """The web's own reply to user row ``user_row_id``: written only while
+    the row has none (the core may have written its reply after a hop that
+    failed here), with the row locked as the core's writer locks it.
+    Returns the row written, or the reply already there."""
+    async with session_scope() as s:
+        mine = (await s.execute(text(
+            "SELECT id FROM chat_messages WHERE id = :u AND thread_id = :t AND role = 'user' FOR UPDATE"
+        ), {"u": user_row_id, "t": thread_id})).first()
+        if mine is None:
+            raise _ThreadGone()
+        row = (await s.execute(text(
+            """
+            INSERT INTO chat_messages AS m (thread_id, role, content, stats)
+            SELECT :t, 'assistant', :c, CAST(:st AS JSONB)
+             WHERE NOT ({answered})
+            RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
+            """.format(answered=typed_chat.ANSWERED_SQL, cols=_MSG_COLUMNS)
+        ), {"t": thread_id, "u": user_row_id, "c": content, "st": json.dumps(stats)})).mappings().first()
+        if row is not None:
+            await s.execute(text("UPDATE chat_threads SET updated_at = now() WHERE id = :t"), {"t": thread_id})
+            await _notify_chat(s, "message")
+        await s.commit()
+    return row if row is not None else await _assistant_row(thread_id, after_id=user_row_id)
+
+
+def _row_events(row: Any) -> list[str]:
+    """A reply already in the thread, as the send's SSE events."""
     msg = _msg_dict(row)
-
-    async def sse() -> AsyncIterator[str]:
-        yield f"event: delta\ndata: {json.dumps({'text': msg.get('content') or ''})}\n\n"
-        yield f"event: done\ndata: {json.dumps(msg, default=str)}\n\n"
-
-    return StreamingResponse(sse(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return [f"event: delta\ndata: {json.dumps({'text': msg.get('content') or ''})}\n\n",
+            f"event: done\ndata: {json.dumps(msg, default=str)}\n\n"]
 
 
 def _router_hop_headers(request: Request | None) -> dict[str, str]:
@@ -3136,15 +3176,12 @@ def _router_hop_headers(request: Request | None) -> dict[str, str]:
     return forward
 
 
-async def _router_turn(
-    thread_id: int, question: str, user_row_id: int, request: Request | None, *,
-    thread_title: str | None, device_id: str | None,
-) -> StreamingResponse | None:
-    """The house's reply to a typed command (see the section above), or
-    None: the chat answers it."""
-    kind = await _router_hop_kind(thread_id, question, user_row_id, thread_title)
-    if kind is None:
-        return None
+async def _router_hop(
+    thread_id: int, question: str, user_row_id: int, request: Request | None, device_id: str | None,
+) -> tuple[str, Any]:
+    """One hop to the core: ``("reply", row)``, ``("deferred", None)``,
+    ``("timeout", None)`` or ``("failed", (status, code))`` (status 0: no
+    answer at all)."""
     payload = {
         "text": question.strip(),
         # Names the routing session, as the mic's phone_id: the device the
@@ -3154,51 +3191,111 @@ async def _router_turn(
         "thread_id": thread_id,
         "user_message_id": user_row_id,
         # The dashboard has no player of its own, and the app's typed send
-        # doesn't play actions: media for a phone's player is said plainly.
+        # doesn't play actions: a play for a phone's player is said plainly.
         "plays_here": False,
-        "actions_only": True,
+        "fast_paths_only": True,
     }
     url = f"{domovoi_url().rstrip('/')}/v1/phone/text"
-    r: httpx.Response | None = None
     _reply_started()
     try:
         async with _core_client() as client:
             r = await client.post(url, json=payload, headers=_router_hop_headers(request))
-    except Exception as e:  # noqa: BLE001 — the core is down, restarting or slow
+    except httpx.TimeoutException:
+        log.warning("chat: the house command hop timed out (thread %s)", thread_id)
+        return "timeout", None
+    except Exception as e:  # noqa: BLE001 — the core is down or restarting
         log.warning("chat: the house command hop failed (thread %s): %s", thread_id, type(e).__name__)
+        return "failed", (0, "core_unreachable")
     finally:
         _reply_finished()
-    body: dict[str, Any] = {}
-    if r is not None:
+    try:
+        parsed = r.json()
+        body = parsed if isinstance(parsed, dict) else {}
+    except ValueError:
+        body = {}
+    if r.status_code != 200:
+        return "failed", (r.status_code, str(body.get("code") or ""))
+    if not body.get("handled"):
+        return "deferred", None
+    messages = body.get("messages") or []
+    reply_id = messages[-1].get("id") if messages and isinstance(messages[-1], dict) else None
+    row = await _assistant_row(thread_id, row_id=reply_id) if isinstance(reply_id, int) else None
+    if row is None:
+        row = await _assistant_row(thread_id, after_id=user_row_id)
+    return ("reply", row) if row is not None else ("failed", (500, "reply_missing"))
+
+
+def _fixed_line(status: int, code: str) -> tuple[str, str]:
+    """The fixed reply (and its ``error_code``) for a hop that failed."""
+    if status == 409 and code == "busy":
+        return ROUTER_BUSY_TEXT, "core_busy"
+    if status == 501:
+        return ROUTER_SETUP_TEXT, "core_not_set_up"
+    if status == 0 or status >= 500:
+        return ROUTER_UNREACHABLE_TEXT, "core_unreachable"
+    return CHAT_CANT_TEXT, "core_refused"
+
+
+def _router_stream(
+    kind: str, thread_id: int, question: str, user_row_id: int, request: Request | None,
+    device_id: str | None, rest: Any,
+) -> StreamingResponse:
+    """The send's SSE for a message the house may take (see the section
+    above). ``rest()``: the chat's own answer, when the house leaves it."""
+
+    async def sse() -> AsyncIterator[str]:
+        if kind != "maybe":
+            yield f"event: status\ndata: {json.dumps({'state': 'house_command'})}\n\n"
+        outcome, detail = await _router_hop(thread_id, question, user_row_id, request, device_id)
+        if outcome == "reply":
+            for event in _row_events(detail):
+                yield event
+            return
+        if outcome == "deferred":
+            async for chunk in (await rest()).body_iterator:
+                yield chunk
+            return
+        # The core may have written its reply before the hop failed here:
+        # that reply stands, and nothing is written twice.
+        late = await _assistant_row(thread_id, after_id=user_row_id)
+        if outcome == "timeout":
+            end = time.monotonic() + ROUTER_LATE_GRACE_SEC
+            while late is None and time.monotonic() < end:
+                await asyncio.sleep(_ROUTER_LATE_POLL_SEC)
+                late = await _assistant_row(thread_id, after_id=user_row_id)
+            if late is None:
+                payload = {"detail": ROUTER_STILL_WORKING_TEXT, "code": "core_timeout"}
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                return
+        if late is not None:
+            for event in _row_events(late):
+                yield event
+            return
+        status, code = detail
+        if status == 404 or code == "message_not_found":
+            payload = {"detail": "this chat isn't here any more", "code": "thread_not_found"}
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+            return
+        if kind == "maybe":
+            # Never known to be a command: the chat answers it.
+            async for chunk in (await rest()).body_iterator:
+                yield chunk
+            return
+        text_, error_code = _fixed_line(status, code)
         try:
-            parsed = r.json()
-            body = parsed if isinstance(parsed, dict) else {}
-        except ValueError:
-            body = {}
-    if r is not None and r.status_code == 200:
-        if not body.get("handled"):
-            return None
-        messages = body.get("messages") or []
-        reply_id = messages[-1].get("id") if messages and isinstance(messages[-1], dict) else None
-        row = await _assistant_row(thread_id, row_id=reply_id) if isinstance(reply_id, int) else None
-        if row is not None:
-            return _stored_reply(row)
-    # The core may have written the reply before the hop failed (a slow
-    # turn past the timeout): that reply stands, nothing is written twice.
-    written = await _assistant_row(thread_id, after_id=user_row_id)
-    if written is not None:
-        return _stored_reply(written)
-    if kind == "tool":
-        return None
-    if r is not None and r.status_code == 409 and body.get("code") == "busy":
-        text_, code = ROUTER_BUSY_TEXT, "core_busy"
-    elif r is None or r.status_code >= 500:
-        text_, code = ROUTER_UNREACHABLE_TEXT, "core_unreachable"
-    else:
-        log.warning("chat: the core refused a house command (thread %s): %s %s",
-                    thread_id, r.status_code, body.get("code"))
-        text_, code = CHAT_CANT_TEXT, "core_refused"
-    return await _immediate_reply(thread_id, text_, {"model_role": "action", "error_code": code})
+            row = await _insert_reply_once(thread_id, user_row_id, text_,
+                                           {"model_role": "action", "error_code": error_code})
+        except _ThreadGone:
+            row = None
+        if row is None:
+            payload = {"detail": "this chat isn't here any more", "code": "thread_not_found"}
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+            return
+        for event in _row_events(row):
+            yield event
+
+    return StreamingResponse(sse(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ─── Voice turns (the app's chat mic) ───────────────────────────────────────
