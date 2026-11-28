@@ -15,8 +15,9 @@ transport), so a request runs through the real chat code against the test
 database. httpx's ASGI transport hands the relay a reply only once it has
 all of it, so with ``web_socket=True`` the web app is served by uvicorn on
 a real loopback socket (a free ``127.0.0.1`` port) instead, and the relay
-reaches it over HTTP as it does in a house: replies stream. The caller's test enrols the phone first (or writes
-``phones.json`` itself with :meth:`AwayLoopback.set_phones`).
+reaches it over HTTP as it does in a house: replies stream. The caller's
+test enrols the phone first (or writes ``phones.json`` itself with
+:meth:`AwayLoopback.set_phones`).
 
 Unwired (``core=False``): the listener's events are only recorded, for
 listener-only tests.

@@ -2798,9 +2798,9 @@ one its key resolves to, never an id the caller names. Errors are
 
 | Route | Tier | Body / query | Notes |
 |---|---|---|---|
-| `POST /api/away/enroll` | Device, **after setup** (501 before an admin exists), **LAN only** | `{"tor_auth_pub": "<52 chars: base32, upper case, no padding>", "noise_pub": "<43 chars: base64url, no padding>"}` | Sets away chat up for this phone, or replaces both of its keys (re-pairing, a lost Keychain). `200 {"onion": "<56>.onion", "port": 80, "house_noise_pub": "<43 chars>", "proto": 1, "state": "ready" \| "starting"}`. `house_noise_pub` is the house's away Noise key, never the Friend Houses session key. `starting`: the onion is being brought up (the first phone's enrolment restarts Tor; later ones ride a batched reload); connect anyway. Refusals: `400 bad_key` (a key's shape or length, the two keys the same, or a key another phone holds), `401 device_key_required` (no or a wrong device key) or the device tier's own 401/403, `403 lan_only` (the caller's address isn't private, link-local or loopback), `409 away_off` (an admin turned it off), `409 internet_off` (the internet answer is "never"), `409 guest` (a shared screen, or a caller with no household credential). |
-| `DELETE /api/away/enroll` | Device, **LAN only** | — | This phone turns away chat off for itself (or is unpairing): its keys are revoked at once for the Noise check, and its Tor key goes in the next batched reload. Always `200 {"ok": true}`. |
-| `GET /api/away/status` | Device | — | `{"house": "on" \| "away_off" \| "internet_off", "enrolled": bool, "state": "ready" \| "starting" \| null}`: why the onion can or can't be reached (the onion itself never says). Works off the LAN, but only at home is it useful. |
+| `POST /api/away/enroll` | Device, **after setup** (501 before an admin exists), **LAN only** | `{"tor_auth_pub": "<52 chars: base32, upper case, no padding>", "noise_pub": "<43 chars: base64url, no padding>"}` | Sets away chat up for this phone, or replaces both of its keys (re-pairing, a lost Keychain). `200 {"onion": "<56>.onion", "port": 80, "house_noise_pub": "<43 chars>", "proto": 1, "state": "ready" \| "publishing" \| "starting"}`. `house_noise_pub` is the house's away Noise key, never the Friend Houses session key. `starting`: the onion is being brought up (the first phone's enrolment restarts Tor; later ones ride a batched reload); connect anyway. `publishing`: Tor has this phone's key and is putting the onion's new descriptor out (about a minute after a reload, two after a Tor start; it ends early once a request from the phone arrives over the onion); connect anyway. An app treats a state it doesn't know as `starting`. Refusals: `400 bad_key` (a key's shape or length, the two keys the same, or a key another phone holds), `401 device_key_required` (no or a wrong device key) or the device tier's own 401/403, `403 lan_only` (the caller's address isn't private, link-local or loopback), `409 away_off` (an admin turned it off), `409 internet_off` (the internet answer is "never"), `409 guest` (a shared screen, or a caller with no household credential). |
+| `DELETE /api/away/enroll` | Device, **LAN only** | — | This phone turns away chat off for itself (or is unpairing): its keys are revoked at once for the Noise check, and its Tor key goes in the next batched reload. Always `200 {"ok": true}`. Away from home, the onion's `away.leave` request does the same. |
+| `GET /api/away/status` | Device | — | `{"house": "on" \| "away_off" \| "internet_off", "enrolled": bool, "state": "ready" \| "publishing" \| "starting" \| null}`: why the onion can or can't be reached (the onion itself never says). `publishing` as for the enrolment above. Works off the LAN, but only at home is it useful. |
 | `GET /api/away/phones` | Admin (read) | — | System → Chat from away: `{"on", "house", "phones": [{"device_id", "name", "platform", "enrolled_at", "updated_at", "current"}]}`. `current` is false for an enrolment that no longer counts (the device holds another key now, or is a shared screen). |
 | `DELETE /api/away/phones/{device_id}` | Admin, security tier (`X-Requested-With`) | — | Removes one phone's away chat, as the phone's own DELETE does. 404 when it has none. |
 | `PUT /api/away/setting` | Admin, security tier (`X-Requested-With`) | `{"on": bool}` | "Chat from away" for the house (on by default; stored as the household setting `away_chat`). Off removes the away onion and closes open connections with `BYE away_off`; enrolled phones keep their keys for when it's back on. `200 {"on", "house"}`. |
@@ -2829,13 +2829,18 @@ phone's enrolled `noise_pub` as its static key), framed messages with a
 most 4, unknown keys refused). The request set is closed: `chat.list`,
 `chat.history`, `chat.send` (text up to 32,000 code points, an optional
 JPEG or WebP picture up to 1 MiB with its sha256, an optional phone admin
-grant counting for that turn only), `chat.stream` and `chat.cancel`. A
+grant counting for that turn only), `chat.stream`, `chat.cancel` and
+`away.leave` (no fields: the phone turns away chat off for itself, the
+same as its `DELETE /api/away/enroll` at home; the core answers it, only
+ever for the calling phone, with `RESP {}`, then closes that phone's
+connections with `BYE revoked`, and its next handshake is refused). A
 `chat.send` always ends with a `done` or `error` event; the same
 `client_id` within 24 hours answers the first send again (and its reply)
 and posts nothing; one reply runs per device. Limits per device: 4 open
 requests per connection, 2 connections, 10 sends a minute and 200 an
-hour, 60 other requests a minute, 30 pictures and 20 MB an hour; 16
-connections and 60 handshakes a minute across the house.
+hour, 60 other requests a minute (of them at most 5 `away.leave`), 30
+pictures and 20 MB an hour; 16 connections and 60 handshakes a minute
+across the house.
 
 ### 3.18a Help (Domovoi's own help desk)
 
