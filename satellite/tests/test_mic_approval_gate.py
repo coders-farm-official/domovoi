@@ -97,6 +97,11 @@ class Leds:
     def set_state_unless(self, unless: str, state: str) -> None:
         self.states.append(state)
 
+    def set_state_if(self, expected: str, state: str) -> None:
+        current = self.states[-1] if self.states else "idle"
+        if current == expected:
+            self.states.append(state)
+
 
 class Sat:
     """What the fakes recorded, alongside the satellite they were hung on."""
@@ -173,6 +178,11 @@ def make_sat(
     sat.chat_active = threading.Event()
     sat.dropin_active = threading.Event()
     sat._post_playback_state = None
+    # What `_is_music_playing` reads: no music unless a test starts some.
+    sat._music_lock = threading.Lock()
+    sat._music_proc = None
+    sat._room_player = None
+    sat._music_run = None
 
     def start_mic() -> None:
         if rec.open_delay:
@@ -203,7 +213,7 @@ def make_sat(
         sat._wake_armed.set()
         if sat._ring_handoff_pending:
             sat._ring_handoff_pending = False
-            sat._leds.resync()
+            sat._repaint_ring()
 
     def load_wake_model():
         rec.wake_models_loaded += 1
@@ -1888,3 +1898,99 @@ def test_the_code_goes_in_the_hello_only_when_the_old_way_is_allowed(monkeypatch
     assert sat._hello_frame()["approval_code"] == "481502"
     sat._legacy_allowed = False
     assert sat._hello_frame()["approval_code"] is None
+
+
+# ─── the ring at rest after a reconnect (2026-11-28) ──────────────────────
+#
+# A core restart drops the session while the room's player plays on (the
+# server's music players outlive it). The ring used to go to idle — off on
+# the XVF3800 — and stay there until the next turn, a group's dining room
+# dark while its music played.
+
+
+class _Playing:
+    """An mpg123 that is still running."""
+
+    def poll(self):
+        return None
+
+
+def _connected(rec):
+    """As after `ready`: the session holds the ring."""
+    rec.s._conn_state = "connected"
+    rec.s._set_conn = lambda state, *a: setattr(rec.s, "_conn_state", state)
+    rec.s._music_run = None
+    return rec
+
+
+def test_a_dropped_session_keeps_the_music_ring_while_the_music_plays(monkeypatch):
+    rec = _connected(make_sat(monkeypatch))
+    rec.s._music_proc = _Playing()
+    rec.s._on_session_ended()
+    assert rec.s._leds.states[-1] == "music"
+
+
+def test_a_dropped_session_with_no_music_rests_the_ring(monkeypatch):
+    rec = _connected(make_sat(monkeypatch))
+    rec.s._on_session_ended()
+    assert rec.s._leds.states[-1] == "idle"
+
+
+def test_a_failed_attempt_leaves_the_outage_ring_alone(monkeypatch):
+    """A second end in an outage (a handshake that timed out while the core
+    boots) must not repaint: the ring shows the no-server colour by then."""
+    rec = _connected(make_sat(monkeypatch))
+    rec.s._music_proc = _Playing()
+    rec.s._on_session_ended()
+    rec.s._music_proc = None  # the stream died during the outage
+    before = list(rec.s._leds.states)
+    rec.s._on_session_ended()
+    assert rec.s._leds.states == before
+
+
+def test_a_retry_gap_still_counts_as_music(monkeypatch):
+    rec = _connected(make_sat(monkeypatch))
+    rec.s._music_run = object()  # between two spawns of a retried stream
+    rec.s._leds.states = ["idle"]
+    rec.s._repaint_ring()
+    assert rec.s._leds.states[-1] == "music"
+
+
+def test_the_handed_back_ring_shows_the_music_that_kept_playing(monkeypatch):
+    rec = make_sat(monkeypatch)
+    rec.s._leds.states = ["idle"]
+    rec.s._music_proc = _Playing()
+    rec.s._repaint_ring()
+    assert rec.s._leds.states[-1] == "music"
+    assert rec.s._leds.resyncs == 1
+
+
+def test_the_handed_back_ring_drops_a_music_look_nothing_plays(monkeypatch):
+    rec = make_sat(monkeypatch)
+    rec.s._leds.states = ["music"]
+    rec.s._repaint_ring()
+    assert rec.s._leds.states[-1] == "idle"
+    assert rec.s._leds.resyncs == 1
+
+
+@pytest.mark.parametrize("state", ["dropin", "listening", "thinking", "speaking", "error"])
+def test_the_handed_back_ring_leaves_other_states_to_their_owner(monkeypatch, state):
+    rec = make_sat(monkeypatch)
+    rec.s._leds.states = [state]
+    rec.s._music_proc = _Playing()
+    rec.s._repaint_ring()
+    assert rec.s._leds.states == [state]
+    assert rec.s._leds.resyncs == 1
+
+
+def test_a_stream_that_ends_in_an_outage_leaves_the_no_server_ring(monkeypatch):
+    """Giving up on a stream with no session must not turn the ring off:
+    it shows the no-server colour, drawn straight onto it."""
+    rec = make_sat(monkeypatch)
+    rec.s.send_q = None
+    rec.s._music_gen = 0
+    rec.s._music_url = None
+    rec.s._core_features = frozenset()
+    rec.s._leds.states = ["music"]
+    rec.s._give_up_music_locked(types.SimpleNamespace(url="http://192.168.1.20:8051"), "gone", 3)
+    assert rec.s._leds.states == ["music"]

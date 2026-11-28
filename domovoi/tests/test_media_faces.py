@@ -565,6 +565,14 @@ async def _photos(fh, faces_by_rel: dict[str, list[np.ndarray]]) -> None:
 
 async def _person(name: str) -> int:
     async with session_scope() as s:
+        # Other test files insert people with fixed ids (1, 7, 901…) without
+        # moving the id sequence; in some shard orders a plain insert then
+        # collides with one of them (people_pkey). Bring the sequence past
+        # whatever is there first.
+        await s.execute(text(
+            "SELECT setval(pg_get_serial_sequence('people', 'id'), "
+            "GREATEST((SELECT COALESCE(MAX(id), 0) FROM people), 1))"
+        ))
         return int((await s.execute(text("INSERT INTO people (name) VALUES (:n) RETURNING id"),
                                     {"n": name})).scalar())
 

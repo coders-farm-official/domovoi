@@ -21437,7 +21437,7 @@
           "away-chat"
         ],
         "summary": "Enroll",
-        "description": "Set away chat up for this phone, or replace both of its keys. The\nphone sends the public halves of two X25519 keys it made (Tor client\nauthorization: 52 characters of upper-case base32; Noise static: 43\ncharacters of base64url); the answer is the away onion, its port, the\nhouse's away Noise key, the protocol number and whether the onion is\n``ready`` or still ``starting`` (the first phone's enrolment restarts\nTor; later ones ride a batched reload).",
+        "description": "Set away chat up for this phone, or replace both of its keys. The\nphone sends the public halves of two X25519 keys it made (Tor client\nauthorization: 52 characters of upper-case base32; Noise static: 43\ncharacters of base64url); the answer is the away onion, its port, the\nhouse's away Noise key, the protocol number and whether the onion is\n``ready``, still ``starting`` (the first phone's enrolment restarts\nTor; later ones ride a batched reload) or ``publishing`` (Tor has the\nnew key, and the onion's descriptor carrying it is on its way: about a\nminute).",
         "operationId": "enroll_api_away_enroll_post",
         "requestBody": {
           "content": {
@@ -21511,7 +21511,7 @@
           "away-chat"
         ],
         "summary": "Status",
-        "description": "Why the away onion can or can't be reached, for the app at home\n(the onion itself never says): the house's state (``on``,\n``away_off``, ``internet_off``), whether this phone is enrolled, and\nwhether its onion is ``ready`` or ``starting`` (null when it isn't\nenrolled or the house has it off).",
+        "description": "Why the away onion can or can't be reached, for the app at home\n(the onion itself never says): the house's state (``on``,\n``away_off``, ``internet_off``), whether this phone is enrolled, and\nwhether its onion is ``ready``, ``publishing`` or ``starting`` (null\nwhen it isn't enrolled or the house has it off).",
         "operationId": "status_api_away_status_get",
         "responses": {
           "200": {

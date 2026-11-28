@@ -536,13 +536,104 @@ def _is_not_playing(exc: BaseException) -> bool:
 _VIDEO_ID_RE = re.compile(r"\[[A-Za-z0-9_-]{11}\]")
 
 
+# Typographic hyphens, dashes, minus and curly quotes, read as their ASCII
+# forms: metadata enrichment writes names like "Bone Thugs‐n‐Harmony"
+# (U+2010) that the file on disk spells with a plain "-".
+_ASCII_FOLD = str.maketrans({
+    **{chr(c): "-" for c in range(0x2010, 0x2016)},
+    "−": "-",
+    "‘": "'", "’": "'",
+    "“": '"', "”": '"',
+})
+
+
+def fold_name(text: str) -> str:
+    """``text`` with typographic hyphens, dashes and curly quotes as ASCII."""
+    return (text or "").translate(_ASCII_FOLD)
+
+
+def _readable(text: str) -> str:
+    """The part of a path or searched word a person reads: video ids out,
+    typographic punctuation folded, case folded."""
+    return fold_name(_VIDEO_ID_RE.sub(" ", text or "")).casefold()
+
+
 def filename_hit_matches(path: str, substrings: tuple[str, ...]) -> bool:
     """Does a filename-search hit really contain every searched word — in
     the name a person reads, not inside a bracketed video id? MPD's
     ``search file`` matches anywhere in the path, so "kygo" finds a song
-    whose name ends "[FQKdHGgKygo]"."""
-    name = _VIDEO_ID_RE.sub(" ", path or "").casefold()
-    return all((s or "").casefold() in name for s in substrings if s)
+    whose name ends "[FQKdHGgKygo]".
+
+    The searched words get the same treatment as the path (the video id
+    taken out the same way, hyphens and quotes folded), so a search for a
+    file's own basename, "Song [FQKdHGgKygo].mp3", still matches it."""
+    name = _readable(path)
+    return all(_readable(s) in name for s in substrings if s)
+
+
+def library_uri_for(file_path: str) -> str | None:
+    """The exact MPD URI of a ``library_tracks.file_path``: its path inside
+    the music folder, forward slashes, the way the room's player (which
+    mounts that folder at ``/music``) names it. A row stored already
+    relative is taken as it is. None for a path outside the music folder
+    (then only MPD's own search can find it)."""
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    from domovoi.handlers.shared.library_match import mpd_file_for_library_path
+
+    raw = (file_path or "").strip()
+    if not raw:
+        return None
+    uri = mpd_file_for_library_path(raw)
+    if uri:
+        return uri
+    if PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).is_absolute() or PureWindowsPath(raw).drive:
+        return None
+    rel = PurePosixPath(raw.replace("\\", "/")).as_posix()
+    if rel in ("", ".") or rel.startswith("../") or "/../" in rel:
+        return None
+    return rel
+
+
+async def prepare_library_track(
+    mpd: Any, *, title: str | None, artist: str | None, file_path: str | None
+) -> dict[str, Any] | None:
+    """Queue one library row in a room's player, paused (the ``prepare_*``
+    contract), and return the song MPD queued — or None when it has
+    nothing by that row.
+
+    The row's exact file first (:func:`library_uri_for`): no search can
+    land on another song, and names that metadata enrichment rewrote
+    (a title the file's tags don't carry, typographic hyphens) don't
+    matter. Only when MPD refuses that path (a file it hasn't indexed, a
+    row outside the music folder) the old three-stage search runs: tag
+    search on title + artist, then filename substrings, then the basename.
+    Any connection failure propagates to the caller."""
+    from pathlib import PurePath
+
+    uri = library_uri_for(file_path or "")
+    if uri:
+        queued = await mpd.prepare_files([uri])
+        if queued:
+            song = dict(queued[0])
+            song.setdefault("title", title)
+            song.setdefault("artist", artist)
+            return song
+        log.info("library track %r not in the player's database; searching for it", uri)
+    song: dict[str, Any] | None = None
+    if title and artist:
+        song = await mpd.prepare_search({"title": title, "artist": artist})
+    elif title:
+        song = await mpd.prepare_search({"title": title})
+    if song is None:
+        substrings = [s for s in (title, artist) if s]
+        if substrings:
+            song = await mpd.prepare_filename(*substrings)
+    if song is None and file_path:
+        basename = PurePath(file_path).name
+        if basename:
+            song = await mpd.prepare_filename(basename)
+    return song
 
 
 def _is_ack(exc: BaseException) -> bool:
@@ -680,16 +771,34 @@ class RealMPDClient:
         if not substrings:
             return None
         async with self._connect() as c:
+            return await self._queue_filename_hit(c, substrings, start=True)
+
+    async def _queue_filename_hit(
+        self, c: Any, substrings: tuple[str, ...], *, start: bool
+    ) -> dict[str, Any] | None:
+        """The filename search behind ``play_filename`` / ``prepare_filename``:
+        the words as given, then (when that missed and folding changes them)
+        with typographic hyphens and quotes as ASCII, the way file names
+        are usually spelled. Hits inside a video id don't count
+        (:func:`filename_hit_matches`)."""
+        words = tuple(s for s in substrings if s)
+        if not words:
+            return None
+        tries = [words]
+        folded = tuple(fold_name(s) for s in words)
+        if folded != words:
+            tries.append(folded)
+        for attempt in tries:
             search_args: list[str] = []
-            for s in substrings:
-                if s:
-                    search_args.extend(["file", s])
-            if not search_args:
-                return None
-            return await self._queue_first_search_hit(
-                c, search_args, start=True,
-                accept=lambda song: filename_hit_matches(str(song.get("file") or ""), substrings),
+            for s in attempt:
+                search_args.extend(["file", s])
+            song = await self._queue_first_search_hit(
+                c, search_args, start=start,
+                accept=lambda song: filename_hit_matches(str(song.get("file") or ""), words),
             )
+            if song is not None:
+                return song
+        return None
 
     async def play_url(self, url: str, *, title: str | None = None, artist: str | None = None) -> bool:
         """Clear queue, add a stream URL, play. Returns True on success.
@@ -774,16 +883,7 @@ class RealMPDClient:
         if not substrings:
             return None
         async with self._connect() as c:
-            search_args: list[str] = []
-            for s in substrings:
-                if s:
-                    search_args.extend(["file", s])
-            if not search_args:
-                return None
-            return await self._queue_first_search_hit(
-                c, search_args, start=False,
-                accept=lambda song: filename_hit_matches(str(song.get("file") or ""), substrings),
-            )
+            return await self._queue_filename_hit(c, substrings, start=False)
 
     async def prepare_url(self, url: str, *, title: str | None = None, artist: str | None = None) -> bool:
         """Paused-queue sibling of `play_url`; see `prepare_search`."""
@@ -794,39 +894,57 @@ class RealMPDClient:
         self, c: Any, spec: dict[str, str]
     ) -> dict[str, Any] | None:
         """Resolve one track spec to an MPD song dict WITHOUT touching the
-        queue, using the same three-stage lookup the single-track admin
-        paths use: tag search → filename substrings → basename. Returns the
-        first hit or ``None``."""
+        queue, the way the single-track paths do (:func:`prepare_library_track`):
+        the row's exact file first, then tag search → filename substrings →
+        basename. Returns the first hit or ``None``."""
         from pathlib import PurePath
 
         title = (spec.get("title") or "").strip()
         artist = (spec.get("artist") or "").strip()
         file_path = (spec.get("file_path") or "").strip()
 
-        arg_lists: list[list[str]] = []
+        # (search args, the file the hit must be / the words it must hold)
+        tries: list[tuple[list[str], str | None, tuple[str, ...]]] = []
+        uri = library_uri_for(file_path)
+        if uri:
+            tries.append((["file", uri], uri, ()))
         if title and artist:
-            arg_lists.append(["title", title, "artist", artist])
+            tries.append((["title", title, "artist", artist], None, ()))
         if title:
-            arg_lists.append(["title", title])
-        subs = [s for s in (title, artist) if s]
-        if subs:
-            args: list[str] = []
-            for s in subs:
-                args.extend(["file", s])
-            arg_lists.append(args)
+            tries.append((["title", title], None, ()))
+
+        def _file_try(words: tuple[str, ...]) -> None:
+            if not words:
+                return
+            variants = [words]
+            folded = tuple(fold_name(s) for s in words)
+            if folded != words:
+                variants.append(folded)
+            for v in variants:
+                args: list[str] = []
+                for s in v:
+                    args.extend(["file", s])
+                tries.append((args, None, words))
+
+        _file_try(tuple(s for s in (title, artist) if s))
         if file_path:
             base = PurePath(file_path).name
             if base:
-                arg_lists.append(["file", base])
+                _file_try((base,))
 
-        for args in arg_lists:
+        for args, exact, words in tries:
             try:
                 results = await c.search(*args)
             except Exception as e:
                 log.debug("MPD prepare_tracks search %r failed: %s", args, e)
                 continue
-            if results:
-                return results[0]
+            for r in results or []:
+                path = str(r.get("file") or "")
+                if exact is not None and path != exact:
+                    continue
+                if words and not filename_hit_matches(path, words):
+                    continue
+                return r
         return None
 
     async def prepare_tracks(
