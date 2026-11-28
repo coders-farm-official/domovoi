@@ -1917,9 +1917,13 @@ class _InterimSpeech:
         self.text = ""
         self.sample_rate = 0
 
-    async def say(self, text: str) -> bool:
+    async def say(self, text: str, *, handler: str = "cold_start") -> bool:
         """True when the line went out (the router lists it in the room's
-        history then); False when it was not said."""
+        history then); False when it was not said. ``handler`` labels the
+        response_start frame (``matched_handler``): the router's cold-start
+        notice keeps the default, a plugin's ``sdk.speech.interim`` line
+        carries the plugin's handler name (SDK 1.20). Only a label: the
+        spoken words never carry it."""
         if self.started:
             return False
         sess = self._session
@@ -1935,7 +1939,7 @@ class _InterimSpeech:
         await sess._safe_send_text({
             "type": "response_start",
             "text": text,
-            "matched_handler": "cold_start",
+            "matched_handler": handler,
             "matched_path": "system",
             "session_id": str(sess.session_id) if sess.session_id else None,
             "online": True,

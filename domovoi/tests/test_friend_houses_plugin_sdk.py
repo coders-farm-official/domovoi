@@ -53,7 +53,7 @@ def phrases(monkeypatch):
 def test_the_sdk_is_1_18() -> None:
     from domovoi import sdk
 
-    assert sdk.API_VERSION == "1.19.0"
+    assert sdk.API_VERSION == "1.20.0"
     assert sdk.FriendText is sfh.FriendText and sdk.friend_reply is sfh.friend_reply
 
 

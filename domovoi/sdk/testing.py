@@ -176,6 +176,11 @@ class RecordingSpeech:
         self.calls.append({"room_id": room_id, "text": text})
         return [room_id] if room_id is not None else ["stub-room"]
 
+    async def interim(self, ctx, text):
+        """Records the line; every interim line "goes out" (SDK 1.20)."""
+        self.calls.append({"room_id": getattr(ctx, "room_id", None), "text": text})
+        return True
+
 
 class StubSDK:
     """Duck-typed PluginSDK double (see module docstring)."""

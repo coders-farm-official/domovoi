@@ -4,6 +4,19 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — "Still looking…" during a slow search (SDK 1.20)
+
+- **What changed.** Plugin SDK **1.20.0** adds `sdk.speech.interim(ctx,
+  text)`: a plugin's handler can say one short line in the room ("Still
+  looking…") while it keeps working, the way the core says it is waking
+  its language model. Once per turn, voice turns only. "Play <song>" that
+  the library doesn't have and a streaming provider is searching for says
+  "Still looking…" when the search takes more than 3 seconds; the song
+  still plays.
+- **What to know.** Typed chat shows nothing for these lines. The
+  `response_start` frame of such a line carries the handler that said it
+  as `matched_handler` (the core's notice stays `cold_start`).
+
 ## 1.5.0 (unreleased) — Music questions stay with the music
 
 - **What changed.** A reply to "Did you mean …?" that names no option is

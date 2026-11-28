@@ -19,6 +19,11 @@ Words from a friend house (SDK 1.19): ``announce`` and ``render`` take a
 as well as a ``str`` and filter the friend's words with the wake-phrase
 filter people's messages get. For a plugin with the ``friend_houses``
 permission every line is filtered, a plain ``str`` too.
+
+A line inside the turn (SDK 1.20): ``interim(ctx, text)`` says a short line
+in the room now, as the opening of the turn's reply, while the handler is
+still working — the hook the core's cold-start notice uses
+(``Context.speak_interim``), once per turn.
 """
 
 from __future__ import annotations
@@ -27,6 +32,23 @@ import logging
 from typing import Any, Callable
 
 log = logging.getLogger(__name__)
+
+#: The longest line ``SpeechAPI.interim`` says (SDK 1.20): a few seconds
+#: of speech, so the reply it opens isn't held up behind it.
+INTERIM_MAX_CHARS = 120
+
+
+def _short_line(text: Any) -> str:
+    """``text`` as one short line: whitespace collapsed, cut at a word
+    boundary to :data:`INTERIM_MAX_CHARS` with an ellipsis. "" for none."""
+    line = " ".join(str(text or "").split())
+    if len(line) <= INTERIM_MAX_CHARS:
+        return line
+    cut = line[: INTERIM_MAX_CHARS - 1]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:.-") + "…"
+
 
 _active_sessions_provider: Callable[[], dict[str, Any]] | None = None
 _room_voices_provider: Callable[[], dict[str, str]] | None = None
@@ -128,6 +150,52 @@ class SpeechAPI:
             wf.setframerate(rate or 22050)
             wf.writeframes(b"".join(parts))
         return buf.getvalue()
+
+    def _handler_label(self) -> str:
+        """The name this plugin's line is labelled with in the turn's
+        response_start frame (``matched_handler``): its handler's name
+        when it has exactly one, else its slug. Only a label for logs and
+        the dashboard; the spoken words never carry it."""
+        try:
+            from domovoi.handlers import HANDLERS
+
+            names = [h.name for h in HANDLERS if getattr(h, "plugin_slug", None) == self.slug]
+        except Exception:  # noqa: BLE001 - the slug is a fine label
+            names = []
+        return names[0] if len(names) == 1 else self.slug
+
+    async def interim(self, ctx: Any, text: Any) -> bool:
+        """Say a short line now, as the opening of this turn's reply, while
+        the handler keeps working (SDK 1.20) — "Still looking…" before a
+        slow search finishes. At most once per turn; it shares the slot
+        with the core's cold-start notice, so a turn that already said
+        "I'm waking up my language model" says nothing more. True when it
+        went out (the line is then listed in the room's history before the
+        reply); False when it was not said.
+
+        Only a voice turn can say it: typed chat, the dashboard's play box
+        and ``/v1/intent`` have no room speaker, and get False. Empty text
+        is refused, and the line is cut to :data:`INTERIM_MAX_CHARS`. For a
+        plugin with the ``friend_houses`` permission the line goes through
+        the wake-phrase filter ``announce`` uses. Never raises: a TTS
+        failure is False too."""
+        try:
+            speak = getattr(ctx, "speak_interim", None)
+            if not callable(speak):
+                return False
+            line = _short_line(await self._said(text))
+            if not line:
+                return False
+            spoke = await speak(line, handler=self._handler_label())
+            if spoke is not True:
+                return False
+            said = getattr(ctx, "interim_said", None)
+            if isinstance(said, list):
+                said.append(line)
+            return True
+        except Exception as e:  # noqa: BLE001 - an interim line is best-effort
+            log.warning("speech.interim (plugin %s) failed: %s", self.slug, e)
+            return False
 
     async def announce(self, room_id: str | None, text: Any) -> list[str]:
         """Speak ``text`` in ``room_id`` (or every connected room when
