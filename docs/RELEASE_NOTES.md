@@ -4,6 +4,41 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Song recognition checks the title; name changes can be undone
+
+- **What changed.** A fingerprint answer was used whenever its artist
+  agreed with the track's, whatever its title, so a sweep could rename a
+  song to another one by the same artist ("Mo'murda" became "Ghetto
+  Cowboy", a file 20 s longer in the same folder). Now, when a track has a
+  real title (its tag title, or else its file name without the video id
+  and upload words such as "(Official Video)", "(Lyrics)", "- Remastered
+  2009" and an "Artist - " in front), the answer's title must be that
+  title too, compared without case, Unicode hyphens and quotes, "feat."
+  credits, "&"/"and" and version suffixes. Every recording the
+  fingerprint names is tried, so the right one is used when it is listed;
+  otherwise the track is marked `disagreed` and waits in "Needs review". A
+  file with no artist tag is held to its file name ("Track 3"-style names
+  still aren't). Migration **V088** adds `library_tag_changes`: every name
+  a sweep, the repair or the re-match changes is kept with what it was,
+  and a whole batch can be undone. Tag text that can't be decoded is no
+  longer stored as it is: it is decoded properly where possible (UTF-8 or
+  Windows-1252 bytes in a Latin-1 tag, a file name that isn't UTF-8),
+  otherwise the character becomes U+FFFD. New routes:
+  `/v1/admin/library/enrich/rematch`, `/v1/admin/library/tag-changes/undo`
+  and `/v1/admin/library/tag-changes`, with their `/api/music/library/...`
+  proxies (API_REFERENCE.md, §2.8 and §3.5).
+- **What to do.** A library an earlier sweep renamed this way is fixed by
+  the re-match, in two steps, with the admin Bearer. First the dry run,
+  which changes nothing: `POST /api/music/library/enrich/rematch` with no
+  body. It lists each wrong track, what it holds and what the file says,
+  and the action it would take: "restore file names, then re-match", or
+  "restore only, needs review"; tracks whose names hold undecodable text
+  are listed as "bad encoding" and never changed. Then, to apply exactly
+  that list: the same call with `{"apply": true, "batch_id": "<the dry
+  run's batch_id>"}` (`409` if the library changed since: run the dry run
+  again). `POST /api/music/library/tag-changes/undo` with that `batch_id`
+  puts the old names back. Tracks edited by hand are never touched.
+
 ## 1.5.0 (unreleased) — Chat from away
 
 - **What changed.** A household member's phone can chat with the house

@@ -2367,6 +2367,137 @@
         }
       }
     },
+    "/api/music/library/enrich/rematch": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Enrich Rematch",
+        "description": "Hold every track song recognition matched to the strict name check.\nNo body: the dry run (changes nothing; lists each failing track with\nits proposed action and a ``batch_id``). ``{\"apply\": true,\n\"batch_id\": ...}``: apply exactly that list. Admin tier at both hops,\nlike the repair.",
+        "operationId": "enrich_rematch_api_music_library_enrich_rematch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EnrichRematchBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library/tag-changes/undo": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Tag Changes Undo",
+        "description": "Undo one batch of song-recognition name changes (a sweep, a repair,\na re-match or an undo); tracks edited by hand are never touched. Admin\ntier at both hops.",
+        "operationId": "tag_changes_undo_api_music_library_tag_changes_undo_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagChangesUndoBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library/tag-changes": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Tag Changes",
+        "description": "The most recent batches of song-recognition name changes, for the\nundo. Admin read at both hops.",
+        "operationId": "tag_changes_api_music_library_tag_changes_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/audio": {
       "get": {
         "tags": [
@@ -30160,6 +30291,30 @@
         ],
         "title": "EditBody"
       },
+      "EnrichRematchBody": {
+        "properties": {
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EnrichRematchBody"
+      },
       "EnrichRepairBody": {
         "properties": {
           "requeue_disagreed": {
@@ -37991,6 +38146,21 @@
         },
         "type": "object",
         "title": "SubscribeRequest"
+      },
+      "TagChangesUndoBody": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Batch Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "batch_id"
+        ],
+        "title": "TagChangesUndoBody"
       },
       "TargetIn": {
         "properties": {

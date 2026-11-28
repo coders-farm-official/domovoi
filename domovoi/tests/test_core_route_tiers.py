@@ -116,6 +116,10 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/music/tracks-removed"),
     ("POST", "/v1/admin/library/enrich"),
     ("POST", "/v1/admin/library/enrich/repair"),
+    # The re-match (dry run and apply) and the undo of a batch of name
+    # changes (2026-11-28): library-wide name rewrites, like the repair.
+    ("POST", "/v1/admin/library/enrich/rematch"),
+    ("POST", "/v1/admin/library/tag-changes/undo"),
 ]
 
 # CORE-2 / CORE-14: opening a live two-way mic bridge between two rooms
@@ -143,6 +147,8 @@ SECURITY_TIER = [
 ADMIN_READ_TIER = [
     ("GET", "/v1/admin/satellite/{room_id}/logs"),
     ("GET", "/v1/admin/satellite/{room_id}/mic_dsp"),
+    # What song recognition changed: the library's names as they were.
+    ("GET", "/v1/admin/library/tag-changes"),
 ]
 
 # The groups list (V060) is a household read: the cookie may render it.
@@ -402,6 +408,7 @@ BODIES: dict[str, dict[str, Any]] = {
     "/v1/admin/music/queue/{room_id}/add": {"track_ids": [1]},
     "/v1/admin/music/queue/{room_id}/remove": {"song_ids": [1]},
     "/v1/admin/music/queue/{room_id}/move": {"song_id": 1, "to_position": 0},
+    "/v1/admin/library/tag-changes/undo": {"batch_id": "6f3e2a1c-5b7d-4c8e-9a0f-1d2c3b4a5e61"},
 }
 
 GATED_POSTS = DEVICE_TIER + ADMIN_TIER + LIVE_MIC_TIER + SECURITY_TIER

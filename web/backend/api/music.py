@@ -28,6 +28,7 @@ import zipfile
 from collections import OrderedDict
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -35,7 +36,12 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 from sqlalchemy import text
 
 from domovoi.room_ids import require_room_id_path
-from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
+from domovoi.admin_auth import (
+    check_device_request,
+    require_admin_mutation,
+    require_admin_read,
+    require_device,
+)
 from domovoi.cover_art_writer import cover_cache_file
 from domovoi.library_cover_version import cover_url
 from domovoi.player_relay import redact as redact_relay
@@ -49,6 +55,7 @@ from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
     bridge_response,
+    get_admin,
     get_cached_snapshot,
     post_admin,
 )
@@ -97,6 +104,7 @@ router = APIRouter(
 # ``domovoi/tests/test_kiosk_surface_is_documented.py``.
 DEVICE = [Depends(require_device)]
 ADMIN = [Depends(require_admin_mutation)]
+ADMIN_READ = [Depends(require_admin_read)]
 
 
 # ─── Library ───────────────────────────────────────────────────────────────
@@ -1387,6 +1395,60 @@ async def enrich_repair(request: Request, body: EnrichRepairBody | None = None):
     forward = body.model_dump(mode="json", exclude_none=True) if body is not None else None
     status, payload = await post_admin(
         "/v1/admin/library/enrich/repair", forward, headers=auth_forward_headers(request)
+    )
+    return bridge_response(status, payload)
+
+
+class EnrichRematchBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    apply: bool = False
+    batch_id: UUID | None = None
+
+
+#: The re-match reads every matched file's tags before it answers (a dry
+#: run and an apply alike): minutes on a large library, so this hop waits
+#: longer than post_admin's default.
+REMATCH_TIMEOUT_SEC = 900.0
+
+
+@router.post("/library/enrich/rematch", dependencies=ADMIN)
+async def enrich_rematch(request: Request, body: EnrichRematchBody | None = None):
+    """Hold every track song recognition matched to the strict name check.
+    No body: the dry run (changes nothing; lists each failing track with
+    its proposed action and a ``batch_id``). ``{"apply": true,
+    "batch_id": ...}``: apply exactly that list. Admin tier at both hops,
+    like the repair."""
+    forward = body.model_dump(mode="json", exclude_none=True) if body is not None else None
+    status, payload = await post_admin(
+        "/v1/admin/library/enrich/rematch", forward, timeout=REMATCH_TIMEOUT_SEC,
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+class TagChangesUndoBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    batch_id: UUID
+
+
+@router.post("/library/tag-changes/undo", dependencies=ADMIN)
+async def tag_changes_undo(request: Request, body: TagChangesUndoBody):
+    """Undo one batch of song-recognition name changes (a sweep, a repair,
+    a re-match or an undo); tracks edited by hand are never touched. Admin
+    tier at both hops."""
+    status, payload = await post_admin(
+        "/v1/admin/library/tag-changes/undo", body.model_dump(mode="json"),
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.get("/library/tag-changes", dependencies=ADMIN_READ)
+async def tag_changes(request: Request, limit: int = Query(50, ge=1, le=500)):
+    """The most recent batches of song-recognition name changes, for the
+    undo. Admin read at both hops."""
+    status, payload = await get_admin(
+        f"/v1/admin/library/tag-changes?limit={int(limit)}", headers=auth_forward_headers(request)
     )
     return bridge_response(status, payload)
 

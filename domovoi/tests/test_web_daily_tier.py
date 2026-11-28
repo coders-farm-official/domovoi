@@ -153,6 +153,9 @@ ADMIN_TIER = [
     ("POST", "/api/music/library/reindex"),
     ("POST", "/api/music/library/enrich"),
     ("POST", "/api/music/library/enrich/repair"),
+    # the re-match and the undo of a batch of name changes (2026-11-28)
+    ("POST", "/api/music/library/enrich/rematch"),
+    ("POST", "/api/music/library/tag-changes/undo"),
     # library tools (V058): they move files into the trash, rename songs
     # and change the pictures in files.
     ("POST", "/api/music/library-tools/duplicates/resolve"),

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, AsyncIterator, Literal
 from urllib.parse import quote
+from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
@@ -10500,6 +10501,102 @@ async def admin_library_enrich_repair(
         library_enricher.repair_disagreeing(), name="admin-library-enrich-repair",
     )
     return {"queued": True, "worker": "library_enricher_repair"}
+
+
+class EnrichRematchRequest(BaseModel):
+    """``apply`` false (the default): the dry run. ``apply`` true: apply
+    the dry run whose ``batch_id`` is given."""
+
+    model_config = ConfigDict(extra="forbid")
+    apply: bool = False
+    batch_id: UUID | None = None
+
+
+@app.post(
+    "/v1/admin/library/enrich/rematch",
+    # Admin tier, like the repair: it reads every matched file's tags and,
+    # applied, rewrites names library-wide.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_library_enrich_rematch(
+    body: EnrichRematchRequest | None = None,
+) -> dict[str, Any]:
+    """Hold every track song recognition matched to the strict name check
+    (``domovoi/workers/library_rematch.py``). No body, or ``{"apply":
+    false}``: the DRY RUN, which changes nothing and lists every track
+    that fails, with its proposed action (``restore_rematch``,
+    ``restore_review`` or ``bad_encoding``) and a ``batch_id`` naming
+    exactly that list. ``{"apply": true, "batch_id": ...}`` applies it,
+    logged in ``library_tag_changes`` under that ``batch_id`` (cause
+    ``rematch``), and starts a sweep for the tracks put back in the queue
+    when one can run. ``409`` when the library no longer gives that list
+    (``detail.batch_id`` is the current one: run the dry run again) or a
+    sweep is running. No network: reads the files' tags only."""
+    from domovoi.workers import library_rematch
+
+    body = body or EnrichRematchRequest()
+    if not body.apply:
+        if body.batch_id is not None:
+            raise HTTPException(status_code=422, detail="batch_id is for apply=true")
+        return await library_rematch.dry_run()
+    if body.batch_id is None:
+        raise HTTPException(status_code=422, detail="apply=true needs the dry run's batch_id")
+    try:
+        out = await library_rematch.apply(str(body.batch_id))
+    except library_rematch.PlanChanged as e:
+        raise HTTPException(status_code=409, detail={
+            "reason": "changed", "batch_id": e.batch_id,
+            "message": "the library changed since that dry run; run it again",
+        }) from e
+    if out["skipped"]:
+        raise HTTPException(status_code=409, detail={"reason": out["skipped"]})
+    sweep: dict[str, Any] = {"queued": False, "reason": "nothing_requeued"}
+    if out["rematch"]:
+        try:
+            sweep = await admin_library_enrich()
+        except HTTPException:
+            sweep = {"queued": False, "reason": "internet_off"}
+    return {**out, "sweep": "queued" if sweep.get("queued") else sweep.get("reason", "not_queued")}
+
+
+class TagChangesUndoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    batch_id: UUID
+
+
+@app.post(
+    "/v1/admin/library/tag-changes/undo",
+    # Admin tier: it rewrites names library-wide, like the runs it undoes.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_library_tag_changes_undo(body: TagChangesUndoRequest) -> dict[str, Any]:
+    """Undo one batch of ``library_tag_changes`` (an enricher sweep, a
+    repair, a re-match or an undo): each track gets its ``old`` values back
+    where its names still equal the batch's ``new``, and a track a person
+    edited by hand (outcome ``manual`` or ``reviewed``) is never touched
+    (``library_tag_changes.undo_batch``). ``409`` while a sweep, repair or
+    re-match runs."""
+    from domovoi import library_tag_changes
+    from domovoi.workers import library_enricher
+
+    if library_enricher.enrich_running():
+        raise HTTPException(status_code=409, detail={"reason": "running"})
+    library_enricher._sweep_running = True
+    try:
+        return await library_tag_changes.undo_batch(str(body.batch_id))
+    finally:
+        library_enricher._sweep_running = False
+
+
+@app.get("/v1/admin/library/tag-changes", dependencies=[Depends(require_admin_read)])
+async def admin_library_tag_changes(limit: int = 50) -> dict[str, Any]:
+    """The most recent ``library_tag_changes`` batches, newest first:
+    ``batch_id``, ``cause``, ``changes``, ``undone``, ``first_at``,
+    ``last_at``. An admin read: it shows the library's names as they
+    were."""
+    from domovoi import library_tag_changes
+
+    return {"batches": await library_tag_changes.list_batches(limit)}
 
 
 # ─── Streaming ────────────────────────────────────────────────────────────

@@ -88,6 +88,20 @@ earlier sweep already overwrote that way, but only on a real
 disagreement and never with names that look like an upload's;
 :func:`requeue_disagreed` undoes a repair over a time window.
 
+Since 2026-11-28 the TITLE must agree too whenever the row has a real one
+(:func:`titles_agree`, :func:`real_title`): an artist that agrees is no
+longer enough, as a sweep that took AcoustID's first recording renamed
+"Mo'murda" to "Ghetto Cowboy" by the same artist (a file 20 s longer, in
+the same folder: within :data:`LENGTH_TOLERANCE_SEC`). A file with no
+artist tag is held to its file name. ``domovoi/workers/library_rematch.py``
+finds the rows matched before that and, on the owner's say-so, puts the
+file's names back.
+
+**Change history** (V088). Every update here that changes a title,
+artist, album or recording id is logged in ``library_tag_changes`` in the
+same statement (``domovoi/library_tag_changes.py``): cause ``enrich`` (one
+batch per sweep) or ``repair`` (one per repair). A batch can be undone.
+
 A network error, a refused key, the internet being turned off, or no
 provider configured at all is NOT "no match": the row is left exactly as
 it was, so the next sweep tries again. A refused AcoustID key is treated
@@ -141,6 +155,7 @@ from typing import Any
 from sqlalchemy import text
 
 from domovoi import connectivity, egress
+from domovoi import library_tag_changes as tag_changes
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 
@@ -420,6 +435,10 @@ def _named_in(
     credit = (their_artist or "").strip()
     if not title or not credit:
         return False
+    if _same_artist(credit, title):
+        # Its title IS its artist ("Linkin Park" by Linkin Park): finding
+        # it in our names is one piece of evidence, not two (2026-11-28).
+        return False
     words: list[str] = []
     for t in our_texts:
         words.extend(_words(_VIDEO_ID_RE.sub(" ", t or "")))
@@ -470,6 +489,200 @@ def artist_usable(artist: str | None) -> bool:
 _NOBODY_KEYS = frozenset({"unknownartist", "variousartists", "unknown", "va", "artist"})
 
 
+# ─── Titles (2026-11-28) ────────────────────────────────────────────────
+
+# Unicode hyphens and dashes, and curly or prime quotes, as the plain ones
+# (MusicBrainz writes "Bone Thugs‐n‐Harmony" and "Don’t" with U+2010 and
+# U+2019).
+_PLAIN_CHARS = {
+    **dict.fromkeys(map(ord, "‐‑‒–—―−﹘﹣－"), "-"),
+    **dict.fromkeys(map(ord, "‘’‚‛′＇`´"), "'"),
+    **dict.fromkeys(map(ord, "“”„‟″＂"), '"'),
+}
+# A dash that separates names: a space on at least one side ("Artist -
+# Title", "Imagine Dragons- Believer"), never inside a name
+# ("Bone Thugs-N-Harmony", "A-Six").
+_NAME_SEP_RE = re.compile(r"\s+-\s*|\s*-\s+")
+# Words that make a title no title at all: "Track 3", "track01", "Audio
+# 12", "Untitled", "Recording 4", a phone's "AUD-20190101-WA0003" (letters
+# and digits are split, and the numbers dropped, first).
+_JUNK_TITLE_WORDS = frozenset({
+    "track", "audio", "aud", "rec", "recording", "voice", "untitled", "unknown", "song",
+    "title", "sound", "file", "piste", "pista", "titel", "mp", "sample", "wa", "ptt",
+})
+#: A title key at least this long agrees with another that contains it
+#: ("Interlude" in "True Dat (interlude)"); a shorter one would be found in
+#: almost anything ("Wish" in "Wish You Were Here").
+TITLE_CONTAINED_MIN_LEN = 8
+
+
+def plain_text(text: str | None) -> str:
+    """``text`` NFKC-normalised, Unicode hyphens and quotes made plain,
+    spaces collapsed. Pure."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFKC", text or "").translate(_PLAIN_CHARS)
+    return " ".join(s.split())
+
+
+def _bare_title(text: str | None) -> str:
+    """A title without a video id and upload noise, plain."""
+    return strip_upload_noise(_VIDEO_ID_RE.sub(" ", plain_text(text)))
+
+
+def real_title(title: str | None) -> bool:
+    """Is ``title`` a song's name worth holding an answer to, rather than
+    nothing ("", a video id), a track number or a placeholder ("Track 3",
+    "01 track", "03", "Untitled", "Audio 12", a phone's "AUD-20190101-
+    WA0003")? A number alone is a title when it doesn't start with 0 and
+    has two digits or more ("1999", "22"). Pure."""
+    from domovoi.handlers.shared.spoken_names import fold
+
+    tokens = re.findall(r"[a-z]+|[0-9]+", fold(_bare_title(title)))
+    if len(tokens) == 1 and tokens[0].isdigit():
+        return len(tokens[0]) >= 2 and not tokens[0].startswith("0")
+    words = [w for w in tokens if not w.isdigit()]
+    if not words or all(w in _JUNK_TITLE_WORDS for w in words):
+        return False
+    return sum(len(w) for w in words) >= 2
+
+
+# A dash-separated part of a name that starts as a version label does ("2023
+# Mix", "Remastered 2009", "Live at ...", "7'' Mix", "Single Version",
+# "feat. X"). Only its start is read: "Show Me How to Live" is a song.
+_VERSION_PART_RE = re.compile(
+    r"\A(?:[\d'\"]+\s*)?(?:(?:digital(?:ly)?\s+)?re-?master(?:ed)?|mono|stereo|live|demo|"
+    r"acoustic|instrumental|radio|single|album|extended|original|explicit|clean|bonus|"
+    r"edit|version|mix|remix|feat\.?|ft\.?|featuring)\b",
+    re.I,
+)
+
+
+def _version_only(part: str) -> bool:
+    """Is a dash-separated part of a name only a version label ("2023
+    Mix", "Remastered 2009", "Live", "Single Version"), or no title at all?"""
+    return bool(_VERSION_PART_RE.match(part.strip())) or not real_title(part)
+
+
+def title_readings(*texts: str | None, artist: str | None = None) -> list[str]:
+    """Every reading of a file's title in ``texts`` (its tag title, its
+    file name): each one plain, without a video id and upload noise, and
+    each dash-separated part of it that isn't the artist (``artist``) or a
+    version label, so "Bone Thugs-N-Harmony - Mo'murda [<video id>]" reads
+    "Mo'murda" and "Drive My Car - Remastered 2009" reads "Drive My Car".
+    Pure."""
+    return [r for r, _ambiguous in _readings(texts, artist)]
+
+
+def _readings(texts: tuple[str | None, ...], artist: str | None) -> list[tuple[str, bool]]:
+    """:func:`title_readings`, each with whether it is one of several parts
+    that could each be the title ("Corona - The Rhythm Of The Night" with
+    no usable artist to tell which part is the artist's)."""
+    out: dict[str, bool] = {}
+    for raw in texts:
+        t = _bare_title(raw)
+        if not t:
+            continue
+        out.setdefault(t, False)
+        numbered = _TRACK_NO_RE.sub("", t)
+        if numbered != t and real_title(numbered):
+            t = numbered  # "4.RUN!" is "RUN!"; the numbered reading stays too
+            out.setdefault(t, False)
+        parts = [p.strip() for p in _NAME_SEP_RE.split(t) if p.strip()]
+        if len(parts) < 2:
+            continue
+        songs = [p for p in parts if not _version_only(p)]
+        # The artist's own part is dropped, unless it is all there is
+        # ("Weezer - Weezer": a self-titled song).
+        named = [p for p in songs if not (artist and _same_artist(artist, p))] or songs
+        for p in named:
+            out.setdefault(p, len(named) > 1)
+    return list(out.items())
+
+
+def _named_for_artist(our_title: str | None, their_artist: str | None) -> bool:
+    """Is our whole title (as it is, only a video id and upload noise
+    dropped) the answer's artist: a file named for its artist, which says
+    nothing about the song?"""
+    from domovoi.handlers.shared.spoken_names import alias_key
+
+    key = alias_key(_bare_title(our_title))
+    return bool(key) and any(_keys_agree(key, k) for k in _credit_keys(their_artist))
+
+
+# A track number in front of a file's name ("4.RUN!", "03 - Song", "12_Song").
+_TRACK_NO_RE = re.compile(r"\A\d{1,3}\s*[.\-_)]\s*(?=\S)")
+# A censored word: letters with asterisks in it ("B***h", "F＊＊＊").
+_CENSORED_RE = re.compile(r"\*+")
+
+
+def _title_keys(title: str) -> set[str]:
+    """A title's keys: decoration dropped (:func:`_name_key`), and kept
+    ("True Dat (interlude)" → "truedatinterlude"), and each spoken form's
+    ("4AM" and "4 AM" share one)."""
+    from domovoi.handlers.shared.spoken_names import alias_key, clean_title, compact_forms
+
+    bare = _bare_title(title)
+    keys = {_name_key(title), alias_key(bare)}
+    for t in dict.fromkeys((clean_title(bare), bare)):
+        keys |= set(compact_forms(t))
+    return {k for k in keys if k}
+
+
+def _censored_match(a: str, b: str) -> bool:
+    """Does a censored title ("Hood N***a", "The Big F＊＊＊ You") match the
+    other one with letters where its asterisks are?"""
+    from domovoi.handlers.shared.spoken_names import fold
+
+    for censored, plain in ((a, b), (b, a)):
+        c = fold(plain_text(censored))
+        if "*" not in c:
+            continue
+        parts = [re.sub(r"[^a-z0-9]+", "", p) for p in _CENSORED_RE.split(c)]
+        pattern = "[a-z]*".join(re.escape(p) for p in parts)
+        if pattern and re.fullmatch(pattern, re.sub(r"[^a-z0-9]+", "", fold(plain_text(plain)))):
+            return True
+    return False
+
+
+def titles_agree(
+    our_title: str | None, their_title: str | None,
+    *, our_extra: str | None = None, our_artist: str | None = None,
+) -> bool:
+    """Is a provider's title (``their_title``) the title the file names, in
+    any of its :func:`title_readings` (``our_title`` and the file name
+    ``our_extra``; ``our_artist`` is left out of them)? Compared after
+    normalising case, accents, Unicode hyphens and quotes, "feat." credits,
+    "&"/"and", brackets and version suffixes ("- 2023 Mix", "(2011
+    Remaster)"), allowing small spelling differences
+    (:data:`NAME_AGREE_MIN_RATIO`), or one single-part reading of at least
+    :data:`TITLE_CONTAINED_MIN_LEN` letters inside the other. "Ghetto
+    Cowboy" is not "Mo'murda", whoever the artist. Pure."""
+    theirs = _title_keys(plain_text(their_title))
+    if not theirs:
+        return False
+    for reading, ambiguous in _readings((our_title, our_extra), our_artist):
+        if ambiguous:
+            # One of several parts, any of which could be the artist's: the
+            # answer's artist being the other part is what tells
+            # (``_named_in``), not this part alone.
+            continue
+        ours = _title_keys(reading)
+        if any(_keys_agree(a, b) for a in ours for b in theirs):
+            return True
+        if "*" in reading or "*" in plain_text(their_title):
+            if _censored_match(reading, plain_text(their_title)):
+                return True
+        if _NAME_SEP_RE.search(reading):
+            continue
+        for a in ours:
+            for b in theirs:
+                short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+                if len(short) >= TITLE_CONTAINED_MIN_LEN and short in long_:
+                    return True
+    return False
+
+
 def names_agree(
     our_title: str | None, our_artist: str | None,
     their_title: str | None, their_artist: str | None,
@@ -490,17 +703,22 @@ def names_agree(
     * Its title is our artist while its artist isn't: False (how a wrong
       fingerprint answer looked: "In the End" by Linkin Park answered as
       the title "Linkin Park" by "Boomin").
+    * We have a real title (:func:`real_title`: not empty, a number or a
+      placeholder like "Track 3"): its title must be ours
+      (:func:`titles_agree`, in any reading of our title or the file name
+      ``our_extra``), whatever the artist (2026-11-28: "Mo'murda" by Bone
+      Thugs-N-Harmony answered as "Ghetto Cowboy" by the same artist, a
+      file 20 s shorter in the same folder).
     * Our artist is a real performer (:func:`artist_usable`) and it names
-      one: its artist (or one performer) must be ours; the title alone is
-      not enough, as a cover by someone else has the same title
+      one: its artist (or one performer) must be ours as well; the title
+      alone is not enough, as a cover by someone else has the same title
       (2026-11-14: "Jumper" by Third Eye Blind answered as "Jumper" by
       "Tweaker").
-    * Otherwise (no usable artist of ours, or none in the answer, which
-      then leaves ours as it is): its title must be ours.
+    * No real title of ours: its artist must be ours.
 
     Upload noise ("(Lyrics)", "Official Video", "HD", a video id) is
     ignored throughout."""
-    has_title = bool(_name_key(our_title))
+    has_title = real_title(our_title)
     has_artist = bool(_credit_keys(our_artist))
     if not has_title and not has_artist:
         return True
@@ -514,9 +732,15 @@ def names_agree(
         return True  # both of its names are in ours
     if has_artist and not artist_ok and _same_artist(our_artist, their_title):
         return False  # their title is our artist, their artist someone else
+    if has_title and not has_artist and _named_for_artist(our_title, their_artist):
+        return True  # an untagged file named for its artist ("Ed Sheeran.mp3")
+    if has_title and not titles_agree(
+        our_title, their_title, our_extra=our_extra, our_artist=our_artist,
+    ):
+        return False  # another song, even by the same artist
     if artist_usable(our_artist) and (their_artist or "").strip():
         return bool(artist_ok)
-    return bool(has_title and _same_title(our_title, their_title)) or bool(artist_ok)
+    return has_title or bool(artist_ok)
 
 
 #: A candidate whose recording is this many seconds longer or shorter than
@@ -538,11 +762,17 @@ def file_names(
 ) -> tuple[str | None, str | None]:
     """The names to hold a provider's answer against: ``(title,
     artist)``, or ``(None, None)`` when there are none worth holding it
-    to: no artist and a title that is just the file's name (the indexer's
-    last resort, which is what the enricher is for)."""
+    to: no artist and no real title (:func:`real_title`: "Track 3", "01
+    track", nothing but a video id).
+
+    Since 2026-11-28 a title that is just the file's name (the indexer's
+    last resort for an untagged file with no "Artist - Title" in its name)
+    is held to as well: "Mo'murda [<video id>].mp3" names its song, and an
+    answer titled "Ghetto Cowboy" is refused (:func:`titles_agree` drops
+    the video id and upload noise first)."""
     t = (title or "").strip() or None
     a = (artist or "").strip() or None
-    if a is None and (t is None or t == Path(str(file_path)).stem.strip()):
+    if a is None and (t is None or not real_title(t)):
         return None, None
     return t, a
 
@@ -1089,13 +1319,16 @@ _NOT_ASKED = Lookup(Verdict.NOT_ASKED, detail="not asked")
 
 def _agreeing(
     lookup: Lookup, names: tuple[str | None, str | None] | None,
-    length: float | None = None,
+    length: float | None = None, extra: str | None = None,
 ) -> Lookup:
     """A MATCH whose result agrees with ``names`` (``(title, artist)``,
-    :func:`names_agree`) and whose length is plausible for the file's
-    (``length`` seconds, :func:`length_plausible`): the first candidate
-    that does, or DISAGREED (carrying every candidate) when none does.
-    ``names`` None: no name check; ``length`` None: no length check."""
+    :func:`names_agree`, with the file's name ``extra`` as one more reading
+    of its title) and whose length is plausible for the file's (``length``
+    seconds, :func:`length_plausible`): the first candidate, best first,
+    that does — every candidate is walked, so the right recording is used
+    when the provider lists it after a wrong one — or DISAGREED (carrying
+    every candidate) when none does. ``names`` None: no name check;
+    ``length`` None: no length check."""
     if lookup.verdict is not Verdict.MATCH or lookup.result is None:
         return lookup
     if names is None and not length:
@@ -1107,7 +1340,9 @@ def _agreeing(
         if not length_plausible(length, cand.length_sec):
             wrong_length += 1
             continue
-        if names is None or names_agree(our_title, our_artist, cand.title, cand.artist):
+        if names is None or names_agree(
+            our_title, our_artist, cand.title, cand.artist, our_extra=extra,
+        ):
             if cand is lookup.result:
                 return lookup
             return Lookup(Verdict.MATCH, result=cand, candidates=lookup.candidates)
@@ -1136,16 +1371,19 @@ async def _enrich_one(
     from the other is a genuine no-match; nothing answered at all is
     NOT_ASKED."""
     providers = providers if providers is not None else _Providers()
+    # The file's name is one more reading of its title (an untagged
+    # "Artist - Title [<video id>].mp3").
+    extra = Path(str(file_path)).stem if names is not None else None
     ac = await _enrich_via_acoustid(file_path) if providers.acoustid else _NOT_ASKED
     if ac.unusable:
         providers.acoustid = False
-    ac = _agreeing(ac, names, length)
+    ac = _agreeing(ac, names, length, extra)
     if ac.verdict is Verdict.MATCH:
         return ac
     sh = await _enrich_via_shazam(file_path) if providers.shazam else _NOT_ASKED
     if sh.unusable:
         providers.shazam = False
-    sh = _agreeing(sh, names, length)
+    sh = _agreeing(sh, names, length, extra)
     if sh.verdict is Verdict.MATCH:
         return sh
     errors = [x for x in (ac, sh) if x.verdict is Verdict.ERROR]
@@ -1217,10 +1455,11 @@ async def waiting_count(session) -> int:
 # An album only Shazam names replaces the row's (as before); one AcoustID's
 # release groups give fills only an empty album (V058). The album's release
 # group goes with the recording id: a new recording drops the old one's
-# release and release group.
-_MATCH_SQL = """
-    UPDATE library_tracks
-    SET title = COALESCE(:t, title),
+# release and release group. Each is logged in library_tag_changes in the
+# same statement (V088, domovoi/library_tag_changes.py), cause 'enrich',
+# one batch per sweep.
+_MATCH_SET = """
+        title = COALESCE(:t, title),
         artist = COALESCE(:a, artist),
         album = COALESCE(:al, NULLIF(album, ''), :alf),
         musicbrainz_release_id = CASE WHEN CAST(:mb AS text) IS NOT NULL
@@ -1232,13 +1471,12 @@ _MATCH_SQL = """
         musicbrainz_recording_id = COALESCE(CAST(:mb AS text), musicbrainz_recording_id),
         enriched_at = NOW(),
         enrich_outcome = :matched
-    WHERE id = :id
 """
+_MATCH_SQL = tag_changes.logged_update(_MATCH_SET)
 # A requeued legacy row: fill only what is empty, so a hand correction
 # made before V020 (indistinguishable from a no-provider stamp) survives.
-_FILL_ONLY_SQL = """
-    UPDATE library_tracks
-    SET title = COALESCE(NULLIF(title, ''), :t, title),
+_FILL_ONLY_SET = """
+        title = COALESCE(NULLIF(title, ''), :t, title),
         artist = COALESCE(NULLIF(artist, ''), :a, artist),
         album = COALESCE(NULLIF(album, ''), :al, :alf, album),
         musicbrainz_release_group_id = CASE WHEN musicbrainz_recording_id IS NULL
@@ -1247,8 +1485,8 @@ _FILL_ONLY_SQL = """
         musicbrainz_recording_id = COALESCE(musicbrainz_recording_id, CAST(:mb AS text)),
         enriched_at = NOW(),
         enrich_outcome = :matched
-    WHERE id = :id
 """
+_FILL_ONLY_SQL = tag_changes.logged_update(_FILL_ONLY_SET)
 _STAMP_SQL = "UPDATE library_tracks SET enriched_at = NOW(), enrich_outcome = :outcome WHERE id = :id"
 
 # "Needs review" (V058): the candidates of a lookup that wasn't used. A
@@ -1348,6 +1586,9 @@ async def _sweep() -> dict[str, Any]:
     counts = _counts()
     providers = _Providers()
     consecutive_errors = 0
+    # Every name this sweep changes is logged under one batch (V088), so
+    # the whole sweep can be undone (library_tag_changes.undo_batch).
+    batch_id = tag_changes.new_batch_id()
     # The legacy rows (stamped before V020 with no sign a provider ever
     # answered) are looked at in this sweep, but put back in the queue
     # (requeue_legacy) only once a provider has actually answered for some
@@ -1426,6 +1667,8 @@ async def _sweep() -> dict[str, Any]:
                         "mb": result.musicbrainz_recording_id,
                         "rg": result.release_group_id,
                         "matched": OUTCOME_MATCHED,
+                        "batch_id": batch_id,
+                        "cause": tag_changes.CAUSE_ENRICH,
                     },
                 )
                 try:
@@ -1498,10 +1741,11 @@ async def _sweep() -> dict[str, Any]:
 
     log.info(
         "library enricher: scanned=%d matched=%d no_match=%d disagreed=%d errors=%d "
-        "missing=%d requeued_legacy=%d aborted=%s",
+        "missing=%d requeued_legacy=%d aborted=%s batch=%s",
         counts["scanned"], counts["matched"], counts["no_match"], counts["disagreed"],
         counts["errors"],
         counts["skipped_missing_file"], counts["requeued_legacy"], counts["aborted"],
+        batch_id,
     )
     return counts
 
@@ -1517,10 +1761,10 @@ _REPAIR_ROWS_SQL = (
 # The file's names back, the wrong match's MusicBrainz id gone, with the
 # year and genre that were fetched by that id; stamped ``disagreed`` so no
 # sweep matches it again. An album only where the file names one (an
-# AcoustID match never wrote an album).
-_RESTORE_SQL = """
-    UPDATE library_tracks
-    SET title = :t,
+# AcoustID match never wrote an album). Logged in library_tag_changes
+# (V088), cause 'repair', one batch per repair.
+RESTORE_NAMES_SET = """
+        title = :t,
         artist = :a,
         album = COALESCE(:al, album),
         musicbrainz_recording_id = NULL,
@@ -1528,11 +1772,12 @@ _RESTORE_SQL = """
         year_source = CASE WHEN year_source = 'musicbrainz' THEN NULL ELSE year_source END,
         genre = CASE WHEN genre_source = 'musicbrainz' THEN NULL ELSE genre END,
         genre_keys = CASE WHEN genre_source = 'musicbrainz' THEN NULL ELSE genre_keys END,
-        genre_source = CASE WHEN genre_source = 'musicbrainz' THEN NULL ELSE genre_source END,
-        enriched_at = NOW(),
-        enrich_outcome = :disagreed
-    WHERE id = :id AND enrich_outcome = :matched
+        genre_source = CASE WHEN genre_source = 'musicbrainz' THEN NULL ELSE genre_source END
 """
+_RESTORE_SQL = tag_changes.logged_update(
+    RESTORE_NAMES_SET + ", enriched_at = NOW(), enrich_outcome = :disagreed",
+    "AND enrich_outcome = :matched",
+)
 
 
 async def repair_disagreeing() -> dict[str, Any]:
@@ -1631,6 +1876,7 @@ def _names_to_put_back(
 async def _repair(counts: dict[str, Any]) -> None:
     from domovoi.workers import library_indexer
 
+    batch_id = tag_changes.new_batch_id()
     async with session_scope() as session:
         rows = (await session.execute(
             text(_REPAIR_ROWS_SQL), {"matched": OUTCOME_MATCHED},
@@ -1673,12 +1919,14 @@ async def _repair(counts: dict[str, Any]) -> None:
                 "al": meta.get("album"),
                 "matched": OUTCOME_MATCHED,
                 "disagreed": OUTCOME_DISAGREED,
+                "batch_id": batch_id,
+                "cause": tag_changes.CAUSE_REPAIR,
             })
             await session.commit()
             counts["restored"] += 1
             log.info(
-                "library enricher repair: %s: %r by %r → %r by %r (the file's names)",
-                path.name[:60], row.title, row.artist, put_back[0], put_back[1],
+                "library enricher repair: %s: %r by %r → %r by %r (the file's names; batch %s)",
+                path.name[:60], row.title, row.artist, put_back[0], put_back[1], batch_id,
             )
         if counts["restored"]:
             await session.execute(
