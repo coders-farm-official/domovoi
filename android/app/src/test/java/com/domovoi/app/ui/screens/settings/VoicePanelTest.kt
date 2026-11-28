@@ -64,12 +64,13 @@ class VoicePanelTest {
             assertTrue("$path: $source", source.isFile)
         }
         val names = parts.joinToString("\n") { it.name }
-        listOf("CMUdict", "Piper voices", "ONNX Runtime", "sherpa-onnx", "LiteRT-LM").forEach {
+        listOf("CMUdict", "Piper voices", "ONNX Runtime", "sherpa-onnx", "LiteRT-LM", "Arti").forEach {
             assertTrue("missing $it", names.contains(it))
         }
         ModelCatalog.assistant.forEach { m -> assertTrue(m.name, parts.any { it.name == m.name && it.licence == m.license }) }
         // OFL-1.1: the fonts the phone's PDFs embed (owner-approved for fonts, plan Q3).
-        val allowed = setOf("MIT", "Apache-2.0", "BSD-2-Clause style", "public domain", "OFL-1.1")
+        // "MIT OR Apache-2.0": Arti, chat from away's Tor (1.5.0), either at the user's choice.
+        val allowed = setOf("MIT", "Apache-2.0", "MIT OR Apache-2.0", "BSD-2-Clause style", "public domain", "OFL-1.1")
         parts.forEach { assertTrue("${it.name}: ${it.licence}", it.licence in allowed) }
     }
 }

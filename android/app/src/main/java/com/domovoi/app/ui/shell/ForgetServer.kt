@@ -69,7 +69,8 @@ internal fun provenFingerprint(status: IdentityGate.Status?, serverUrl: String):
 }
 
 /** What both places do once the person confirmed: the house's copy of
- *  this phone's calendars is deleted while the token still works
+ *  this phone's calendars is deleted, and its away chat turned off, while
+ *  the token still works
  *  ([CalendarShare.withdraw], at most a few seconds), then Prefs drops
  *  everything about the server, the pairing flag clears, and the shell
  *  lands on the server list. Run in the app's scope, so leaving the screen
@@ -82,6 +83,11 @@ internal fun forgetActiveServer(app: AppContainer, context: Context, toast: (Str
     if (ShareRules.mayHoldCopy(CalendarShare.store(context).get(server))) toast("removing this phone's calendars from the house…")
     app.scope.launch {
         val calendarsGone = runCatching { CalendarShare.withdraw(context.applicationContext, app) }.getOrDefault(false)
+        // Chat from away: a parting DELETE while the token still works, best
+        // effort (the house's own LAN rule decides); the keys go with Prefs.
+        if (app.prefs.holdsAway(server)) {
+            runCatching { kotlinx.coroutines.withTimeoutOrNull(5_000) { com.domovoi.app.away.AwayEnroll.unenroll(app.awayHttp(), app.prefs, server) } }
+        }
         // The server the person confirmed, even if the app moved meanwhile.
         if (ServerCredentials.normalize(app.prefs.serverUrl.value) != server) {
             app.prefs.removeKnownServer(confirmed)

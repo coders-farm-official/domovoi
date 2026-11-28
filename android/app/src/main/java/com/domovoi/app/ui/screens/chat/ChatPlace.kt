@@ -174,13 +174,17 @@ data class PlaceFacts(
     val phoneCapable: Boolean,
     /** A shared screen (the kitchen tablet): nobody's own chats. */
     val shared: Boolean,
+    /** Away from home with chat from away set up for the server (1.5.0,
+     *  away/): its chats are listed, over the house's away onion. */
+    val awayChat: Boolean = false,
 )
 
-/** The places whose chats are listed: the server's only when it is in
- *  reach and allows chat; the phone's only where the install has the engine
- *  and the screen isn't shared. */
+/** The places whose chats are listed: the server's when it is in reach
+ *  and allows chat, or, away, when chat from away is set up (the house says
+ *  then whether its AI is on); the phone's only where the install has the
+ *  engine and the screen isn't shared. */
 fun listedPlaces(f: PlaceFacts): List<ChatPlaceKind> = listOfNotNull(
-    ChatPlaceKind.Server.takeIf { !f.away && f.serverChatOn },
+    ChatPlaceKind.Server.takeIf { if (f.away) f.awayChat && !f.shared else f.serverChatOn },
     ChatPlaceKind.Phone.takeIf { f.phoneEngine && !f.shared },
 )
 

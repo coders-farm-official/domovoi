@@ -40,8 +40,9 @@ const val WANT_DEVICE_KEY = "want_device_key"
  * the deliveries' catch-up read, the state socket, the phone admin grant,
  * a person's music mix, listening history, up next and the room plays that
  * say whose music a room follows, faces, the shared-screen checks of photo
- * search, and the device's own row ("this is me", the registration itself:
- * `device_key_ok` is only true when the registration presents it). Nothing
+ * search, the device's own row ("this is me", the registration itself:
+ * `device_key_ok` is only true when the registration presents it), and away
+ * chat's setup (`/api/away`: enrol, turn off, status). Nothing
  * else: the key proves nothing anywhere else, so it goes nowhere else.
  */
 object DeviceKeyRoutes {
@@ -57,6 +58,9 @@ object DeviceKeyRoutes {
         "/api/faces",
         "/api/media/search",
         "/api/devices",
+        // Away chat's setup (1.5.0): enrol, turn off, status. The house
+        // resolves the phone from its key alone.
+        "/api/away",
     )
 
     /** The room plays that replace a room's queue (music.py `_note_room_start`). */

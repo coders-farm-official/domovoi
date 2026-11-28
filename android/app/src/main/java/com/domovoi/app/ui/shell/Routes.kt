@@ -411,10 +411,14 @@ val EverythingRoutes = WorkspaceRoutes + listOf(Route.Settings, Route.Manual)
  * Audiobooks joins them once a book is saved on the phone ([savedBooks]):
  * the saved books play with no server (audiobooks/BookStore.kt). A phone
  * with none has nothing to show there, so it has no tab.
+ *
+ * Chat is a tab with the on-device assistant, or when chat from away is set
+ * up for the saved server ([awayChat], 1.5.0): its chats come over the
+ * house's away onion then.
  */
-fun localTabs(assistant: Boolean = onDeviceAssistant(), shared: Boolean = false, savedBooks: Boolean = false): List<Route> =
+fun localTabs(assistant: Boolean = onDeviceAssistant(), shared: Boolean = false, savedBooks: Boolean = false, awayChat: Boolean = false): List<Route> =
     (
         listOf(Route.Music, Route.Videos, Route.Files) +
             (if (savedBooks) listOf(Route.Audiobooks) else emptyList()) +
-            (if (assistant) listOf(Route.Chat) else emptyList())
+            (if (assistant || awayChat) listOf(Route.Chat) else emptyList())
         ).filterNot { shared && it in SharedScreenHidden }

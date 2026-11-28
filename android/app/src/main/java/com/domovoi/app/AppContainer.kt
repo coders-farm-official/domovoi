@@ -57,6 +57,7 @@ import java.util.concurrent.TimeUnit
 
 /** Process-wide singletons. Deliberately no DI framework — one small graph. */
 class AppContainer(context: Context) {
+    private val appContext: Context = context.applicationContext
     val prefs = Prefs(context)
 
     /** The networks the phone is on, as one fingerprint every identity
@@ -269,6 +270,39 @@ class AppContainer(context: Context) {
             }
         }
     }
+
+    /**
+     * Chat from away (1.5.0, away/): the house's chats over its away onion
+     * while the phone is off the home network. Tor (Arti: ArtiTransport) runs only
+     * while the chat screen holds this, and stops shortly after
+     * (AwaySession). A connect that met silence, or a house that said
+     * revoked / away_off, asks `GET /api/away/status` the next time the
+     * phone is home (AWAY-CHAT-WIRE §8 item 8).
+     */
+    val away: com.domovoi.app.away.AwaySession by lazy {
+        com.domovoi.app.away.AwaySession(
+            transport = com.domovoi.app.away.ArtiTransport(appContext),
+            enrolment = { prefs.awayEnrolmentFor(prefs.serverUrl.value) },
+            version = BuildConfig.VERSION_NAME,
+            scope = scope,
+            onSilence = { code ->
+                val server = prefs.serverUrl.value
+                prefs.setAwayRecheck(server, true)
+                when (code) {
+                    "revoked" -> prefs.setAwayNote(server, com.domovoi.app.away.AwayText.NOT_SET_UP)
+                    "away_off" -> prefs.setAwayNote(server, com.domovoi.app.away.AwayText.AWAY_OFF)
+                }
+            },
+        )
+    }
+
+    /** Away chat's setup calls for the active server (away/AwayEnroll.kt). */
+    fun awayHttp(): com.domovoi.app.away.AwayHttp =
+        com.domovoi.app.away.ApiAwayHttp(api, prefs.serverUrl.value, prefs.deviceId)
+
+    /** A server just paired on this phone: the shell offers away chat once
+     *  (ui/screens/settings/AwayChatCard.kt). Carries the server's address. */
+    val awayOffer = MutableStateFlow<String?>(null)
 
     /** Developer options (data/DeveloperOptions.kt): the benchmark and the
      *  assistant's timings, off for a household until the app version is

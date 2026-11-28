@@ -1,0 +1,44 @@
+[package]
+name = "domovoi_tor"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Away chat's Tor for the Domovoi apps: an embedded Arti onion client with client authorization, as a byte pipe."
+publish = false
+
+[lib]
+name = "domovoi_tor"
+# cdylib: the Android app's libdomovoi_tor.so (JNI). staticlib: the iPhone
+# app's (C ABI, dtor_*). rlib: tests.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# Exactly this Arti (2.8.0): its 0.x API changes about monthly. Stable,
+# non-experimental features only.
+arti-client = { version = "=0.48.0", default-features = false, features = [
+    "tokio",
+    "rustls",
+    "onion-service-client",
+    "vanguards",
+    "keymgr",
+    "static-sqlite",
+    "compression",
+] }
+tor-keymgr = { version = "=0.48.0", default-features = false, features = ["keymgr"] }
+tor-rtcompat = { version = "=0.48.0", default-features = false }
+fs-mistrust = "=0.16.1"
+# ring, not aws-lc-rs: no cmake, builds with the NDK and for iOS.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "=0.21.1", default-features = false }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+# unwind, not abort: every FFI entry catches a panic and reports it, so a
+# fault in Tor ends the chat's connection, not the app.
+panic = "unwind"
+strip = true

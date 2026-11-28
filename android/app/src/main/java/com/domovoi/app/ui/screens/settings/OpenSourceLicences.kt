@@ -61,6 +61,7 @@ internal object OpenSourceLicences {
     const val ORT_LICENCE = "licences/texts/onnxruntime/LICENSE"
     const val ORT_NOTICES = "licences/texts/onnxruntime/ThirdPartyNotices.txt"
     const val LIBYUV_LICENCE = "licences/texts/libyuv/LICENSE"
+    const val DOMOVOI_TOR_NOTICE = "licences/texts/domovoi-tor/THIRD-PARTY-LICENSES.txt"
 
     /** The licences the app may contain (docs/CONTRIBUTING.md: permissive
      *  only). MPL-2.0 only for unmodified third-party code or data, and only
@@ -98,6 +99,12 @@ internal object OpenSourceLicences {
             note = "Copyright (c) Microsoft Corporation. Runs speech recognition, the voice and the phonemizer's model; " +
                 "its third-party notices list what it builds in (Eigen under MPL-2.0, unmodified, among them).",
             texts = listOf(ORT_LICENCE, ORT_NOTICES),
+        ),
+        LicenceRule(
+            "Bouncy Castle (away chat's encryption)", "org.bouncycastle", "bcprov-jdk18on", "MIT",
+            "github.com/bcgit/bc-java",
+            "The Legion of the Bouncy Castle Inc. Its X25519 and ChaCha20-Poly1305 encrypt a chat away from home " +
+                "(the Noise handshake). The Bouncy Castle licence is the MIT licence; the jar carries its own copy.",
         ),
         LicenceRule("ZXing (room mode's QR decoder)", "com.google.zxing", licence = "Apache-2.0", source = "github.com/zxing/zxing",
             texts = listOf(APACHE_TEXT)),
@@ -143,6 +150,8 @@ internal object OpenSourceLicences {
         return when {
             "apache" in n || "apache.org/licenses/license-2.0" in u -> "Apache-2.0"
             n == "mit" || "mit license" in n || "opensource.org/licenses/mit" in u -> "MIT"
+            // Bouncy Castle's licence is the MIT licence, word for word.
+            "bouncy castle licence" in n || "bouncycastle.org/licence" in u -> "MIT"
             "bsd" in n && ("3" in n || "new" in n || "revised" in n) -> "BSD-3-Clause"
             "bsd" in n && ("2" in n || "simplified" in n) -> "BSD-2-Clause"
             "bsd" in n -> "BSD"

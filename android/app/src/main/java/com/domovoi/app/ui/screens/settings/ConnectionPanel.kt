@@ -241,6 +241,11 @@ internal fun ConnectionPanel() {
                                 app.scope.launch {
                                     val gone = runCatching { CalendarShare.withdraw(context.applicationContext, app) }
                                         .getOrDefault(false)
+                                    // Chat from away too: the house revokes its keys
+                                    // (the phone wipes them with the token either way).
+                                    if (app.prefs.holdsAway(pairedWith)) {
+                                        runCatching { com.domovoi.app.away.AwayEnroll.unenroll(app.awayHttp(), app.prefs, pairedWith) }
+                                    }
                                     // That server's token, even if the app moved meanwhile.
                                     app.prefs.setDeviceTokenFor(pairedWith, null)
                                     toast(unpairedToast(gone))

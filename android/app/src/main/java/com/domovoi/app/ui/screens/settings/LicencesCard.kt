@@ -92,6 +92,14 @@ internal val OPEN_SOURCE_PARTS: List<OpenSourcePart> = listOf(
             "$SHERPA/simple-sentencepiece/LICENSE", "$SHERPA/kissfft/COPYING",
         ),
     ),
+    OpenSourcePart(
+        "Arti 2.8 (arti-client 0.48.0), the Tor Project's Tor in Rust", "MIT OR Apache-2.0", "gitlab.torproject.org/tpo/core/arti",
+        "Chat from away: reaches your house's onion over Tor, only while that chat is open (native/domovoi-tor). " +
+            "Built in: 434 Rust crates, nearly all MIT or Apache-2.0; ring (Apache-2.0 AND ISC), SQLite (public domain), " +
+            "Zstandard (BSD-3-Clause), the Unicode tables (Unicode-3.0), a few under ISC, Zlib, BSD, CC0 or the " +
+            "Unlicense, and one under MPL-2.0, unmodified (option-ext). Each crate's own licence files are in the notice.",
+        listOf(OpenSourceLicences.DOMOVOI_TOR_NOTICE),
+    ),
     OpenSourcePart(LITERT_LM, "Apache-2.0", "github.com/google-ai-edge/LiteRT-LM", "Runs the on-device language model."),
     OpenSourcePart(
         "CameraX and ZXing", "Apache-2.0", "android.googlesource.com/platform/frameworks/support · github.com/zxing/zxing",

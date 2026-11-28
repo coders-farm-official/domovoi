@@ -29,7 +29,8 @@ import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
- * Settings → Chat & AI → Chat (documents plan D3): the heads-up before
+ * Settings → Chat & AI → Chat: chat from away (1.5.0, AwayChatCard.kt),
+ * and (documents plan D3) the heads-up before
  * shaky results, on this phone. The switch and the kinds this phone said
  * "don't warn me about this again" for, which its own chats use and its
  * home-server chats send with every message (the server's rules decide when
@@ -44,6 +45,8 @@ internal fun ChatSettingsPanel(navigate: (Route) -> Unit) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // Chat from away (1.5.0, AwayChatCard.kt).
+        item { AwayChatCard() }
         item {
             PanelCard(
                 "Heads-up before shaky results",
