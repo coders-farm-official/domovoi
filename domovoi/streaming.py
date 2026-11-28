@@ -917,6 +917,11 @@ AUTHENTICATED_FEATURES: frozenset[str] = frozenset({"health", "log_push"})
 # never comes (2026-11-12: the call's audio used to cut the announcement off).
 DROPIN_READY_WAIT_SEC = 10.0
 
+# The hello boards of the Python satellite (satellite/client.py): a Pi names
+# none, a spare PC names its kind. Only these get the silent response that
+# ends a reply's wait during a call (StreamSession._needs_reply_release).
+PY_SATELLITE_BOARDS: frozenset[str | None] = frozenset({None, "linux_pc", "windows_pc"})
+
 # When a room can take an out-of-turn announcement (a timer or reminder
 # going off elsewhere, domovoi/timer_delivery.py): StreamSession.
 # announce_block. A capture whose last audio frame is older than this is
@@ -2088,6 +2093,9 @@ class StreamSession:
         # (`_drop_followup_capture`; "?" when it had none): its late
         # utterance_end gets an empty reply instead of a turn.
         self._dropped_followup_utt: Any = None
+        # The silent response after a reply in a call is going out
+        # (`_release_reply_wait_in_call`): no call audio to this room.
+        self._releasing_reply: bool = False
         # ── Conversational chat mode (Feature 8) ─────────────────────
         # In-memory mirror of sessions.context["conversational_mode"], refreshed
         # at the top of every turn so the tool bridge + watchdog can read it
@@ -2490,7 +2498,8 @@ class StreamSession:
     async def _on_audio(self, data: bytes) -> None:
         # Before any early return: announce_block reads it to tell a live
         # capture from one that went quiet without an utterance_end.
-        self._last_audio_at = time.monotonic()
+        now = time.monotonic()
+        previous_audio_at, self._last_audio_at = self._last_audio_at, now
         # 1.5.0: a quiet stream of another device's turn (wake_claims): to
         # the arbiter, which keeps it only until the pick.
         if self.quiet_stream is not None:
@@ -2509,6 +2518,17 @@ class StreamSession:
         # below and the command reaches the router (DropInHandler ends
         # the call). The peer's own frames keep flowing the other way.
         peer = self.dropin_peer
+        if (
+            peer is not None and self.utterance_active
+            and (self._response_task is None or self._response_task.done())
+            and now - previous_audio_at >= ANNOUNCE_CAPTURE_FRESH_SEC
+        ):
+            # Audio again after a capture went quiet with no utterance_end
+            # (a phone muted mid-command cancels its turn that way): that
+            # capture is over, and this is the call's audio. Left open, the
+            # room's mic would be buffered for a turn for the rest of the
+            # call instead of relayed.
+            await self._drop_followup_capture(self._utt_id, why="its capture went quiet")
         if peer is not None and not self.utterance_active:
             # Relay noise gate: don't forward near-silent frames (bounced
             # cross-room echo / room tone between nearby rooms), and DON'T
@@ -2522,12 +2542,15 @@ class StreamSession:
                 # The peer is still playing the reply that announced the
                 # call: its speaker isn't the call's yet (`dropin_ready`).
                 return
-            if getattr(peer, "utterance_active", False) is True:
+            holds = getattr(peer, "holds_call_audio", None)
+            if holds is not None and holds(now) is True:
                 # The other room is capturing a command ("hey jarvis, hang
                 # up"): this room's voice stays off its speaker until the
                 # capture ends, so the command's transcript, its voice ID
                 # and anything learned from it hold that room's speaker
-                # alone, not this one's voice played back into its mic.
+                # alone. Nor does it play over that room's reply, or come
+                # between the reply and the silent response that ends the
+                # satellite's wait for it (`holds_call_audio`).
                 return
             try:
                 await peer.ws.send_bytes(data)
@@ -4464,9 +4487,18 @@ class StreamSession:
                 dropped = self._dropped_followup_utt
                 if dropped is not None and (dropped == "?" or ctrl.get("utt") == dropped):
                     # The end of a follow-up capture a drop-in took the mic
-                    # from: no turn, just let the satellite stop waiting.
+                    # from: no turn, just let the satellite stop waiting —
+                    # the Python satellite with the silent response, any
+                    # other device with the bare end that answers a blank
+                    # capture.
                     self._dropped_followup_utt = None
-                    await self._release_reply_wait_in_call()
+                    if self._needs_reply_release():
+                        await self._release_reply_wait_in_call()
+                    else:
+                        await self._safe_send_text({
+                            "type": "response_end", "interrupted": False,
+                            "expect_followup": False,
+                        })
                     return
                 # Late for a capture this server ended early (or a stray).
                 self._note_late_utterance_end(ctrl)
@@ -8331,8 +8363,45 @@ class StreamSession:
             pass
         if payload.get("type") == "response_end":
             self._note_response_end(payload)
-            if self.dropin_peer is not None:
+            if (
+                self.dropin_peer is not None
+                # Talked over: the satellite released its wait itself (an
+                # interrupted end is never deferred). A capture open now:
+                # an extra response_start would count as one from before it
+                # and end that capture's own wait early (its `_turn_mark`).
+                and not payload.get("interrupted")
+                and not self.utterance_active
+            ):
                 await self._release_reply_wait_in_call()
+
+    def _needs_reply_release(self) -> bool:
+        """Whether this device is the Python satellite (a Pi, a spare Linux
+        or Windows PC), whose wait for a reply's end a call never releases
+        (`_release_reply_wait_in_call`). A Pi's hello names no board; a
+        spare PC's says ``linux_pc`` / ``windows_pc``. A phone in room mode
+        (``android_room``, ``ios_room``) must NOT get the silent response:
+        its response_start resets the speaker and flushes the reply still
+        queued there, and it needs none (its wait ends on the response_end
+        while in a call). Any other board is not known to need it, so it
+        isn't sent."""
+        return self.board in PY_SATELLITE_BOARDS
+
+    def holds_call_audio(self, now: float | None = None) -> bool:
+        """Whether the other room's call audio must not go to this room's
+        speaker right now: a command capture is live (the other room's
+        voice would land in its transcript and voice ID), or a turn of this
+        room's is being answered — its reply, and the silent response after
+        it (`_release_reply_wait_in_call`), go out with nothing of the call
+        between them: a relay frame between the silent start and end makes
+        a Pi's end wait for a drain the call never allows. Uses the capture
+        freshness check (`_capturing`), so a capture that ended with no
+        utterance_end (a phone muted mid-command) holds nothing."""
+        if now is None:
+            now = time.monotonic()
+        if self._releasing_reply or self._capturing(now):
+            return True
+        task = self._response_task
+        return task is not None and not task.done()
 
     async def _release_reply_wait_in_call(self) -> None:
         """A reply just ended in a room that is in a drop-in: let its
@@ -8347,27 +8416,36 @@ class StreamSession:
         the room nothing and heard no wake word, so a spoken "hang up" could
         not end the call either. A second, silent response — a start with
         no audio, at the call's own 16 kHz, then its end — is released at
-        once by every satellite (an end with no audio is never deferred),
-        and leaves the speaker at the call's rate for the relay that
-        follows. The reply's own audio still plays out: it is already
-        queued. Sent straight down the socket, not through
-        ``_safe_send_text``, so it is never taken for a spoken reply (the
-        echo filter, the reply guard, the response bookkeeping)."""
-        for frame in (
-            {
-                "type": "response_start",
-                "text": "",
-                "matched_handler": "dropin",
-                "matched_path": "system",
-                "online": True,
-                "audio_sample_rate": PCM_INPUT_SAMPLE_RATE,
-            },
-            {"type": "response_end", "interrupted": False, "expect_followup": False},
-        ):
-            try:
-                await self.ws.send_text(json.dumps(frame))
-            except Exception:
-                return
+        once by the satellite (an end with no audio since its start is never
+        deferred), and leaves the speaker at the call's rate for the relay
+        that follows. The reply's own audio still plays out: it is already
+        queued. No call audio may come between the two frames
+        (`holds_call_audio`): a frame there counts as the silent response's
+        audio and defers its end too. Sent straight down the socket, not
+        through ``_safe_send_text``, so it is never taken for a spoken reply
+        (the echo filter, the reply guard, the response bookkeeping). Only
+        to the Python satellite (`_needs_reply_release`)."""
+        if not self._needs_reply_release():
+            return
+        self._releasing_reply = True
+        try:
+            for frame in (
+                {
+                    "type": "response_start",
+                    "text": "",
+                    "matched_handler": "dropin",
+                    "matched_path": "system",
+                    "online": True,
+                    "audio_sample_rate": PCM_INPUT_SAMPLE_RATE,
+                },
+                {"type": "response_end", "interrupted": False, "expect_followup": False},
+            ):
+                try:
+                    await self.ws.send_text(json.dumps(frame))
+                except Exception:
+                    return
+        finally:
+            self._releasing_reply = False
 
     async def notify_sounds_changed(self) -> None:
         """Tell this satellite its sound clips changed (greetings edited +

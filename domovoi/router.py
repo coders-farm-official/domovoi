@@ -29,7 +29,7 @@ from domovoi.db.repositories import (
     SessionRepository,
     WebSearchPrefsRepository,
 )
-from domovoi.dropin_common import end_call_phrase, room_in_call
+from domovoi.dropin_common import END_STOP, END_WEAK, end_call_kind, room_in_call
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path, satellite_setting_refusal
 from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
@@ -1144,31 +1144,72 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
     # of music's bare "stop" (the call already holds the music). A parked
     # question is dropped with the call: the next turn was its only chance.
     # Outside a call nothing here applies: a bare "stop" stays the music's.
+    #
+    # Two ways a turn is "in the call" (Context.in_call). The streaming
+    # layer sets it for the satellite that is itself in the call (its own
+    # session, ``own_call`` below). Everyone else — a phone's chat mic, the
+    # dashboard's /v1/intent with a room picked, any caller — gets it from
+    # ``ctx.room_id`` alone (``room_in_call``), which is enough for the
+    # call-only refusals but not to hang up on a bare "stop": that one ends
+    # the call only from the call's own satellite. "Hang up" and the other
+    # explicit phrasings end it from anywhere the turn names that room
+    # (dropin_common.end_call_kind).
+    own_call = ctx.in_call
     if not ctx.in_call and room_in_call(ctx.app, ctx.room_id):
         ctx = ctx.model_copy(update={"in_call": True})
-    if ctx.in_call:
-        if end_call_phrase(transcript):
-            dropin = HANDLER_BY_NAME.get("dropin")
-            if dropin is not None:
-                await session_repo.set_context_key(session_id, PENDING_CONFIRMATION_KEY, None)
-                take_parked_choice(session_id)
-                response = dropin._end(ctx)
-                response.matched_handler = dropin.name
-                response.matched_path = "fast"
-                response.session_id = session_id
-                response.online = ctx.online
-                response.expect_followup = False
-                await _persist_turn(
-                    session=session,
-                    session_id=session_id,
-                    intent=intent,
-                    ctx=ctx,
-                    response=response,
-                    matched_handler=dropin.name,
-                    matched_path="fast",
-                    latency_ms=_elapsed_ms(),
-                )
-                return response
+    ending = end_call_kind(transcript) if ctx.in_call else None
+    if ending == END_STOP and not own_call:
+        ending = None
+    if ending == END_WEAK:
+        # "cancel", "that's enough": a parked question takes them first.
+        pending_now = (await session_repo.get_context(session_id) or {}).get(
+            PENDING_CONFIRMATION_KEY
+        )
+        if not own_call or pending_now:
+            ending = None
+    if ending == END_STOP and ctx.room_id and isinstance(session, AsyncSession):
+        # A timer or an alarm going off in the room is silenced first, as a
+        # bare "stop" always does (handlers/music.py); the next one hangs up.
+        from domovoi.room_display import stop_ringing_by_voice
+
+        if await stop_ringing_by_voice(session, ctx.room_id, ctx.app) is not None:
+            response = Response(
+                text="Okay.", session_id=session_id, matched_handler="music",
+                matched_path="fast", online=ctx.online, expect_followup=False,
+            )
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler="music",
+                matched_path="fast",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
+    if ending is not None:
+        dropin = HANDLER_BY_NAME.get("dropin")
+        if dropin is not None:
+            await session_repo.set_context_key(session_id, PENDING_CONFIRMATION_KEY, None)
+            take_parked_choice(session_id)
+            response = dropin._end(ctx)
+            response.matched_handler = dropin.name
+            response.matched_path = "fast"
+            response.session_id = session_id
+            response.online = ctx.online
+            response.expect_followup = False
+            await _persist_turn(
+                session=session,
+                session_id=session_id,
+                intent=intent,
+                ctx=ctx,
+                response=response,
+                matched_handler=dropin.name,
+                matched_path="fast",
+                latency_ms=_elapsed_ms(),
+            )
+            return response
 
     async def _dropped_in_call(handler: Handler) -> bool:
         """A parked question or confirmation whose handler must not run

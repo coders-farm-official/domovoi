@@ -224,6 +224,18 @@ def test_end_call_phrases() -> None:
         assert not end_call_phrase(s), s
 
 
+def test_end_call_kinds() -> None:
+    from domovoi.dropin_common import END_EXPLICIT, END_STOP, END_WEAK, end_call_kind
+
+    for s in ("stop", "stop.", "stop stop", "stop it please"):
+        assert end_call_kind(s) == END_STOP, s
+    for s in ("hang up", "okay, hang up please", "end the drop-in", "stop the call",
+              "leave the drop in", "cancel the call"):
+        assert end_call_kind(s) == END_EXPLICIT, s
+    for s in ("cancel", "that's enough", "end it", "disconnect"):
+        assert end_call_kind(s) == END_WEAK, s
+
+
 def test_room_in_call_reads_the_live_registry() -> None:
     app = _app(active_dropins={GARAGE: {"peer": KITCHEN}})
     assert room_in_call(app, GARAGE) and not room_in_call(app, KITCHEN)
@@ -291,11 +303,134 @@ async def test_the_other_room_stays_off_a_command_capture(_quiet_calls) -> None:
     await garage._on_audio(FRAME)
     assert len(kitchen.ws.sent) == n               # held back
     await kitchen._on_control({"type": "utterance_end", "utt": 1})
-    if kitchen._response_task is not None:
-        kitchen._response_task.cancel()
+    await _cancelled(kitchen._response_task)
     kitchen.utterance_active = False
     await garage._on_audio(FRAME)
     assert len(kitchen.ws.sent) == n + 1           # back once it ended
+    await garage._end_dropin(ended_by=GARAGE)
+
+
+async def _cancelled(task) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except BaseException:  # noqa: BLE001 — cancelled on purpose
+        pass
+
+
+async def test_a_stale_capture_holds_nothing(_quiet_calls) -> None:
+    """A capture that ended with no utterance_end (a phone muted
+    mid-command) does not keep the other room off its speaker, and the
+    room's own audio, once it comes again, goes back to the call."""
+    garage, kitchen = _pair()
+    await garage._begin_dropin(kitchen)
+    await kitchen._on_control({"type": "utterance_start", "trigger": "wake_word", "utt": 1})
+    kitchen._last_audio_at -= streaming.ANNOUNCE_CAPTURE_FRESH_SEC + 0.1   # went quiet
+    n = len(kitchen.ws.sent)
+    await garage._on_audio(FRAME)
+    assert len(kitchen.ws.sent) == n + 1           # not held
+    m = len(garage.ws.sent)
+    await kitchen._on_audio(FRAME)                 # the kitchen's mic again
+    assert kitchen.utterance_active is False
+    assert len(kitchen.audio_buf) == 0
+    assert len(garage.ws.sent) == m + 1            # relayed to the garage
+    await garage._end_dropin(ended_by=GARAGE)
+
+
+async def test_the_relay_is_held_while_the_room_is_answered(_quiet_calls) -> None:
+    garage, kitchen = _pair()
+    await garage._begin_dropin(kitchen)
+    gate = asyncio.Event()
+    kitchen._response_task = asyncio.create_task(gate.wait())
+    n = len(kitchen.ws.sent)
+    await garage._on_audio(FRAME)
+    assert len(kitchen.ws.sent) == n               # held: the kitchen's reply
+    gate.set()
+    await kitchen._response_task
+    await garage._on_audio(FRAME)
+    assert len(kitchen.ws.sent) == n + 1
+    # ...and while its silent response goes out.
+    kitchen._releasing_reply = True
+    await garage._on_audio(FRAME)
+    assert len(kitchen.ws.sent) == n + 1
+    kitchen._releasing_reply = False
+    await garage._end_dropin(ended_by=GARAGE)
+
+
+async def test_no_call_audio_between_the_silent_start_and_end(_quiet_calls) -> None:
+    """The garage's mic frame arriving while the kitchen's silent response
+    is half sent is not relayed between its two frames."""
+    garage, kitchen = _pair()
+    await garage._begin_dropin(kitchen)
+    real_send = kitchen.ws.send_text
+
+    async def send_text(data):
+        await real_send(data)
+        if json.loads(data).get("text") == "":
+            await garage._on_audio(FRAME)          # lands mid-pair
+    kitchen.ws.send_text = send_text
+    before = len(kitchen.ws.sent)
+    await kitchen._safe_send_text({"type": "response_end", "interrupted": False,
+                                   "expect_followup": False})
+    kinds = [k if k == "bytes" else f["type"] for _t, k, f in kitchen.ws.sent[before:]]
+    assert kinds == ["response_end", "response_start", "response_end"]
+    await garage._end_dropin(ended_by=GARAGE)
+
+
+@pytest.mark.parametrize("board", ["android_room", "ios_room", "some_new_device"])
+async def test_phones_and_unknown_devices_get_no_silent_response(_quiet_calls, board) -> None:
+    """A phone's response_start resets its speaker and would flush the
+    reply still queued there; it needs no release. Unknown boards don't
+    get it either."""
+    garage, kitchen = _pair()
+    garage.board = board
+    await garage._begin_dropin(kitchen)
+    before = len(_texts(garage.ws))
+    await garage._safe_send_text({"type": "response_end", "interrupted": False,
+                                  "expect_followup": False})
+    assert [f["type"] for f in _texts(garage.ws)[before:]] == ["response_end"]
+    # A follow-up capture dropped in the call gets the bare end instead.
+    garage._capture_control = True
+    await garage._on_control({"type": "utterance_start", "trigger": "followup", "utt": 4})
+    before = len(_texts(garage.ws))
+    await garage._on_control({"type": "utterance_end", "utt": 4})
+    assert [f["type"] for f in _texts(garage.ws)[before:]] == ["response_end"]
+    await garage._end_dropin(ended_by=GARAGE)
+
+
+@pytest.mark.parametrize("board", [None, "linux_pc", "windows_pc"])
+async def test_python_satellites_get_the_silent_response(_quiet_calls, board) -> None:
+    garage, kitchen = _pair()
+    garage.board = board
+    await garage._begin_dropin(kitchen)
+    before = len(_texts(garage.ws))
+    await garage._safe_send_text({"type": "response_end", "interrupted": False,
+                                  "expect_followup": False})
+    assert [f["type"] for f in _texts(garage.ws)[before:]] == [
+        "response_end", "response_start", "response_end"]
+    await garage._end_dropin(ended_by=GARAGE)
+
+
+async def test_no_silent_response_after_an_interrupted_reply_or_into_a_capture(
+    _quiet_calls,
+) -> None:
+    """Talked over: the satellite released its own wait. A capture open:
+    an extra response_start would count as one from before it and end
+    that capture's wait early."""
+    garage, kitchen = _pair()
+    await garage._begin_dropin(kitchen)
+    before = len(_texts(garage.ws))
+    await garage._safe_send_text({"type": "response_end", "interrupted": True,
+                                  "expect_followup": False})
+    assert [f["type"] for f in _texts(garage.ws)[before:]] == ["response_end"]
+    await garage._on_control({"type": "utterance_start", "trigger": "wake_word", "utt": 2})
+    before = len(_texts(garage.ws))
+    await garage._safe_send_text({"type": "response_end", "interrupted": False,
+                                  "expect_followup": False})
+    assert [f["type"] for f in _texts(garage.ws)[before:]] == ["response_end"]
+    garage.utterance_active = False
     await garage._end_dropin(ended_by=GARAGE)
 
 
@@ -618,3 +753,81 @@ async def test_bare_stop_outside_a_call_is_not_the_drop_in(house) -> None:
     frames = await _heard(h, h.garage, "Stop.", utt=1)
     assert _reply_text(frames) != "You're not in a call right now."
     assert all(json.dumps(f).find("dropin_end") < 0 for f in frames)
+
+
+# ─── 6. which "stop" ends a call, from where ─────────────────────────────
+
+
+async def _route(db_session, said: str, *, in_call: bool, session_id=None, app=None):
+    from domovoi.models import Intent
+    from domovoi.router import route
+
+    ctx = Context(room_id=GARAGE, session_id=session_id, app=app, in_call=in_call)
+    return await route(Intent(transcript=said, room_id=GARAGE, session_id=session_id), ctx,
+                       db_session)
+
+
+def _call_app():
+    return _app(active_dropins={GARAGE: {"peer": KITCHEN}, KITCHEN: {"peer": GARAGE}})
+
+
+@requires_db
+async def test_a_ringing_timer_is_silenced_before_the_call_ends(db_session, monkeypatch) -> None:
+    import domovoi.room_display as room_display
+
+    rang: list[str] = []
+
+    async def _ringing(session, room_id, app=None):
+        rang.append(room_id)
+        return 42
+
+    async def _quiet(session, room_id, app=None):
+        return None
+
+    monkeypatch.setattr(room_display, "stop_ringing_by_voice", _ringing)
+    r = await _route(db_session, "stop", in_call=True, app=_call_app())
+    assert rang == [GARAGE]
+    assert r.text == "Okay." and r.dropin_action is None
+    # Nothing ringing any more: the next "stop" hangs up.
+    monkeypatch.setattr(room_display, "stop_ringing_by_voice", _quiet)
+    r = await _route(db_session, "stop", in_call=True, app=_call_app())
+    assert r.dropin_action == "end"
+
+
+@requires_db
+async def test_cancel_goes_to_a_parked_question_not_the_call(db_session) -> None:
+    from domovoi.confirmations import request_confirmation
+
+    app = _call_app()
+    first = await _route(db_session, "what time is it", in_call=True, app=app)
+    sid = first.session_id
+    await request_confirmation(db_session, sid, kind="core.pending_memory_offer",
+                               handler="memory", data={"body": "the oven is gas"})
+    r = await _route(db_session, "cancel", in_call=True, session_id=sid, app=app)
+    assert r.dropin_action is None and r.matched_handler != "dropin"
+    # Nothing parked any more: "cancel" ends the call.
+    from domovoi.confirmations import PENDING_CONFIRMATION_KEY
+    from domovoi.db.repositories import SessionRepository
+
+    await SessionRepository(db_session).set_context_key(sid, PENDING_CONFIRMATION_KEY, None)
+    r = await _route(db_session, "cancel", in_call=True, session_id=sid, app=app)
+    assert r.dropin_action == "end"
+    # "Hang up" ends it even with a question parked.
+    await request_confirmation(db_session, sid, kind="core.pending_memory_offer",
+                               handler="memory", data={"body": "the oven is gas"})
+    r = await _route(db_session, "hang up", in_call=True, session_id=sid, app=app)
+    assert r.dropin_action == "end"
+
+
+@requires_db
+async def test_a_bare_stop_from_elsewhere_never_ends_the_call(db_session) -> None:
+    """A turn not made by the call's own satellite (a phone's chat mic, the
+    dashboard with the room picked: in_call comes from ctx.room_id) ends
+    the call only with an explicit "hang up"."""
+    app = _call_app()
+    r = await _route(db_session, "stop", in_call=False, app=app)
+    assert r.dropin_action is None and r.matched_handler != "dropin"
+    r = await _route(db_session, "that's enough", in_call=False, app=app)
+    assert r.dropin_action is None
+    r = await _route(db_session, "hang up", in_call=False, app=app)
+    assert r.dropin_action == "end"

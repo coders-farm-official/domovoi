@@ -17,33 +17,56 @@ from typing import Any
 # (DropInHandler) or an HTTP status (the admin endpoint).
 OK = "ok"
 
-#: What ends a drop-in when it is said IN a room that is in one, ahead of
-#: everything else the turn could mean (a parked question, an introduction
-#: collecting its clips, music's bare "stop"). Outside a call none of this
-#: is special: a bare "stop" stays the music's (handlers/dropin.py's own
-#: ``_END_RE`` never takes it). Matched against the transcript as
-#: :func:`end_call_phrase` cleans it.
-_END_CALL_RE = re.compile(
-    r"^(?:(?:stop|stop it|stop that|stop now)(?: stop)*"
-    r"|hang up(?: now)?(?: the (?:call|phone|drop[- ]?in))?"
-    r"|end it|end (?:the )?(?:call|drop[- ]?in)(?: now)?"
+#: What ends a drop-in when it is said in a room that is in one
+#: (:func:`end_call_kind`). Outside a call none of this is special: a bare
+#: "stop" stays the music's (handlers/dropin.py's own ``_END_RE`` never
+#: takes it). Three kinds, because they are not equally sure:
+#:
+#: * ``END_STOP`` — a bare "stop" ("stop it", "stop stop"): ends the call
+#:   only when said by the satellite that is in it, after a timer or alarm
+#:   ringing there has been silenced first;
+#: * ``END_EXPLICIT`` — "hang up", "end / stop / leave the drop-in" or the
+#:   call: always about the call, from wherever it is said for that room,
+#:   and ahead of any parked question;
+#: * ``END_WEAK`` — "cancel", "that's enough", "end it", "disconnect": end
+#:   the call only when nothing else is waiting for an answer there (a
+#:   parked question takes "cancel" for itself).
+END_STOP, END_EXPLICIT, END_WEAK = "stop", "explicit", "weak"
+_END_STOP_RE = re.compile(r"^(?:stop|stop it|stop that|stop now)(?: stop)*(?: please)?$")
+_END_EXPLICIT_RE = re.compile(
+    r"^(?:hang up(?: now)?(?: the (?:call|phone|drop[- ]?in))?"
+    r"|end (?:the )?(?:call|drop[- ]?in)(?: now)?"
     r"|stop (?:the )?(?:call|drop[- ]?in)"
     r"|leave (?:the )?(?:call|drop[- ]?in)"
-    r"|disconnect|that's enough|cancel(?: the (?:call|drop[- ]?in))?)"
+    r"|cancel (?:the )?(?:call|drop[- ]?in))"
     r"(?: please)?$"
 )
+_END_WEAK_RE = re.compile(r"^(?:end it|disconnect|that's enough|cancel)(?: please)?$")
 
 
-def end_call_phrase(transcript: str) -> bool:
-    """Whether ``transcript`` (already lowercased by the router's
-    ``normalize_transcript``) asks to end a live drop-in: "stop", "Stop.",
-    "stop stop", "hang up", "end the drop-in", "okay, hang up please"."""
+def end_call_kind(transcript: str) -> str | None:
+    """Which way ``transcript`` (already lowercased by the router's
+    ``normalize_transcript``) asks to end a live drop-in — ``END_STOP``,
+    ``END_EXPLICIT`` or ``END_WEAK`` (see above) — or None. Punctuation
+    and a leading "okay" / "please" don't count: "Stop.", "okay, hang up
+    please"."""
     t = re.sub(r"[.!?,;:]+", " ", (transcript or "").lower())
     t = " ".join(t.split())
     for lead in ("okay ", "ok ", "please ", "hey ", "um ", "uh "):
         if t.startswith(lead):
             t = t[len(lead):]
-    return bool(_END_CALL_RE.match(t))
+    if _END_EXPLICIT_RE.match(t):
+        return END_EXPLICIT
+    if _END_STOP_RE.match(t):
+        return END_STOP
+    if _END_WEAK_RE.match(t):
+        return END_WEAK
+    return None
+
+
+def end_call_phrase(transcript: str) -> bool:
+    """Whether ``transcript`` is any of :func:`end_call_kind`'s phrases."""
+    return end_call_kind(transcript) is not None
 
 
 def room_in_call(app: Any, room_id: str | None) -> bool:
