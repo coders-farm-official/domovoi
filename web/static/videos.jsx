@@ -87,8 +87,10 @@ const VideoPosterTile = ({ video, progress, onClick }) => {
 /* Full-screen playback overlay. Starts at `startSec` when given (a chat
  * result's moment), else auto-resumes at `resumeSec`, saves the
  * position every 5 s while playing plus on pause/close/end (end saves 0 so
- * a finished video restarts next time). Esc closes. */
-const VideoOverlay = ({ video, resumeSec, startSec, onClose }) => {
+ * a finished video restarts next time). Esc closes. `onInfo` (Photos:
+ * the file's details) adds an "Info" button that saves the position and
+ * hands over; without it there is no button. */
+const VideoOverlay = ({ video, resumeSec, startSec, onClose, onInfo }) => {
   const p = usePlayback();
   const ref = React.useRef(null);
   const lastSave = React.useRef(0);
@@ -142,6 +144,14 @@ const VideoOverlay = ({ video, resumeSec, startSec, onClose }) => {
             {video.library_label || video.library_id}
           </span>
         </div>
+        {onInfo && (
+          <Button icon="info" title="details about this video" aria-label={`info about ${video.title || video.name}`}
+                  onClick={() => {
+                    const el = ref.current;
+                    if (el && !errored && el.currentTime > 0 && !el.ended) save(el.currentTime);
+                    onInfo();
+                  }}>Info</Button>
+        )}
         <Button icon="rotate-ccw" title="start over"
                 onClick={() => { const el = ref.current; if (el) { el.currentTime = 0; el.play().catch(() => {}); } }}>
           start over

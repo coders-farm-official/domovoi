@@ -1334,6 +1334,13 @@ Podcasts, Audiobooks, and plugged-in drives.
   once **Understand photos and videos** is on in
   [Settings → Chat & AI → Photos and videos](#settings/photos-and-videos);
   until it has looked at some, Photos says so.
+- **Dashboard:** Tap a photo, or a video's **Info** button (on its tile
+  or in the player), for everything Domovoi knows about it: the file's
+  name, folder and size, when it was taken, the place (with **Use photo
+  locations** on), the people in it (with **Recognize faces** on, not on
+  a shared screen), whether it has been looked at yet and with which
+  model, and for a video what its frames might show, what is said in it
+  and a summary. Tap a time to play the video from there.
 - With **Understand photos and videos** on
   ([Settings → Chat & AI → Photos and videos](#settings/photos-and-videos)), ask for them by voice or in a chat. The answer says
   how many it found and that they're on the Photos page; a chat also

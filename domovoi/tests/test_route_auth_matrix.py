@@ -1035,6 +1035,7 @@ def test_the_support_banner_is_a_household_read(label, path) -> None:
 
 MEDIA_HOUSEHOLD_READS = [
     ("web", "/api/media/search"),
+    ("web", "/api/media/items/{item_id}/details"),
     ("web", "/api/media-understanding"),
 ]
 

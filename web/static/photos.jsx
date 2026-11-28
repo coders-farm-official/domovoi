@@ -6,7 +6,12 @@
  * "christmas 2023", "snow last winter"). The grid loads as it scrolls
  * (data.js usePagedList over the search's next_cursor). A photo opens its
  * details; a video opens the player at the moment the search matched
- * (`at_s`), or at the start.
+ * (`at_s`), or at the start, and its "Info" button (on the tile and in
+ * the player) opens its details. The details show everything the house
+ * worked out about the file: name, folder, size, date, place (locations
+ * on), people (faces on, not on a shared screen), the state and its error
+ * code, when and with which vision model, and for a video its frames,
+ * transcript and summary, each moment a button that plays from there.
  *
  * #faces (Media ▸ Faces): the people in the photos, on a launcher only
  * while "Recognize faces" is on, and never for a guest or on a shared
@@ -36,6 +41,7 @@
  * Data:
  *   GET  /api/media-understanding             · switches and progress (household)
  *   GET  /api/media/search?q=&kind=&cursor=   · the grid and the search (household)
+ *   GET  /api/media/items/{id}/details        · one file's details (household)
  *   GET  /api/faces/status|people|hidden      · (household; hidden: admin)
  *   GET  /api/faces/groups/{id}               · a group's faces
  *   GET  /api/faces/people/{id}/items         · a person's photos and videos
@@ -68,53 +74,272 @@ const photosCount = (n) => (typeof n === 'number' ? n.toLocaleString() : '0');
 
 // A search hit and a person's item, as one shape for the tile and details.
 const photosFromHit = (h) => ({
-  key: `i${h.id}`, library_id: h.library_id, path: h.path, name: h.name || String(h.path || '').split('/').pop(),
+  key: `i${h.id}`, id: h.id, library_id: h.library_id, path: h.path, name: h.name || String(h.path || '').split('/').pop(),
   kind: h.kind, taken_at: h.taken_at, date_from: h.date_from, might_show: h.might_show || null,
   tags: Array.isArray(h.tags) ? h.tags : [], text: h.text || null, analysed: h.analysed !== false,
   at_s: typeof h.at_s === 'number' ? h.at_s : null,
 });
 const photosFromPersonItem = (it) => ({
-  key: `i${it.item_id}`, library_id: it.library_id, path: it.rel_path,
+  key: `i${it.item_id}`, id: it.item_id, library_id: it.library_id, path: it.rel_path,
   name: String(it.rel_path || '').split('/').pop(), kind: it.kind, taken_at: it.taken_at, date_from: null,
   might_show: null, tags: [], text: null, analysed: true,
   at_s: Array.isArray(it.moments) && it.moments.length ? it.moments[0] : null,
   confirmed: it.confirmed,
 });
 
-/* One tile of the grid. Every string from the server is a text child. */
-const PhotosTile = ({ item, onOpen }) => {
+/* One tile of the grid. Every string from the server is a text child. A
+ * video also gets an "Info" button over its corner (its details); a photo
+ * opens its details by a tap on the tile itself. */
+const PhotosTile = ({ item, onOpen, onInfo }) => {
   const video = item.kind === 'video';
   return (
-    <button type="button" className="photos-tile" onClick={() => onOpen(item)}
-            aria-label={`${video ? 'play' : 'open'} ${item.name}`}>
-      <span className="photos-tile-img">
-        <img src={video ? photosPosterUrl(item.library_id, item.path) : photosThumbUrl(item.library_id, item.path)}
-             alt="" loading="lazy" decoding="async" draggable={false}/>
-        {video && (
-          <span className="photos-tile-badge">
-            <Icon name="play" size={12}/>
-            {item.at_s != null ? <span className="mono">{fmtDur(item.at_s)}</span> : null}
-          </span>
-        )}
-      </span>
-      <span className="photos-tile-text">
-        {item.might_show
-          ? <span className="photos-tile-cap">Might show: {item.might_show}</span>
-          : <span className="photos-tile-cap photos-muted">{item.name}</span>}
-        <span className="photos-muted">{photosDay(item.taken_at)}</span>
-      </span>
-    </button>
+    <div className="photos-tile-wrap">
+      <button type="button" className="photos-tile" onClick={() => onOpen(item)}
+              aria-label={`${video ? 'play' : 'open'} ${item.name}`}>
+        <span className="photos-tile-img">
+          <img src={video ? photosPosterUrl(item.library_id, item.path) : photosThumbUrl(item.library_id, item.path)}
+               alt="" loading="lazy" decoding="async" draggable={false}/>
+          {video && (
+            <span className="photos-tile-badge">
+              <Icon name="play" size={12}/>
+              {item.at_s != null ? <span className="mono">{fmtDur(item.at_s)}</span> : null}
+            </span>
+          )}
+        </span>
+        <span className="photos-tile-text">
+          {item.might_show
+            ? <span className="photos-tile-cap">Might show: {item.might_show}</span>
+            : <span className="photos-tile-cap photos-muted">{item.name}</span>}
+          <span className="photos-muted">{photosDay(item.taken_at)}</span>
+        </span>
+      </button>
+      {video && onInfo && item.id != null && (
+        <button type="button" className="photos-tile-info" title="Info"
+                aria-label={`info about ${item.name}`} onClick={() => onInfo(item)}>
+          <Icon name="info" size={14}/><span>Info</span>
+        </button>
+      )}
+    </div>
   );
 };
 
-/* A photo's details: the bigger picture, what it might show, its tags,
- * the text found in it, its date. Esc or the backdrop closes it. */
-const PhotosDetails = ({ item, onClose }) => {
+// What the runner's state means, in words.
+const PHOTOS_STATES = {
+  pending: 'waiting to be looked at',
+  running: 'being looked at now',
+  done: 'looked at',
+  failed: 'couldn’t be read',
+  skipped: 'skipped',
+};
+
+const photosWhen = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
+
+// A moment in a video: a button that opens the player there, or plain
+// text when there is no player to open.
+const PhotosMoment = ({ at, onPlayAt }) => (onPlayAt
+  ? <button type="button" className="photos-moment mono" aria-label={`play from ${fmtDur(at)}`}
+            onClick={() => onPlayAt(at)}>{fmtDur(at)}</button>
+  : <span className="photos-moment mono">{fmtDur(at)}</span>);
+
+const PhotosFact = ({ label, children }) => (
+  <div className="photos-fact">
+    <dt className="photos-muted">{label}</dt>
+    <dd className="photos-wrap">{children}</dd>
+  </div>
+);
+
+/* The people in a photo or video (only while faces are on, never on a
+ * shared screen: the server leaves `faces` out then). A named person
+ * links to their page, an unnamed group to its page; a suggestion says
+ * so. A face in a hidden group reaches an admin only. */
+const PhotosDetailsPeople = ({ faces, video, onPlayAt }) => {
+  if (!faces.length) return <div className="photos-muted">No faces found.</div>;
+  return (
+    <ul className="photos-people-list">
+      {faces.map((f, i) => {
+        const label = f.name
+          ? `${f.name}${f.confirmed ? '' : ' (suggested)'}`
+          : (f.hidden ? 'a hidden group' : 'someone not named yet');
+        const href = f.person_id != null && f.name ? `#faces/person/${f.person_id}`
+          : (f.group_id != null ? `#faces/group/${f.group_id}` : null);
+        return (
+          <li key={i} className="photos-line">
+            {video && f.at_s != null && <PhotosMoment at={f.at_s} onPlayAt={onPlayAt}/>}
+            {href ? <a className="home-link photos-wrap" href={href}>{label}</a>
+                  : <span className="photos-wrap">{label}</span>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
+
+/* The full details of one photo or video: the file (name, folder, size,
+ * date, place), what the house worked out (the state, when, which vision
+ * model; the caption, tags, text, people) and, for a video, its frames,
+ * transcript and summary, each moment a button that opens the player
+ * there. Read from GET /api/media/items/{id}/details. Esc or the backdrop
+ * closes it. Every string from the server is a text child. */
+const PhotosDetails = ({ item, onClose, onPlayAt }) => {
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+  const path = item.id != null ? `/api/media/items/${item.id}/details` : null;
+  const { data: d, error } = useApiObject(path, { quiet: true });
+  const [extra, setExtra] = React.useState({ frames: [], transcript: [], framesPage: null, transcriptPage: null });
+  const [busy, setBusy] = React.useState(false);
+  const video = item.kind === 'video';
+
+  const more = async (which) => {
+    const page = which === 'frames' ? (extra.framesPage || (d && d.frames_page)) : (extra.transcriptPage || (d && d.transcript_page));
+    if (!page || !page.more || busy) return;
+    setBusy(true);
+    try {
+      const q = which === 'frames' ? `frames_from=${page.next}` : `segments_from=${page.next}`;
+      const r = await apiGet(`${path}?${q}`);
+      setExtra((x) => (which === 'frames'
+        ? { ...x, frames: x.frames.concat(r.frames || []), framesPage: r.frames_page }
+        : { ...x, transcript: x.transcript.concat(r.transcript || []), transcriptPage: r.transcript_page }));
+    } catch { /* the button stays; a later tap tries again */ } finally { setBusy(false); }
+  };
+
+  // Until the details come (or when they can't), what the grid already
+  // knows about it.
+  const known = (
+    <>
+      {item.taken_at && (
+        <div className="photos-muted">
+          {photosDay(item.taken_at)}{item.date_from === 'file' ? ' (the file’s date)' : ''}
+        </div>
+      )}
+      {item.might_show && <div className="photos-wrap">Might show: {item.might_show}</div>}
+      {item.tags && item.tags.length > 0 && <div className="photos-muted photos-wrap">{item.tags.join(', ')}</div>}
+      {item.text && <div className="photos-found-text">Text in it: {item.text}</div>}
+    </>
+  );
+  let body;
+  if (!path) body = known;
+  else if (error && !d) body = <>{known}<div className="photos-muted">Couldn’t load the rest of the details.</div></>;
+  else if (!d) body = <>{known}<div className="photos-muted">loading…</div></>;
+  else {
+    const u = d.understanding || {};
+    const a = d.analysis || {};
+    const tags = Array.isArray(d.tags) ? d.tags : [];
+    const frames = (Array.isArray(d.frames) ? d.frames : []).concat(extra.frames);
+    const transcript = (Array.isArray(d.transcript) ? d.transcript : []).concat(extra.transcript);
+    const framesPage = extra.framesPage || d.frames_page;
+    const transcriptPage = extra.transcriptPage || d.transcript_page;
+    const anything = !!(d.might_show || tags.length || d.text || frames.length || transcript.length || d.summary);
+    const analysed = a.state === 'done' || anything;
+    const folder = d.folder ? `${d.library} › ${d.folder}` : d.library;
+    body = (
+      <>
+        <dl className="photos-facts">
+          <PhotosFact label="File">{d.name}</PhotosFact>
+          <PhotosFact label="Folder">{folder}</PhotosFact>
+          <PhotosFact label="Size">{fmtBytes(d.size_bytes)}</PhotosFact>
+          {video && d.duration_s != null && <PhotosFact label="Length">{fmtDur(d.duration_s)}</PhotosFact>}
+          {d.taken_at && (
+            <PhotosFact label={d.date_from === 'photo' ? 'Taken' : 'Date'}>
+              {photosWhen(d.taken_at)}{d.date_from === 'file' ? ' (the file’s date)' : ''}
+            </PhotosFact>
+          )}
+          {u.places_shown && d.place && <PhotosFact label="Place">{d.place}</PhotosFact>}
+          <PhotosFact label="State">
+            {PHOTOS_STATES[a.state] || a.state}
+            {a.state === 'running' && a.stage ? ` (${a.stage})` : ''}
+            {a.error_code ? <> · <span className="mono">{a.error_code}</span></> : null}
+          </PhotosFact>
+          {a.analysed_at && <PhotosFact label="Analysed">{photosWhen(a.analysed_at)}</PhotosFact>}
+          {a.vision_model && <PhotosFact label="Vision model"><span className="mono">{a.vision_model}</span></PhotosFact>}
+        </dl>
+        {d.missing && <div className="photos-muted">This file wasn’t there at the last look at the folder.</div>}
+
+        {!u.on && (
+          <div className="photos-details-note">
+            <strong>Understanding is off</strong>
+            <div className="photos-muted">Domovoi looks at photos and videos only while it is on.</div>
+            <PhotosSettingsLink/>
+          </div>
+        )}
+        {u.on && !analysed && (
+          <div className="photos-details-note">
+            <strong>Not analysed yet</strong>
+            <div className="photos-muted">Domovoi looks at photos and videos at night and when the house is quiet.</div>
+          </div>
+        )}
+
+        {d.might_show && <div className="photos-wrap">Might show: {d.might_show}</div>}
+        {tags.length > 0 && <div className="photos-muted photos-wrap">{tags.join(', ')}</div>}
+        {d.text && <div className="photos-found-text">Text in it: {d.text}{d.text_cut ? ' …' : ''}</div>}
+
+        {video && d.summary && (
+          <section className="photos-details-section" aria-label="summary">
+            <h3 className="photos-details-h">Summary</h3>
+            {d.summary.suggested_title && <div className="photos-wrap"><strong>{d.summary.suggested_title}</strong></div>}
+            {d.summary.text && <div className="photos-found-text">{d.summary.text}</div>}
+          </section>
+        )}
+
+        {u.faces_shown && Array.isArray(d.faces) && (analysed || d.faces.length > 0) && (
+          <section className="photos-details-section" aria-label="people">
+            <h3 className="photos-details-h">People</h3>
+            <PhotosDetailsPeople faces={d.faces} video={video} onPlayAt={onPlayAt}/>
+          </section>
+        )}
+
+        {video && frames.length > 0 && (
+          <section className="photos-details-section" aria-label="frames">
+            <h3 className="photos-details-h">What it might show</h3>
+            <ul className="photos-lines">
+              {frames.map((f, i) => (
+                <li key={i} className="photos-line">
+                  <PhotosMoment at={f.at_s} onPlayAt={onPlayAt}/>
+                  <span className="photos-line-text">
+                    {f.might_show && <span className="photos-wrap">Might show: {f.might_show}</span>}
+                    {Array.isArray(f.tags) && f.tags.length > 0 && <span className="photos-muted photos-wrap">{f.tags.join(', ')}</span>}
+                    {f.text && <span className="photos-found-text">Text in it: {f.text}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {framesPage && framesPage.more && (
+              <Button onClick={() => more('frames')} disabled={busy}>show more frames</Button>
+            )}
+          </section>
+        )}
+
+        {video && transcript.length > 0 && (
+          <section className="photos-details-section" aria-label="transcript">
+            <h3 className="photos-details-h">What is said</h3>
+            <ul className="photos-lines">
+              {transcript.map((t, i) => (
+                <li key={i} className="photos-line">
+                  <PhotosMoment at={t.start_s} onPlayAt={onPlayAt}/>
+                  <span className="photos-line-text photos-found-text">{t.text}</span>
+                </li>
+              ))}
+            </ul>
+            {transcriptPage && transcriptPage.more && (
+              <Button onClick={() => more('transcript')} disabled={busy}>show more of what is said</Button>
+            )}
+          </section>
+        )}
+
+        {(d.might_show || frames.some((f) => f.might_show) || (d.summary && d.summary.text)) && (
+          <div className="photos-muted">A description is a computer’s guess at what a picture shows, and is sometimes wrong.</div>
+        )}
+      </>
+    );
+  }
+
   return (
     <div className="photos-scrim" onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-label={item.name} className="photos-details"
@@ -123,25 +348,18 @@ const PhotosDetails = ({ item, onClose }) => {
           <strong className="photos-wrap">{item.name}</strong>
           <IconButton name="x" title="close" aria-label="close" onClick={onClose}/>
         </div>
-        <img className="photos-details-img" src={photosThumbUrl(item.library_id, item.path, 'xl')} alt=""/>
+        <img className="photos-details-img" alt=""
+             src={video ? photosPosterUrl(item.library_id, item.path) : photosThumbUrl(item.library_id, item.path, 'xl')}/>
         <div className="photos-details-body">
-          {item.taken_at && (
-            <div className="photos-muted">
-              {photosDay(item.taken_at)}{item.date_from === 'file' ? ' (the file’s date)' : ''}
-            </div>
-          )}
-          {item.might_show && <div>Might show: {item.might_show}</div>}
-          {item.tags.length > 0 && <div className="photos-muted">{item.tags.join(', ')}</div>}
-          {item.text && <div className="photos-found-text">Text in it: {item.text}</div>}
-          {!item.analysed && <div className="photos-muted">Not looked at yet: found by its name.</div>}
-          {item.might_show && (
-            <div className="photos-muted">A description is a computer’s guess at what a picture shows, and is sometimes wrong.</div>
-          )}
-          <div>
-            <a className="btn btn-secondary" href={photosRawUrl(item.library_id, item.path)} target="_blank" rel="noopener noreferrer">
-              <Icon name="external-link" size={14}/> open full size
-            </a>
+          <div className="photos-details-acts">
+            {video && onPlayAt && <Button variant="primary" icon="play" onClick={() => onPlayAt(0)}>play</Button>}
+            {!video && (
+              <a className="btn btn-secondary" href={photosRawUrl(item.library_id, item.path)} target="_blank" rel="noopener noreferrer">
+                <Icon name="external-link" size={14}/> open full size
+              </a>
+            )}
           </div>
+          {body}
         </div>
       </div>
     </div>
@@ -150,25 +368,35 @@ const PhotosDetails = ({ item, onClose }) => {
 
 /* The grid, its footer (load as you scroll) and the photo / video it
  * opens. `list` is a usePagedList whose items are already in the tile
- * shape. */
+ * shape. A video's tile plays it; its Info button (on the tile and in the
+ * player) opens its details, whose moments play it from there. */
 const PhotosGrid = ({ list, noun = 'photos and videos' }) => {
   const [open, setOpen] = React.useState(null);
   const [playing, setPlaying] = React.useState(null);
+  const asVideo = (item) => ({ library_id: item.library_id, rel: item.path, name: item.name });
   const pick = (item) => {
     if (item.kind === 'video') {
-      setPlaying({ video: { library_id: item.library_id, rel: item.path, name: item.name },
-                   resumeSec: item.at_s || 0 });
+      setPlaying({ item, video: asVideo(item), resumeSec: item.at_s || 0, startSec: null });
     } else setOpen(item);
   };
+  const playAt = (item) => (at) => {
+    setOpen(null);
+    setPlaying({ item, video: asVideo(item), resumeSec: 0, startSec: Math.max(0, Number(at) || 0) });
+  };
+  const info = (item) => { setPlaying(null); setOpen(item); };
+  const canPlay = typeof VideoOverlay === 'function';
   return (
     <>
       <div className="photos-grid">
-        {list.items.map((it) => <PhotosTile key={it.key} item={it} onOpen={pick}/>)}
+        {list.items.map((it) => <PhotosTile key={it.key} item={it} onOpen={pick} onInfo={info}/>)}
       </div>
       <PagedListFooter list={list} noun={noun}/>
-      {open && <PhotosDetails item={open} onClose={() => setOpen(null)}/>}
-      {playing && typeof VideoOverlay === 'function' && (
-        <VideoOverlay video={playing.video} resumeSec={playing.resumeSec} onClose={() => setPlaying(null)}/>
+      {open && <PhotosDetails item={open} onClose={() => setOpen(null)}
+                              onPlayAt={open.kind === 'video' && canPlay ? playAt(open) : null}/>}
+      {playing && canPlay && (
+        <VideoOverlay video={playing.video} resumeSec={playing.resumeSec} startSec={playing.startSec}
+                      onInfo={playing.item && playing.item.id != null ? () => info(playing.item) : null}
+                      onClose={() => setPlaying(null)}/>
       )}
     </>
   );

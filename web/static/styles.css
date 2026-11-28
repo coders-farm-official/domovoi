@@ -2819,6 +2819,29 @@ table.qh-tbl td.mono, table.qh-tbl .qh-nowrap { white-space: nowrap; }
 .photos-details-img { display: block; max-width: 100%; max-height: 60vh; margin: 0 auto; }
 .photos-details-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; font-size: 13px; min-width: 0; }
 .photos-found-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The details sheet (Info): the file's facts as a two-column list that
+   stacks at a phone's width, the moments of a video as buttons. */
+.photos-tile-wrap { position: relative; min-width: 0; display: flex; flex-direction: column; }
+.photos-tile-info { position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; gap: 4px;
+  min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--card); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+.photos-tile-info:focus-visible, .photos-moment:focus-visible { outline: 2px solid var(--brand-ring); outline-offset: 2px; }
+.photos-details-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.photos-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; }
+.photos-fact { display: contents; }
+.photos-fact dt, .photos-fact dd { margin: 0; min-width: 0; }
+.photos-details-note { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--sunken); }
+.photos-details-section { display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  padding-top: 8px; border-top: 1px solid var(--border-soft); }
+.photos-details-section > .btn { align-self: flex-start; }
+.photos-details-h { margin: 0; font-size: 13px; font-weight: 600; }
+.photos-lines, .photos-people-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.photos-line { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.photos-line-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.photos-moment { flex: 0 0 auto; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--raised); color: var(--fg); font-size: 12px; cursor: pointer; }
+span.photos-moment { cursor: default; }
 .faces-crop { display: inline-block; flex: 0 0 auto; border-radius: var(--r-sm); border: 1px solid var(--border);
   background-color: var(--sunken); background-repeat: no-repeat; overflow: hidden; }
 .faces-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(130px, 100%), 1fr)); gap: 12px; }
@@ -2839,6 +2862,9 @@ table.qh-tbl td.mono, table.qh-tbl .qh-nowrap { white-space: nowrap; }
   .photos-search .btn, .photos-kinds .btn, .faces-face-acts .btn, .faces-row .btn, .faces-name-form .btn { min-height: 44px; }
   .photos-search input, .faces-name-form input, .faces-name-form select { height: 44px; font-size: 16px; }
   .photos-person-chip { min-height: 44px; }
+  .photos-tile-info, .photos-moment, .photos-details-acts .btn, .photos-details-section > .btn { min-height: 44px; }
+  .photos-facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .photos-fact dd { margin-bottom: 6px; }
 }
 /* A spinning icon (the Files page's "Preparing download…"). */
 @keyframes dv-spin { to { transform: rotate(360deg); } }
