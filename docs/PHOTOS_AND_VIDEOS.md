@@ -96,6 +96,14 @@ More frames find more detail in a long video and cost more time.
 - **Photos page** (Media menu): every photo and video, newest first, with a
   search box. Open one to see what it might show, its tags, the text found
   in it and its date. A video found by a moment opens at that moment.
+- **Details** (the dashboard; the phone apps later): tap a photo, or a
+  video's **Info** button on its tile or in the player, for everything
+  Domovoi worked out about the file: its name, folder, size and date, the
+  place (with locations on), the people in it (with faces on; never on a
+  shared screen, and a hidden group's faces only for an admin), whether it
+  has been looked at, when, with which vision model and any error code,
+  and for a video what its frames might show, what is said in it (with
+  times) and its summary. A time plays the video from there.
 - **Videos page**: its search also looks inside videos.
 - **Words, times and places** can be mixed: "dog at the beach last summer",
   "Christmas 2021", "photos from Portland", "at home". A month, season or

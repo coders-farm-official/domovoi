@@ -87,8 +87,10 @@ const VideoPosterTile = ({ video, progress, onClick }) => {
 /* Full-screen playback overlay. Starts at `startSec` when given (a chat
  * result's moment), else auto-resumes at `resumeSec`, saves the
  * position every 5 s while playing plus on pause/close/end (end saves 0 so
- * a finished video restarts next time). Esc closes. */
-const VideoOverlay = ({ video, resumeSec, startSec, onClose }) => {
+ * a finished video restarts next time). Esc closes. `onInfo` (Photos:
+ * the file's details) adds an "Info" button that saves the position and
+ * hands over; without it there is no button. */
+const VideoOverlay = ({ video, resumeSec, startSec, onClose, onInfo }) => {
   const p = usePlayback();
   const ref = React.useRef(null);
   const lastSave = React.useRef(0);
@@ -133,20 +135,30 @@ const VideoOverlay = ({ video, resumeSec, startSec, onClose }) => {
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'oklch(0.12 0.005 80)',
                   display: 'flex', flexDirection: 'column' }}>
+      {/* The title keeps at least 140px: on a narrow phone the buttons
+          wrap to a row of their own rather than squeeze the name away. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px',
-                    color: 'oklch(0.95 0.005 80)' }}>
-        <div style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600,
+                    flexWrap: 'wrap', color: 'oklch(0.95 0.005 80)' }}>
+        <div style={{ flex: '1 1 140px', minWidth: 0, fontSize: 14, fontWeight: 600,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {video.title || video.name}
           <span className="mono" style={{ fontSize: 11, marginLeft: 10, opacity: 0.55 }}>
             {video.library_label || video.library_id}
           </span>
         </div>
-        <Button icon="rotate-ccw" title="start over"
+        {onInfo && (
+          <Button icon="info" title="details about this video" style={{ whiteSpace: 'nowrap' }} aria-label={`info about ${video.title || video.name}`}
+                  onClick={() => {
+                    const el = ref.current;
+                    if (el && !errored && el.currentTime > 0 && !el.ended) save(el.currentTime);
+                    onInfo();
+                  }}>Info</Button>
+        )}
+        <Button icon="rotate-ccw" title="start over" style={{ whiteSpace: 'nowrap' }}
                 onClick={() => { const el = ref.current; if (el) { el.currentTime = 0; el.play().catch(() => {}); } }}>
           start over
         </Button>
-        <Button icon="download" title="save to this device"
+        <Button icon="download" title="save to this device" style={{ whiteSpace: 'nowrap' }}
                 onClick={() => deviceDownload(vidStreamUrl(video, true))}>save</Button>
         <IconButton name="x" title="close" onClick={close}/>
       </div>
