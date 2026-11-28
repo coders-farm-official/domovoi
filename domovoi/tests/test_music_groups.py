@@ -237,7 +237,7 @@ async def test_the_sweeper_marks_a_playing_or_paused_group_alive(house, monkeypa
     await music_groups.upkeep(app)
     await music_groups.upkeep(app)  # within TOUCH_EVERY_SEC: not again
     assert touched == [sh.id]
-    sh.touched = 0.0
+    sh.touched = None
     await house.clients["garage"].pause()  # a paused group stays alive
     await music_groups.upkeep(app)
     assert touched == [sh.id, sh.id]
@@ -245,7 +245,7 @@ async def test_the_sweeper_marks_a_playing_or_paused_group_alive(house, monkeypa
     async def no_answer():
         raise ConnectionError("not answering")
 
-    sh.touched = 0.0
+    sh.touched = None
     monkeypatch.setattr(house.clients["garage"], "state", no_answer)
     await music_groups.upkeep(app)  # can't tell: not marked
     assert touched == [sh.id, sh.id]

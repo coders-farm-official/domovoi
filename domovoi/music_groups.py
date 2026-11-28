@@ -276,8 +276,9 @@ class Share:
     #: sweeper looks in a row that found the host stopped.
     stopped_looks: int = 0
     #: monotonic: when the sweeper last marked the database row alive
-    #: (:func:`_touch`); 0 until it first does.
-    touched: float = 0.0
+    #: (:func:`_touch`); None until it first does (the first look always
+    #: marks it: monotonic time can be small on a machine just booted).
+    touched: float | None = None
 
     @property
     def rooms(self) -> list[str]:
@@ -944,7 +945,7 @@ async def upkeep(app: Any) -> None:
                 continue
         elif state is not None:
             sh.stopped_looks = 0
-            if now - sh.touched >= TOUCH_EVERY_SEC:
+            if sh.touched is None or now - sh.touched >= TOUCH_EVERY_SEC:
                 sh.touched = now
                 await _touch(sh)
         for room in list(sh.members):
