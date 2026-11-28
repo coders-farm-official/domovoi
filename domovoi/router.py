@@ -223,6 +223,31 @@ def _end_sentence(text: str) -> str:
     return text + "."
 
 
+def with_lead(lead: str | None, text: str | None) -> str:
+    """``lead`` as its own sentence, then ``text`` ("Thanks, Alex." +
+    "Playing X." → "Thanks, Alex. Playing X."). Either may be empty."""
+    lead = (lead or "").strip()
+    text = (text or "").strip()
+    if not lead:
+        return text
+    if not text:
+        return lead
+    return f"{_end_sentence(lead)} {text}"
+
+
+def said_slice(said: str, rest: str) -> str:
+    """``rest`` — words of ``said`` as a handler read them (normalized:
+    lowercased, a comma between two words dropped) — in ``said``'s own
+    casing ("yes, announce Dinner is ready" → "announce Dinner is ready"),
+    so the routed rest reads as it was said. ``rest`` itself when its words
+    can't be found in ``said`` in that order."""
+    words = (rest or "").split()
+    if not words:
+        return rest
+    found = re.search(r"[\s,]+".join(f"({re.escape(w)})" for w in words), said or "", re.IGNORECASE)
+    return " ".join(found.groups()) if found else rest
+
+
 # Yes/no detection for the multi-turn confirmation flow. Tight on
 # purpose — anything not clearly affirmative or negative falls through
 # to normal routing rather than getting accidentally wired into a
@@ -699,6 +724,17 @@ async def _persist_turn(
         from domovoi.sdk.friend_houses import guard_response
 
         await guard_response(response)
+    # The rest of a reply to a parked question ("yes, play X";
+    # Context.answered_first): the rows keep what was said, whole, and the
+    # reply with the question's part in front, as the room hears it. A copy:
+    # the caller speaks (and puts that part in front of) its own response.
+    first = getattr(ctx, "answered_first", None)
+    if first is not None:
+        intent = intent.model_copy(update={"transcript": first[0]})
+        update = {"text": with_lead(first[1], response.text)}
+        if response.history_text is not None:
+            update["history_text"] = with_lead(first[1], response.history_text)
+        response = response.model_copy(update=update)
     # A voice turn's stage timings (speech-to-text, voice identification,
     # the capture length) go in with the row, in this same transaction;
     # the stages after routing are merged into it by id once the reply is
@@ -1171,6 +1207,9 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
             return None
         if response is None:
             return None
+        if response.then_route and ctx.answered_first is None:
+            return await _route_rest(response)
+        response.then_route = None
         response.matched_handler = response.matched_handler or handler.name
         response.matched_path = "confirmation"
         response.session_id = session_id
@@ -1186,6 +1225,30 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
             latency_ms=_elapsed_ms(),
         )
         return response
+
+    async def _route_rest(answer: Response) -> Response:
+        """A reply that answered the parked question AND asked for more
+        ("yes, wrong song though. Play X" to "was that you, X?"): the
+        question's handler has done its part (``answer.text``, maybe
+        empty) and handed back the rest (``answer.then_route``). The rest
+        is routed now, in this turn, as if said alone — a fast path, the
+        tool model, Q&A — and its reply follows the handler's. One turn,
+        one set of rows: the rest's route writes them, with what was
+        actually said (Context.answered_first). Once: a reply to a question
+        the rest parks is the next turn's. Its Q&A answer is not streamed,
+        so the handler's part can go in front of it."""
+        lead = (answer.text or "").strip()
+        rest_ctx = ctx.model_copy(update={
+            "answered_first": (intent.transcript, lead), "stream_qa": False,
+        })
+        rest = said_slice(intent.transcript, str(answer.then_route))
+        routed = await _route_turn(
+            intent.model_copy(update={"transcript": rest}), rest_ctx, session,
+        )
+        routed.text = with_lead(lead, routed.text)
+        if routed.history_text is not None:
+            routed.history_text = with_lead(lead, routed.history_text)
+        return routed
 
     # ── A live drop-in: "stop" / "hang up" end it, before anything else ──
     # Said in a room that is in a call, these end the call — ahead of a
