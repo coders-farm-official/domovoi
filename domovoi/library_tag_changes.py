@@ -3,18 +3,27 @@
 Every update by the enricher (``cause`` ``enrich``), its repair
 (``repair``) and the re-match (``rematch``) that changes a track's title,
 artist, album or MusicBrainz recording id writes one ``library_tag_changes``
-row in the SAME statement as the update (:func:`logged_update`): the
-track's tracked columns before (``old``) and after (``new``), and the
-``batch_id`` of the run that made it (one per sweep, repair or re-match).
-Before V088 these updates overwrote the old values in place.
+row in the SAME statement as the update (:func:`logged_update`; run it with
+:func:`execute_logged`, which locks the row first): the track's tracked
+columns before (``old``) and after (``new``), and the ``batch_id`` of the
+run that made it (one per sweep, repair or re-match). Before V088 these
+updates overwrote the old values in place.
 
 :func:`undo_batch` puts a batch's ``old`` values back, newest change first,
-but only on a track whose names still equal the batch's ``new`` (a later
-sweep, re-match or edit since then wins), and never on a track a person
-edited by hand: ``enrich_outcome`` ``manual`` (the dashboard's track editor,
-``web/backend/api/music.py`` ``patch_track``) or ``reviewed`` (a candidate
-applied from "Needs review"). An undo is itself logged (``cause`` ``undo``,
-a batch of its own), so it can be undone the same way.
+but only on a track whose title, artist and recording id still equal the
+batch's ``new`` (a later sweep, re-match or edit since then wins; the album
+is not compared, because the year and cover-art lookups fill an empty album
+by the recording id afterwards, and the undo puts the old album back with
+the rest), and never on a track a person edited by hand: ``enrich_outcome``
+``manual`` (the dashboard's track editor, ``web/backend/api/music.py``
+``patch_track``) or ``reviewed`` (a candidate applied from "Needs review").
+
+An undo never leaves a track waiting for song recognition: where ``old``
+was "not enriched yet" (an undone sweep match), the next sweep would only
+match it again with the same answer, so the track is stamped ``disagreed``
+instead (enriched now, its names as they were), and the answer that was
+undone waits in "Needs review" as its candidate. An undo is itself logged
+(``cause`` ``undo``, a batch of its own), so it can be undone the same way.
 
 The files' own tags are never written (tags are database-only): this is
 the only record of what a track's names were.
@@ -37,9 +46,11 @@ CAUSE_REMATCH = "rematch"
 CAUSE_UNDO = "undo"
 CAUSES = (CAUSE_ENRICH, CAUSE_REPAIR, CAUSE_REMATCH, CAUSE_UNDO)
 
-#: The names a change is about: a row is logged when one of these moved,
-#: and an undo applies only while the track still has the batch's values.
+#: The names a change is about: a row is logged when one of these moved.
 NAME_COLUMNS = ("title", "artist", "album", "musicbrainz_recording_id")
+#: What an undo holds a track to: it applies only while the track still has
+#: the batch's values for these (not the album: see the module docstring).
+UNDO_GUARD_COLUMNS = ("title", "artist", "musicbrainz_recording_id")
 
 #: Everything a change keeps of a track, before and after: the names, the
 #: ids and the year and genre that came with a recording id, and the
@@ -54,6 +65,8 @@ TRACKED_COLUMNS = NAME_COLUMNS + (
 
 #: Outcomes a person set: an undo never touches these tracks.
 HAND_OUTCOMES = ("manual", "reviewed")
+#: What an undo stamps a track that ``old`` would leave waiting.
+UNDONE_OUTCOME = "disagreed"
 
 
 def _snapshot(alias: str) -> str:
@@ -72,12 +85,13 @@ def logged_update(set_sql: str, where_sql: str = "", from_sql: str = "") -> str:
     ``library_tag_changes`` row with the track before and after, under
     ``:batch_id`` (a uuid) and ``:cause``. ``from_sql`` adds a ``FROM``
     list to the update. Answers one row: ``updated`` (0 or 1) and
-    ``logged`` (0 or 1)."""
+    ``logged`` (0 or 1). Run it with :func:`execute_logged`."""
     where = f"library_tracks.id = :id {where_sql}".strip()
     from_part = f" FROM {from_sql}" if from_sql else ""
     # "before" reads the statement's snapshot, so it sees the row as it was
-    # before "after" changed it. (No FOR UPDATE: a row the same statement
-    # updates would be skipped by it.)
+    # before "after" changed it. (No FOR UPDATE here: a row the same
+    # statement updates would be skipped by it; execute_logged locks the
+    # row first, so the snapshot can't be stale.)
     return f"""
         WITH before AS (
             SELECT t.id, {_snapshot('t')} AS snap
@@ -98,13 +112,33 @@ def logged_update(set_sql: str, where_sql: str = "", from_sql: str = "") -> str:
     """
 
 
+_LOCK_SQL = text("SELECT 1 FROM library_tracks WHERE id = :id FOR UPDATE")
+
+
+async def execute_logged(session: Any, sql: str, params: dict[str, Any]) -> Any:
+    """Lock the track's row, then run a :func:`logged_update` statement on
+    it (in the caller's transaction): a writer that changed the row since
+    this transaction's last snapshot can't leave a stale ``old``. Returns
+    the ``(updated, logged)`` row."""
+    await session.execute(_LOCK_SQL, {"id": params["id"]})
+    return (await session.execute(text(sql), params)).first()
+
+
 def new_batch_id() -> str:
     return str(uuid.uuid4())
 
 
+# Would the change's "old" leave the track waiting for song recognition
+# (library_enricher.WAITING_WHERE: never enriched, or a pre-V020 stamp with
+# no outcome and no recording id)?
+_OLD_WAITS = (
+    "(c.old->>'enriched_at' IS NULL OR (c.old->>'enrich_outcome' IS NULL "
+    "AND c.old->>'musicbrainz_recording_id' IS NULL))"
+)
 # An undo puts the change's ``old`` back, every tracked column, read from
-# the change row itself (JSON text back to each column's type).
-_RESTORE_OLD_SET = """
+# the change row itself (JSON text back to each column's type), except that
+# a track "old" would leave waiting is stamped :data:`UNDONE_OUTCOME` now.
+_RESTORE_OLD_SET = f"""
     title = c.old->>'title',
     artist = c.old->>'artist',
     album = c.old->>'album',
@@ -119,13 +153,15 @@ _RESTORE_OLD_SET = """
         THEN ARRAY(SELECT jsonb_array_elements_text(c.old->'genre_keys')) END,
     genre_source = c.old->>'genre_source',
     genre_checked_at = CAST(c.old->>'genre_checked_at' AS timestamptz),
-    enriched_at = CAST(c.old->>'enriched_at' AS timestamptz),
-    enrich_outcome = c.old->>'enrich_outcome'
+    enriched_at = CASE WHEN {_OLD_WAITS} THEN now()
+        ELSE CAST(c.old->>'enriched_at' AS timestamptz) END,
+    enrich_outcome = CASE WHEN {_OLD_WAITS} THEN CAST(:undone AS text)
+        ELSE c.old->>'enrich_outcome' END
 """
 _UNDO_SQL = logged_update(_RESTORE_OLD_SET, "AND c.id = :change_id", "library_tag_changes c")
 
 _BATCH_CHANGES_SQL = """
-    SELECT id, track_id, new FROM library_tag_changes
+    SELECT id, track_id, old, new FROM library_tag_changes
     WHERE batch_id = CAST(:batch_id AS uuid) AND undone_at IS NULL
     ORDER BY id DESC
 """
@@ -147,22 +183,64 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def still_as_changed(current: dict[str, Any], new: dict[str, Any]) -> bool:
-    """Does a track still have the names a change gave it? Pure."""
-    return all(current.get(c) == new.get(c) for c in NAME_COLUMNS)
+    """Does a track still have the title, artist and recording id a change
+    gave it (:data:`UNDO_GUARD_COLUMNS`)? Pure."""
+    return all(current.get(c) == new.get(c) for c in UNDO_GUARD_COLUMNS)
+
+
+def old_waits(old: dict[str, Any]) -> bool:
+    """Would ``old`` leave a track waiting for song recognition? Pure."""
+    if old.get("enriched_at") is None:
+        return True
+    return old.get("enrich_outcome") is None and old.get("musicbrainz_recording_id") is None
+
+
+async def batch_open(session: Any, batch_id: str) -> int:
+    """How many changes of ``batch_id`` are not undone."""
+    return int((await session.execute(text(
+        "SELECT count(*) FROM library_tag_changes "
+        "WHERE batch_id = CAST(:b AS uuid) AND undone_at IS NULL"
+    ), {"b": str(batch_id)})).scalar_one() or 0)
+
+
+async def _keep_undone_answer(session: Any, track_id: int, new: dict[str, Any]) -> None:
+    """The answer an undo reverted, as the track's "Needs review" candidate."""
+    if not (new.get("title") or new.get("artist")):
+        return
+    cand = {
+        "title": new.get("title"), "artist": new.get("artist"), "album": new.get("album"),
+        "length_sec": None, "score": None, "sources": None,
+        "recording_id": new.get("musicbrainz_recording_id"),
+        "release_group_id": new.get("musicbrainz_release_group_id"), "source": "undone",
+    }
+    try:
+        async with session.begin_nested():
+            await session.execute(text(
+                "INSERT INTO library_match_candidates (track_id, reason, candidates, stored_at) "
+                "VALUES (:id, 'disagreed', CAST(:c AS jsonb), now()) "
+                "ON CONFLICT (track_id) DO UPDATE SET reason = EXCLUDED.reason, "
+                "candidates = EXCLUDED.candidates, stored_at = EXCLUDED.stored_at "
+                "WHERE library_match_candidates.decided IS NULL"
+            ), {"id": track_id, "c": json.dumps([cand])})
+    except Exception as e:  # noqa: BLE001 — a lane without V058; the undo still lands
+        log.debug("tag changes undo: couldn't keep the undone answer for %s: %s", track_id, e)
 
 
 async def undo_batch(batch_id: str) -> dict[str, Any]:
     """Put back the ``old`` values of every change in ``batch_id`` not yet
     undone, newest first, in one transaction. A track is skipped when its
-    names no longer equal the change's ``new`` (``changed_since``) or a
-    person edited it (``hand_edited``). Returns ``{"batch_id", "changes",
-    "restored", "changed_since", "hand_edited", "undo_batch_id"}``; the
-    undo's own changes are logged under ``undo_batch_id``."""
+    title, artist or recording id no longer equal the change's ``new``
+    (``changed_since``) or a person edited it (``hand_edited``); one ``old``
+    would leave waiting is stamped ``disagreed`` instead (``stamped``), with
+    the undone answer kept for "Needs review". Returns ``{"batch_id",
+    "changes", "restored", "stamped", "changed_since", "hand_edited",
+    "undo_batch_id"}``; the undo's own changes are logged under
+    ``undo_batch_id``."""
     from domovoi.db.session import session_scope
 
     undo_id = new_batch_id()
     out: dict[str, Any] = {
-        "batch_id": str(batch_id), "changes": 0, "restored": 0,
+        "batch_id": str(batch_id), "changes": 0, "restored": 0, "stamped": 0,
         "changed_since": 0, "hand_edited": 0, "undo_batch_id": undo_id,
     }
     async with session_scope() as s:
@@ -176,17 +254,21 @@ async def undo_batch(batch_id: str) -> dict[str, Any]:
             if cur["enrich_outcome"] in HAND_OUTCOMES:
                 out["hand_edited"] += 1
                 continue
-            if not still_as_changed(dict(cur), _as_dict(ch.new)):
+            new = _as_dict(ch.new)
+            if not still_as_changed(dict(cur), new):
                 out["changed_since"] += 1
                 continue
-            await s.execute(text(_UNDO_SQL), {
-                "id": ch.track_id, "change_id": ch.id,
+            await execute_logged(s, _UNDO_SQL, {
+                "id": ch.track_id, "change_id": ch.id, "undone": UNDONE_OUTCOME,
                 "batch_id": undo_id, "cause": CAUSE_UNDO,
             })
             await s.execute(
                 text("UPDATE library_tag_changes SET undone_at = now() WHERE id = :id"),
                 {"id": ch.id},
             )
+            if old_waits(_as_dict(ch.old)):
+                out["stamped"] += 1
+                await _keep_undone_answer(s, int(ch.track_id), new)
             restored_ids.append(int(ch.track_id))
         out["restored"] = len(restored_ids)
         if restored_ids:
@@ -209,9 +291,9 @@ async def undo_batch(batch_id: str) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001 — the fingerprint catches up anyway
             log.debug("tag changes undo: couldn't refresh the name index: %s", e)
     log.info(
-        "library tag changes: undid batch %s: restored=%d changed_since=%d hand_edited=%d "
-        "(undo batch %s)", batch_id, out["restored"], out["changed_since"],
-        out["hand_edited"], undo_id,
+        "library tag changes: undid batch %s: restored=%d (stamped %d) changed_since=%d "
+        "hand_edited=%d (undo batch %s)", batch_id, out["restored"], out["stamped"],
+        out["changed_since"], out["hand_edited"], undo_id,
     )
     return out
 

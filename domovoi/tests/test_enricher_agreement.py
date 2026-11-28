@@ -355,7 +355,9 @@ async def test_repair_waits_for_a_running_sweep(monkeypatch) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_admin_repair_route_queues_the_repair(monkeypatch) -> None:
+async def test_admin_repair_route_is_retired_in_favour_of_the_rematch(monkeypatch) -> None:
+    # 2026-11-28: under the strict name check the immediate repair would
+    # rewrite the whole re-match list unasked; it points at the re-match.
     from httpx import ASGITransport, AsyncClient
 
     from domovoi.main import app
@@ -365,8 +367,9 @@ async def test_admin_repair_route_queues_the_repair(monkeypatch) -> None:
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             r = await client.post("/v1/admin/library/enrich/repair")
-            assert r.status_code == 200
-            assert r.json() == {"queued": True, "worker": "library_enricher_repair"}
+            assert r.status_code == 410
+            assert r.json()["detail"]["use"] == "/v1/admin/library/enrich/rematch"
+            repair.assert_not_awaited()
             monkeypatch.setattr(le, "_sweep_running", True)
             busy = await client.post("/v1/admin/library/enrich/repair")
             assert busy.json() == {"queued": False, "reason": "running"}

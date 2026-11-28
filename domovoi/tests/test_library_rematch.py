@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from domovoi import library_tag_changes as tc
 from domovoi.tests import media_writer as mw
+from domovoi.tests.auth_testkit import _db  # noqa: F401 — fixture
 from domovoi.tests.conftest import requires_db
 from domovoi.tests.enrich_outcome_testkit import apply_v020
 from domovoi.workers import library_enricher as le
@@ -223,9 +224,10 @@ async def test_dry_run_apply_audit_sweep_and_undo(lane, monkeypatch, tmp_path) -
     # The audit comes back clean (the bad encoding is still listed, never changed).
     again = await rm.dry_run()
     assert [r["action"] for r in again["rows"]] == [rm.ACTION_BAD_ENCODING]
-    # The same batch id can't be applied twice.
-    with pytest.raises(rm.PlanChanged):
-        await rm.apply(plan["batch_id"])
+    # The same apply again changes nothing and says so.
+    twice = await rm.apply(plan["batch_id"])
+    assert (twice["already_applied"], twice["applied"]) == (True, 2)
+    assert {r[0]: r for r in await _table(lane)} == got
 
     # The next sweep picks the right sibling when the fingerprint lists it.
     wrong = le.EnrichmentResult("Ghetto Cowboy", BONE_MB, musicbrainz_recording_id="r-ghetto",
@@ -246,10 +248,17 @@ async def test_dry_run_apply_audit_sweep_and_undo(lane, monkeypatch, tmp_path) -
     mo = {r[0]: r for r in await _table(lane)}[ids["mo"]]
     assert mo[1:6] == ("Mo’ Murda", BONE_MB, "E. 1999 Eternal", "r-mo", "matched")
 
-    # Undo the sweep, then the re-match: the library is as it was.
+    # Undo the sweep: the file's names stay, marked for review rather than
+    # put back in the queue (a boot sweep would re-match it at once).
     sweep_batch = (await lane.execute(text(
         "SELECT CAST(batch_id AS text) FROM library_tag_changes WHERE cause = 'enrich'"))).scalar_one()
-    assert (await tc.undo_batch(sweep_batch))["restored"] == 1
+    undone = await tc.undo_batch(sweep_batch)
+    assert (undone["restored"], undone["stamped"]) == (1, 1)
+    mo = {r[0]: r for r in await _table(lane)}[ids["mo"]]
+    assert mo[1:6] == ("Mo'murda", BONE, "E. 1999 Eternal", None, "disagreed")
+    with egress.override_policy("always"):
+        assert (await le.enrich_library())["scanned"] == 0
+    # Then the re-match: the library is as it was.
     assert (await tc.undo_batch(plan["batch_id"]))["restored"] == 2
     after = {r[0]: r for r in await _table(lane)}
     for row in before:
@@ -268,10 +277,56 @@ async def test_apply_waits_for_a_running_sweep(lane, monkeypatch) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_the_admin_rematch_route(lane, monkeypatch, tmp_path) -> None:
+async def test_a_part_of_the_list_can_be_applied(lane, tmp_path) -> None:
+    ids = await _library(lane, tmp_path)
+    plan = await rm.dry_run()
+    with pytest.raises(rm.NotInDryRun) as outside:
+        await rm.apply(plan["batch_id"], [ids["mo"], ids["hand"]])
+    assert outside.value.ids == [ids["hand"]]
+    with pytest.raises(rm.NotInDryRun):       # bad encoding is never applied
+        await rm.apply(plan["batch_id"], [ids["odd"]])
+
+    out = await rm.apply(plan["batch_id"], [ids["mo"]])
+    assert (out["applied"], out["rematch"], out["review"]) == (1, 1, 0)
+    assert out["batch_id"] == rm.applied_batch_id(plan["batch_id"], [ids["mo"]]) != plan["batch_id"]
+    titles = dict((await lane.execute(text("SELECT id, title FROM library_tracks"))).all())
+    assert titles[ids["mo"]] == "Mo'murda" and titles[ids["upload"]] == "Ask Me Why"
+    # The same part again: already applied.
+    assert (await rm.apply(plan["batch_id"], [ids["mo"]]))["already_applied"] is True
+    # Undo by the part's own batch id.
+    assert (await tc.undo_batch(out["batch_id"]))["restored"] == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_row_changed_after_the_dry_run_read_it_is_left_alone(
+    lane, monkeypatch, tmp_path,
+) -> None:
+    ids = await _library(lane, tmp_path)
+    plan = await rm.dry_run()
+    # A plugin's write lands between the apply's dry run and its update.
+    await lane.execute(text("UPDATE library_tracks SET title = 'Mo Murda (plugin)' WHERE id = :i"),
+                       {"i": ids["mo"]})
+    await lane.commit()
+
+    async def stale_dry_run():
+        return plan
+
+    monkeypatch.setattr(rm, "dry_run", stale_dry_run)
+    out = await rm.apply(plan["batch_id"])
+    assert (out["applied"], out["changed_since"]) == (1, 1)
+    titles = dict((await lane.execute(text("SELECT id, title FROM library_tracks"))).all())
+    assert titles[ids["mo"]] == "Mo Murda (plugin)"            # the later write wins
+    assert titles[ids["upload"]] == "Drive My Car"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_admin_rematch_route(lane, _db, monkeypatch, tmp_path) -> None:  # noqa: F811
     from httpx import ASGITransport, AsyncClient
 
     from domovoi.main import app
+    from domovoi.tests.auth_testkit import bearer, claim_admin, web_client
 
     ids = await _library(lane, tmp_path)
     started = []
@@ -281,23 +336,65 @@ async def test_the_admin_rematch_route(lane, monkeypatch, tmp_path) -> None:
         return {"queued": True}
 
     monkeypatch.setattr("domovoi.main.admin_library_enrich", fake_sweep)
-    async with app.router.lifespan_context(app):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            dry = await client.post("/v1/admin/library/enrich/rematch")
-            assert dry.status_code == 200 and dry.json()["dry_run"] is True
-            batch = dry.json()["batch_id"]
-            assert (await client.post("/v1/admin/library/enrich/rematch",
-                                      json={"apply": True})).status_code == 422
-            assert (await client.post("/v1/admin/library/enrich/rematch",
-                                      json={"batch_id": batch})).status_code == 422
-            stale = await client.post("/v1/admin/library/enrich/rematch",
-                                      json={"apply": True, "batch_id": tc.new_batch_id()})
-            assert stale.status_code == 409 and stale.json()["detail"]["batch_id"] == batch
-            ok = await client.post("/v1/admin/library/enrich/rematch",
-                                   json={"apply": True, "batch_id": batch})
-            assert ok.status_code == 200, ok.text
-            assert (ok.json()["applied"], ok.json()["sweep"]) == (2, "queued")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # The security tier: nothing before setup.
+        assert (await client.post("/v1/admin/library/enrich/rematch")).status_code == 501
+    async with web_client() as web:
+        token = await claim_admin(web)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test",
+                           headers=bearer(token)) as client:
+        dry = await client.post("/v1/admin/library/enrich/rematch")
+        assert dry.status_code == 200 and dry.json()["dry_run"] is True, dry.text
+        batch = dry.json()["batch_id"]
+        assert (await client.post("/v1/admin/library/enrich/rematch",
+                                  json={"apply": True})).status_code == 422
+        assert (await client.post("/v1/admin/library/enrich/rematch",
+                                  json={"batch_id": batch})).status_code == 422
+        stale = await client.post("/v1/admin/library/enrich/rematch",
+                                  json={"apply": True, "batch_id": tc.new_batch_id()})
+        assert stale.status_code == 409 and stale.json()["detail"]["batch_id"] == batch
+        outside = await client.post("/v1/admin/library/enrich/rematch",
+                                    json={"apply": True, "batch_id": batch,
+                                          "track_ids": [ids["hand"]]})
+        assert outside.status_code == 422 and outside.json()["detail"]["track_ids"] == [ids["hand"]]
+        ok = await client.post("/v1/admin/library/enrich/rematch",
+                               json={"apply": True, "batch_id": batch})
+        assert ok.status_code == 200, ok.text
+        assert (ok.json()["applied"], ok.json()["sweep"]) == (2, "queued")
+        # Sent again (a web hop that timed out and retried): the same answer, no change.
+        again = await client.post("/v1/admin/library/enrich/rematch",
+                                  json={"apply": True, "batch_id": batch})
+        assert again.status_code == 200 and again.json()["already_applied"] is True
+        status = (await client.get("/v1/admin/library/enrich/rematch/status")).json()["job"]
+        assert (status["kind"], status["state"]) == ("apply", "done")
     assert started == [True]
     title = (await lane.execute(text("SELECT title FROM library_tracks WHERE id = :i"),
                                 {"i": ids["mo"]})).scalar_one()
     assert title == "Mo'murda"
+
+
+@pytest.mark.asyncio
+async def test_a_second_request_joins_the_running_job_and_another_kind_waits() -> None:
+    import asyncio
+
+    gate = asyncio.Event()
+    calls = []
+
+    async def slow():
+        calls.append(1)
+        await gate.wait()
+        return {"dry_run": True}
+
+    first = rm.start_job("dry_run", {}, slow)
+    assert rm.start_job("dry_run", {}, slow) is first          # joined
+    with pytest.raises(rm.Busy):
+        rm.start_job("undo", {"batch_id": "x"}, slow)
+    job = await rm.wait_for(first, 0.05)
+    assert job.state == "running"
+    gate.set()
+    job = await rm.wait_for(first, 5)
+    assert (job.state, job.result, calls) == ("done", {"dry_run": True}, [1])
+    # Done: a new job may start.
+    second = rm.start_job("undo", {"batch_id": "x"}, slow)
+    assert second is not first
+    await rm.wait_for(second, 5)

@@ -23,10 +23,15 @@ a way that would otherwise get reported as a bug.
   and a whole batch can be undone. Tag text that can't be decoded is no
   longer stored as it is: it is decoded properly where possible (UTF-8 or
   Windows-1252 bytes in a Latin-1 tag, a file name that isn't UTF-8),
-  otherwise the character becomes U+FFFD. New routes:
-  `/v1/admin/library/enrich/rematch`, `/v1/admin/library/tag-changes/undo`
-  and `/v1/admin/library/tag-changes`, with their `/api/music/library/...`
-  proxies (API_REFERENCE.md, §2.8 and §3.5).
+  otherwise the character becomes U+FFFD. New routes, on the security
+  tier (admin Bearer, nothing before setup):
+  `/v1/admin/library/enrich/rematch` (and its `/status`),
+  `/v1/admin/library/tag-changes/undo` and `/v1/admin/library/tag-changes`,
+  with their `/api/music/library/...` proxies (API_REFERENCE.md, §2.8 and
+  §3.5). **The repair is retired:** `POST /api/music/library/enrich/repair`
+  without a body now answers `410` and points at the re-match, because
+  under the stricter check it would rewrite that whole list at once,
+  unasked. Its `requeue_disagreed` window still works.
 - **What to do.** A library an earlier sweep renamed this way is fixed by
   the re-match, in two steps, with the admin Bearer. First the dry run,
   which changes nothing: `POST /api/music/library/enrich/rematch` with no
@@ -35,9 +40,15 @@ a way that would otherwise get reported as a bug.
   "restore only, needs review"; tracks whose names hold undecodable text
   are listed as "bad encoding" and never changed. Then, to apply exactly
   that list: the same call with `{"apply": true, "batch_id": "<the dry
-  run's batch_id>"}` (`409` if the library changed since: run the dry run
-  again). `POST /api/music/library/tag-changes/undo` with that `batch_id`
-  puts the old names back. Tracks edited by hand are never touched.
+  run's batch_id>"}`, adding `"track_ids": [...]` to apply only the rows
+  you agree with (`409` if the library changed since: run the dry run
+  again). A dry run can take minutes: an answer of `202` means it is
+  still running, and `GET /api/music/library/enrich/rematch/status` gives
+  it once done. Sending the same apply twice changes nothing.
+  `POST /api/music/library/tag-changes/undo` with the apply's `batch_id`
+  puts the old names back; undoing a sweep's matches marks those tracks
+  for "Needs review" rather than queueing them to be matched again.
+  Tracks edited by hand are never touched.
 
 ## 1.5.0 (unreleased) — Chat from away
 

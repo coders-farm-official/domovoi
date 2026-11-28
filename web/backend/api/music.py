@@ -32,14 +32,15 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
 from domovoi.room_ids import require_room_id_path
 from domovoi.admin_auth import (
     check_device_request,
     require_admin_mutation,
-    require_admin_read,
+    require_admin_security,
+    require_admin_security_read,
     require_device,
 )
 from domovoi.cover_art_writer import cover_cache_file
@@ -104,7 +105,10 @@ router = APIRouter(
 # ``domovoi/tests/test_kiosk_surface_is_documented.py``.
 DEVICE = [Depends(require_device)]
 ADMIN = [Depends(require_admin_mutation)]
-ADMIN_READ = [Depends(require_admin_read)]
+# The re-match and the undo of song recognition's name changes (2026-11-28):
+# the security tier at both hops, no pre-setup grace.
+SECURITY = [Depends(require_admin_security)]
+SECURITY_READ = [Depends(require_admin_security_read)]
 
 
 # ─── Library ───────────────────────────────────────────────────────────────
@@ -1386,12 +1390,11 @@ class EnrichRepairBody(BaseModel):
 
 @router.post("/library/enrich/repair", dependencies=ADMIN)
 async def enrich_repair(request: Request, body: EnrichRepairBody | None = None):
-    """Put the file's own names back on tracks song recognition renamed
-    to a song that isn't theirs. Admin tier at both hops, like the
-    enrich it repairs after; hand-edited tracks are never touched. With
-    ``requeue_disagreed: {since, until}``: instead put the tracks marked
+    """Without a body: RETIRED (2026-11-28), the core answers ``410``
+    pointing at ``/library/enrich/rematch`` (a dry run the owner approves).
+    With ``requeue_disagreed: {since, until}``: put the tracks marked
     ``disagreed`` in that window back in the enrichment queue (the undo
-    for a repair that marked tracks wrongly)."""
+    for a repair that marked tracks wrongly). Admin tier at both hops."""
     forward = body.model_dump(mode="json", exclude_none=True) if body is not None else None
     status, payload = await post_admin(
         "/v1/admin/library/enrich/repair", forward, headers=auth_forward_headers(request)
@@ -1403,25 +1406,37 @@ class EnrichRematchBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     apply: bool = False
     batch_id: UUID | None = None
+    track_ids: list[int] | None = Field(default=None, min_length=1, max_length=20000)
 
 
-#: The re-match reads every matched file's tags before it answers (a dry
-#: run and an apply alike): minutes on a large library, so this hop waits
-#: longer than post_admin's default.
-REMATCH_TIMEOUT_SEC = 900.0
+#: The core answers a re-match or an undo within about 20 s (a job still
+#: running then is "202, ask the status route"), so this hop waits a little
+#: longer than that, never minutes.
+REMATCH_TIMEOUT_SEC = 60.0
 
 
-@router.post("/library/enrich/rematch", dependencies=ADMIN)
+@router.post("/library/enrich/rematch", dependencies=SECURITY)
 async def enrich_rematch(request: Request, body: EnrichRematchBody | None = None):
     """Hold every track song recognition matched to the strict name check.
     No body: the dry run (changes nothing; lists each failing track with
     its proposed action and a ``batch_id``). ``{"apply": true,
-    "batch_id": ...}``: apply exactly that list. Admin tier at both hops,
-    like the repair."""
+    "batch_id": ..., "track_ids": [...]?}``: apply exactly that list, or
+    those tracks of it. ``202`` while the job still runs (see
+    ``/library/enrich/rematch/status``). Security tier at both hops."""
     forward = body.model_dump(mode="json", exclude_none=True) if body is not None else None
     status, payload = await post_admin(
         "/v1/admin/library/enrich/rematch", forward, timeout=REMATCH_TIMEOUT_SEC,
         headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.get("/library/enrich/rematch/status", dependencies=SECURITY_READ)
+async def enrich_rematch_status(request: Request):
+    """The running or last re-match job (dry run, apply or undo) and, once
+    done, its answer. Security read at both hops."""
+    status, payload = await get_admin(
+        "/v1/admin/library/enrich/rematch/status", headers=auth_forward_headers(request)
     )
     return bridge_response(status, payload)
 
@@ -1431,22 +1446,22 @@ class TagChangesUndoBody(BaseModel):
     batch_id: UUID
 
 
-@router.post("/library/tag-changes/undo", dependencies=ADMIN)
+@router.post("/library/tag-changes/undo", dependencies=SECURITY)
 async def tag_changes_undo(request: Request, body: TagChangesUndoBody):
     """Undo one batch of song-recognition name changes (a sweep, a repair,
-    a re-match or an undo); tracks edited by hand are never touched. Admin
-    tier at both hops."""
+    a re-match or an undo); tracks edited by hand are never touched.
+    ``202`` while the job still runs. Security tier at both hops."""
     status, payload = await post_admin(
         "/v1/admin/library/tag-changes/undo", body.model_dump(mode="json"),
-        headers=auth_forward_headers(request),
+        timeout=REMATCH_TIMEOUT_SEC, headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
 
-@router.get("/library/tag-changes", dependencies=ADMIN_READ)
+@router.get("/library/tag-changes", dependencies=SECURITY_READ)
 async def tag_changes(request: Request, limit: int = Query(50, ge=1, le=500)):
     """The most recent batches of song-recognition name changes, for the
-    undo. Admin read at both hops."""
+    undo. Security read at both hops."""
     status, payload = await get_admin(
         f"/v1/admin/library/tag-changes?limit={int(limit)}", headers=auth_forward_headers(request)
     )

@@ -50,6 +50,7 @@ proposed for a change: a hand edit (``manual``), a reviewed candidate
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -57,8 +58,9 @@ import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Awaitable, Callable, Iterable
 
 from sqlalchemy import text
 
@@ -353,14 +355,16 @@ async def _load() -> tuple[list[Track], dict[int, FileNames], int]:
         known = await library_indexer.known_artist_keys(s) if raw else None
     tracks = [Track(int(r.id), r.file_path, r.title, r.artist, r.album,
                     r.musicbrainz_recording_id, r.enrich_outcome, r.duration_sec) for r in raw]
+    matched = [t for t in tracks if t.outcome == le.OUTCOME_MATCHED]
+    # Thousands of stat calls: off the event loop.
+    present = await asyncio.to_thread(
+        lambda: {t.id for t in matched if Path(t.file_path).exists()})
     files: dict[int, FileNames] = {}
     unreadable = 0
-    for t in tracks:
-        if t.outcome != le.OUTCOME_MATCHED:
+    for t in matched:
+        if t.id not in present:
             continue
         path = Path(t.file_path)
-        if not path.exists():
-            continue
         try:
             meta = await library_indexer.read_metadata(path, known)
         except Exception as e:  # noqa: BLE001 — one unreadable file
@@ -382,7 +386,9 @@ async def dry_run() -> dict[str, Any]:
     tracks, files, unreadable = await _load()
     # A matched row whose file is gone has no file names to hold it to.
     judged = [t for t in tracks if t.outcome != le.OUTCOME_MATCHED or t.id in files]
-    rows = plan_rows(judged, files)
+    # The audit is pure CPU over the whole library (and resolves paths):
+    # off the event loop.
+    rows = await asyncio.to_thread(plan_rows, judged, files)
     out = {
         "dry_run": True,
         "batch_id": batch_id_for(rows),
@@ -395,6 +401,16 @@ async def dry_run() -> dict[str, Any]:
     return out
 
 
+# An apply changes a row only while it is as the dry run listed it: still
+# the enricher's match, with the same names and recording id (a plugin's
+# write or a restore from the trash in between wins).
+_STILL_AS_LISTED = (
+    "AND enrich_outcome = :matched "
+    "AND title IS NOT DISTINCT FROM CAST(:db_t AS text) "
+    "AND artist IS NOT DISTINCT FROM CAST(:db_a AS text) "
+    "AND album IS NOT DISTINCT FROM CAST(:db_al AS text) "
+    "AND musicbrainz_recording_id IS NOT DISTINCT FROM CAST(:db_mb AS text)"
+)
 # Re-match: the file's names back, the wrong recording (and what came with
 # it) gone, and back in the queue as never enriched, so the next sweep
 # matches it under the strict rule.
@@ -406,7 +422,7 @@ _REMATCH_SQL = tag_changes.logged_update(
         genre_checked_at = NULL,
         enriched_at = NULL,
         enrich_outcome = NULL""",
-    "AND enrich_outcome = :matched",
+    _STILL_AS_LISTED,
 )
 # Restore only: the file's names back, marked disagreed for "Needs review".
 _REVIEW_SQL = tag_changes.logged_update(
@@ -415,7 +431,7 @@ _REVIEW_SQL = tag_changes.logged_update(
         musicbrainz_release_group_id = NULL,
         enriched_at = NOW(),
         enrich_outcome = :disagreed""",
-    "AND enrich_outcome = :matched",
+    _STILL_AS_LISTED,
 )
 
 
@@ -427,45 +443,93 @@ class PlanChanged(Exception):
         self.batch_id = batch_id
 
 
-async def apply(batch_id: str) -> dict[str, Any]:
-    """Apply the dry run whose ``batch_id`` is given, in one transaction.
-    Raises :class:`PlanChanged` (carrying the current ``batch_id``) when a
-    dry run now lists something else. ``bad_encoding`` rows are left as
-    they are. Returns ``{"applied", "batch_id", "rematch", "review",
-    "skipped"}`` (``skipped``: "" when it ran, else "running")."""
-    out: dict[str, Any] = {"applied": 0, "batch_id": str(batch_id), "rematch": 0,
-                           "review": 0, "skipped": ""}
+class NotInDryRun(ValueError):
+    """``track_ids`` named tracks the dry run doesn't propose to change."""
+
+    def __init__(self, ids: list[int]) -> None:
+        super().__init__(ids)
+        self.ids = ids
+
+
+def applied_batch_id(batch_id: str, track_ids: Iterable[int] | None = None) -> str:
+    """The ``batch_id`` an apply logs its changes under: the dry run's own
+    for the whole list, or one derived from it and the chosen tracks for a
+    part of it. Pure."""
+    ids = sorted({int(i) for i in track_ids or ()})
+    if not ids:
+        return str(batch_id)
+    return str(uuid.uuid5(_BATCH_NS, f"{batch_id}:{','.join(map(str, ids))}"))
+
+
+async def apply(batch_id: str, track_ids: Iterable[int] | None = None) -> dict[str, Any]:
+    """Apply the dry run whose ``batch_id`` is given, in one transaction:
+    every row it proposes to change, or only ``track_ids`` among them (the
+    owner may drop rows he disagrees with). The changes are logged under
+    :func:`applied_batch_id`.
+
+    * The same apply again (its batch already logged and not undone) is
+      answered with ``already_applied: true`` and changes nothing.
+    * Raises :class:`PlanChanged` (carrying the current ``batch_id``) when a
+      dry run now lists something else, and :class:`NotInDryRun` for a
+      ``track_ids`` entry the list doesn't propose to change.
+    * A row whose title, artist, album or recording id moved since the dry
+      run read it (a plugin's write, a restore from the trash) is left as
+      it is (``changed_since``). ``bad_encoding`` rows are never changed.
+
+    Returns ``{"applied", "batch_id", "dry_run_batch_id", "rematch",
+    "review", "changed_since", "already_applied", "skipped"}``
+    (``skipped``: "" when it ran, else "running")."""
+    chosen = sorted({int(i) for i in track_ids or ()})
+    applied_id = applied_batch_id(batch_id, chosen)
+    out: dict[str, Any] = {"applied": 0, "batch_id": applied_id,
+                           "dry_run_batch_id": str(batch_id), "rematch": 0, "review": 0,
+                           "changed_since": 0, "already_applied": False, "skipped": ""}
     if le.enrich_running():
         out["skipped"] = "running"
         return out
     le._sweep_running = True
     try:
+        async with session_scope() as s:
+            done = await tag_changes.batch_open(s, applied_id)
+        if done:
+            out.update(applied=done, already_applied=True)
+            return out
         plan = await dry_run()
         if plan["batch_id"] != str(batch_id):
             raise PlanChanged(plan["batch_id"])
-        await _apply_rows(plan["rows"], str(batch_id), out)
+        rows = [r for r in plan["rows"] if r["action"] != ACTION_BAD_ENCODING]
+        if chosen:
+            listed = {r["id"] for r in rows}
+            missing = [i for i in chosen if i not in listed]
+            if missing:
+                raise NotInDryRun(missing)
+            rows = [r for r in rows if r["id"] in set(chosen)]
+        await _apply_rows(rows, applied_id, out)
     finally:
         le._sweep_running = False
-    log.info("library re-match applied: batch %s: rematch=%d review=%d",
-             batch_id, out["rematch"], out["review"])
+    log.info("library re-match applied: batch %s (dry run %s): rematch=%d review=%d "
+             "changed_since=%d", applied_id, batch_id, out["rematch"], out["review"],
+             out["changed_since"])
     return out
 
 
 async def _apply_rows(rows: list[dict[str, Any]], batch_id: str, out: dict[str, Any]) -> None:
     async with session_scope() as s:
         for r in rows:
-            if r["action"] == ACTION_BAD_ENCODING:
-                continue
             back = r["put_back"] or {}
+            db = r["db"]
             params = {
                 "id": r["id"], "t": back.get("title"), "a": back.get("artist"),
                 "al": back.get("album"), "matched": le.OUTCOME_MATCHED,
                 "disagreed": le.OUTCOME_DISAGREED,
+                "db_t": db.get("title"), "db_a": db.get("artist"), "db_al": db.get("album"),
+                "db_mb": db.get("recording_id"),
                 "batch_id": batch_id, "cause": tag_changes.CAUSE_REMATCH,
             }
             sql = _REMATCH_SQL if r["action"] == ACTION_REMATCH else _REVIEW_SQL
-            done = (await s.execute(text(sql), params)).first()
+            done = await tag_changes.execute_logged(s, sql, params)
             if not done or not done.updated:
+                out["changed_since"] += 1
                 continue
             if r["action"] == ACTION_REVIEW:
                 db = r["db"]
@@ -494,3 +558,119 @@ async def _apply_rows(rows: list[dict[str, Any]], batch_id: str, out: dict[str, 
             library_match.invalidate(library=True)
         except Exception as e:  # noqa: BLE001 — the fingerprint catches up anyway
             log.debug("library re-match: couldn't refresh the name index: %s", e)
+
+
+# ─── One job at a time: the dry run, an apply, an undo ──────────────────
+#
+# A dry run reads every matched file's tags (minutes on a large library),
+# and an apply runs one again first, so neither may hang on the HTTP request
+# that asked for it: each runs as a background job, the route waits a
+# little for it (:data:`INLINE_WAIT_SEC`) and otherwise answers "running",
+# and the status route shows the job and, once it is done, its answer. The
+# job carries on if the caller goes away. A second request for the same job
+# while it runs (the same kind and parameters) joins it; any other is
+# refused (:class:`Busy`).
+
+#: How long a route waits for its job before answering "running".
+INLINE_WAIT_SEC = 20.0
+
+
+@dataclass
+class Job:
+    id: str
+    kind: str                      # "dry_run", "apply" or "undo"
+    params: dict[str, Any]
+    state: str = "running"         # "running", "done" or "failed"
+    started_at: str = ""
+    finished_at: str | None = None
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+
+    def as_dict(self, with_result: bool = True) -> dict[str, Any]:
+        out = {"id": self.id, "kind": self.kind, "params": self.params, "state": self.state,
+               "started_at": self.started_at, "finished_at": self.finished_at,
+               "error": self.error}
+        if with_result:
+            out["result"] = self.result
+        return out
+
+
+class Busy(Exception):
+    """Another re-match job is running."""
+
+    def __init__(self, job: Job) -> None:
+        super().__init__(job.kind)
+        self.job = job
+
+
+_job: Job | None = None
+_task: asyncio.Task | None = None
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def current_job() -> Job | None:
+    """The running job, or the last one (with its answer)."""
+    return _job
+
+
+def job_running() -> bool:
+    """A job is running on this event loop (a task left on a loop that is
+    gone, as a test's, never finishes and doesn't count)."""
+    if _task is None or _task.done():
+        return False
+    try:
+        return _task.get_loop() is asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+
+
+def _error_of(e: BaseException) -> dict[str, Any]:
+    if isinstance(e, PlanChanged):
+        return {"reason": "changed", "batch_id": e.batch_id,
+                "message": "the library changed since that dry run; run it again"}
+    if isinstance(e, NotInDryRun):
+        return {"reason": "not_in_dry_run", "track_ids": e.ids,
+                "message": "these tracks aren't in the dry run's list"}
+    return {"reason": "error", "message": str(e)[:300]}
+
+
+async def _run(job: Job, factory: Callable[[], Awaitable[dict[str, Any]]]) -> None:
+    try:
+        result = await factory()
+    except Exception as e:  # noqa: BLE001 — the job's answer carries it
+        job.state, job.error = "failed", _error_of(e)
+        if job.error["reason"] == "error":
+            log.warning("library re-match %s job failed: %s", job.kind, e)
+    else:
+        if result.get("skipped") == "running":
+            job.state, job.error = "failed", {
+                "reason": "running", "message": "a sweep, repair or re-match is running"}
+        else:
+            job.state, job.result = "done", result
+    job.finished_at = _now()
+
+
+def start_job(kind: str, params: dict[str, Any],
+              factory: Callable[[], Awaitable[dict[str, Any]]]) -> Job:
+    """Start ``kind`` in the background, or join the same job already
+    running. Raises :class:`Busy` while a different one runs."""
+    global _job, _task
+    if job_running() and _job is not None:
+        if _job.kind == kind and _job.params == params:
+            return _job
+        raise Busy(_job)
+    job = Job(id=str(uuid.uuid4()), kind=kind, params=params, started_at=_now())
+    _job = job
+    _task = asyncio.create_task(_run(job, factory), name=f"library-rematch-{kind}")
+    return job
+
+
+async def wait_for(job: Job, seconds: float = INLINE_WAIT_SEC) -> Job:
+    """Wait up to ``seconds`` for ``job`` (never cancels it)."""
+    task = _task if _job is job else None
+    if task is not None and job_running():
+        await asyncio.wait({task}, timeout=seconds)
+    return job

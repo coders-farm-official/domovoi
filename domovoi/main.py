@@ -10465,12 +10465,12 @@ class EnrichRepairRequest(BaseModel):
 async def admin_library_enrich_repair(
     body: EnrichRepairRequest | None = None,
 ) -> dict[str, Any]:
-    """Put the file's own names back on tracks song recognition renamed
-    to a song that isn't theirs (``library_enricher.repair_disagreeing``),
-    in the background. Only rows the enricher matched are looked at; a
-    track a person edited is never touched. No network, so it runs with
-    internet access off too. ``{"queued": false, "reason": "running"}``
-    while a sweep (or another repair) is in progress.
+    """RETIRED without a body (2026-11-28): ``410`` pointing at the
+    re-match (``/v1/admin/library/enrich/rematch``), which puts the file's
+    own names back behind a dry run the owner approves by its
+    ``batch_id``; the immediate repair would now rewrite that whole list
+    unasked. ``{"queued": false, "reason": "running"}`` while a sweep is in
+    progress.
 
     With ``{"requeue_disagreed": {"since": ..., "until": ...}}`` it runs
     no repair: instead every track marked ``disagreed`` with
@@ -10497,66 +10497,123 @@ async def admin_library_enrich_repair(
             "requeued": out["requeued"],
             "sweep": "queued" if sweep.get("queued") else sweep.get("reason", "not_queued"),
         }
-    asyncio.create_task(
-        library_enricher.repair_disagreeing(), name="admin-library-enrich-repair",
-    )
-    return {"queued": True, "worker": "library_enricher_repair"}
+    # Retired 2026-11-28: under the strict name check the repair would
+    # rewrite every track the re-match's dry run lists, at once and with
+    # nobody approving the list. The re-match does the same work behind a
+    # dry run and its batch_id.
+    raise HTTPException(status_code=410, detail={
+        "reason": "retired",
+        "message": "the repair is retired; use the re-match: POST "
+                   "/v1/admin/library/enrich/rematch (a dry run that changes nothing), "
+                   "then the same with {\"apply\": true, \"batch_id\": ...}",
+        "use": "/v1/admin/library/enrich/rematch",
+    })
 
 
 class EnrichRematchRequest(BaseModel):
     """``apply`` false (the default): the dry run. ``apply`` true: apply
-    the dry run whose ``batch_id`` is given."""
+    the dry run whose ``batch_id`` is given, or only ``track_ids`` of it."""
 
     model_config = ConfigDict(extra="forbid")
     apply: bool = False
     batch_id: UUID | None = None
+    track_ids: list[int] | None = Field(default=None, min_length=1, max_length=20000)
+
+
+_REMATCH_STATUS = "/v1/admin/library/enrich/rematch/status"
+_JOB_ERROR_STATUS = {"changed": 409, "running": 409, "not_in_dry_run": 422, "error": 500}
+
+
+def _rematch_job_answer(job: Any) -> Any:
+    """A re-match job as a route's answer: its result once done (200), the
+    refusal it ended in (409 / 422 / 500), or 202 while it still runs."""
+    if job.state == "done":
+        return {**(job.result or {}), "job_id": job.id}
+    if job.state == "failed":
+        error = job.error or {"reason": "error"}
+        return JSONResponse(status_code=_JOB_ERROR_STATUS.get(error.get("reason"), 500),
+                            content={"detail": error, "job_id": job.id})
+    return JSONResponse(status_code=202, content={
+        "running": True, "job": job.as_dict(with_result=False), "status": _REMATCH_STATUS})
+
+
+def _start_rematch_job(kind: str, params: dict[str, Any], factory: Any) -> Any:
+    from domovoi.workers import library_rematch
+
+    try:
+        return library_rematch.start_job(kind, params, factory)
+    except library_rematch.Busy as e:
+        raise HTTPException(status_code=409, detail={
+            "reason": "busy", "message": f"a re-match {e.job.kind} is running",
+            "job": e.job.as_dict(with_result=False), "status": _REMATCH_STATUS,
+        }) from e
 
 
 @app.post(
     "/v1/admin/library/enrich/rematch",
-    # Admin tier, like the repair: it reads every matched file's tags and,
-    # applied, rewrites names library-wide.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier (no pre-setup grace): applied, it rewrites names
+    # library-wide; the dry run reads every matched file's tags.
+    dependencies=[Depends(require_admin_security)],
 )
-async def admin_library_enrich_rematch(
-    body: EnrichRematchRequest | None = None,
-) -> dict[str, Any]:
+async def admin_library_enrich_rematch(body: EnrichRematchRequest | None = None) -> Any:
     """Hold every track song recognition matched to the strict name check
     (``domovoi/workers/library_rematch.py``). No body, or ``{"apply":
     false}``: the DRY RUN, which changes nothing and lists every track
     that fails, with its proposed action (``restore_rematch``,
     ``restore_review`` or ``bad_encoding``) and a ``batch_id`` naming
-    exactly that list. ``{"apply": true, "batch_id": ...}`` applies it,
-    logged in ``library_tag_changes`` under that ``batch_id`` (cause
-    ``rematch``), and starts a sweep for the tracks put back in the queue
-    when one can run. ``409`` when the library no longer gives that list
-    (``detail.batch_id`` is the current one: run the dry run again) or a
-    sweep is running. No network: reads the files' tags only."""
+    exactly that list. ``{"apply": true, "batch_id": ..., "track_ids":
+    [...]?}`` applies it (or only those tracks of it), logged in
+    ``library_tag_changes`` (cause ``rematch``), and starts a sweep for the
+    tracks put back in the queue when one can run; the same apply again
+    answers ``already_applied``.
+
+    Each runs as a background job: the answer comes inline when the job
+    ends within :data:`library_rematch.INLINE_WAIT_SEC`, else ``202``
+    ``{"running": true, "job", "status"}`` and ``GET .../rematch/status``
+    has it. The same request while its job runs joins it; another is
+    ``409`` ``busy``. ``409`` ``changed`` (``detail.batch_id`` is the
+    current one: run the dry run again) or ``running`` (a sweep); ``422``
+    ``not_in_dry_run``. No network: reads the files' tags only."""
     from domovoi.workers import library_rematch
 
     body = body or EnrichRematchRequest()
     if not body.apply:
-        if body.batch_id is not None:
-            raise HTTPException(status_code=422, detail="batch_id is for apply=true")
-        return await library_rematch.dry_run()
-    if body.batch_id is None:
-        raise HTTPException(status_code=422, detail="apply=true needs the dry run's batch_id")
-    try:
-        out = await library_rematch.apply(str(body.batch_id))
-    except library_rematch.PlanChanged as e:
-        raise HTTPException(status_code=409, detail={
-            "reason": "changed", "batch_id": e.batch_id,
-            "message": "the library changed since that dry run; run it again",
-        }) from e
-    if out["skipped"]:
-        raise HTTPException(status_code=409, detail={"reason": out["skipped"]})
-    sweep: dict[str, Any] = {"queued": False, "reason": "nothing_requeued"}
-    if out["rematch"]:
-        try:
-            sweep = await admin_library_enrich()
-        except HTTPException:
-            sweep = {"queued": False, "reason": "internet_off"}
-    return {**out, "sweep": "queued" if sweep.get("queued") else sweep.get("reason", "not_queued")}
+        if body.batch_id is not None or body.track_ids is not None:
+            raise HTTPException(status_code=422, detail="batch_id and track_ids are for apply=true")
+        job = _start_rematch_job("dry_run", {}, library_rematch.dry_run)
+    else:
+        if body.batch_id is None:
+            raise HTTPException(status_code=422, detail="apply=true needs the dry run's batch_id")
+        batch_id = str(body.batch_id)
+        track_ids = sorted(set(body.track_ids or ()))
+
+        async def run_apply() -> dict[str, Any]:
+            out = await library_rematch.apply(batch_id, track_ids)
+            out["sweep"] = "not_needed"
+            if out["rematch"] and not out["already_applied"]:
+                # Started from the job, so the requeued tracks are looked
+                # up even if the caller went away.
+                try:
+                    sweep = await admin_library_enrich()
+                except HTTPException:
+                    sweep = {"queued": False, "reason": "internet_off"}
+                out["sweep"] = "queued" if sweep.get("queued") else sweep.get("reason", "not_queued")
+            return out
+
+        job = _start_rematch_job("apply", {"batch_id": batch_id, "track_ids": track_ids}, run_apply)
+    return _rematch_job_answer(await library_rematch.wait_for(job))
+
+
+@app.get(_REMATCH_STATUS, dependencies=[Depends(require_admin_security_read)])
+async def admin_library_enrich_rematch_status() -> dict[str, Any]:
+    """The running or last re-match job (dry run, apply or undo): ``{"job":
+    {"id", "kind", "params", "state", "started_at", "finished_at",
+    "error", "result"}}``, or ``{"job": null}`` before the first one. A
+    security read, like the routes it reports on."""
+    from domovoi.workers import library_rematch
+
+    job = library_rematch.current_job()
+    return {"job": job.as_dict() if job is not None else None}
 
 
 class TagChangesUndoRequest(BaseModel):
@@ -10566,34 +10623,45 @@ class TagChangesUndoRequest(BaseModel):
 
 @app.post(
     "/v1/admin/library/tag-changes/undo",
-    # Admin tier: it rewrites names library-wide, like the runs it undoes.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: it rewrites names library-wide, like the runs it undoes.
+    dependencies=[Depends(require_admin_security)],
 )
-async def admin_library_tag_changes_undo(body: TagChangesUndoRequest) -> dict[str, Any]:
+async def admin_library_tag_changes_undo(body: TagChangesUndoRequest) -> Any:
     """Undo one batch of ``library_tag_changes`` (an enricher sweep, a
     repair, a re-match or an undo): each track gets its ``old`` values back
-    where its names still equal the batch's ``new``, and a track a person
-    edited by hand (outcome ``manual`` or ``reviewed``) is never touched
-    (``library_tag_changes.undo_batch``). ``409`` while a sweep, repair or
-    re-match runs."""
+    where its title, artist and recording id still equal the batch's
+    ``new``; one ``old`` would leave waiting for song recognition is stamped
+    ``disagreed`` instead, its undone answer kept for "Needs review"; a
+    track a person edited by hand (outcome ``manual`` or ``reviewed``) is
+    never touched (``library_tag_changes.undo_batch``). Runs as a re-match
+    job (see the rematch route): inline, ``202`` while it runs, ``409``
+    while a sweep, repair or other job runs. Undoing a batch again changes
+    nothing."""
     from domovoi import library_tag_changes
-    from domovoi.workers import library_enricher
+    from domovoi.workers import library_enricher, library_rematch
 
-    if library_enricher.enrich_running():
+    batch_id = str(body.batch_id)
+
+    async def run_undo() -> dict[str, Any]:
+        if library_enricher.enrich_running():
+            return {"skipped": "running"}
+        library_enricher._sweep_running = True
+        try:
+            return await library_tag_changes.undo_batch(batch_id)
+        finally:
+            library_enricher._sweep_running = False
+
+    if library_enricher.enrich_running() and not library_rematch.job_running():
         raise HTTPException(status_code=409, detail={"reason": "running"})
-    library_enricher._sweep_running = True
-    try:
-        return await library_tag_changes.undo_batch(str(body.batch_id))
-    finally:
-        library_enricher._sweep_running = False
+    job = _start_rematch_job("undo", {"batch_id": batch_id}, run_undo)
+    return _rematch_job_answer(await library_rematch.wait_for(job))
 
 
-@app.get("/v1/admin/library/tag-changes", dependencies=[Depends(require_admin_read)])
+@app.get("/v1/admin/library/tag-changes", dependencies=[Depends(require_admin_security_read)])
 async def admin_library_tag_changes(limit: int = 50) -> dict[str, Any]:
     """The most recent ``library_tag_changes`` batches, newest first:
     ``batch_id``, ``cause``, ``changes``, ``undone``, ``first_at``,
-    ``last_at``. An admin read: it shows the library's names as they
-    were."""
+    ``last_at``. A security read, like the undo it serves."""
     from domovoi import library_tag_changes
 
     return {"batches": await library_tag_changes.list_batches(limit)}

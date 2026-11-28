@@ -1656,8 +1656,8 @@ async def _sweep() -> dict[str, Any]:
                 result = lookup.result
                 fill_only = bool(row.legacy) or row.enrich_outcome == OUTCOME_RECHECK
                 await _requeue_once()
-                await session.execute(
-                    text(_FILL_ONLY_SQL if fill_only else _MATCH_SQL),
+                await tag_changes.execute_logged(
+                    session, _FILL_ONLY_SQL if fill_only else _MATCH_SQL,
                     {
                         "id": row.id,
                         "t": _without_upload_words(result.title),
@@ -1912,7 +1912,7 @@ async def _repair(counts: dict[str, Any]) -> None:
                     path.name[:60], row.title, row.artist, ours[0], ours[1],
                 )
                 continue
-            await session.execute(text(_RESTORE_SQL), {
+            await tag_changes.execute_logged(session, _RESTORE_SQL, {
                 "id": row.id,
                 "t": put_back[0],
                 "a": put_back[1],

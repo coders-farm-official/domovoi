@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import text
 
 from domovoi import library_tag_changes as tc
+from domovoi.tests.auth_testkit import _db  # noqa: F401 — fixture
 from domovoi.tests.conftest import requires_db
 from domovoi.tests.enrich_outcome_testkit import apply_v020
 from domovoi.workers import library_enricher as le
@@ -52,13 +53,26 @@ def test_a_logged_update_is_one_statement() -> None:
     assert "INSERT INTO library_tag_changes" in sql and ";" not in sql
 
 
-def test_still_as_changed_compares_the_names_only() -> None:
+def test_still_as_changed_compares_title_artist_and_recording_only() -> None:
     new = {"title": "A", "artist": "B", "album": None, "musicbrainz_recording_id": "r",
            "enrich_outcome": "matched"}
     assert tc.still_as_changed({"title": "A", "artist": "B", "album": None,
                                 "musicbrainz_recording_id": "r", "enrich_outcome": "x"}, new)
+    # An album the year or cover-art lookup filled since doesn't block it.
+    assert tc.still_as_changed({"title": "A", "artist": "B", "album": "Filled Later",
+                                "musicbrainz_recording_id": "r"}, new)
     assert not tc.still_as_changed({"title": "A2", "artist": "B", "album": None,
                                     "musicbrainz_recording_id": "r"}, new)
+    assert not tc.still_as_changed({"title": "A", "artist": "B", "album": None,
+                                    "musicbrainz_recording_id": "r2"}, new)
+
+
+def test_old_waits() -> None:
+    assert tc.old_waits({"enriched_at": None, "enrich_outcome": None})
+    assert tc.old_waits({"enriched_at": "2026-01-01T00:00:00+00:00", "enrich_outcome": None,
+                         "musicbrainz_recording_id": None})          # a pre-V020 stamp
+    assert not tc.old_waits({"enriched_at": "2026-01-01T00:00:00+00:00",
+                             "enrich_outcome": "matched", "musicbrainz_recording_id": "r"})
 
 
 # ═══ The sweep and the repair log (DB) ════════════════════════════════════
@@ -217,6 +231,69 @@ async def test_undo_restores_only_unchanged_and_unedited_tracks(lane) -> None:
 
 @requires_db
 @pytest.mark.asyncio
+async def test_an_undone_sweep_match_stays_undone(lane, monkeypatch, tmp_path) -> None:
+    """B1: a sweep's "old" is "not enriched yet"; put back as it was, the
+    next (boot) sweep would match it again with the same answer. The undo
+    stamps it ``disagreed`` instead and keeps the answer for review."""
+    from domovoi import egress
+
+    f = tmp_path / "Linkin Park - In the End.mp3"
+    f.write_bytes(b"")
+    tid = await _insert(lane, str(f), "In the End", "Linkin Park")
+    answer = EnrichmentResult("In the End (Live)", "Linkin Park", musicbrainz_recording_id="r-live",
+                              source="acoustid")
+
+    async def ac(_p):
+        return Lookup(Verdict.MATCH, result=answer)
+
+    monkeypatch.setattr(f"{ENRICHER}._enrich_via_acoustid", ac)
+    monkeypatch.setattr(f"{ENRICHER}._enrich_via_shazam", _no_shazam)
+    with egress.override_policy("always"):
+        assert (await le.enrich_library())["matched"] == 1
+    (change,) = await _changes(lane, tid)
+
+    out = await tc.undo_batch(str(change["batch_id"]))
+    assert (out["restored"], out["stamped"]) == (1, 1)
+    title, artist, _al, mbid, outcome, waiting, _y, _g = await _names(lane, tid)
+    assert (title, artist, mbid, outcome, waiting) == ("In the End", "Linkin Park", None,
+                                                        "disagreed", False)
+    cand = (await lane.execute(text(
+        "SELECT reason, candidates FROM library_match_candidates WHERE track_id = :t"),
+        {"t": tid})).one()
+    assert cand[0] == "disagreed" and cand[1][0]["recording_id"] == "r-live"
+
+    # The next sweep (a boot) leaves it alone.
+    with egress.override_policy("always"):
+        assert (await le.enrich_library())["scanned"] == 0
+    assert (await _names(lane, tid))[0] == "In the End"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_album_filled_later_doesnt_block_the_undo(lane) -> None:
+    """B2: the year and cover-art lookups fill an empty album by the
+    (wrong) recording id after the match; the undo still applies, and puts
+    the empty album back with the rest."""
+    batch = tc.new_batch_id()
+    tid = await _insert(lane, "/m/a.mp3", "Perfect", "Ed Sheeran", enrich_outcome="matched")
+    await lane.execute(text("UPDATE library_tracks SET enriched_at = now()"))
+    await lane.commit()
+    await _change(lane, tid, batch, "title = :t, musicbrainz_recording_id = 'r-pale'",
+                  t="Beyond the Pale")
+    # What library_year_fetch / library_cover_art do, unlogged:
+    await lane.execute(text("UPDATE library_tracks SET album = 'Wrong Album', "
+                            "musicbrainz_release_id = 'rel-x' WHERE id = :i"), {"i": tid})
+    await lane.commit()
+    out = await tc.undo_batch(batch)
+    assert (out["restored"], out["changed_since"]) == (1, 0)
+    row = (await lane.execute(text(
+        "SELECT title, album, musicbrainz_recording_id, enrich_outcome FROM library_tracks "
+        "WHERE id = :i"), {"i": tid})).one()
+    assert tuple(row) == ("Perfect", None, None, "matched")
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_undo_of_an_unknown_batch_does_nothing(lane) -> None:
     out = await tc.undo_batch(str(uuid.uuid4()))
     assert (out["changes"], out["restored"]) == (0, 0)
@@ -224,23 +301,39 @@ async def test_undo_of_an_unknown_batch_does_nothing(lane) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_the_admin_undo_and_list_routes(lane, monkeypatch) -> None:
+async def test_the_admin_undo_and_list_routes(lane, _db, monkeypatch) -> None:  # noqa: F811
     from httpx import ASGITransport, AsyncClient
 
     from domovoi.main import app
+    from domovoi.tests.auth_testkit import bearer, claim_admin, web_client
 
     batch = tc.new_batch_id()
     tid = await _insert(lane, "/m/a.mp3", "Ask Me Why", "The Beatles", enrich_outcome="matched")
+    await lane.execute(text("UPDATE library_tracks SET enriched_at = now()"))
+    await lane.commit()
     await _change(lane, tid, batch, "title = :t", t="Twist and Shout")
-    async with app.router.lifespan_context(app):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            listed = (await client.get("/v1/admin/library/tag-changes")).json()["batches"]
-            assert listed[0]["batch_id"] == batch and listed[0]["changes"] == 1
-            assert (await client.post("/v1/admin/library/tag-changes/undo",
-                                      json={"batch_id": "not-a-uuid"})).status_code == 422
-            r = await client.post("/v1/admin/library/tag-changes/undo", json={"batch_id": batch})
-            assert r.status_code == 200 and r.json()["restored"] == 1
-            monkeypatch.setattr(le, "_sweep_running", True)
-            busy = await client.post("/v1/admin/library/tag-changes/undo", json={"batch_id": batch})
-            assert busy.status_code == 409
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # The security tier: nothing before setup.
+        assert (await client.get("/v1/admin/library/tag-changes")).status_code == 501
+        assert (await client.post("/v1/admin/library/tag-changes/undo",
+                                  json={"batch_id": batch})).status_code == 501
+    async with web_client() as web:
+        token = await claim_admin(web)
+    auth = bearer(token)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test",
+                           headers=auth) as client:
+        listed = (await client.get("/v1/admin/library/tag-changes")).json()["batches"]
+        assert listed[0]["batch_id"] == batch and listed[0]["changes"] == 1
+        assert (await client.post("/v1/admin/library/tag-changes/undo",
+                                  json={"batch_id": "not-a-uuid"})).status_code == 422
+        r = await client.post("/v1/admin/library/tag-changes/undo", json={"batch_id": batch})
+        assert r.status_code == 200 and r.json()["restored"] == 1, r.text
+        status = (await client.get("/v1/admin/library/enrich/rematch/status")).json()["job"]
+        assert (status["kind"], status["state"], status["result"]["restored"]) == ("undo", "done", 1)
+        # Again: nothing left to undo, nothing changes.
+        again = await client.post("/v1/admin/library/tag-changes/undo", json={"batch_id": batch})
+        assert again.status_code == 200 and again.json()["restored"] == 0
+        monkeypatch.setattr(le, "_sweep_running", True)
+        busy = await client.post("/v1/admin/library/tag-changes/undo", json={"batch_id": batch})
+        assert busy.status_code == 409
     assert (await _names(lane, tid))[0] == "Ask Me Why"
