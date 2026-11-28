@@ -4502,194 +4502,306 @@
       "note": "away twin of 22.9 (1.5.0 away chat): the same answer as a home send for the same phone; proven admin = a valid admin_grant this turn; never the guest wording"
     },
     {
+      "id": "25.1m",
+      "utterance": "Please announce that Ana, Ben and Amber need another shot",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the announcement is the message, not 'that ana, ben and amber ...' (the mic keeps 'that' today)",
+      "needs_change": "N20"
+    },
+    {
       "id": "25.1",
       "utterance": "Please announce that Ana, Ben and Amber need another shot",
       "where": "chat",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' (the mic keeps 'that' today)"
     },
     {
       "id": "25.1w",
       "utterance": "Please announce that Ana, Ben and Amber need another shot",
       "where": "chat",
       "house": "proven-admin",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' (the mic keeps 'that' today)"
     },
     {
       "id": "25.1a",
       "utterance": "Please announce that Ana, Ben and Amber need another shot",
       "where": "away",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' (the mic keeps 'that' today)"
+    },
+    {
+      "id": "25.2m",
+      "utterance": "Announce that",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$"
+      ],
+      "before": [
+        {
+          "say": "Please announce that Ana, Ben and Amber need another shot"
+        }
+      ],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. 'announce that' continues the thread: the earlier message again, never the word 'that' (the mic broadcasts 'that' today)",
+      "needs_change": "N20"
     },
     {
       "id": "25.2",
       "utterance": "Announce that",
       "where": "chat",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
-      "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$"
+      ],
       "before": [
         {
           "say": "Please announce that Ana, Ben and Amber need another shot"
         }
-      ]
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' (the mic broadcasts 'that' today)"
     },
     {
       "id": "25.2w",
       "utterance": "Announce that",
       "where": "chat",
       "house": "proven-admin",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
-      "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$"
+      ],
       "before": [
         {
           "say": "Please announce that Ana, Ben and Amber need another shot"
         }
-      ]
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' (the mic broadcasts 'that' today)"
     },
     {
       "id": "25.2a",
       "utterance": "Announce that",
       "where": "away",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
-      "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$"
+      ],
       "before": [
         {
           "say": "Please announce that Ana, Ben and Amber need another shot"
         }
-      ]
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' (the mic broadcasts 'that' today)"
+    },
+    {
+      "id": "25.9",
+      "utterance": "Announce that",
+      "where": "chat",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$",
+        "you two|another round"
+      ],
+      "before": [
+        {
+          "say": "Please announce that Ana, Ben and Amber need another shot",
+          "reply": "I'll let them know. Ana, Ben, and Amber, you two will need another round, please."
+        }
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words"
+    },
+    {
+      "id": "25.9w",
+      "utterance": "Announce that",
+      "where": "chat",
+      "house": "proven-admin",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$",
+        "you two|another round"
+      ],
+      "before": [
+        {
+          "say": "Please announce that Ana, Ben and Amber need another shot",
+          "reply": "I'll let them know. Ana, Ben, and Amber, you two will need another round, please."
+        }
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words"
+    },
+    {
+      "id": "25.9a",
+      "utterance": "Announce that",
+      "where": "away",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$",
+        "you two|another round"
+      ],
+      "before": [
+        {
+          "say": "Please announce that Ana, Ben and Amber need another shot",
+          "reply": "I'll let them know. Ana, Ben, and Amber, you two will need another round, please."
+        }
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words"
+    },
+    {
+      "id": "25.3m",
+      "utterance": "Announce it to the rooms please",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$"
+      ],
+      "before": [
+        {
+          "say": "Please announce that Ana, Ben and Amber need another shot"
+        },
+        {
+          "say": "Announce that"
+        }
+      ],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the earlier message again, never 'it to the rooms please' (what the mic broadcasts today)",
+      "needs_change": "N20"
     },
     {
       "id": "25.3",
       "utterance": "Announce it to the rooms please",
       "where": "chat",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
-      "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$"
+      ],
       "before": [
         {
           "say": "Please announce that Ana, Ben and Amber need another shot"
@@ -4697,32 +4809,27 @@
         {
           "say": "Announce that"
         }
-      ]
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' (what the mic broadcasts today)"
     },
     {
       "id": "25.3w",
       "utterance": "Announce it to the rooms please",
       "where": "chat",
       "house": "proven-admin",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
-      "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$"
+      ],
       "before": [
         {
           "say": "Please announce that Ana, Ben and Amber need another shot"
@@ -4730,32 +4837,27 @@
         {
           "say": "Announce that"
         }
-      ]
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' (what the mic broadcasts today)"
     },
     {
       "id": "25.3a",
       "utterance": "Announce it to the rooms please",
       "where": "away",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
-      "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
+      "did_not": [
+        "^announce:[^:]*:(?:that|it|this)\\b(?: to the (?:rooms|house))?(?: please)?\\.?$"
+      ],
       "before": [
         {
           "say": "Please announce that Ana, Ben and Amber need another shot"
@@ -4763,385 +4865,386 @@
         {
           "say": "Announce that"
         }
-      ]
+      ],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' (what the mic broadcasts today)"
+    },
+    {
+      "id": "25.4m",
+      "utterance": "Play some jazz in the kitchen",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Playing .*\\bjazz\\b.* in the kitchen\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^music:kitchen:start$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked"
     },
     {
       "id": "25.4",
       "utterance": "Play some jazz in the kitchen",
       "where": "chat",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Playing .*\\bjazz\\b.* in the kitchen\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^music:kitchen:start$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked"
     },
     {
       "id": "25.4w",
       "utterance": "Play some jazz in the kitchen",
       "where": "chat",
       "house": "proven-admin",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Playing .*\\bjazz\\b.* in the kitchen\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^music:kitchen:start$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked"
     },
     {
       "id": "25.4a",
       "utterance": "Play some jazz in the kitchen",
       "where": "away",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Playing .*\\bjazz\\b.* in the kitchen\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^music:kitchen:start$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked"
+    },
+    {
+      "id": "25.5m",
+      "utterance": "Set a timer for ten minutes",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Timer set for 10 minutes\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^timer:600$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the timer read-back, and a 10-minute timer is set"
     },
     {
       "id": "25.5",
       "utterance": "Set a timer for ten minutes",
       "where": "chat",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Timer set for 10 minutes\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^timer:600$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set"
     },
     {
       "id": "25.5w",
       "utterance": "Set a timer for ten minutes",
       "where": "chat",
       "house": "proven-admin",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Timer set for 10 minutes\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^timer:600$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set"
     },
     {
       "id": "25.5a",
       "utterance": "Set a timer for ten minutes",
       "where": "away",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Timer set for 10 minutes\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^timer:600$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set"
+    },
+    {
+      "id": "25.6m",
+      "utterance": "Add milk to the shopping list",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Added milk to your shopping list\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^list_item:Shopping:milk$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the list read-back, and milk is on the list"
     },
     {
       "id": "25.6",
       "utterance": "Add milk to the shopping list",
       "where": "chat",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Added milk to your shopping list\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^list_item:Shopping:milk$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list"
     },
     {
       "id": "25.6w",
       "utterance": "Add milk to the shopping list",
       "where": "chat",
       "house": "proven-admin",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Added milk to your shopping list\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^list_item:Shopping:milk$"
       ],
+      "did_not": [],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list"
     },
     {
       "id": "25.6a",
       "utterance": "Add milk to the shopping list",
       "where": "away",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Added milk to your shopping list\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^list_item:Shopping:milk$"
+      ],
+      "did_not": [],
+      "needs_change": "N19",
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list"
+    },
+    {
+      "id": "25.7m",
+      "utterance": "Drop in on the kitchen",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^(?:I can't tell which room you're in\\.|I can't do that from chat yet\\b.*)$"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
       ],
-      "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "did": [],
+      "did_not": [
+        "^dropin"
+      ],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. OPEN (Main): a phone's drop-in. The mic says 'I can't tell which room you're in.' today; the fixed chat line is accepted too. Never a made-up look into the room"
     },
     {
       "id": "25.7",
       "utterance": "Drop in on the kitchen",
       "where": "chat",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^(?:I can't tell which room you're in\\.|I can't do that from chat yet\\b.*)$"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]",
-        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\bwhirr|\\bhum of\\b|\\bseems? (?:to be )?(?:quiet|empty|in order|clean)\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
+      ],
+      "did": [],
+      "did_not": [
+        "^dropin"
       ],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). OPEN (Main): a phone's drop-in. The mic says 'I can't tell which room you're in.' today; the fixed chat line is accepted too. Never a made-up look into the room"
     },
     {
       "id": "25.7w",
       "utterance": "Drop in on the kitchen",
       "where": "chat",
       "house": "proven-admin",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^(?:I can't tell which room you're in\\.|I can't do that from chat yet\\b.*)$"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]",
-        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\bwhirr|\\bhum of\\b|\\bseems? (?:to be )?(?:quiet|empty|in order|clean)\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
+      ],
+      "did": [],
+      "did_not": [
+        "^dropin"
       ],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). OPEN (Main): a phone's drop-in. The mic says 'I can't tell which room you're in.' today; the fixed chat line is accepted too. Never a made-up look into the room"
     },
     {
       "id": "25.7a",
       "utterance": "Drop in on the kitchen",
       "where": "away",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^(?:I can't tell which room you're in\\.|I can't do that from chat yet\\b.*)$"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]",
-        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\bwhirr|\\bhum of\\b|\\bseems? (?:to be )?(?:quiet|empty|in order|clean)\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
+      ],
+      "did": [],
+      "did_not": [
+        "^dropin"
       ],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). OPEN (Main): a phone's drop-in. The mic says 'I can't tell which room you're in.' today; the fixed chat line is accepted too. Never a made-up look into the room"
+    },
+    {
+      "id": "25.8m",
+      "utterance": "Broadcast that dinner's ready",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:dinner'?s ready$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:that\\b"
+      ],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the announcement is 'dinner's ready', not 'that dinner's ready'",
+      "needs_change": "N20"
     },
     {
       "id": "25.8",
       "utterance": "Broadcast that dinner's ready",
       "where": "chat",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:dinner'?s ready$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:that\\b"
       ],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'"
     },
     {
       "id": "25.8w",
       "utterance": "Broadcast that dinner's ready",
       "where": "chat",
       "house": "proven-admin",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:dinner'?s ready$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:that\\b"
       ],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'"
     },
     {
       "id": "25.8a",
       "utterance": "Broadcast that dinner's ready",
       "where": "away",
       "house": "base",
-      "expect": "CANT",
+      "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
+        "^Broadcasting to the house\\.$"
       ],
-      "must_not_include": [
-        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
-        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
-        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
-        "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
-        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
-        "[\"“][^\"”]{20,}[\"”]"
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:dinner'?s ready$"
+      ],
+      "did_not": [
+        "^announce:[^:]*:that\\b"
       ],
       "needs_change": "N19",
-      "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
+      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'"
     }
   ]
 }
