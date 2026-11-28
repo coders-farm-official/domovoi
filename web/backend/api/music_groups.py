@@ -280,12 +280,30 @@ def _listen_headers(request: Request) -> dict[str, str]:
     """The caller's credentials, plus the address it dialed: the core
     builds the stream URL on it (``lan_address.stream_url_for_peer``), as it
     does for a room's satellite — the address the phone already reached is
-    the one that works."""
+    the one that works. An IPv6 address goes bracketed, as in a Host."""
     headers = auth_forward_headers(request)
     host = request.url.hostname
     if host:
-        headers["X-Forwarded-Host"] = host
+        headers["X-Forwarded-Host"] = f"[{host.strip('[]')}]" if ":" in host else host
     return headers
+
+
+def _bad_device(raw: str | None):
+    """The core's refusal for a ``device_id`` that is missing or not the
+    devices tier's shape (``_DEVICE_ID_RE``), answered at this hop already;
+    None when it is fine."""
+    from fastapi.responses import JSONResponse
+
+    from web.backend.api.devices import _DEVICE_ID_RE
+
+    device_id = (raw or "").strip()
+    if not device_id:
+        code, message = "no_device", "This phone didn't say which phone it is."
+    elif not _DEVICE_ID_RE.match(device_id):
+        code, message = "bad_device", "This phone's id isn't one Domovoi can use."
+    else:
+        return None
+    return JSONResponse(status_code=400, content={"detail": {"code": code, "message": message}})
 
 
 @listen_router.post("/join", dependencies=DEVICE)
@@ -294,6 +312,9 @@ async def listen_join(body: ListenJoinBody, request: Request):
     answer as is: ``room_id``, ``host_room``, ``stream_url``, ``state``,
     ``group``, ``listeners``, ``heartbeat_sec``; refusals carry
     ``detail: {code, message}``)."""
+    refused = _bad_device(body.device_id)
+    if refused is not None:
+        return refused
     status, payload = await post_admin(
         "/v1/admin/music/listen/join", body.model_dump(), headers=_listen_headers(request),
     )
@@ -304,6 +325,9 @@ async def listen_join(body: ListenJoinBody, request: Request):
 async def listen_leave(body: ListenDeviceBody, request: Request):
     """This phone stops listening along (``{left: <host_room>}``; 404
     ``not_listening``)."""
+    refused = _bad_device(body.device_id)
+    if refused is not None:
+        return refused
     status, payload = await post_admin(
         "/v1/admin/music/listen/leave", body.model_dump(), headers=_listen_headers(request),
     )
@@ -313,7 +337,12 @@ async def listen_leave(body: ListenDeviceBody, request: Request):
 @listen_router.post("/heartbeat", dependencies=DEVICE)
 async def listen_heartbeat(body: ListenDeviceBody, request: Request):
     """Every ``heartbeat_sec`` while listening: ``listening: true`` with the
-    join's fields, or ``listening: false`` with ``reason`` and ``message``."""
+    join's fields, or ``listening: false`` with ``reason`` and ``message``.
+    A ``device_id`` that is missing or not the devices tier's shape was
+    never listening: answered here, as the core would."""
+    if _bad_device(body.device_id) is not None:
+        return {"listening": False, "reason": "not_listening",
+                "message": "This phone isn't listening along any more."}
     status, payload = await post_admin(
         "/v1/admin/music/listen/heartbeat", body.model_dump(), headers=_listen_headers(request),
     )

@@ -371,6 +371,166 @@ async def test_a_voice_stop_in_the_room_stops_its_listeners(room) -> None:
     assert entry.message == "The music in Dining room stopped."
 
 
+async def test_a_skip_past_the_last_song_ends_listening(core, house) -> None:
+    """The queue someone built is over: "ended", as when it runs out."""
+    from domovoi.handlers.music import MusicHandler
+
+    await _playing(house, "dining_room")
+    await house.clients["dining_room"].next()  # on the queue's last song
+    await _join(core, "dining_room")
+    resp = await MusicHandler()._skip_in_queue(_ctx(), 1, 2)
+    assert resp.music_action == "stop" and resp.data == {"queue_ended": True}
+    await dispatch_music(_app(), resp, "dining_room")
+    assert (await _beat(core))["reason"] == "ended"
+
+
+# ─── review fixes (2026-11-28) ────────────────────────────────────────────
+
+
+async def test_a_room_joining_a_shared_queue_during_a_join_still_takes_the_phone(
+    core, house, monkeypatch,
+) -> None:
+    """The host is read before the join's awaits: a room that joins a shared
+    queue meanwhile must not leave the phone on its own paused player."""
+    await _playing(house, "garage")
+    await _playing(house, "dining_room", "mine.mp3")
+    real_name = music_listeners.device_name
+
+    async def _name_while_the_room_joins(device_id):
+        await music_groups.share(_app(), "garage", ["dining_room"])
+        return await real_name(device_id)
+
+    monkeypatch.setattr(music_listeners, "device_name", _name_while_the_room_joins)
+    body = await _join(core, "dining_room")
+    assert body["host_room"] == "garage" and body["room_id"] == "dining_room"
+    assert body["stream_url"] == _stream("garage")
+    assert body["state"] == "play"
+
+
+async def test_a_heartbeat_checks_the_host_again(core, house) -> None:
+    await _playing(house, "garage")
+    await _playing(house, "dining_room", "mine.mp3")
+    await _join(core, "dining_room")
+    await music_groups.share(_app(), "garage", ["dining_room"])
+    music_listeners.get(PHONE).host = "dining_room"  # a move that was missed
+    body = await _beat(core)
+    assert body["listening"] is True and body["host_room"] == "garage"
+    assert body["stream_url"] == _stream("garage")
+
+
+async def test_forget_drops_only_the_entry_it_was_given(core, house) -> None:
+    await _playing(house, "garage")
+    await _join(core, "garage")
+    old = music_listeners.get(PHONE)
+    await _join(core, "garage")  # the phone joined again meanwhile
+    await music_listeners.forget(PHONE, old)
+    assert music_listeners.get(PHONE) is not None and music_listeners.get(PHONE) is not old
+    await music_listeners.forget(PHONE)  # no entry: only an expired one goes
+    assert music_listeners.get(PHONE) is not None
+    music_listeners.get(PHONE).seen = time.monotonic() - music_listeners.EXPIRE_SEC - 1
+    await music_listeners.forget(PHONE)
+    assert PHONE not in music_listeners._listeners
+
+
+@pytest.mark.parametrize("device", ["ab", "bad id", "-leading", "x" * 65, "phone/1"])
+async def test_a_device_id_must_have_the_devices_tiers_shape(core, house, device) -> None:
+    await _playing(house, "garage")
+    r = await core.post(JOIN, json={"room_id": "garage", "device_id": device})
+    _refused(r, 400, "bad_device")
+    r = await core.post(LEAVE, json={"device_id": device})
+    _refused(r, 400, "bad_device")
+    assert (await _beat(core, device))["reason"] == "not_listening"
+    assert music_listeners._listeners == {}
+
+
+async def test_the_web_refuses_a_bad_device_id_before_the_core(monkeypatch) -> None:
+    from web.backend.api import music_groups as web_groups
+    from web.backend.main import app as web_app
+
+    async def _post(*a, **kw):
+        raise AssertionError("reached the core")
+
+    monkeypatch.setattr(web_groups, "post_admin", _post)
+    web_app.dependency_overrides[admin_auth.require_device] = lambda: None
+    try:
+        async with AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test",
+                               headers={"X-Requested-With": "domovoi-tests"}) as c:
+            for path in ("/api/music/listen/join", "/api/music/listen/leave"):
+                r = await c.post(path, json={"room_id": "garage", "device_id": "bad id"})
+                _refused(r, 400, "bad_device")
+                r = await c.post(path, json={"room_id": "garage"})
+                _refused(r, 400, "no_device")
+            r = await c.post("/api/music/listen/heartbeat", json={"device_id": "bad id"})
+            assert r.status_code == 200 and r.json()["reason"] == "not_listening"
+    finally:
+        web_app.dependency_overrides.pop(admin_auth.require_device, None)
+
+
+async def test_at_most_32_phones_listen(core, house, monkeypatch) -> None:
+    assert music_listeners.MAX_LISTENERS == 32
+    monkeypatch.setattr(music_listeners, "MAX_LISTENERS", 2)
+    await _playing(house, "garage")
+    await _playing(house, "dining_room")
+    await _join(core, "garage")
+    await _join(core, "garage", PHONE_2)
+    r = await core.post(JOIN, json={"room_id": "garage", "device_id": "android-third"})
+    assert _refused(r, 409, "too_many_listeners") == "Too many phones are listening along already."
+    # A phone already listening may still move.
+    assert (await _join(core, "dining_room", PHONE_2))["host_room"] == "dining_room"
+    # An expired one leaves its place.
+    music_listeners.get(PHONE).seen = time.monotonic() - music_listeners.EXPIRE_SEC - 1
+    assert (await _join(core, "garage", "android-third"))["host_room"] == "garage"
+
+
+@pytest.mark.parametrize("forwarded", ["fe80::1", "[fe80::1]", "[fe80::1]:6369"])
+async def test_an_ipv6_dialed_address_is_read_whole(core, house, forwarded) -> None:
+    await _playing(house, "garage")
+    r = await core.post(JOIN, json={"room_id": "garage", "device_id": PHONE},
+                        headers={"X-Forwarded-Host": forwarded})
+    expected = lan_address.stream_url_for_peer(mpd_module.own_stream_url_for("garage"), "fe80::1")
+    assert r.json()["stream_url"] == expected
+    if lan_address.is_auto(lan_address.settings.mpd_http_base):
+        assert expected == "http://[fe80::1]:8051"
+
+
+async def test_the_web_sends_an_ipv6_dialed_address_bracketed(monkeypatch) -> None:
+    from web.backend.api import music_groups as web_groups
+    from web.backend.main import app as web_app
+
+    sent: list[dict] = []
+
+    async def _post(path, body=None, timeout=30.0, headers=None):
+        sent.append(headers or {})
+        return 200, {"left": "garage"}
+
+    monkeypatch.setattr(web_groups, "post_admin", _post)
+    web_app.dependency_overrides[admin_auth.require_device] = lambda: None
+    try:
+        async with AsyncClient(transport=ASGITransport(app=web_app),
+                               base_url="http://[fe80::1]:6369",
+                               headers={"X-Requested-With": "domovoi-tests"}) as c:
+            await c.post("/api/music/listen/leave", json={"device_id": PHONE})
+    finally:
+        web_app.dependency_overrides.pop(admin_auth.require_device, None)
+    assert sent[0]["X-Forwarded-Host"] == "[fe80::1]"
+
+
+async def test_a_player_that_doesnt_answer_keeps_its_last_state(core, house, monkeypatch) -> None:
+    from domovoi import music_groups_routes
+
+    await _playing(house, "garage")
+    await _join(core, "garage")
+    await house.clients["garage"].pause()
+    assert (await _beat(core))["state"] == "pause"
+
+    async def _silent(host):
+        return None
+
+    monkeypatch.setattr(music_groups_routes, "_player_state", _silent)
+    body = await _beat(core)
+    assert body["listening"] is True and body["state"] == "pause"  # never a made-up "stop"
+
+
 # ─── expiry and restarts ──────────────────────────────────────────────────
 
 

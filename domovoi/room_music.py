@@ -109,7 +109,7 @@ async def dispatch_music(
         # (domovoi/music_listeners.py).
         from domovoi import music_listeners
 
-        await music_listeners.note_stopped(room_id)
+        await music_listeners.note_stopped(room_id, response)
         # Generic stamp pop (design §4.7) — no provider-specific
         # state dicts to clear.
         NOW_PLAYING.clear(room_id)

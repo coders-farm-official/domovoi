@@ -887,11 +887,16 @@ garage, stop the music").
   another room's shared queue; a member room leaving, or the dashboard
   ending the shared queue, doesn't. A person's stop reaching the host (the
   voice reply's `music_stop`, `room_music.dispatch_music`) marks them
-  `stopped`; the host's player found stopped by itself for a few seconds
-  (the sweeper, `music_groups.upkeep` ending a group, or a heartbeat)
-  marks them `ended`; each phone hears it on its next 15-second heartbeat.
-  A phone with no heartbeat for 60 s is dropped; a restart reloads the
-  mirror and gives each phone 60 s from boot. Household tier only (a guest
+  `stopped` (`ended` for a skip past the last song, whose reply carries
+  `data.queue_ended`); the host's player found stopped by itself for a few
+  seconds (the sweeper, `music_groups.upkeep` ending a group, or a
+  heartbeat) marks them `ended`; each phone hears it on its next 15-second
+  heartbeat. The end of a join and every heartbeat check the host again
+  (`music_listeners.follow`). At most 32 phones listen at once; device ids
+  must have the devices tier's shape. A phone with no heartbeat for 60 s
+  is dropped; a restart reloads the mirror and gives each phone 60 s from
+  boot. Memory changes never wait; each mirror write then copies memory as
+  it is (`_sync`), so racing changes can't leave a row behind. Household tier only (a guest
   phone can't listen along in 1.5.0), home network only (away chat has no
   op for it). The cards and the group list carry
   `listeners: [{device_id, name}]` from the mirror.

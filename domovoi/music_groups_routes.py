@@ -19,6 +19,7 @@ a home-network address).
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from typing import Any
 from urllib.parse import urlsplit
@@ -280,6 +281,37 @@ def _refuse(status: int, code: str, message: str) -> HTTPException:
 
 
 _NO_DEVICE = ("no_device", "This phone didn't say which phone it is.")
+_BAD_DEVICE = ("bad_device", "This phone's id isn't one Domovoi can use.")
+_TOO_MANY = ("too_many_listeners", "Too many phones are listening along already.")
+
+
+def _device_id(raw: str | None) -> str:
+    """The body's ``device_id``, or the refusal: 400 ``no_device`` when it
+    is missing, 400 ``bad_device`` when it isn't the devices tier's id
+    shape (music_listeners.DEVICE_ID_RE)."""
+    device_id = (raw or "").strip()
+    if not device_id:
+        raise _refuse(400, *_NO_DEVICE)
+    if not music_listeners.valid_device_id(device_id):
+        raise _refuse(400, *_BAD_DEVICE)
+    return device_id
+
+
+def _host_part(value: str) -> str | None:
+    """The host of a Host-style value: ``192.168.1.20``, ``domovoi.local``,
+    ``[fe80::1]``, ``fe80::1`` or any of them with a ``:port`` — a bare IPv6
+    address is read whole, never cut at its first colon."""
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return str(ipaddress.ip_address(value.strip("[]")))
+    except ValueError:
+        pass
+    try:
+        return urlsplit(f"//{value}").hostname
+    except ValueError:
+        return None
 
 
 def _dialed_host(request: Request) -> str | None:
@@ -287,15 +319,8 @@ def _dialed_host(request: Request) -> str | None:
     passes it on as ``X-Forwarded-Host`` (the core is a hop behind it),
     else this request's own Host. Only ever used to build the stream URL
     handed back to this same caller."""
-    forwarded = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
-    if forwarded:
-        try:
-            host = urlsplit(f"//{forwarded}").hostname
-        except ValueError:
-            host = None
-        if host:
-            return host
-    return request.url.hostname
+    forwarded = (request.headers.get("x-forwarded-host") or "").split(",")[0]
+    return _host_part(forwarded) or request.url.hostname
 
 
 async def _player_state(host: str) -> str | None:
@@ -333,12 +358,14 @@ async def listen_join(body: _ListenJoinBody, request: Request) -> dict[str, Any]
     """This phone (``device_id``) listens along to the music playing in
     ``room_id``: it plays the stream of the room's player (its shared
     queue's host's when it is in one). A phone listening elsewhere moves.
-    Refusals carry ``detail: {code, message}``: 400 ``no_device``, 404
-    ``no_such_room``, 409 ``no_player`` (the room never connected), 409
-    ``nothing_playing`` (its player isn't playing or paused)."""
-    device_id = (body.device_id or "").strip()
-    if not device_id:
-        raise _refuse(400, *_NO_DEVICE)
+    Refusals carry ``detail: {code, message}``: 400 ``no_device``, 400
+    ``bad_device``, 404 ``no_such_room``, 409 ``no_player`` (the room never
+    connected), 409 ``nothing_playing`` (its player isn't playing or
+    paused), 409 ``too_many_listeners`` (MAX_LISTENERS phones listen
+    already)."""
+    device_id = _device_id(body.device_id)
+    if music_listeners.full_for(device_id):
+        raise _refuse(409, *_TOO_MANY)
     room_id = (body.room_id or "").strip()
     room = None
     if room_id:
@@ -353,17 +380,26 @@ async def listen_join(body: _ListenJoinBody, request: Request) -> dict[str, Any]
     if state not in ("play", "pause"):
         raise _refuse(409, "nothing_playing", f"Nothing is playing in {where}.")
     name = await music_listeners.device_name(device_id)
-    entry = await music_listeners.join(device_id, host, room_id=room_id, label=room.label, name=name)
+    # Again, with nothing awaited between the check and the entry: other
+    # phones may have joined while the name was read.
+    if music_listeners.full_for(device_id):
+        raise _refuse(409, *_TOO_MANY)
+    entry = await music_listeners.join(device_id, host, room_id=room_id, label=room.label,
+                                       name=name, state=state)
+    # The host was read before the awaits above: a room that joined a
+    # shared queue meanwhile hands this phone on to that queue's host.
+    await music_listeners.follow(entry)
+    if entry.host != host:
+        state = await _player_state(entry.host) or entry.state
     return _listen_answer(request, entry, state)
 
 
 @router.post("/v1/admin/music/listen/leave", dependencies=[Depends(require_device)])
 async def listen_leave(body: _ListenDeviceBody) -> dict[str, Any]:
     """This phone stops listening along: ``{left: <host_room>}``. Nothing
-    changes in any room. 404 ``not_listening`` when it wasn't."""
-    device_id = (body.device_id or "").strip()
-    if not device_id:
-        raise _refuse(400, *_NO_DEVICE)
+    changes in any room. 404 ``not_listening`` when it wasn't; 400
+    ``no_device`` / ``bad_device`` as for a join."""
+    device_id = _device_id(body.device_id)
     entry = await music_listeners.leave(device_id)
     if entry is None:
         raise _refuse(404, "not_listening", "This phone isn't listening along.")
@@ -378,13 +414,17 @@ async def listen_heartbeat(body: _ListenDeviceBody, request: Request) -> dict[st
     else ``{listening: false, reason, message}``, ``reason`` one of
     ``stopped`` (a person stopped the music), ``ended`` (the queue ran
     out), ``not_listening`` (left, expired, or the core restarted without
-    it)."""
+    it). A ``device_id`` that is missing or not the devices tier's shape
+    was never listening: ``not_listening``."""
     device_id = (body.device_id or "").strip()
+    if not music_listeners.valid_device_id(device_id):
+        return {"listening": False, "reason": music_listeners.REASON_NOT_LISTENING,
+                "message": music_listeners.NOT_LISTENING_MESSAGE}
     entry = music_listeners.get(device_id)
 
     async def over(reason: str, message: str) -> dict[str, Any]:
-        if device_id:
-            await music_listeners.forget(device_id)
+        # Only this entry: a join that replaced it meanwhile stays.
+        await music_listeners.forget(device_id, entry)
         return {"listening": False, "reason": reason, "message": message}
 
     if entry is None:
@@ -392,11 +432,22 @@ async def listen_heartbeat(body: _ListenDeviceBody, request: Request) -> dict[st
     if not entry.live:
         return await over(entry.reason or music_listeners.REASON_STOPPED, entry.message or "")
     music_listeners.touch(entry)
+    await music_listeners.follow(entry)
     if not music_groups.has_own_player(entry.host):
         await music_listeners.host_stopped(entry.host, music_listeners.REASON_STOPPED)
         return await over(entry.reason or music_listeners.REASON_STOPPED, entry.message or "")
-    state = await _player_state(entry.host)
-    await music_listeners.look(entry.host, state)
+    host = entry.host
+    state = await _player_state(host)
+    # The host may have joined a shared queue while its player was read.
+    await music_listeners.follow(entry)
+    if entry.host == host:
+        await music_listeners.look(host, state)
+    else:
+        state = await _player_state(entry.host)
     if not entry.live:
         return await over(entry.reason or music_listeners.REASON_ENDED, entry.message or "")
-    return {**_listen_answer(request, entry, state or "stop"), "listening": True}
+    # A player that didn't answer: the state it last had, never a "stop"
+    # it didn't say (the phone would show the music stopped).
+    if state not in ("play", "pause"):
+        state = entry.state
+    return {**_listen_answer(request, entry, state), "listening": True}

@@ -17,14 +17,18 @@ The rules (design note LISTEN-ALONG, owner-approved 2026-11-28):
   changes nothing for a listener. A room playing alone that joins another
   room's shared queue takes its listeners along to that queue's host (its
   own player only waits, paused; the note doesn't name this case, and
-  silence on a paused stream would be the alternative).
+  silence on a paused stream would be the alternative). The end of a join
+  and every heartbeat check the host again (:func:`follow`), so a room
+  that joined a shared queue while a phone was joining it still takes it.
 * **The host stopping stops it.** A person's stop reaching the host (the
   voice reply's ``music_stop``, or ``room_music.dispatch_music``) marks the
-  listeners ``stopped``; the host's player found stopped by itself (the
-  queue ran out: :func:`look`, from the playback sweeper and from each
-  heartbeat) marks them ``ended``. The next heartbeat answers
-  ``listening: false`` with that reason, once.
-* **One room per phone.** Joining somewhere else replaces the entry.
+  listeners ``stopped`` — ``ended`` when that stop was a skip past the
+  queue's last song (``Response.data["queue_ended"]``); the host's player
+  found stopped by itself (the queue ran out: :func:`look`, from the
+  playback sweeper and from each heartbeat) marks them ``ended``. The next
+  heartbeat answers ``listening: false`` with that reason, once.
+* **One room per phone.** Joining somewhere else replaces the entry. At
+  most :data:`MAX_LISTENERS` phones listen at once.
 * **60 seconds without a heartbeat** and the listener is gone (phone off the
   Wi-Fi, app killed): its next heartbeat answers ``not_listening``.
 * **A core restart** reloads the mirror and gives every listener 60 seconds
@@ -32,17 +36,21 @@ The rules (design note LISTEN-ALONG, owner-approved 2026-11-28):
 
 State is in memory (this process routes every music command) and mirrored
 to the database (V089: ``music_listeners``) for the web process's cards and
-for a restart. Database trouble is logged, never fatal.
+for a restart. Memory changes never wait on anything; the mirror is then
+brought in line with memory as it is at that moment (:func:`_sync`), so
+two changes racing can't leave the row behind the entry. Database trouble
+is logged, never fatal.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import text
 
@@ -56,14 +64,22 @@ EXPIRE_SEC = 60.0
 #: play or pause between them): its queue ran out. A new song being loaded
 #: can read "stop" for a moment.
 STOPPED_GRACE_SEC = 4.0
+#: At most this many phones listen along at once, house-wide.
+MAX_LISTENERS = 32
 #: A listener's name when its device has none on record.
 DEFAULT_NAME = "A phone"
+#: The devices tier's id shape (web/backend/api/devices.py _DEVICE_ID_RE).
+DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}\Z")
 
 REASON_STOPPED = "stopped"
 REASON_ENDED = "ended"
 REASON_NOT_LISTENING = "not_listening"
 
 NOT_LISTENING_MESSAGE = "This phone isn't listening along any more."
+
+
+def valid_device_id(device_id: str | None) -> bool:
+    return bool(device_id) and DEVICE_ID_RE.match(device_id) is not None
 
 
 @dataclass
@@ -83,6 +99,9 @@ class Listener:
     name: str = DEFAULT_NAME
     #: That room's label from Settings → Rooms, when it has one.
     label: str | None = None
+    #: The host's player state last read ("play" or "pause"): what an
+    #: answer says when the player doesn't answer this time.
+    state: str = "play"
     #: Set once the host stopped: ``stopped`` or ``ended``. The next
     #: heartbeat says so and forgets the listener.
     reason: str | None = None
@@ -100,7 +119,8 @@ _listeners: dict[str, Listener] = {}
 #: host room -> monotonic: when its player was first read stopped, while
 #: listeners hear it.
 _stopped_since: dict[str, float] = {}
-_lock = asyncio.Lock()
+#: Mirror writes one at a time (each writes memory as it is then).
+_db_lock = asyncio.Lock()
 
 #: Mirror changes to the database. The suite's conftest turns it off for
 #: tests that don't ask for the database (they share one test database).
@@ -109,9 +129,9 @@ PERSIST = True
 
 def reset(*, persist: bool = True) -> None:
     """Forget everything (tests)."""
-    global _lock, PERSIST
+    global _db_lock, PERSIST
     PERSIST = persist
-    _lock = asyncio.Lock()
+    _db_lock = asyncio.Lock()
     _listeners.clear()
     _stopped_since.clear()
 
@@ -161,6 +181,14 @@ def hosts() -> set[str]:
     return {e.host for e in _listeners.values() if e.live and not _expired(e)}
 
 
+def full_for(device_id: str) -> bool:
+    """No room for another phone: MAX_LISTENERS others are listening (a
+    phone already listening may always move)."""
+    now = time.monotonic()
+    others = sum(1 for d, e in _listeners.items() if d != device_id and not _expired(e, now))
+    return others >= MAX_LISTENERS
+
+
 # ── the database mirror ──
 
 
@@ -170,45 +198,35 @@ def _session_scope():
     return session_scope()
 
 
-async def _save(entry: Listener) -> None:
-    if not PERSIST:
+async def _sync(device_ids: Iterable[str]) -> None:
+    """Bring the mirror rows of ``device_ids`` in line with memory as it is
+    NOW: a live entry is written, anything else deleted. Called after each
+    change, never inside one, so a slow database never holds a change up
+    and the last write always matches the last change."""
+    ids = sorted(set(device_ids))
+    if not PERSIST or not ids:
         return
-    try:
-        async with _session_scope() as s:
-            await s.execute(
-                text("INSERT INTO music_listeners (device_id, host_room_id, joined_at) "
-                     "VALUES (:d, :h, :at) ON CONFLICT (device_id) DO UPDATE SET "
-                     "host_room_id = EXCLUDED.host_room_id, joined_at = EXCLUDED.joined_at"),
-                {"d": entry.device_id, "h": entry.host, "at": entry.joined_at},
-            )
-    except Exception as e:  # noqa: BLE001 — memory decides; the mirror is best-effort
-        log.warning("listen along: couldn't save device=%s: %s", entry.device_id, e)
-
-
-async def _drop_rows(device_ids: list[str]) -> None:
-    if not PERSIST or not device_ids:
-        return
-    try:
-        async with _session_scope() as s:
-            await s.execute(
-                text("DELETE FROM music_listeners WHERE device_id = ANY(:ids)"),
-                {"ids": list(device_ids)},
-            )
-    except Exception as e:  # noqa: BLE001
-        log.warning("listen along: couldn't drop %d listener row(s): %s", len(device_ids), e)
-
-
-async def _move_rows(old: str, new: str) -> None:
-    if not PERSIST:
-        return
-    try:
-        async with _session_scope() as s:
-            await s.execute(
-                text("UPDATE music_listeners SET host_room_id = :new WHERE host_room_id = :old"),
-                {"old": old, "new": new},
-            )
-    except Exception as e:  # noqa: BLE001
-        log.warning("listen along: couldn't move listeners %s -> %s: %s", old, new, e)
+    async with _db_lock:
+        now = time.monotonic()
+        keep = [e for d in ids if (e := _listeners.get(d)) is not None
+                and e.live and not _expired(e, now)]
+        drop = [d for d in ids if d not in {e.device_id for e in keep}]
+        try:
+            async with _session_scope() as s:
+                if drop:
+                    await s.execute(
+                        text("DELETE FROM music_listeners WHERE device_id = ANY(:ids)"),
+                        {"ids": drop},
+                    )
+                for e in keep:
+                    await s.execute(
+                        text("INSERT INTO music_listeners (device_id, host_room_id, joined_at) "
+                             "VALUES (:d, :h, :at) ON CONFLICT (device_id) DO UPDATE SET "
+                             "host_room_id = EXCLUDED.host_room_id, joined_at = EXCLUDED.joined_at"),
+                        {"d": e.device_id, "h": e.host, "at": e.joined_at},
+                    )
+        except Exception as e:  # noqa: BLE001 — memory decides; the mirror is best-effort
+            log.warning("listen along: couldn't mirror %d listener(s): %s", len(ids), e)
 
 
 async def device_name(device_id: str) -> str:
@@ -245,23 +263,21 @@ async def load() -> None:
     _listeners.clear()
     _stopped_since.clear()
     now = time.monotonic()
-    moved: list[Listener] = []
+    changed: list[str] = []
     for device_id, host, joined_at, name in rows:
         if not device_id or not host:
             continue
         # A host that is a member of a shared queue now (it can't be after
         # a clean hand-off) hears that queue's host.
         hears = music_groups.host_of(host) or host
-        entry = Listener(
+        _listeners[device_id] = Listener(
             device_id=device_id, host=hears, room_id=hears,
             joined_at=joined_at or datetime.now(timezone.utc), seen=now,
             name=" ".join(str(name or "").split()) or DEFAULT_NAME,
         )
-        _listeners[device_id] = entry
         if hears != host:
-            moved.append(entry)
-    for entry in moved:
-        await _save(entry)
+            changed.append(device_id)
+    await _sync(changed)
     log.info("listen along: %d listener(s) at startup", len(_listeners))
 
 
@@ -270,37 +286,36 @@ async def load() -> None:
 
 async def join(
     device_id: str, host: str, *, room_id: str, label: str | None = None,
-    name: str | None = None,
+    name: str | None = None, state: str = "play",
 ) -> Listener:
     """``device_id`` listens to ``host``'s player, joined from ``room_id``.
     A phone listening elsewhere moves (one room per phone)."""
-    async with _lock:
-        # Strictly after every listener already here: the cards list them
-        # in join order, even for phones joined in the same instant (the
-        # clock's step can be coarse).
-        joined_at = datetime.now(timezone.utc)
-        latest = max((e.joined_at for e in _listeners.values()), default=None)
-        if latest is not None and joined_at <= latest:
-            joined_at = latest + timedelta(microseconds=1)
-        entry = Listener(
-            device_id=device_id, host=host, room_id=room_id, label=label,
-            joined_at=joined_at, seen=time.monotonic(),
-            name=name or DEFAULT_NAME,
-        )
-        _listeners[device_id] = entry
-        await _save(entry)
+    # Strictly after every listener already here: the cards list them in
+    # join order, even for phones joined in the same instant (the clock's
+    # step can be coarse).
+    joined_at = datetime.now(timezone.utc)
+    latest = max((e.joined_at for e in _listeners.values()), default=None)
+    if latest is not None and joined_at <= latest:
+        joined_at = latest + timedelta(microseconds=1)
+    entry = Listener(
+        device_id=device_id, host=host, room_id=room_id, label=label,
+        joined_at=joined_at, seen=time.monotonic(),
+        name=name or DEFAULT_NAME, state=state,
+    )
+    _listeners[device_id] = entry
     log.info("listen along: device=%s listens to room=%s (joined from %s)", device_id, host, room_id)
+    await _sync([device_id])
     return entry
 
 
 async def leave(device_id: str) -> Listener | None:
     """The phone stops listening; None when it wasn't (a stopped or expired
     entry is forgotten too). Nothing changes in any room."""
-    async with _lock:
-        entry = _listeners.pop(device_id, None)
-        if entry is not None:
-            await _drop_rows([device_id])
-    if entry is None or not entry.live or _expired(entry):
+    entry = _listeners.pop(device_id, None)
+    if entry is None:
+        return None
+    await _sync([device_id])
+    if not entry.live or _expired(entry):
         return None
     log.info("listen along: device=%s left room=%s", device_id, entry.host)
     return entry
@@ -311,11 +326,19 @@ def touch(entry: Listener) -> None:
     entry.seen = time.monotonic()
 
 
-async def forget(device_id: str) -> None:
-    """Drop a phone's entry after its heartbeat was told it is over."""
-    async with _lock:
-        if _listeners.pop(device_id, None) is not None:
-            await _drop_rows([device_id])
+async def forget(device_id: str, entry: Listener | None = None) -> None:
+    """Drop a phone's entry after its heartbeat was told it is over: only
+    ``entry`` itself (a join that replaced it meanwhile stays), or, with no
+    entry, only one that has expired."""
+    current = _listeners.get(device_id)
+    if current is None:
+        return
+    if entry is not None and current is not entry:
+        return
+    if entry is None and not _expired(current):
+        return
+    _listeners.pop(device_id, None)
+    await _sync([device_id])
 
 
 async def move_host(old: str, new: str, *, follow_room: bool = True) -> int:
@@ -325,20 +348,29 @@ async def move_host(old: str, new: str, *, follow_room: bool = True) -> int:
     phone joined from still hears the music). Returns how many moved."""
     if not old or not new or old == new:
         return 0
-    async with _lock:
-        moving = [e for e in _listeners.values() if e.host == old and e.live]
-        for e in moving:
-            e.host = new
-            if follow_room and e.room_id == old:
-                # The room it joined from plays nothing of this queue now.
-                e.room_id, e.label = new, None
-        _stopped_since.pop(old, None)
-        if moving:
-            await _move_rows(old, new)
+    moving = [e for e in _listeners.values() if e.host == old and e.live]
+    for e in moving:
+        e.host = new
+        if follow_room and e.room_id == old:
+            # The room it joined from plays nothing of this queue now.
+            e.room_id, e.label = new, None
+    _stopped_since.pop(old, None)
     if moving:
         log.info("listen along: %d listener(s) moved from room=%s to room=%s",
                  len(moving), old, new)
+        await _sync(e.device_id for e in moving)
     return len(moving)
+
+
+async def follow(entry: Listener) -> None:
+    """Check ``entry``'s host again: a host that has become a member of a
+    shared queue since (it joined one while this phone was joining it, or
+    while the change missed it) hands its listeners to that queue's host."""
+    from domovoi import music_groups
+
+    hears = music_groups.host_of(entry.host) or entry.host
+    if entry.live and hears != entry.host:
+        await move_host(entry.host, hears, follow_room=False)
 
 
 def _message(entry: Listener, reason: str) -> str:
@@ -353,24 +385,24 @@ async def host_stopped(host: str, reason: str) -> int:
     next heartbeat (``stopped``: a person stopped it; ``ended``: its queue
     ran out). Their rows go now, so the cards stop showing them. Returns
     how many were marked."""
-    async with _lock:
-        marked = [e for e in _listeners.values() if e.host == host and e.live]
-        for e in marked:
-            e.reason = reason
-            e.message = _message(e, reason)
-        _stopped_since.pop(host, None)
-        if marked:
-            await _drop_rows([e.device_id for e in marked])
+    marked = [e for e in _listeners.values() if e.host == host and e.live]
+    for e in marked:
+        e.reason = reason
+        e.message = _message(e, reason)
+    _stopped_since.pop(host, None)
     if marked:
         log.info("listen along: room=%s %s; %d listener(s) told", host, reason, len(marked))
+        await _sync(e.device_id for e in marked)
     return len(marked)
 
 
-async def note_stopped(room_id: str | None) -> int:
+async def note_stopped(room_id: str | None, response: Any = None) -> int:
     """A person's stop reached ``room_id`` (a voice reply's or a dispatched
-    ``music_stop``): when it is a host some phone listens to, those phones
-    stop with it. A member room that left its group first ("stop here")
-    hears itself only, and no phone listens to it."""
+    ``music_stop``, ``response`` the reply that carried it): when it is a
+    host some phone listens to, those phones stop with it — ``ended`` when
+    the stop was a skip past the queue's last song. A member room that left
+    its group first ("stop here") hears itself only, and no phone listens
+    to it."""
     if not room_id or not _listeners:
         return 0
     from domovoi import music_groups
@@ -378,7 +410,9 @@ async def note_stopped(room_id: str | None) -> int:
     host = music_groups.host_of(room_id) or room_id
     if not listeners_of(host):
         return 0
-    return await host_stopped(host, REASON_STOPPED)
+    data = getattr(response, "data", None)
+    ended = isinstance(data, dict) and bool(data.get("queue_ended"))
+    return await host_stopped(host, REASON_ENDED if ended else REASON_STOPPED)
 
 
 async def look(host: str, state: str | None) -> bool:
@@ -389,6 +423,9 @@ async def look(host: str, state: str | None) -> bool:
         return False
     if state in ("play", "pause"):
         _stopped_since.pop(host, None)
+        for e in _listeners.values():
+            if e.host == host:
+                e.state = state
         return False
     now = time.monotonic()
     since = _stopped_since.setdefault(host, now)
@@ -415,15 +452,13 @@ async def upkeep(app: Any = None) -> None:
     no heartbeat for EXPIRE_SEC go, and a host whose player stopped by
     itself tells its listeners ``ended``."""
     now = time.monotonic()
-    async with _lock:
-        gone = [d for d, e in _listeners.items() if _expired(e, now)]
-        for d in gone:
-            _listeners.pop(d, None)
-        if gone:
-            await _drop_rows(gone)
+    gone = [d for d, e in _listeners.items() if _expired(e, now)]
+    for d in gone:
+        _listeners.pop(d, None)
     if gone:
         log.info("listen along: %d listener(s) dropped (no heartbeat for %.0f s)",
                  len(gone), EXPIRE_SEC)
+        await _sync(gone)
     for host in sorted(hosts()):
         await look(host, await _state_of(host))
     for host in list(_stopped_since):
@@ -433,10 +468,15 @@ async def upkeep(app: Any = None) -> None:
 
 __all__ = [
     "DEFAULT_NAME",
+    "DEVICE_ID_RE",
     "EXPIRE_SEC",
     "HEARTBEAT_SEC",
+    "MAX_LISTENERS",
     "Listener",
     "device_name",
+    "follow",
+    "forget",
+    "full_for",
     "get",
     "host_stopped",
     "hosts",
@@ -451,4 +491,5 @@ __all__ = [
     "reset",
     "room_name",
     "upkeep",
+    "valid_device_id",
 ]

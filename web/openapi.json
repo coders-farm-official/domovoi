@@ -6282,7 +6282,7 @@
           "music"
         ],
         "summary": "Listen Heartbeat",
-        "description": "Every ``heartbeat_sec`` while listening: ``listening: true`` with the\njoin's fields, or ``listening: false`` with ``reason`` and ``message``.",
+        "description": "Every ``heartbeat_sec`` while listening: ``listening: true`` with the\njoin's fields, or ``listening: false`` with ``reason`` and ``message``.\nA ``device_id`` that is missing or not the devices tier's shape was\nnever listening: answered here, as the core would.",
         "operationId": "listen_heartbeat_api_music_listen_heartbeat_post",
         "requestBody": {
           "content": {
