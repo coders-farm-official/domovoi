@@ -1068,6 +1068,9 @@ class _LiveState:
         self.active_sessions = {
             r["id"]: _LiveRoom(r["id"], board) for r in house.get("rooms") or [] if r.get("online", True)
         }
+        # No fixture room is in a drop-in: every routed turn asks whether
+        # its room is in a call (router, dropin_common.room_in_call).
+        self.active_dropins: dict = {}
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("__"):
