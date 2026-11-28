@@ -560,7 +560,7 @@ async def test_a_reply_no_fast_path_takes_is_asked_again_and_never_plays_music(
 
 
 @requires_db
-@pytest.mark.parametrize("said", ["Shut up.", "Never mind, play the radio.", "Forget about it."])
+@pytest.mark.parametrize("said", ["Shut up.", "Never mind, play the radio.", "Be quiet."])
 async def test_a_dismissal_is_a_no(db_session, fake_resolver, said) -> None:
     sid = await _asked(db_session)
     resp = await _say(db_session, sid, said)
@@ -635,6 +635,27 @@ async def test_which_one_is_answered_by_the_music_never_the_model(
     # Never a search for the words themselves ("by eminem" would shuffle
     # every Eminem song): only the request was ever resolved.
     assert two_songs.resolved == [{"any": "in too deep"}]
+
+
+@requires_db
+async def test_a_play_after_filler_with_one_close_title_asks_never_the_model(
+    db_session, fake_resolver,
+) -> None:
+    """2026-11-28: "Then wait. Play should be here." went to the model,
+    which played an unrelated song. It is the music's request; the library
+    has only a close title, so the house asks about that one."""
+    close = EntityRef(type="title", key="shouldbeyou|paleorchard", label="Should Be You",
+                      artist_label="Pale Orchard")
+    fake_resolver.asks["shouldbehere"] = Resolution(
+        "ask", (cand(close, 0.8),), heard="should be here", reason="fuzzy",
+    )
+    sid = await _session(db_session)
+    resp = await _say(db_session, sid, "Then wait. Play should be here.")
+    assert resp.matched_handler == "music" and resp.matched_path == "fast"
+    assert resp.text == "Did you mean Should Be You by Pale Orchard?"
+    assert fake_resolver.resolved == [{"any": "should be here"}]
+    resp = await _say(db_session, sid, "Yes.")
+    assert fake_resolver.played_labels == ["Should Be You"]
 
 
 @requires_db

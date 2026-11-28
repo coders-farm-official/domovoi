@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.5.0 (unreleased) — Music questions stay with the music
+
+- **What changed.** A reply to "Did you mean …?" that names no option is
+  never handed to the language model: options are matched by how the
+  reply sounds ("by Eminem", "the Sum 41 one", a misheard "biomina"), the
+  question is asked once more briefly ("Sum 41 or Eminem?"), and a second
+  miss says "Sorry, I didn't catch that." and brings the music back. A
+  command with a fast path, or a new wake-word turn, is still its own
+  turn. A "play" said after other words ("Then wait. Play …", "Play, you
+  should be here") is the music's title search. A title nothing plays is
+  answered `I couldn't find "<words>" in the library.` (`… in the library
+  or online.` when a streaming provider looked too); it used to be "I
+  couldn't find anything called <words>."
+- **What to know.** Satellites show the thinking ring, not the speaking
+  pulse, while a reply has gone quiet mid-answer (a cold model load):
+  Upgrade satellite to get it.
+
 ## 1.5.0 (unreleased) — Chat from away
 
 - **What changed.** A household member's phone can chat with the house

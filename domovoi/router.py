@@ -248,12 +248,27 @@ _NO_RE = re.compile(
 # ...") collapses in one substitution.
 _LEADING_FILLER_RE = re.compile(
     r"^(?:"
-    r"(?:hey|um|uh|so|well|alright)[,\s]+"
-    r"|(?:yeah|yes|yep|ok|okay)[,\s]+"
-    r"|please[,\s]+"
+    r"(?:hey|um|uh|so|well|alright)[,.!\s]+"
+    r"|(?:yeah|yes|yep|ok|okay)[,.!\s]+"
+    r"|please[,.!\s]+"
     r"|(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+"
     r")+"
 )
+# Words said before a "play" that are no part of it (2026-11-28: "Then
+# wait. Play should be here." missed the music's fast path and went to the
+# model, which played an unrelated song). Stripped only when "play" or
+# "put on" follows, so "wait for me" or "now what" keep their words.
+_PLAY_LEAD_RE = re.compile(
+    r"^(?:(?:then|wait|now|and|so|ok|okay|um+|uh+|er+|hmm+|oh|alright|right|actually)"
+    r"[,.!\s]+)+(?=(?:play|put on)\b)"
+)
+# An earlier sentence before a "play" one: "Yes, wrong song though. Play,
+# you should be here." — the request is the "play" sentence. Bounded, and
+# only when the transcript does not already start with the request.
+_LATER_PLAY_RE = re.compile(r"^[^.!?]{1,80}[.!?]+\s+(?=(?:play|put on)\b)")
+# "Play, you should be here": the comma Whisper writes after "play" is no
+# part of the title.
+_PLAY_COMMA_RE = re.compile(r"^(play|put on)\s*[,.:;]+\s*")
 
 
 def _parse_yes_no(transcript: str) -> bool | None:
@@ -293,7 +308,19 @@ def strip_leading_filler(transcript: str) -> str:
         kept = house_facts.kept_question(transcript, stripped)
         if kept is not None:
             return kept
-    return stripped
+    return _play_request(stripped)
+
+
+def _play_request(transcript: str) -> str:
+    """A "play X" request said after words that are no part of it ("then
+    wait. play X", "wrong song though. play, X"): the request alone, so the
+    music's fast path — never the tool model — takes it. ``transcript``
+    unchanged otherwise."""
+    if not transcript.startswith(("play", "put on")):
+        transcript = _PLAY_LEAD_RE.sub("", transcript, count=1)
+    if not transcript.startswith(("play", "put on")):
+        transcript = _LATER_PLAY_RE.sub("", transcript, count=1)
+    return _PLAY_COMMA_RE.sub(r"\1 ", transcript, count=1)
 
 
 def first_fast_path(

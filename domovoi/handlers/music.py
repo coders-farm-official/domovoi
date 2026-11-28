@@ -1212,7 +1212,12 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             return self._reply(
                 ctx, f"I don't have {q_display}, and I can't look it up while Domovoi is offline."
             )
-        return self._reply(ctx, f"I couldn't find anything called {q_display}.")
+        # The words as heard, quoted, and where it looked (2026-11-28: "play
+        # should be here" — speech-to-text lost the "you" — must say plainly
+        # that the library has no such song, never play something else).
+        if why == "not_found":
+            return self._reply(ctx, f'I couldn\'t find "{q_display}" in the library or online.')
+        return self._reply(ctx, f'I couldn\'t find "{q_display}" in the library.')
 
     async def _stream_or_not_in_library(
         self,

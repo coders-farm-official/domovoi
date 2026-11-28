@@ -802,7 +802,7 @@ async def test_a_real_miss_runs_todays_cascade(db_session, music_dir) -> None:
     mpd_module._clients = {"kitchen": _NothingFoundMPD()}
     ctx = await _ctx(db_session, online=False)
     r = await _say(MusicHandler(), "play quartz meridian", ctx, db_session)
-    assert r.text == "I couldn't find anything called quartz meridian."
+    assert r.text == 'I couldn\'t find "quartz meridian" in the library.'
     assert r.music_action is None
 
 
@@ -817,7 +817,7 @@ async def test_a_middle_band_match_without_the_dialog_runs_todays_cascade(
     # The dialog (when it is in this build) asks only while it is switched on.
     monkeypatch.setattr(settings, "music_choice_enabled", False)
     r = await _say(handler, "play subtract", ctx, db_session)
-    assert r.text == "I couldn't find anything called subtract."
+    assert r.text == 'I couldn\'t find "subtract" in the library.'
 
     # With a dialog it asks; allow_choice=False never does.
     asked: list = []
@@ -833,7 +833,7 @@ async def test_a_middle_band_match_without_the_dialog_runs_todays_cascade(
     assert r.text == "Did you mean SBTRKT?"
     assert asked == [("ask", "SBTRKT", {"any": "subtract"})]
     r = await handler._play({"any": "subtract"}, ctx, db_session, allow_choice=False)
-    assert r.text == "I couldn't find anything called subtract."
+    assert r.text == 'I couldn\'t find "subtract" in the library.'
     assert len(asked) == 1
 
 
@@ -1014,7 +1014,7 @@ async def test_a_turned_down_entity_goes_on_to_todays_search(db_session, music_d
     res = await lm.resolve_request(db_session, {"any": "wildfire lines"})
     assert res.decision == "play"
     r = await handler._play({"any": "wildfire lines"}, ctx, db_session, avoid=(res.best.ref,))
-    assert r.text == "I couldn't find anything called wildfire lines."
+    assert r.text == 'I couldn\'t find "wildfire lines" in the library.'
     assert r.music_action is None
 
 
@@ -1235,7 +1235,7 @@ async def test_a_missing_song_by_an_unknown_artist_is_just_not_found(db_session,
     mpd_module._clients = {"kitchen": _NothingFoundMPD()}
     ctx = await _ctx(db_session, online=True)
     r = await _say(MusicHandler(), "play vrtx by quilted moth", ctx, db_session)
-    assert r.text == "I couldn't find anything called vrtx by quilted moth."
+    assert r.text == 'I couldn\'t find "vrtx by quilted moth" in the library.'
     assert not r.expect_followup
 
 
