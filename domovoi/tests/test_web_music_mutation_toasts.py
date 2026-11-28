@@ -286,8 +286,9 @@ def test_a_double_tap_sends_one_play_and_says_cancelled_once(outcomes) -> None:
     assert len(_posts(o, "/api/music/play")) == 1, o["net"]
     assert o["prompts"]["ensurePair"] == 1, o["prompts"]
     assert o["prompts"]["ensureLogin"] == 0 and o["prompts"]["login"] == 0
+    # The cancellation REPLACES the optimistic "shuffle requested…" toast
+    # (2026-11-28: the two showed side by side).
     assert o["toastTexts"] == [
-        "shuffle requested in kitchen…",
         "play cancelled — this browser is not paired.",
     ], o["toastTexts"]
 
@@ -349,10 +350,12 @@ def test_a_blocked_device_bulk_add_says_so_once(outcomes) -> None:
 
 
 def test_a_real_failure_names_the_servers_reason(outcomes) -> None:
+    # A room play's refusal is the server's own sentence, alone: in place
+    # of the optimistic "shuffle requested…" toast, no "play failed:", no
+    # status, no JSON (2026-11-28, the owner's garage play).
     o = outcomes["server_error"]
     assert o["toastTexts"] == [
-        "shuffle requested in kitchen…",
-        "play failed: mpd is on fire",
+        "mpd is on fire",
     ], o["toastTexts"]
 
 
