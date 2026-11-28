@@ -507,16 +507,29 @@ def _mic_twin(case):
     return next((c for c in CASES if m and c.id == m.group(1) + "m"), None)
 
 
+# Where typed chat differs from the mic on purpose (Main 2026-11-28): the
+# typed answer to "What should I announce?" is read back before it goes out
+# (25.11, then 25.12's yes), a message ending in "?" never acts (25.13), and
+# a play that finds nothing with no player here is the chat model's (25.14).
+TYPED_ONLY = ("25.11", "25.12", "25.13", "25.14")
+
+
+def _typed_only(case) -> bool:
+    return case.id in {base + suffix for base in TYPED_ONLY for suffix in ("", "w", "a")}
+
+
 CHAT_ACTION_PAIRS = [
     (c, _mic_twin(c)) for c in CASES
-    if c.id.startswith("25.") and c.where in ("chat", "away") and _mic_twin(c) is not None
+    if c.id.startswith("25.") and c.where in ("chat", "away") and not _typed_only(c)
+    and _mic_twin(c) is not None
 ]
 
 
 def test_every_typed_command_has_a_mic_twin() -> None:
     typed = [c for c in CASES if c.id.startswith("25.") and c.where in ("chat", "away")]
     seeded = {c.id for c in typed if any("reply" in b for b in c.before)}
-    assert typed and {c.id for c, _ in CHAT_ACTION_PAIRS} == {c.id for c in typed} - seeded
+    own = {c.id for c in typed if _typed_only(c)}
+    assert own and typed and {c.id for c, _ in CHAT_ACTION_PAIRS} == {c.id for c in typed} - seeded - own
 
 
 @pytest.mark.skipif(not ev.chat_actions_available(), reason="typed chat's house commands aren't on this checkout")

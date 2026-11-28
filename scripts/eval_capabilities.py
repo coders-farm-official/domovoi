@@ -1572,12 +1572,14 @@ def _did_from(resp: Any, before: int) -> list[str]:
 async def run_typed_command(
     utterance: str, house: dict, *, device: str | None, thread: str, tid: int, user_row: int,
 ) -> Turn | None:
-    """chat.send_message's router hop (web/backend/api/chat.py _router_turn)
-    and the core's typed turn (POST /v1/phone/text, phone_voice
-    run_phone_text_turn without its caller checks and row writes): the
-    reply the house writes, or None (the chat answers). The core is up and
-    the thread has nothing attached (the fixture has neither)."""
-    from domovoi import phone_voice
+    """chat.send_message's router hop (web/backend/api/chat.py _router_hop)
+    and the core's typed turn (POST /v1/phone/text with fast_paths_only and
+    plays_here false, phone_voice _answer_text without its caller checks
+    and row writes): the reply the house writes, or None (the chat
+    answers). The core is up and the thread has nothing attached (the
+    fixture has neither)."""
+    from domovoi import phone_voice, typed_chat
+    from domovoi.router import plan_route
     from web.backend.api import chat as chat_api
 
     saved_snap, saved_attach = chat_api.get_cached_snapshot, chat_api._thread_reads_attachments
@@ -1599,20 +1601,27 @@ async def run_typed_command(
     person = None if dev.get("shared_screen") else dev.get("person_id")
     room = phone_voice.phone_room(device or f"chat-{tid}")
     before = len(STATE["actions"])
+    said = utterance.strip()
+    if not typed_chat.eligible(said):
+        STATE["hop"].update(ms=int((time.perf_counter() - t0) * 1000), acted=False)
+        return None
+    skip = typed_chat.skip_handlers(plan_route(said), said)
     with action_turn(house) as app:
         resp, err = await phone_voice._route_phone_turn(
-            app, room=room, thread_id=tid, request=utterance, player={}, person_id=person,
-            trigger="typed", stages={}, defer_qa=True)
+            app, room=room, thread_id=tid, request=said, player={}, person_id=person,
+            trigger="typed", stages={}, fast_paths_only=True, skip_handlers=skip, no_player=True)
         await _settle()
+    shaped = phone_voice._typed_reply(resp, False) if resp is not None else ("", [], {})
+    deferred = resp is not None and (resp.matched_path == phone_voice.DEFERRED_PATH or shaped is None)
     STATE["hop"]["ms"] = int((time.perf_counter() - t0) * 1000)
-    STATE["hop"]["acted"] = not (resp is not None and resp.matched_path == phone_voice.DEFERRED_PATH)
-    if resp is not None and resp.matched_path == phone_voice.DEFERRED_PATH:
-        return None   # no handler acted: the chat model answers, nothing written
+    STATE["hop"]["acted"] = not deferred
+    if deferred:
+        return None   # no fast tier took it (or it was the phone player's): the chat model answers
     if resp is None:
         text = (err or {}).get("detail", "")
         _chat_row(thread, "assistant", {"model_role": "action", "error": True})
         return Turn("reply", text, None, "chat_action", actions=_did_from(None, before))
-    reply, _actions, _notes = phone_voice._typed_reply(resp, False)
+    reply, _actions, _notes = shaped
     stats = {"model_role": "action", "matched_handler": resp.matched_handler}
     if resp.expect_followup:
         stats["expect_followup"] = True
