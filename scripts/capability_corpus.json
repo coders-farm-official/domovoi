@@ -4512,12 +4512,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4533,12 +4537,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4554,12 +4562,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4575,12 +4587,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
@@ -4601,12 +4617,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
@@ -4627,12 +4647,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
@@ -4653,12 +4677,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
@@ -4682,12 +4710,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
@@ -4711,12 +4743,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then.",
@@ -4740,12 +4776,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4761,12 +4801,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4782,12 +4826,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4803,12 +4851,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4824,12 +4876,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4845,12 +4901,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4866,12 +4926,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4887,12 +4951,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4908,12 +4976,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4929,12 +5001,17 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\bwhirr|\\bhum of\\b|\\bseems? (?:to be )?(?:quiet|empty|in order|clean)\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4950,12 +5027,17 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\bwhirr|\\bhum of\\b|\\bseems? (?:to be )?(?:quiet|empty|in order|clean)\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4971,12 +5053,17 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]",
+        "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\bwhirr|\\bhum of\\b|\\bseems? (?:to be )?(?:quiet|empty|in order|clean)\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -4992,12 +5079,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -5013,12 +5104,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
@@ -5034,12 +5129,16 @@
         "\\b(?:can'?t|cannot|not able to|unable to|not capable of|have no way to|don'?t have a way to)\\b"
       ],
       "must_not_include": [
-        "\\bI'?ll (?:let (?:them|everyone|the (?:house|rooms?)) know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect)\\b",
-        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played)\\b",
-        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|timer (?:is |has been )?(?:set|started|running)|added (?:to|it)|dropping in|connecting you)\\b",
+        "\\bI'?ll (?:let (?:\\w+ ){0,2}know|announce|tell|pass (?:that|it) on|send|broadcast|play|start|set|add|put|drop in|connect|fire up|spin|queue|turn on|make my way|head|go (?:to|into)|remind|notify)\\b",
+        "\\bI'?m (?:sending|announcing|broadcasting|playing|starting|setting|adding|dropping|connecting|reminding|notifying|putting)\\b",
+        "\\bI(?:'ve| have) (?:announced|told|let|sent|broadcast|set|started|added|dropped|connected|put|played|reminded|notified)\\b",
+        "\\b(?:announc(?:ed|ing)|broadcasting|now playing|playing (?:some|it|music|jazz)|dropping in|connecting you|coming right up)\\b",
+        "\\b(?:has been|have been|is|was) (?:set|added|updated|activated|sent|announced|started|playing)\\b",
         "^(?:done|all set|ok(?:ay)?,? done)\\b",
-        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up)",
-        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b"
+        "^\\W*(?:attention|hey (?:everyone|all|there)|everyone[,!:]|listen up|this is Domovoi)\\b",
+        "\\b(?:you two|you three|you all|y'all) (?:will )?need\\b|\\bAmber, you\\b",
+        "^\\W*(?:reminders?|announcement|voice broadcast|ladies and gentlemen|good news)\\b|\\badded to\\b|\\bstarts? playing\\b|\\bI'?ll (?:go ahead|be right)\\b|\\bI'?m (?:here|signaling)\\b",
+        "[\"“][^\"”]{20,}[\"”]"
       ],
       "needs_change": "N19",
       "note": "N19 (owner-found 2026-11-27 on web chat: 'I'll let them know' plus a made-up announcement, nothing announced): a house action typed in chat is done for real with the voice read-back, or gets a plain 'I can't do that from chat yet'. Never a pretend-done. Main decides which; encoded as the can't until then."
