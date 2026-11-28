@@ -7,7 +7,7 @@ model. Everything that needs no model, no network and no database is
 asserted here:
 
 * the corpus and the house fixtures are well-formed (unique ids, houses
-  that exist, valid verdicts, needs_change ids N1..N18 without the
+  that exist, valid verdicts, needs_change ids N1..N20 without the
   resolved N7 and N10);
 * the global reply checks (no hedge on a question, no plugin names, no
   secrets, menu paths that exist in web/static/settings.jsx) on sample
@@ -81,7 +81,7 @@ def test_case_is_well_formed(case) -> None:
         assert case.where == "chat"
         assert case.device in {d["id"] for d in HOUSES[case.house]["devices"]}, case.device
     for b in case.before:
-        assert set(b) <= {"say", "device", "thread"} and b["say"].strip()
+        assert set(b) <= {"say", "device", "thread", "reply"} and b["say"].strip()
     for pid, pat in case.stored + case.not_stored:
         assert pid is None or isinstance(pid, int)
         re.compile(pat)
@@ -122,7 +122,7 @@ def test_the_list_is_covered() -> None:
     """Every group of the question list is in the corpus, the trust groups
     and DO IT concretely enough to check without a judge."""
     groups = {c.group for c in CASES}
-    assert groups == set(range(1, 14)) | set(range(15, 25))
+    assert groups == set(range(1, 14)) | set(range(15, 26))
     for g in (10, 16, 17, 18, 20):
         concrete = [c for c in CASES if c.group == g and not c.judge and not c.skip_reason]
         assert concrete, f"group {g} has no concrete case"
