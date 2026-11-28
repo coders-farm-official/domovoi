@@ -211,7 +211,7 @@ def test_the_page_loads_the_cards_and_the_player_starts_at_a_moment():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert html.index('src="videos.jsx"') < html.index('src="chat_media.jsx"') < html.index('src="chat.jsx"')
     videos = (STATIC / "videos.jsx").read_text(encoding="utf-8")
-    assert "const VideoOverlay = ({ video, resumeSec, startSec, onClose })" in videos
+    assert "const VideoOverlay = ({ video, resumeSec, startSec, onClose, onInfo })" in videos
     assert "if (!el.duration || at < el.duration) el.currentTime = at;" in videos
     src = (STATIC / "chat_media.jsx").read_text(encoding="utf-8")
     assert "dangerouslySetInnerHTML" not in src and "innerHTML" not in src
