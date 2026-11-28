@@ -107,18 +107,24 @@ Main's AWAY-CHAT-WIRE v1; the house's side is `domovoi/away/`.
   shell's out-of-reach screen), never in the background, and stops shortly
   after the chat closes (``AwayChatController``). At home chat is today's
   path.
-- **The engine** is Arti, from the shared Rust crate `domovoi_tor`, linked in
-  later: ``AwayTorEngine`` is its three C calls and ``EngineAwayTransport``
-  runs it; until then ``AwayTransports/forApp()`` is a placeholder that
-  reaches nothing. A DEBUG build launched with `-domovoi-away-direct
-  127.0.0.1:PORT` talks plain TCP to a loopback house instead.
+- **The engine** is Arti 2.8.0, from the shared Rust crate
+  `native/domovoi-tor` (Android's too), linked in as
+  `Vendor/domovoi-tor/DomovoiTor.xcframework` (its `build-ios.sh` builds it,
+  reproducibly; about 4.8 MB of the arm64 binary). ``DomovoiTorEngine`` is its
+  three C calls and ``EngineAwayTransport`` runs it; that is what
+  ``AwayTransports/forApp()`` returns. A DEBUG build launched with
+  `-domovoi-away-direct 127.0.0.1:PORT` talks plain TCP to a loopback house
+  instead.
 - **Noise** is `Noise_IK_25519_ChaChaPoly_SHA256` on CryptoKit, checked
   against cacophony's vector and bytes the house's own `noise.py` wrote
   (`scripts/make-away-noise-fixture.py`).
 - **End to end against a real house**: `scripts/away_loopback_house.py` serves
   the dashboard API and the real away listener on loopback (it says how), and
   `AwayLoopbackE2ETests` enrols, chats, sends a picture and is cut off by a
-  turn-off, over the direct transport.
+  turn-off, over the direct transport. `AwayTorE2ETests` does it over real
+  Tor on a Simulator (`xcodebuild test` with
+  `TEST_RUNNER_AWAY_TOR_E2E_HOUSE`), against a maintainer's house behind a C
+  tor onion with client authorization; it says what it needs.
 
 ## Building and testing
 
