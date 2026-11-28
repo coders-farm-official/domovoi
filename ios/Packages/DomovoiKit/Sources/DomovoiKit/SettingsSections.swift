@@ -168,8 +168,9 @@ public extension SettingsSection {
         ),
         SettingsSection(
             key: "chat", label: "Chat", group: .chatAndAi,
-            sub: "A heads-up before shaky results, on this phone.",
-            words: "chat heads-up heads up warning warn trust shaky calculate exactly reliable"
+            // Chat from away's card is here too (1.5.0), as on Android.
+            sub: "Chat from away, and a heads-up before shaky results, on this phone.",
+            words: "chat away from home tor mobile data outside remote heads-up heads up warning warn trust shaky calculate exactly reliable"
         ),
         SettingsSection(
             key: "internet", label: "Internet", group: .privacy,

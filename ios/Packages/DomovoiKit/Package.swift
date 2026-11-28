@@ -34,6 +34,14 @@ import PackageDescription
 // (`OrtWakeNets`, `SileroVad`), through ``OnnxModel``. Later: the phonemizer's
 // G2P model and Piper voices — against THIS copy, never a second one (plan
 // 2.2: two ONNX Runtimes in one app clash).
+//
+// ## Away chat's Tor (1.5.0): ios/Vendor/domovoi-tor
+//
+// `DomovoiTor.xcframework`, the static library native/domovoi-tor's
+// build-ios.sh writes from the shared Rust crate (Arti, MIT OR Apache-2.0;
+// the same crate as Android's libdomovoi_tor.so). iOS only: `DomovoiTorEngine`
+// calls its three C functions (`import DomovoiTorFFI`), and is compiled only
+// where the module is there.
 let package = Package(
     name: "DomovoiKit",
     platforms: [
@@ -45,12 +53,23 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../../Vendor/onnxruntime-swift-package-manager"),
+        .package(path: "../../Vendor/domovoi-tor"),
     ],
     targets: [
         .target(
             name: "DomovoiKit",
             dependencies: [
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+                // Away chat's Tor (Arti), iOS only: the xcframework has no
+                // Mac slice, so `swift test` here builds without it and
+                // `AwayTransports.forApp()` is the placeholder on the Mac.
+                .product(name: "DomovoiTor", package: "domovoi-tor", condition: .when(platforms: [.iOS])),
+            ],
+            // What the Rust static library needs from the system, as rustc's
+            // native-static-libs says (build-ios.sh prints it): libiconv,
+            // beside libSystem, which every app links anyway.
+            linkerSettings: [
+                .linkedLibrary("iconv", .when(platforms: [.iOS])),
             ]
         ),
         .testTarget(

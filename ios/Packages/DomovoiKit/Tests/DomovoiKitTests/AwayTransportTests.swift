@@ -91,6 +91,8 @@ final class AwayTransportTests: XCTestCase {
         var startResult: Int32 = 0
         var houseEnd: Int32 = -1
         var authSeen: [String] = []
+        /// Answers `open` with this (a crate `ERR_*`) instead of a socket.
+        var openResult: Int32?
 
         func start(stateDir: String, cacheDir: String, authDir: String) -> Int32 {
             lock.lock(); defer { lock.unlock() }
@@ -102,6 +104,7 @@ final class AwayTransportTests: XCTestCase {
         func open(onion: String, port: Int32) -> Int32 {
             lock.lock(); defer { lock.unlock() }
             opens.append((onion, port))
+            if let openResult { return openResult }
             var fds: [Int32] = [0, 0]
             guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else { return -1 }
             houseEnd = fds[1]
@@ -163,6 +166,35 @@ final class AwayTransportTests: XCTestCase {
         }
     }
 
+    /// The crate's `ERR_*` codes say why, in words with no key in them; Tor
+    /// that isn't running after all (`ERR_NOT_STARTED`) is started again by
+    /// the next `open`.
+    func testAnOpenFailureSaysWhyAndTorThatStoppedIsStartedAgain() async throws {
+        let engine = FakeEngine()
+        let dirs = tempDirectories()
+        defer { try? FileManager.default.removeItem(at: dirs.root) }
+        let transport = EngineAwayTransport(engine: engine, directories: dirs)
+        let key = AwayClientAuthKey(privateKey: Data(count: 32))
+        for (code, why) in [(Int32(-4), "the house's onion refused this phone's key"),
+                            (-3, "the house's onion wasn't found"),
+                            (-5, "the house's onion didn't answer in time"),
+                            (-2, "Tor isn't running")] {
+            engine.openResult = code
+            do {
+                _ = try await transport.open(AwayEndpoint(onion: onion, port: 80), clientAuth: key)
+                XCTFail("opened")
+            } catch {
+                XCTAssertEqual(error as? AwayTransportError, .unreachable(why))
+            }
+        }
+        XCTAssertEqual(engine.starts.count, 1, "started once for the first four")
+        engine.openResult = nil
+        let stream = try await transport.open(AwayEndpoint(onion: onion, port: 80), clientAuth: key)
+        XCTAssertEqual(engine.starts.count, 2, "ERR_NOT_STARTED: started again")
+        await stream.close()
+        await transport.stop()
+    }
+
     func testTheAuthFileIsTorsLineInA0600FileInA0700Folder() throws {
         let dirs = tempDirectories()
         defer { try? FileManager.default.removeItem(at: dirs.root) }
@@ -181,8 +213,16 @@ final class AwayTransportTests: XCTestCase {
         XCTAssertFalse("\(key)".contains(AwayKeyCodec.base32(raw)))
     }
 
-    func testTheShippingTransportIsThePlaceholderThatOpensNothing() async {
+    /// On the iPhone the app's transport is Arti (``DomovoiTorEngine``
+    /// under ``EngineAwayTransport``); where the crate isn't linked (the Mac,
+    /// where `swift test` runs) it is the placeholder that opens nothing.
+    func testTheShippingTransportIsArtiOnTheIPhoneAndThePlaceholderElsewhere() async {
         let t = AwayTransports.forApp()
+        #if os(iOS)
+        XCTAssertTrue(t is EngineAwayTransport)
+        XCTAssertTrue(t.available)
+        #else
+        XCTAssertTrue(t is TorAwayTransport)
         XCTAssertFalse(t.available)
         do {
             _ = try await t.open(AwayEndpoint(onion: onion, port: 80), clientAuth: AwayClientAuthKey(privateKey: Data(count: 32)))
@@ -190,6 +230,7 @@ final class AwayTransportTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? AwayTransportError, .notAvailable)
         }
+        #endif
     }
 
     func testTheDirectTransportReachesALocalListener() async throws {

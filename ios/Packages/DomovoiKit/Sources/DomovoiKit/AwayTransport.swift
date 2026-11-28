@@ -10,20 +10,21 @@ import Network
 //
 // Away chat reaches the house over one TCP stream to its away onion, with
 // Tor's client authorization (AWAY-CHAT-WIRE §2.1). The iPhone's Tor is Arti,
-// from the shared Rust crate `domovoi_tor` (the 2026-11-27 spike), linked in
-// once it lands; everything above this file speaks to ``AwayTransport`` and
-// nothing else:
+// from the shared Rust crate `domovoi_tor` (native/domovoi-tor, the
+// 2026-11-27 spike), linked in as ios/Vendor/domovoi-tor/DomovoiTor.xcframework;
+// everything above this file speaks to ``AwayTransport`` and nothing else:
 // the Noise handshake, the wire, the chat client and the controller that
 // decides when it runs. The engine's whole job is
 //
 //     open(onion:port, client-auth key) -> a byte stream
 //     stop()                            -> Tor stops, its streams close
 //
-// and the app builds one in exactly one place, ``AwayTransports/forApp()``.
-// Today that is ``TorAwayTransport``, which says "not available yet" and
-// opens nothing. The crate drops in as an ``AwayTorEngine`` (its three C
-// calls) under ``EngineAwayTransport``, whose streams are the fds it hands
-// back (``FdAwayByteStream``). ``DirectAwayTransport`` (plain TCP to a fixed host and port,
+// and the app builds one in exactly one place, ``AwayTransports/forApp()``:
+// the crate as an ``AwayTorEngine`` (``DomovoiTorEngine``, its three C calls)
+// under ``EngineAwayTransport``, whose streams are the fds it hands back
+// (``FdAwayByteStream``). Where the crate isn't linked (the Mac, where
+// DomovoiKit's tests run) it is ``TorAwayTransport``, which says "not
+// available" and opens nothing. ``DirectAwayTransport`` (plain TCP to a fixed host and port,
 // the client-auth key unused) exists for the tests and for a debug build
 // against a loopback house, and is compiled only in DEBUG, so a Release build
 // cannot reach it.
@@ -95,10 +96,10 @@ public protocol AwayTransport: AnyObject, Sendable {
     func stop() async
 }
 
-/// The iPhone's Tor engine until the shared Rust crate `domovoi_tor` (Arti,
-/// chosen by the 2026-11-27 spike) is linked in: it opens nothing and says
-/// so; the chat screen shows "Can't reach your house." and Settings says this
-/// build can't reach the house from away yet.
+/// The engine where the shared Rust crate `domovoi_tor` (Arti) isn't linked
+/// (DomovoiKit built for the Mac, where its tests run): it opens nothing and
+/// says so; the chat screen would show "Can't reach your house." and Settings
+/// that this build can't reach the house from away.
 public final class TorAwayTransport: AwayTransport {
     public init() {}
 
@@ -116,11 +117,13 @@ public final class TorAwayTransport: AwayTransport {
 /// The shared crate's C API (`native/domovoi-tor/`, `domovoi_tor.h`), as
 /// Swift sees it: **this is the protocol the crate's binding implements**.
 ///
-///     int32_t dtor_start(const char *state, const char *cache, const char *auth);
-///     int32_t dtor_open(const char *onion, int32_t port);   // fd, or -1
+///     int32_t dtor_start(const char *state, const char *cache, const char *auth,
+///                        const char *trusted_prefix);     // 0, or DTOR_ERR_*
+///     int32_t dtor_open(const char *onion, uint16_t port);  // fd, or DTOR_ERR_*
 ///     void    dtor_stop(void);
 ///
-/// `start` bootstraps Tor and blocks until it is ready (0) or failed (not 0);
+/// `start` bootstraps Tor and blocks until it is ready (0) or failed (not 0;
+/// ``DomovoiTorEngine`` supplies the trusted prefix itself);
 /// it reads client-authorization keys from `authDir`, where
 /// ``AwayTorDirectories/writeAuth(onion:key:)`` has put this house's.
 /// `open` hands back one end of a Unix socket pair whose other end the crate
@@ -223,7 +226,11 @@ public final class EngineAwayTransport: AwayTransport, @unchecked Sendable {
             setStarted(true)
         }
         let fd = await Self.offMain { engine.open(onion: endpoint.onion, port: Int32(endpoint.port)) }
-        guard fd >= 0 else { throw AwayTransportError.unreachable("the onion couldn't be reached") }
+        guard fd >= 0 else {
+            // Tor isn't running after all (stopped under us): start it next time.
+            if fd == Self.notStarted { setStarted(false) }
+            throw AwayTransportError.unreachable(Self.openFailure(fd))
+        }
         return FdAwayByteStream(fileDescriptor: fd)
     }
 
@@ -232,6 +239,20 @@ public final class EngineAwayTransport: AwayTransport, @unchecked Sendable {
         setStarted(false)
         let engine = engine
         await Self.offMain { engine.stop() }
+    }
+
+    /// The crate's `ERR_NOT_STARTED`.
+    static let notStarted: Int32 = -2
+
+    /// Why `open` failed, by the crate's code (no key, no traffic in it).
+    static func openFailure(_ code: Int32) -> String {
+        switch code {
+        case -2: return "Tor isn't running"
+        case -3: return "the house's onion wasn't found"
+        case -4: return "the house's onion refused this phone's key"
+        case -5: return "the house's onion didn't answer in time"
+        default: return "the onion couldn't be reached (\(code))"
+        }
     }
 
     private var isStarted: Bool { lock.lock(); defer { lock.unlock() }; return started }
@@ -331,11 +352,20 @@ public final class FdAwayByteStream: AwayByteStream, @unchecked Sendable {
     }
 }
 
-/// Which engine the app uses: the one place it is built. When the
-/// `domovoi_tor` binding lands this becomes
-/// `EngineAwayTransport(engine: DomovoiTorEngine(), directories: dirs)`.
+/// Which engine the app uses: the one place it is built. Arti
+/// (``DomovoiTorEngine``) in the app's Tor folders
+/// (``AwayTorDirectories/forApp()``, the same ones the controller writes the
+/// key into); the placeholder only where the crate isn't linked, or if
+/// Application Support can't be had.
 public enum AwayTransports {
-    public static func forApp() -> any AwayTransport { TorAwayTransport() }
+    public static func forApp() -> any AwayTransport {
+        #if canImport(DomovoiTorFFI)
+        if let directories = AwayTorDirectories.forApp() {
+            return EngineAwayTransport(engine: DomovoiTorEngine(), directories: directories)
+        }
+        #endif
+        return TorAwayTransport()
+    }
 }
 
 #if DEBUG
