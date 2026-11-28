@@ -220,6 +220,18 @@ def bridge_matches(presented: str | None) -> bool:
                                   presented.strip().encode("utf-8", "replace"))
 
 
+def read_bridge_secret() -> str | None:
+    """For the web process: the core's current secret, to present on its
+    own hop back to the core for a phone's away turn (the typed chat's
+    ``POST /v1/phone/text``: chat_access.bridge_viewer). None when the core
+    has made none yet."""
+    try:
+        stored = (folder() / BRIDGE_FILE).read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    return stored if len(stored) == 64 else None
+
+
 def reset_bridge_secret() -> None:
     """For tests."""
     _BRIDGE["secret"] = None

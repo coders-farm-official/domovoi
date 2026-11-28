@@ -1,0 +1,836 @@
+"""Typed chat does what the house does (1.5.0): ``POST /v1/phone/text``
+(domovoi/phone_voice.py ``run_phone_text_turn``) and the typed send's
+router hop (web/backend/api/chat.py ``_router_turn``).
+
+The owner typed "Please announce that Alex, Sam and Jo need another shot",
+then "Announce that", then "Announce it to the rooms please" into the
+dashboard chat; the chat model answered "I'll let them know…" and nothing
+was announced: typed chat never reached the router. Pinned here:
+
+* the core's text turn: the same router as the chat mic, the phone's
+  session per thread, the reply row (``source = 'typed'``, ``model_role =
+  'action'``), the device's person, the private-chats rule, fixed lines for
+  a satellite's setting and for media with no player, ``actions_only``;
+* the announce sequence ("announce that" and "announce it to the rooms"
+  make the last announcement again, never the words "that" or "it to the
+  rooms please"), a timer, a list, music;
+* the web send: house commands go to the core and its reply is the
+  house's; the core down, busy or refusing is a fixed line, never the
+  model; plain questions, memory, print, photo search and house facts stay
+  the chat's; "try again" is never offered on an action row;
+* away chat (web/backend/away_bridge.py) reaches the same hop, as the phone
+  its away key proved;
+* the chat prompt's no-claims sentence.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from types import SimpleNamespace
+from typing import Any
+
+import httpx
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+
+from domovoi import admin_auth, chat_access, phone_voice
+from domovoi.chat_access import Viewer
+from domovoi.clients import mpd as mpd_mod
+from domovoi.clients import ollama
+from domovoi.db.session import SessionLocal
+from domovoi.handlers.intercom import WHAT_TO_ANNOUNCE_TEXT
+from domovoi.main import app as core_app
+from domovoi.tests.auth_testkit import _db  # noqa: F401 — fixture
+from domovoi.tests.away_kit import away_db  # noqa: F401 — fixture
+from domovoi.tests.conftest import requires_db
+
+PHONE = "android-typed1"
+ROOM = "phone-android-typed1"
+SHOT = "Please announce that Alex, Sam and Jo need another shot"
+
+
+# ─── Fixtures ─────────────────────────────────────────────────────────────
+
+
+class _Satellite:
+    """A room's live session: records what it is asked to announce."""
+
+    def __init__(self) -> None:
+        self.said: list[str] = []
+
+    async def announce(self, message: str, kind: str = "user") -> None:
+        self.said.append(message)
+
+
+@pytest.fixture
+def open_gate():
+    core_app.dependency_overrides[admin_auth.require_device_after_setup] = lambda: None
+    phone_voice.reset_for_tests()
+    yield
+    core_app.dependency_overrides.pop(admin_auth.require_device_after_setup, None)
+    phone_voice.reset_for_tests()
+
+
+@pytest.fixture
+def rooms(monkeypatch):
+    """Two rooms with live satellites, for the intercom."""
+    sats = {"kitchen": _Satellite(), "office": _Satellite()}
+    monkeypatch.setattr(mpd_mod, "_room_ports", {"kitchen": (6651, 8051), "office": (6652, 8052)})
+    monkeypatch.setattr(core_app.state, "active_sessions", dict(sats), raising=False)
+    # What the streaming layer keeps on a running core (drop-in reads it).
+    monkeypatch.setattr(core_app.state, "satellite_full_duplex", {}, raising=False)
+    monkeypatch.setattr(core_app.state, "active_dropins", {}, raising=False)
+    return sats
+
+
+async def _fanned_out() -> None:
+    """Let the intercom's background announcements run."""
+    for _ in range(5):
+        await asyncio.sleep(0)
+    if phone_voice._BACKGROUND:
+        await asyncio.gather(*list(phone_voice._BACKGROUND), return_exceptions=True)
+
+
+def _client() -> AsyncClient:
+    return AsyncClient(transport=ASGITransport(app=core_app), base_url="http://test")
+
+
+async def _thread(*, owner: str | None = None, shared: bool = True) -> int:
+    async with SessionLocal() as s:
+        tid = (await s.execute(text("INSERT INTO chat_threads (title) VALUES (NULL) RETURNING id"))).scalar_one()
+        if await chat_access.has_private_columns(s):
+            await s.execute(text("UPDATE chat_threads SET shared = :sh, owner_device_id = :o WHERE id = :t"),
+                            {"sh": shared, "o": owner, "t": tid})
+        await s.commit()
+    return int(tid)
+
+
+async def _rows(thread_id: int) -> list[dict[str, Any]]:
+    async with SessionLocal() as s:
+        rows = (await s.execute(text(
+            "SELECT id, role, content, source, stats FROM chat_messages WHERE thread_id = :t ORDER BY id"
+        ), {"t": thread_id})).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def _text(c: AsyncClient, thread_id: int, said: str, **extra: Any) -> dict[str, Any]:
+    r = await c.post("/v1/phone/text", json={"text": said, "phone_id": PHONE, "thread_id": thread_id, **extra})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def _device(device_id: str, *, person: str | None = None, shared_screen: bool = False) -> int | None:
+    async with SessionLocal() as s:
+        pid = None
+        if person is not None:
+            pid = (await s.execute(text("INSERT INTO people (name) VALUES (:n) RETURNING id"),
+                                   {"n": person})).scalar_one()
+        await s.execute(text(
+            "INSERT INTO devices (device_id, name, owner_person_id, shared_screen) VALUES (:d, :d, :p, :sc)"
+        ), {"d": device_id, "p": pid, "sc": shared_screen})
+        await s.commit()
+    return pid
+
+
+# ─── The core's text turn ─────────────────────────────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_announce_sequence(db_session, open_gate, rooms) -> None:
+    tid = await _thread()
+    async with _client() as c:
+        first = await _text(c, tid, SHOT)
+        await _fanned_out()
+        assert first["handled"] is True and first["matched_handler"] == "intercom", first
+        assert first["reply"] == "Broadcasting to the house."
+        # "that" introduces what is said; it is not said.
+        assert rooms["kitchen"].said == ["Alex, Sam and Jo need another shot"]
+        assert rooms["office"].said == ["Alex, Sam and Jo need another shot"]
+
+        # A pointer at it makes it again, in this phone's session for the thread.
+        again = await _text(c, tid, "Announce that")
+        await _fanned_out()
+        assert again["matched_handler"] == "intercom" and again["session_id"] == first["session_id"]
+        rooms_again = await _text(c, tid, "Announce it to the rooms please")
+        await _fanned_out()
+        assert rooms_again["reply"] == "Broadcasting to the house."
+    for sat in rooms.values():
+        assert sat.said == ["Alex, Sam and Jo need another shot"] * 3   # never "that", never "it to the rooms please"
+
+    rows = await _rows(tid)
+    assert [r["role"] for r in rows] == ["user", "assistant"] * 3
+    assert {r["source"] for r in rows} == {"typed"}
+    reply = rows[1]
+    assert reply["stats"]["model_role"] == "action"
+    assert reply["stats"]["matched_handler"] == "intercom" and reply["stats"]["matched_path"] == "fast"
+    async with SessionLocal() as s:
+        logged = (await s.execute(text("SELECT room_id, transcript FROM intents_log ORDER BY id"))).all()
+    assert [r[0] for r in logged] == [ROOM] * 3
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_announce_that_with_nothing_announced_asks_what(db_session, open_gate, rooms) -> None:
+    tid = await _thread()
+    async with _client() as c:
+        body = await _text(c, tid, "Announce that")
+        await _fanned_out()
+        assert body["reply"] == "What should I announce?" == WHAT_TO_ANNOUNCE_TEXT
+        assert body["expect_followup"] is True
+        assert all(sat.said == [] for sat in rooms.values())
+        # The next turn's words are the announcement.
+        reply = await _text(c, tid, "Dinner is ready")
+    await _fanned_out()
+    assert reply["reply"] == "Broadcasting to the house."
+    assert (reply["matched_handler"], reply["matched_path"]) == ("intercom", "confirmation")
+    assert rooms["kitchen"].said == ["Dinner is ready"]
+    assert (await _rows(tid))[1]["stats"]["expect_followup"] is True
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_announce_that_reads_the_persons_request_never_an_old_pretend_reply(
+    db_session, open_gate, rooms,
+) -> None:
+    """A thread from before typed chat reached the house: the request was
+    answered by the model pretending. "Announce that" announces the
+    person's own words, never the reply's."""
+    tid = await _thread()
+    async with SessionLocal() as s:
+        await s.execute(text(
+            "INSERT INTO chat_messages (thread_id, role, content) VALUES (:t, 'user', :q), "
+            "(:t, 'assistant', 'I''ll let them know. Alex, Sam and Jo, you two need another round.')"
+        ), {"t": tid, "q": SHOT})
+        await s.commit()
+    async with _client() as c:
+        body = await _text(c, tid, "Announce that")
+    await _fanned_out()
+    assert body["reply"] == "Broadcasting to the house."
+    assert rooms["kitchen"].said == ["Alex, Sam and Jo need another shot"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_drop_in_from_typed_chat_is_the_mics_answer(db_session, open_gate, rooms) -> None:
+    """A phone is no room: the mic answers "drop in on the kitchen" with the
+    drop-in handler's own refusal, and typed chat gives the same words."""
+    tid = await _thread()
+    async with _client() as c:
+        body = await _text(c, tid, "Drop in on the kitchen")
+    assert body["matched_handler"] == "dropin"
+    assert body["reply"] == "I can't tell which room you're in."
+
+
+# ─── N20: what the intercom announces, every way in ───────────────────────
+
+
+async def _say(said: str, *, room: str = "kitchen", session_id: Any = None, thread_id: int | None = None,
+               phone: bool = False) -> Any:
+    """One turn through the router, as a satellite (or the chat mic) routes it."""
+    from domovoi.models import Context, Intent
+    from domovoi.router import route
+
+    ctx = Context(room_id=room, session_id=session_id, online=True, app=core_app,
+                  device_kind="phone" if phone else None, chat_thread_id=thread_id)
+    async with SessionLocal() as s:
+        response = await route(Intent(transcript=said, room_id=room, session_id=session_id), ctx, s)
+        await s.commit()
+    return response
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("said", "announced"), [
+    ("Broadcast that dinner's ready", "dinner's ready"),
+    ("Please announce that Alex, Sam and Jo need another shot", "Alex, Sam and Jo need another shot"),
+    ("Announce Dinner is ready to everyone please", "Dinner is ready"),
+    ("announce that the car is here, please.", "the car is here"),
+    ("Tell everyone that Jo is home", "Jo is home"),
+])
+async def test_a_satellite_announces_the_message_as_said(db_session, rooms, said, announced) -> None:
+    response = await _say(said)
+    assert response.matched_handler == "intercom"
+    assert response.announce_text == announced
+    assert response.text == "Broadcasting to the house."
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_satellite_repeats_on_a_pointer_and_asks_when_there_is_none(db_session, rooms) -> None:
+    first = await _say("Please announce that Alex, Sam and Jo need another shot")
+    sid = first.session_id
+    again = await _say("Announce that", session_id=sid)
+    rooms_ = await _say("Announce it to the rooms please", session_id=sid)
+    for r in (again, rooms_):
+        assert r.announce_text == "Alex, Sam and Jo need another shot"
+        assert sorted(r.announce_to_rooms) == ["kitchen", "office"]
+
+    fresh = await _say("Announce that", room="office")
+    assert fresh.text == "What should I announce?" and fresh.expect_followup is True
+    assert not fresh.announce_text
+    answered = await _say("The pizza is here", room="office", session_id=fresh.session_id)
+    assert answered.announce_text == "The pizza is here"
+    # "never mind" takes the question back, and announces nothing.
+    asked = await _say("announce it", room="office", session_id=None)
+    dropped = await _say("never mind", room="office", session_id=asked.session_id)
+    assert not dropped.announce_text and dropped.matched_handler == "intercom"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_old_announcement_is_not_repeated(db_session, rooms, monkeypatch) -> None:
+    from domovoi.handlers import intercom
+
+    first = await _say("announce dinner is ready")
+    monkeypatch.setattr(intercom, "ANNOUNCE_AGAIN_WINDOW_SEC", -1.0)
+    later = await _say("Announce that", session_id=first.session_id)
+    assert later.text == "What should I announce?" and not later.announce_text
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_chat_mic_announces_the_message_as_said(db_session, open_gate, rooms, monkeypatch) -> None:
+    """The chat mic (/v1/phone/voice): the same cleaning, the same pointer."""
+    from types import SimpleNamespace as NS
+
+    import domovoi.voice_identifier as vi
+
+    heard = ["Please announce that Alex, Sam and Jo need another shot.", "Announce it to the rooms, please."]
+
+    class _Whisper:
+        async def transcribe(self, pcm: bytes) -> str:
+            return heard.pop(0)
+
+    async def _identify(pcm, **kw):
+        return NS(person_id=None, presence_tier="low", embedding=None, best_similarity=None,
+                  denylisted=False, runner_up_similarity=None, ambiguous=False)
+
+    monkeypatch.setattr(phone_voice, "get_whisper_client", lambda: _Whisper())
+    monkeypatch.setattr(vi, "identify", _identify)
+    pcm = (b"\x10\x00" * 16_000)
+    tid = await _thread()
+    async with _client() as c:
+        for _ in range(2):
+            r = await c.post("/v1/phone/voice", data={"phone_id": PHONE, "thread_id": str(tid), "speak": "false"},
+                             files={"audio": ("t.pcm", pcm, "application/octet-stream")})
+            assert r.status_code == 200, r.text
+            assert r.json()["reply"] == "Broadcasting to the house."
+    await _fanned_out()
+    assert rooms["kitchen"].said == ["Alex, Sam and Jo need another shot"] * 2
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_timer_and_a_list_from_typed_chat(db_session, open_gate) -> None:
+    async with SessionLocal() as s:   # the two lists a new house starts with (V048)
+        await s.execute(text("INSERT INTO lists (name, name_key, position) VALUES "
+                             "('To-do', 'todo', 1), ('Shopping', 'shopping', 2)"))
+        await s.commit()
+    tid = await _thread()
+    async with _client() as c:
+        timer = await _text(c, tid, "set a timer for 5 minutes")
+        listed = await _text(c, tid, "add milk to the shopping list")
+    assert timer["matched_handler"] == "timer", timer
+    assert listed["matched_handler"] == "lists", listed
+    async with SessionLocal() as s:
+        rooms_ = (await s.execute(text("SELECT room_id FROM timers"))).scalars().all()
+        items = (await s.execute(text("SELECT text FROM list_items"))).scalars().all()
+    assert rooms_ == [None]   # house-wide, as from the chat mic
+    assert any("milk" in (i or "").lower() for i in items)
+
+
+async def _a_song() -> None:
+    async with SessionLocal() as s:
+        await s.execute(text(
+            "INSERT INTO library_tracks (file_path, title, artist, album) "
+            "VALUES ('/music/glass-harbor.mp3', 'Glass Harbor', 'Velvet Kites', 'Tide')"
+        ))
+        await s.commit()
+    from domovoi.handlers.shared import library_match
+
+    library_match.reset_for_tests()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_music_with_no_player_is_said_plainly_and_a_player_gets_the_actions(db_session, open_gate) -> None:
+    await _a_song()
+    tid = await _thread()
+    async with _client() as c:
+        web = await _text(c, tid, "play glass harbor")
+        app = await _text(c, tid, "play glass harbor", plays_here=True)
+    assert web["matched_handler"] == "music", web
+    assert web["reply"] == phone_voice.CHAT_NO_PLAYER_TEXT and web["actions"] == []
+    assert app["reply"].startswith("Playing") and app["actions"][0]["type"] == "play"
+    rows = await _rows(tid)
+    assert rows[1]["content"] == phone_voice.CHAT_NO_PLAYER_TEXT
+    assert rows[1]["stats"]["fixed_reply"] == "no_player" and rows[1]["stats"]["actions_dropped"] == ["play"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_satellite_setting_is_the_fixed_line(db_session, open_gate) -> None:
+    tid = await _thread()
+    async with _client() as c:
+        body = await _text(c, tid, "fix the wifi")
+    assert body["matched_handler"] == "wifi"
+    assert body["reply"] == phone_voice.CHAT_ROOM_SETTING_TEXT
+    assert body["reply"].startswith("I can't do that from chat yet.")
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_actions_only_leaves_a_question_to_the_chat_and_writes_nothing(db_session, open_gate) -> None:
+    tid = await _thread()
+    async with _client() as c:
+        body = await _text(c, tid, "write me a poem about cats", actions_only=True)
+        answered = await _text(c, tid, "write me a poem about cats")
+    assert body["handled"] is False and body["messages"] == [] and body["matched_path"] == "deferred"
+    # Without it the house's own Q&A answers, as for the mic.
+    assert answered["handled"] is True and answered["matched_path"] == "qa"
+    assert len(await _rows(tid)) == 2
+    async with SessionLocal() as s:
+        logged = (await s.execute(text("SELECT count(*) FROM intents_log"))).scalar_one()
+    assert logged == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_row_already_written_gets_one_reply_only(db_session, open_gate) -> None:
+    tid = await _thread()
+    async with SessionLocal() as s:
+        uid = (await s.execute(text(
+            "INSERT INTO chat_messages (thread_id, role, content) VALUES (:t, 'user', 'what time is it') RETURNING id"
+        ), {"t": tid})).scalar_one()
+        await s.commit()
+    async with _client() as c:
+        body = await _text(c, tid, "what time is it", user_message_id=uid)
+        twice = await c.post("/v1/phone/text", json={"text": "what time is it", "phone_id": PHONE,
+                                                     "thread_id": tid, "user_message_id": uid})
+        other = await c.post("/v1/phone/text", json={"text": "set a timer", "phone_id": PHONE,
+                                                     "thread_id": tid, "user_message_id": uid})
+    assert body["matched_handler"] == "clock" and body["messages"][0]["id"] == uid
+    assert twice.status_code == 409 and twice.json()["code"] == "already_answered"
+    assert other.status_code == 404
+    assert [r["role"] for r in await _rows(tid)] == ["user", "assistant"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_yes_answers_the_question_the_last_typed_turn_parked(db_session, open_gate) -> None:
+    from domovoi.confirmations import request_confirmation
+
+    tid = await _thread()
+    async with _client() as c:
+        first = await _text(c, tid, "what time is it")
+        async with SessionLocal() as s:
+            await request_confirmation(s, uuid.UUID(first["session_id"]), kind="core.pending_memory_offer",
+                                       handler="memory", data={"memory_id": 424242})
+            await s.commit()
+        second = await _text(c, tid, "yes")
+    assert second["session_id"] == first["session_id"]
+    assert (second["matched_path"], second["matched_handler"]) == ("confirmation", "memory")
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_turn_is_the_devices_person_and_a_guest_device_is_nobodys(db_session, open_gate) -> None:
+    """Credited as the mic credits a voice: the person the device KEY's
+    device belongs to; a device nobody owns (a guest's) or a shared screen
+    is nobody, as a voice the mic doesn't recognise."""
+    owned, guest, screen = f"android-{uuid.uuid4().hex[:8]}", f"android-{uuid.uuid4().hex[:8]}", \
+        f"tablet-{uuid.uuid4().hex[:8]}"
+    alex = await _device(owned, person="alex")
+    await _device(guest)
+    await _device(screen, person="sam", shared_screen=True)
+    tid = await _thread()
+    for device in (owned, guest, screen):
+        await phone_voice.run_phone_text_turn(
+            core_app, phone_id=device, thread_id=tid, text_="what time is it",
+            viewer=Viewer(device_id=device, shared_screen=device == screen),
+        )
+    async with SessionLocal() as s:
+        logged = (await s.execute(text("SELECT room_id, person_id FROM intents_log ORDER BY id"))).all()
+    assert [tuple(r) for r in logged] == [("phone-" + owned, alex), ("phone-" + guest, None),
+                                          ("phone-" + screen, None)]
+    # A keyless caller can't name a device: a key speaks as itself only.
+    with pytest.raises(phone_voice.PhoneTurnRefused) as e:
+        await phone_voice.run_phone_text_turn(core_app, phone_id=guest, thread_id=tid, text_="hi",
+                                              viewer=Viewer(device_id=owned))
+    assert e.value.code == "not_this_phone"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_private_chat_holds(db_session, open_gate) -> None:
+    owner, other = f"android-{uuid.uuid4().hex[:8]}", f"android-{uuid.uuid4().hex[:8]}"
+    await _device(owner)
+    await _device(other)
+    tid = await _thread(owner=owner, shared=False)
+
+    async def turn(viewer: Viewer, phone_id: str) -> Any:
+        return await phone_voice.run_phone_text_turn(core_app, phone_id=phone_id, thread_id=tid,
+                                                     text_="set a timer for 5 minutes", viewer=viewer)
+
+    for viewer, phone_id, code in ((Viewer(device_id=other), other, "thread_not_found"),
+                                   (Viewer(), "chat-keyless", "thread_not_found"),
+                                   (Viewer(admin=True), "admin-phone", "admin_read_only")):
+        with pytest.raises(phone_voice.PhoneTurnRefused) as e:
+            await turn(viewer, phone_id)
+        assert e.value.code == code
+    assert await _rows(tid) == []
+    ok = await turn(Viewer(device_id=owner), owner)
+    assert ok["matched_handler"] == "timer"
+
+
+@pytest.mark.asyncio
+async def test_only_the_webs_away_hop_can_name_a_device(monkeypatch, tmp_path) -> None:
+    """chat_access.bridge_viewer: the device header counts only with the
+    core's bridge secret, from loopback; anything else is a 401."""
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from domovoi.away import keys as away_keys
+
+    monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
+    away_keys.reset_bridge_secret()
+    secret = away_keys.bridge_secret()
+    assert away_keys.read_bridge_secret() == secret
+
+    def req(headers: dict[str, str], host: str = "127.0.0.1") -> Request:
+        return Request({"type": "http", "method": "POST", "path": "/v1/phone/text", "client": (host, 1),
+                        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()]})
+
+    base = Viewer(admin=True)
+    assert await chat_access.bridge_viewer(req({}), base) is base
+    for headers, host in (
+        ({chat_access.AWAY_DEVICE_HEADER: "android-x"}, "127.0.0.1"),
+        ({chat_access.AWAY_BRIDGE_HEADER: secret}, "127.0.0.1"),
+        ({chat_access.AWAY_BRIDGE_HEADER: "f" * 64, chat_access.AWAY_DEVICE_HEADER: "android-x"}, "127.0.0.1"),
+        ({chat_access.AWAY_BRIDGE_HEADER: secret, chat_access.AWAY_DEVICE_HEADER: "android-x"}, "192.168.1.30"),
+    ):
+        with pytest.raises(HTTPException) as e:
+            await chat_access.bridge_viewer(req(headers, host), base)
+        assert e.value.status_code == 401
+    away_keys.reset_bridge_secret()
+
+
+# ─── The web's typed send ─────────────────────────────────────────────────
+
+
+def _sse(body: str) -> list[tuple[str, Any]]:
+    events = []
+    for block in body.split("\n\n"):
+        name, data = "message", ""
+        for ln in block.split("\n"):
+            if ln.startswith("event: "):
+                name = ln[7:].strip()
+            elif ln.startswith("data: "):
+                data += ln[6:]
+        if data:
+            events.append((name, json.loads(data)))
+    return events
+
+
+def _done(body: str) -> dict[str, Any]:
+    return [d for e, d in _sse(body) if e == "done"][-1]
+
+
+@pytest.fixture
+def web(monkeypatch, open_gate):
+    """The web's typed send, its router hop answered by the real core app
+    in-process (``hop.calls``; ``hop.down`` makes it unreachable,
+    ``hop.status`` makes it answer that), its model a stub that records."""
+    import web.backend.api.chat as chat_api
+
+    hop = SimpleNamespace(calls=[], down=False, status=None, model_calls=0)
+
+    class _Hop:
+        async def __aenter__(self):
+            self.c = AsyncClient(transport=ASGITransport(app=core_app), base_url="http://test")
+            await self.c.__aenter__()
+            return self
+
+        async def __aexit__(self, *a):
+            await self.c.__aexit__(*a)
+            return False
+
+        async def post(self, url, **kw):
+            hop.calls.append({"url": url, "json": kw.get("json"), "headers": kw.get("headers") or {}})
+            if hop.down:
+                raise httpx.ConnectError("connection refused")
+            if hop.status is not None:
+                return httpx.Response(hop.status, json={"detail": "x", "code": "busy" if hop.status == 409 else "x"})
+            return await self.c.post(url, **kw)
+
+    async def _stream(messages, model, **kw):
+        hop.model_calls += 1
+        yield "From the model."
+
+    async def _tags(*a, **kw):
+        return []
+
+    monkeypatch.setattr(chat_api, "domovoi_url", lambda: "http://test")
+    monkeypatch.setattr(chat_api, "_core_client", lambda: _Hop())
+    monkeypatch.setattr(chat_api.ollama_client, "chat_stream", _stream)
+    monkeypatch.setattr(chat_api.ollama_client, "tags_or_none", _tags)
+    monkeypatch.setattr(chat_api, "schedule_title_job", lambda *_a, **_k: None)
+    return hop
+
+
+def _web() -> AsyncClient:
+    from web.backend.main import app as web_app
+
+    return AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test",
+                       headers={"X-Requested-With": "domovoi-tests"})
+
+
+def _texts(hop) -> list[str]:
+    return [c["json"]["text"] for c in hop.calls if c["url"].endswith("/v1/phone/text")]
+
+
+async def _send(c: AsyncClient, tid: int, content: str) -> dict[str, Any]:
+    r = await c.post(f"/api/chat/threads/{tid}/messages", json={"content": content})
+    assert r.status_code == 200, r.text
+    return _done(r.text)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_owners_announce_sequence_from_the_dashboard(db_session, web, rooms) -> None:
+    tid = await _thread()
+    async with _web() as c:
+        first = await _send(c, tid, SHOT)
+        second = await _send(c, tid, "Announce that")
+        third = await _send(c, tid, "Announce it to the rooms please")
+        listed = (await c.get(f"/api/chat/threads/{tid}/messages")).json()["messages"]
+    await _fanned_out()
+    for done in (first, second, third):
+        assert done["content"] == "Broadcasting to the house."
+        assert done["stats"]["model_role"] == "action" and done["stats"]["matched_handler"] == "intercom"
+        assert done["retryable"] is False and done["source"] == "typed"
+    assert web.model_calls == 0
+    assert _texts(web) == [SHOT, "Announce that", "Announce it to the rooms please"]
+    assert web.calls[0]["json"]["actions_only"] is True and web.calls[0]["json"]["plays_here"] is False
+    for sat in rooms.values():
+        assert sat.said == ["Alex, Sam and Jo need another shot"] * 3
+    # One row each: the typed one (the web's) and the reply (the core's).
+    assert [(m["role"], m["content"]) for m in listed][:2] == [("user", SHOT), ("assistant", "Broadcasting to the house.")]
+    assert len(listed) == 6
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_bare_announce_that_asks_and_the_next_message_is_announced(db_session, web, rooms) -> None:
+    tid = await _thread()
+    async with _web() as c:
+        asked = await _send(c, tid, "Announce that")
+        told = await _send(c, tid, "Dinner is ready")   # no command words: the follow-up takes it there
+    await _fanned_out()
+    assert asked["content"] == "What should I announce?"
+    assert told["content"] == "Broadcasting to the house."
+    assert rooms["kitchen"].said == ["Dinner is ready"]
+    assert web.model_calls == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_try_again_is_never_offered_on_an_action(db_session, web) -> None:
+    tid = await _thread()
+    async with _web() as c:
+        await _send(c, tid, "set a timer for 5 minutes")
+        r = await c.post(f"/api/chat/threads/{tid}/retry")
+    assert r.status_code == 409 and r.json()["code"] == "not_retryable"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_satellite_setting_from_the_dashboard_is_the_fixed_line(db_session, web) -> None:
+    tid = await _thread()
+    async with _web() as c:
+        done = await _send(c, tid, "fix the wifi")
+    assert done["content"] == phone_voice.CHAT_ROOM_SETTING_TEXT and web.model_calls == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_play_from_the_dashboard_plays_nowhere_and_says_so(db_session, web) -> None:
+    await _a_song()
+    tid = await _thread()
+    async with _web() as c:
+        done = await _send(c, tid, "play glass harbor")
+    assert done["content"] == phone_voice.CHAT_NO_PLAYER_TEXT and web.model_calls == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_core_down_busy_or_refusing_is_a_fixed_line_never_the_model(db_session, web) -> None:
+    import web.backend.api.chat as chat_api
+
+    tid = await _thread()
+    async with _web() as c:
+        web.down = True
+        down = await _send(c, tid, "set a timer for 5 minutes")
+        web.down, web.status = False, 409
+        busy = await _send(c, tid, "announce dinner is ready")
+        web.status = 403
+        refused = await _send(c, tid, "add milk to the shopping list")
+    assert down["content"] == chat_api.ROUTER_UNREACHABLE_TEXT
+    assert down["content"].startswith("I can't do that from chat yet.")
+    assert down["stats"] == {"model_role": "action", "error_code": "core_unreachable"}
+    assert busy["content"] == chat_api.ROUTER_BUSY_TEXT and busy["stats"]["error_code"] == "core_busy"
+    assert refused["content"] == chat_api.CHAT_CANT_TEXT and refused["stats"]["error_code"] == "core_refused"
+    assert web.model_calls == 0
+    assert all(not d["retryable"] for d in (down, busy, refused))
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_plain_question_still_goes_to_the_model(db_session, web, monkeypatch) -> None:
+    import web.backend.api.chat as chat_api
+
+    tid = await _thread()
+    async with _web() as c:
+        world = await _send(c, tid, "what is the capital of france?")
+        # The state poll hasn't reached the core: no speculative hop.
+        hello = await _send(c, tid, "hello there")
+        monkeypatch.setattr(chat_api, "get_cached_snapshot", lambda: {"active_rooms": []})
+        # The core is up: the tool model is asked, acts on nothing, and the
+        # chat's model answers; nothing of the house's is written.
+        poem = await _send(c, tid, "write me a poem about cats")
+        web.down = True
+        offline = await _send(c, tid, "write me a poem about dogs")
+    for done in (world, hello, poem, offline):
+        assert done["content"] == "From the model." and done["stats"]["model_role"] == "chat"
+    assert _texts(web) == ["write me a poem about cats", "write me a poem about dogs"]
+    assert web.model_calls == 4
+    rows = await _rows(tid)
+    assert [r["role"] for r in rows] == ["user", "assistant"] * 4
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_chats_own_steps_still_win(db_session, web, monkeypatch) -> None:
+    """Memory, house facts, print and the photo search answer before the
+    router hop, exactly as before: the core is never asked."""
+    import web.backend.api.chat as chat_api
+    from web.backend.api import chat_memory
+
+    monkeypatch.setattr(chat_api, "get_cached_snapshot", lambda: {"active_rooms": []})
+    tid = await _thread()
+    async with SessionLocal() as s:
+        await s.execute(text(
+            "INSERT INTO chat_messages (thread_id, role, content, images) VALUES "
+            "(:t, 'user', 'a photo', CAST(:img AS JSONB))"
+        ), {"t": tid, "img": json.dumps([{"token": uuid.uuid4().hex, "name": "receipt.jpg"}])})
+        await s.commit()
+    async with _web() as c:
+        memory = await _send(c, tid, "remember that I like tea")
+        facts = await _send(c, tid, "do you record me?")
+        printed = await _send(c, tid, "print this")
+        photos = await _send(c, tid, "show me photos of the dog")
+    assert memory["stats"]["model_role"] == chat_memory.MODEL_ROLE
+    assert facts["stats"]["model_role"] == "house_facts"
+    assert printed["stats"]["model_role"] == "draft" and "receipt.jpg" in printed["content"]
+    assert photos["stats"]["model_role"] == "media"
+    assert _texts(web) == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_follow_up_goes_back_to_the_house(db_session, web) -> None:
+    """The house asked something back (stats.expect_followup): the next
+    typed message answers it there, whatever it says."""
+    tid = await _thread()
+    async with SessionLocal() as s:
+        await s.execute(text(
+            "INSERT INTO chat_messages (thread_id, role, content, source, stats) VALUES "
+            "(:t, 'user', 'play something', 'typed', NULL), "
+            "(:t, 'assistant', 'Did you mean the album or the song?', 'typed', "
+            "CAST('{\"model_role\": \"action\", \"expect_followup\": true}' AS JSONB))"
+        ), {"t": tid})
+        await s.commit()
+    async with _web() as c:
+        await _send(c, tid, "the second one")
+        await _send(c, tid, "and how are you")   # the last reply asked nothing: the chat's
+    assert _texts(web) == ["the second one"]
+
+
+# ─── Away chat reaches the same hop ───────────────────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_away_send_reaches_the_house_as_its_phone(away_db, monkeypatch, rooms, web) -> None:
+    """chat.send "announce dinner is ready" from away: the bridge relays it
+    into the home send, whose router hop names the phone its away key
+    proved (with the core's bridge secret), and the core announces it in
+    the phone's own private chat."""
+    from domovoi.away import keys as away_keys
+    from domovoi.friend_houses import service as svc
+    from domovoi.friend_houses.noise import public_bytes
+    from domovoi.tests.auth_testkit import web_client
+    from domovoi.tests.away_kit import claimed, enroll, lines, phone
+    from web.backend.api import away as away_api
+
+    # The house: claimed, the real core gate (the household token the
+    # bridge's request carries is forwarded), away chat on, a phone enrolled.
+    core_app.dependency_overrides.pop(admin_auth.require_device_after_setup, None)
+    monkeypatch.setattr(core_app.state, "active_sessions", dict(rooms), raising=False)
+
+    async def tell(_request):
+        return True
+
+    async def state(_device):
+        return "ready"
+
+    monkeypatch.setattr(away_api, "tell_core", tell)
+    monkeypatch.setattr(away_api, "core_state", state)
+    monkeypatch.setattr(svc, "sys", SimpleNamespace(platform="linux"))
+    away_keys.reset_bridge_secret()
+    secret = away_keys.bridge_secret()
+    try:
+        async with web_client() as c:
+            base, _admin, _token = await claimed(c)
+            p = await phone(c, base)
+            await enroll(c, p)
+            body = {"device_id": p["id"], "noise_pub": public_bytes(p["noise"]).hex(),
+                    "request": {"op": "chat.send", "chat_id": None, "client_id": str(uuid.uuid4()),
+                                "text": "announce dinner is ready"},
+                    "picture": ""}
+            r = await c.post("/api/away/bridge", json=body, headers={**base, away_api.BRIDGE_HEADER: secret})
+            assert r.status_code == 200, r.text
+            out = lines(r.content)
+        await _fanned_out()
+        final = out[-1]["b"]
+        assert final["type"] == "done", out
+        assert final["message"]["content"] == "Broadcasting to the house."
+        (call,) = web.calls
+        assert call["json"]["phone_id"] == p["id"] and call["json"]["text"] == "announce dinner is ready"
+        assert call["headers"][chat_access.AWAY_DEVICE_HEADER] == p["id"]
+        assert call["headers"][chat_access.AWAY_BRIDGE_HEADER] == secret
+        assert rooms["kitchen"].said == ["dinner is ready"]
+        async with SessionLocal() as s:
+            owner = (await s.execute(text(
+                "SELECT owner_device_id FROM chat_threads t JOIN chat_messages m ON m.thread_id = t.id "
+                "WHERE m.content = 'announce dinner is ready'"
+            ))).scalar_one()
+        assert owner == p["id"]
+    finally:
+        away_keys.reset_bridge_secret()
+
+
+# ─── The chat prompt's backstop ───────────────────────────────────────────
+
+
+def test_the_chat_prompt_never_claims_a_house_action() -> None:
+    p = ollama.chat_system_prompt()
+    assert "You can't do anything in the house yourself" in p
+    assert "never say you did one or that you will" in p
+    # The memory and printing sentences stay.
+    assert "You can't save or delete memories yourself" in p and "never say you can't print" in p
+    assert "can't do anything in the house" not in ollama.voice_qa_system_prompt()

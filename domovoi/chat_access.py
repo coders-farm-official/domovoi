@@ -392,6 +392,54 @@ async def chat_viewer(request: Request) -> Viewer:
     return viewer
 
 
+#: The web's hop to the core for a phone's AWAY turn (the typed chat's
+#: router hop, ``POST /v1/phone/text``) names the device its away key
+#: proved in this header, beside the core's bridge secret of this start in
+#: :data:`AWAY_BRIDGE_HEADER` (domovoi/away/keys.py). The proof is request
+#: STATE in the web (:data:`PROVEN_DEVICE_STATE`), which can't cross a hop.
+AWAY_DEVICE_HEADER = "X-Domovoi-Away-Device"
+AWAY_BRIDGE_HEADER = "X-Domovoi-Away-Bridge"
+
+
+async def bridge_viewer(request: Request, viewer: Viewer) -> Viewer:
+    """``viewer``, or, for the web's hop of a phone's away turn, that phone:
+    a loopback caller presenting the core's bridge secret of this start
+    (only the web process can read it) and the device, which must still
+    hold a device key. Either header without the other, a wrong secret or
+    another peer is a 401: nothing a client sends can name a device. The
+    admin flag stays what the request proved (a turn's admin grant rides
+    as its Bearer)."""
+    import ipaddress
+
+    presented = (request.headers.get(AWAY_BRIDGE_HEADER) or "").strip()
+    claimed = (request.headers.get(AWAY_DEVICE_HEADER) or "").strip()
+    if not presented and not claimed:
+        return viewer
+    from domovoi.away import keys as away_keys
+    from domovoi.db.session import session_scope
+
+    peer = request.client.host if request.client else ""
+    try:
+        loopback = ipaddress.ip_address(peer).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback or not claimed or not away_keys.bridge_matches(presented):
+        raise HTTPException(status_code=401, detail="not the web's away bridge")
+    async with session_scope() as s:
+        if not await has_device_keys(s):
+            raise HTTPException(status_code=401, detail="not the web's away bridge")
+        row = (
+            await s.execute(
+                text("SELECT device_id, COALESCE(shared_screen, false) FROM devices "
+                     "WHERE device_id = :d AND device_key_hash IS NOT NULL"),
+                {"d": claimed[:64]},
+            )
+        ).first()
+    if row is None:
+        raise HTTPException(status_code=401, detail="not the web's away bridge")
+    return Viewer(device_id=str(row[0]), admin=viewer.admin, shared_screen=bool(row[1]))
+
+
 #: The enumeration test's marker: a route whose dependencies include a
 #: callable carrying it goes through this module.
 chat_viewer.__chat_access__ = True  # type: ignore[attr-defined]

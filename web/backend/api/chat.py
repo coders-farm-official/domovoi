@@ -1563,6 +1563,17 @@ async def _answer(
         if mreq is not None:
             mturn = await _media.answer(mreq.q, request, mreq)
             return await _immediate_reply(thread_id, mturn.text, {"model_role": "media", "media": mturn.media})
+    if (dturn is None and not has_images and replace_id is None and not documents and revise_draft is None
+            and user_row_id is not None and skip_row_id is None):
+        # A house command ("announce dinner is ready", "set a timer"): done
+        # by the house's router, as the chat mic does it, and its reply is
+        # the house's (the router hop, above :func:`send_voice`). After the
+        # chat's own steps that win (memory, house facts, drafts and print,
+        # the photo search); ahead of documents, help, lookups and the model.
+        routed = await _router_turn(thread_id, question, user_row_id, request,
+                                    thread_title=thread_title, device_id=device_id)
+        if routed is not None:
+            return routed
     if not has_images and replace_id is None and dturn is None:
         previous = await _docs.previous_question(thread_id, before_id=user_row_id)
         plan = await _docs.plan_reply(thread_id, question, documents or [], previous, heads_up)
@@ -2942,6 +2953,232 @@ async def _write_title(thread_id: int) -> None:
         if r.rowcount:
             await _notify_chat(s, "thread-titled")
         await s.commit()
+
+
+# ─── House commands typed into the chat (the router hop) ───────────────────
+# A typed message that is a house command ("announce dinner is ready", "set
+# a timer for ten minutes", "add milk to the shopping list") is done by the
+# house, as the chat mic does it: handed to the core's POST /v1/phone/text
+# (domovoi/phone_voice.py run_phone_text_turn) with the caller's
+# credentials, which routes it as this device's phone turn in this thread
+# and writes the reply row. Before this (1.5.0, owner bug) typed chat never
+# reached the router, and the chat model wrote "I'll let them know…" while
+# nothing was announced.
+#
+# Decided here before any model is asked (:func:`_router_hop_kind`), after
+# the chat's own steps that must win (send_message: memory, house facts,
+# the owner joke; _answer: drafts and print, the photo search):
+#
+# * "followup": the last reply in the thread was the house's and asked a
+#   question (stats.expect_followup): "yes", "the second one" answer it;
+# * "fast": a router fast path takes the message (router.plan_route, pure),
+#   unless it is one the chat answers itself (CHAT_OWN_HANDLERS);
+# * "tool": no fast path, but the router would ask its tool model
+#   (router.goes_to_the_tool_model), not a plain question about the world
+#   or a request for a story, in a thread with nothing attached that the
+#   chat reads (documents, videos, photo results), and not help, a lookup
+#   or a privacy question. The core is asked to act only
+#   (``actions_only``): when no handler acts, nothing is written and the
+#   chat model answers as before. Skipped while the core isn't answering
+#   (the state poll's snapshot is gone).
+#
+# The reply row is the core's (``source = 'typed'``, ``stats.model_role =
+# 'action'``, the handler in ``stats.matched_handler``; never retryable).
+# When the core can't be reached or refuses a "fast" or "followup" turn,
+# the reply is a fixed line written here, never the model's; a "tool" turn
+# then goes to the model (it was never known to be a command).
+
+#: A house command is short and one line; a longer or pasted message is
+#: never handed to the router (words in a pasted email are not commands).
+COMMAND_MAX_CHARS = 400
+#: Fast paths the chat answers itself (its help, lookups, memory and house
+#: facts), or that only make sense spoken (voice enrollment, "say that
+#: again", "never mind", open-mic chat mode).
+CHAT_OWN_HANDLERS = frozenset({
+    "help", "help_desk", "house_facts", "memory", "double_check",
+    "voice_profile", "repeat", "dismiss", "chat_mode",
+})
+#: The typed chat's fixed replies when the house didn't do it.
+CHAT_CANT_TEXT = "I can't do that from chat yet."
+ROUTER_UNREACHABLE_TEXT = (
+    CHAT_CANT_TEXT + " Domovoi's house service isn't answering right now, so nothing was done. "
+    "Try again in a moment, or say it to a room."
+)
+ROUTER_BUSY_TEXT = "I'm still doing your last request, so nothing was done this time. Try again in a moment."
+#: The roles of a reply written by the house's router (typed or spoken).
+ROUTER_ROLES = frozenset({"action", "voice"})
+
+
+async def _awaits_house_answer(thread_id: int, user_row_id: int) -> bool:
+    """Whether the last reply before ``user_row_id`` was the house's and
+    asked something back ("did you mean …?", "should I …?")."""
+    async with session_scope() as s:
+        stats = (await s.execute(text(
+            "SELECT stats FROM chat_messages WHERE thread_id = :t AND role = 'assistant' AND id < :u "
+            "ORDER BY id DESC LIMIT 1"
+        ), {"t": thread_id, "u": user_row_id})).scalar_one_or_none()
+    if isinstance(stats, str):
+        try:
+            stats = json.loads(stats)
+        except ValueError:
+            return False
+    return (isinstance(stats, dict) and stats.get("expect_followup") is True
+            and stats.get("model_role") in ROUTER_ROLES)
+
+
+async def _thread_reads_attachments(thread_id: int) -> bool:
+    """Whether the thread has documents, videos or photo results the chat
+    answers follow-up questions from: those stay the chat's."""
+    try:
+        if await _docs.thread_documents(thread_id):
+            return True
+        if await _videos.thread_videos(thread_id):
+            return True
+        return bool(await _media.rules(thread_id))
+    except Exception as e:  # noqa: BLE001 — can't tell: the chat answers
+        log.warning("chat: thread %s attachments unreadable: %s", thread_id, type(e).__name__)
+        return True
+
+
+async def _router_hop_kind(
+    thread_id: int, question: str, user_row_id: int, thread_title: str | None,
+) -> str | None:
+    """"followup", "fast" or "tool" for a typed message the house's router
+    should have, or None (the chat answers). See the section above."""
+    from domovoi import router as core_router
+
+    q = (question or "").strip()
+    if not q or len(q) > COMMAND_MAX_CHARS or "\n" in q:
+        return None
+    if await _awaits_house_answer(thread_id, user_row_id):
+        return "followup"
+    if lookup_answer.fast_path(q) is not None or lookup_answer.is_bare_followup(q):
+        return None
+    plan = core_router.plan_route(q)
+    if plan is not None:
+        return None if plan.handler.name in CHAT_OWN_HANDLERS else "fast"
+    if not core_router.goes_to_the_tool_model(q):
+        return None
+    if core_router.is_question_about_the_world(q) or core_router.is_request_for_a_story(q):
+        return None
+    if get_cached_snapshot() is None:
+        return None
+    if ((thread_title or "").startswith(help_delivery.TITLE_PREFIX) or help_answer.looks_like_help(q)
+            or help_admin_tasks.match(q) is not None or house_facts.wants_facts(q)):
+        return None
+    if await _thread_reads_attachments(thread_id):
+        return None
+    return "tool"
+
+
+async def _assistant_row(thread_id: int, *, row_id: int | None = None, after_id: int | None = None) -> Any:
+    """An assistant row as the message reads: by id, or the first one after
+    ``after_id`` (the reply the core wrote to that message)."""
+    where = "m.id = :id" if row_id is not None else "m.id > :id"
+    async with session_scope() as s:
+        return (await s.execute(text(
+            "SELECT {cols}, NULL::text AS device_name, NULL::text AS speaker_name FROM chat_messages m "
+            "WHERE m.thread_id = :t AND m.role = 'assistant' AND {where} ORDER BY m.id LIMIT 1".format(
+                cols=_MSG_COLUMNS, where=where)
+        ), {"t": thread_id, "id": row_id if row_id is not None else after_id})).mappings().first()
+
+
+def _stored_reply(row: Any) -> StreamingResponse:
+    """A reply already in the thread, as the send's SSE."""
+    msg = _msg_dict(row)
+
+    async def sse() -> AsyncIterator[str]:
+        yield f"event: delta\ndata: {json.dumps({'text': msg.get('content') or ''})}\n\n"
+        yield f"event: done\ndata: {json.dumps(msg, default=str)}\n\n"
+
+    return StreamingResponse(sse(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _router_hop_headers(request: Request | None) -> dict[str, str]:
+    """The caller's credentials, as the voice hop forwards them; for a
+    phone's away turn (a request the away bridge built), the device its
+    away key proved, with the core's bridge secret (chat_access.bridge_viewer)."""
+    if request is None:
+        return {}
+    forward = auth_forward_headers(request)
+    key = chat_access.presented_device_key(request)
+    if key and request.headers.get(chat_access.DEVICE_KEY_HEADER):
+        forward[chat_access.DEVICE_KEY_HEADER] = key
+    proven = chat_access.proven_device(request)
+    if proven is not None:
+        from domovoi.away import keys as away_keys
+
+        secret = away_keys.read_bridge_secret()
+        if secret is not None:
+            forward[chat_access.AWAY_BRIDGE_HEADER] = secret
+            forward[chat_access.AWAY_DEVICE_HEADER] = proven
+    return forward
+
+
+async def _router_turn(
+    thread_id: int, question: str, user_row_id: int, request: Request | None, *,
+    thread_title: str | None, device_id: str | None,
+) -> StreamingResponse | None:
+    """The house's reply to a typed command (see the section above), or
+    None: the chat answers it."""
+    kind = await _router_hop_kind(thread_id, question, user_row_id, thread_title)
+    if kind is None:
+        return None
+    payload = {
+        "text": question.strip(),
+        # Names the routing session, as the mic's phone_id: the device the
+        # caller's key resolved to (the mic's own session on the app), else
+        # one per thread for a keyless caller.
+        "phone_id": device_id or f"chat-{thread_id}",
+        "thread_id": thread_id,
+        "user_message_id": user_row_id,
+        # The dashboard has no player of its own, and the app's typed send
+        # doesn't play actions: media for a phone's player is said plainly.
+        "plays_here": False,
+        "actions_only": True,
+    }
+    url = f"{domovoi_url().rstrip('/')}/v1/phone/text"
+    r: httpx.Response | None = None
+    _reply_started()
+    try:
+        async with _core_client() as client:
+            r = await client.post(url, json=payload, headers=_router_hop_headers(request))
+    except Exception as e:  # noqa: BLE001 — the core is down, restarting or slow
+        log.warning("chat: the house command hop failed (thread %s): %s", thread_id, type(e).__name__)
+    finally:
+        _reply_finished()
+    body: dict[str, Any] = {}
+    if r is not None:
+        try:
+            parsed = r.json()
+            body = parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            body = {}
+    if r is not None and r.status_code == 200:
+        if not body.get("handled"):
+            return None
+        messages = body.get("messages") or []
+        reply_id = messages[-1].get("id") if messages and isinstance(messages[-1], dict) else None
+        row = await _assistant_row(thread_id, row_id=reply_id) if isinstance(reply_id, int) else None
+        if row is not None:
+            return _stored_reply(row)
+    # The core may have written the reply before the hop failed (a slow
+    # turn past the timeout): that reply stands, nothing is written twice.
+    written = await _assistant_row(thread_id, after_id=user_row_id)
+    if written is not None:
+        return _stored_reply(written)
+    if kind == "tool":
+        return None
+    if r is not None and r.status_code == 409 and body.get("code") == "busy":
+        text_, code = ROUTER_BUSY_TEXT, "core_busy"
+    elif r is None or r.status_code >= 500:
+        text_, code = ROUTER_UNREACHABLE_TEXT, "core_unreachable"
+    else:
+        log.warning("chat: the core refused a house command (thread %s): %s %s",
+                    thread_id, r.status_code, body.get("code"))
+        text_, code = CHAT_CANT_TEXT, "core_refused"
+    return await _immediate_reply(thread_id, text_, {"model_role": "action", "error_code": code})
 
 
 # ─── Voice turns (the app's chat mic) ───────────────────────────────────────

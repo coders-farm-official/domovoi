@@ -561,8 +561,13 @@ def voice_qa_system_prompt(profile_prefix: str | None = None) -> str:
 # prompt's "no markdown, short sentences" here. Memories: a typed
 # "remember that …" / "forget that …" is done before the model is asked
 # (web/backend/api/chat_memory.py), so a model reply that says it will
-# remember or has forgotten something is never true; the last sentence
-# says so (2026-11-25).
+# remember or has forgotten something is never true; that sentence says
+# so (2026-11-25). House actions: a typed command ("announce dinner is
+# ready", "set a timer") is done by Domovoi's router before the model is
+# asked (chat.py, the router hop), and the model is only asked when nothing
+# was done, so a reply that says it announced, set or played something, or
+# will, is never true (1.5.0: "I'll let them know…" while nothing was
+# announced); the last sentence says so.
 CHAT_SYSTEM_PROMPT = (
     "You are {bot}, this household's own assistant. You run on the "
     "household's own server and talk with the people who live here: by "
@@ -574,7 +579,10 @@ CHAT_SYSTEM_PROMPT = (
     "{bot} itself when someone asks (\"print this\"): never say you "
     "can't print. You can't save or delete memories yourself, so never say "
     "you'll remember something or that you've forgotten it: tell them to "
-    "write \"remember that …\" or \"forget that …\" and {bot} will do it."
+    "write \"remember that …\" or \"forget that …\" and {bot} will do it. "
+    "You can't do anything in the house yourself (announce, set timers or "
+    "reminders, play music, change a setting): {bot} does those before you "
+    "are asked, so never say you did one or that you will."
 )
 
 # Added for a call that carries pictures (the vision model). The model has

@@ -32,7 +32,7 @@ from domovoi.db.repositories import (
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path, satellite_setting_refusal
 from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
-from domovoi.models import Context, Intent, Response
+from domovoi.models import DEFERRED_PATH, Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix, wants_profile
 from domovoi.spoken_answer import SpokenAnswer, StreamedQA
 from domovoi.turn_timings import timings_for_row
@@ -1067,7 +1067,9 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
 
     session_repo = SessionRepository(session)
     session_id = await session_repo.get_or_create(ctx.session_id, ctx.room_id)
-    ctx = ctx.model_copy(update={"session_id": session_id})
+    # The turn's own words, as said or typed (Context.said): the fast paths
+    # read them normalized, a handler that repeats words keeps their casing.
+    ctx = ctx.model_copy(update={"session_id": session_id, "said": intent.transcript})
 
     ollama_client = get_ollama_client()
 
@@ -1463,6 +1465,13 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
             # The tool declined the call (it was not about what the tool
             # does after all): the Q&A model answers it below.
             log.info("tool %s declined %r; answering as Q&A", handler.name, said(intent.transcript))
+
+    if ctx.defer_qa:
+        # A typed chat turn no handler acted on (phone_voice's text turn):
+        # the chat answers it with its own model, so nothing is said or
+        # recorded here.
+        return Response(text="", session_id=session_id, matched_handler=None,
+                        matched_path=DEFERRED_PATH, online=ctx.online)
 
     # 3. General Q&A (Ollama is local, so always available). Pass recent
     # turns from session context so multi-turn QA actually feels stateful —
