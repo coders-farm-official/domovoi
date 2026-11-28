@@ -91,7 +91,7 @@ SQL_ALLOWED: dict[str, tuple[str, str]] = {
     "domovoi/phone_voice.py::_check_user_row": (HELPER, "the typed row of the thread run_phone_text_turn checked"),
     # "announce that" in a chat: ctx.chat_thread_id is set only by the phone
     # turns (voice and typed), after their chat_access check.
-    "domovoi/handlers/intercom.py::_thread_request": (VOICE, "the checked phone chat's recent user rows"),
+    "domovoi/phone_voice.py::recent_requests": (VOICE, "the checked phone chat's recent user rows (intercom)"),
     "domovoi/voice_docs/letters.py::_say_line": (VOICE, "a line into the letter chat it made"),
     "domovoi/voice_docs/letters.py::_start_thread": (VOICE, "a room's letter chat, shared (chat_access.create_columns)"),
     "domovoi/voice_docs/letters.py::write_and_save": (VOICE, "the letter's draft in the chat it made"),

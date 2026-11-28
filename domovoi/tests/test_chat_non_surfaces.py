@@ -167,6 +167,8 @@ VOICE_CHAT_HANDLERS = {
     "domovoi/handlers/media_search.py": "photos to a phone: makes its own chat (help_desk.delivery)",
     "domovoi/handlers/help_desk.py": "voice help (being removed in 1.5.0): makes its own chat",
     "domovoi/handlers/documents.py": "a letter taken by voice: makes its own shared chat (voice_docs.letters)",
+    "domovoi/handlers/intercom.py": "announce that: the person's own recent requests in the checked phone chat "
+                                    "(phone_voice.recent_requests), never a reply",
 }
 
 
@@ -179,6 +181,6 @@ def test_no_voice_handler_reads_a_chat() -> None:
             f"{rel} reads a chat table: a voice handler never reads a chat (no 'read my last chat')"
         )
         if re.search(r"drafts\.store|drafts import store|help_desk import delivery|help_desk\.delivery|"
-                     r"voice_docs import letters|voice_docs\.letters", src):
+                     r"voice_docs import letters|voice_docs\.letters|phone_voice import recent_requests", src):
             touching[rel] = True
     assert set(touching) <= set(VOICE_CHAT_HANDLERS), sorted(set(touching) - set(VOICE_CHAT_HANDLERS))

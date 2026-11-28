@@ -369,12 +369,16 @@ def test_print_this_with_a_picture_prints_the_picture_and_asks_no_model(model, m
 
 
 @requires_db
-def test_print_this_with_nothing_to_print_goes_to_the_model_as_before(model):
+def test_print_this_with_nothing_to_print_goes_to_the_house_not_the_model(model):
+    """No draft or attachment to print: "print this" is a house command
+    since 1.5.0 (the core's printing handler asks which document, as the
+    chat mic does). The core isn't running here: the fixed line, no model."""
     with _client() as c:
         tid = _thread(c)
         model.replies = ["I can't see anything to print."]
         done, _ = _send(c, tid, "print this")
-        assert len(model.calls) == 1 and not done.get("draft")
+        assert len(model.calls) == 0 and not done.get("draft")
+        assert done["stats"]["model_role"] == "action"
 
 
 # ─── The household's AI switch ───────────────────────────────────────────
@@ -421,7 +425,11 @@ def test_an_unrelated_message_never_rewrites_the_draft(model, phrase):
         model.replies = [LETTER, "Sure."]
         one, _ = _send(c, tid, "write a cover letter for Acme")
         done, _ = _send(c, tid, phrase)
-        assert done.get("draft") is None and done["content"] == "Sure."
+        assert done.get("draft") is None
+        # A house command ("fix the wifi", "add milk to my shopping list")
+        # is the house's since 1.5.0 (typed chat's router hop); the rest
+        # are the model's, as before.
+        assert done["content"] == "Sure." or done["stats"]["model_role"] == "action"
         assert [v["version"] for v in c.get(f"/api/chat/drafts/{one['draft']['id']}").json()["versions"]] == [1]
     assert model.calls[-1]["messages"][0]["content"] != prompts.REVISE_RULES
 

@@ -674,6 +674,28 @@ async def _insert_user_row(
 
 
 
+async def recent_requests(session: Any, ctx: Context, window_sec: float) -> list[tuple[str, float]]:
+    """``(text, epoch)`` of the person's own recent messages in the chat a
+    phone turn was said in (``ctx.chat_thread_id``, set only here after the
+    thread was checked), newest first, within ``window_sec``: USER rows from
+    this phone (or from a keyless caller), never a reply. For the intercom's
+    "announce that" (handlers/intercom.py)."""
+    if ctx.chat_thread_id is None or not str(ctx.room_id or "").startswith(PHONE_ROOM_PREFIX):
+        return []
+    device = str(ctx.room_id)[len(PHONE_ROOM_PREFIX):]
+    rows = (
+        await session.execute(
+            text(
+                "SELECT content, EXTRACT(EPOCH FROM created_at) FROM chat_messages "
+                "WHERE thread_id = :t AND role = 'user' AND (device_id = :d OR device_id IS NULL) "
+                "AND created_at > now() - make_interval(secs => :w) ORDER BY id DESC LIMIT 10"
+            ),
+            {"t": int(ctx.chat_thread_id), "d": device, "w": float(window_sec)},
+        )
+    ).all()
+    return [(str(r[0] or ""), float(r[1] or 0)) for r in rows]
+
+
 # ─── The turn ─────────────────────────────────────────────────────────────
 
 #: The longest typed message the text turn routes.

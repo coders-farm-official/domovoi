@@ -66,7 +66,19 @@ class _Satellite:
 
 
 @pytest.fixture
-def open_gate():
+async def own_threads():
+    """The chats a test makes are deleted after it: a household-shared one
+    left behind would show in every later test's chat list."""
+    async with SessionLocal() as s:
+        before = (await s.execute(text("SELECT COALESCE(max(id), 0) FROM chat_threads"))).scalar_one()
+    yield
+    async with SessionLocal() as s:
+        await s.execute(text("DELETE FROM chat_threads WHERE id > :b"), {"b": before})
+        await s.commit()
+
+
+@pytest.fixture
+def open_gate(own_threads):
     core_app.dependency_overrides[admin_auth.require_device_after_setup] = lambda: None
     phone_voice.reset_for_tests()
     yield
@@ -278,6 +290,10 @@ async def test_a_satellite_repeats_on_a_pointer_and_asks_when_there_is_none(db_s
     asked = await _say("announce it", room="office", session_id=None)
     dropped = await _say("never mind", room="office", session_id=asked.session_id)
     assert not dropped.announce_text and dropped.matched_handler == "intercom"
+    # A command in reply is routed as one, never read out.
+    asked = await _say("announce that", room="office", session_id=None)
+    routed = await _say("what time is it", room="office", session_id=asked.session_id)
+    assert routed.matched_handler == "clock" and not routed.announce_text
 
 
 @requires_db

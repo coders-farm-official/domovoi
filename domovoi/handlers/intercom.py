@@ -24,7 +24,6 @@ import logging
 import re
 import time
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Imported as a module rather than `from ... import _room_ports` so tests
@@ -35,7 +34,7 @@ from domovoi.clients import mpd as _mpd
 from domovoi.dropin_common import room_may_reach_other_rooms
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.house_facts import GENERIC_OBJECT
-from domovoi.models import PHONE_ROOM_PREFIX, Context, Intent, Response, is_phone_room
+from domovoi.models import Context, Intent, Response, is_phone_room
 
 log = logging.getLogger(__name__)
 
@@ -176,7 +175,10 @@ _POINTER_RE = re.compile(
     r"(?:,?\s+(?:please|again|now|for me|for us|too|as well))*$"
 )
 #: A reply to "What should I announce?" that takes it back.
-_NEVER_MIND_RE = re.compile(r"^(?:never ?mind|nothing|cancel|forget it|no|nope|don't|stop)\b")
+_NEVER_MIND_RE = re.compile(
+    r"^(?:(?:no|nope),? )?(?:never ?mind|nothing|cancel|forget it|no|nope|don't|stop)"
+    r"(?:,? (?:thanks|thank you|then))?$"
+)
 #: Where the session keeps its last announcement ({"text", "room", "at"}).
 LAST_ANNOUNCEMENT_KEY = "intercom_last_announcement"
 #: How long "announce that" may reach back for what to announce again.
@@ -254,22 +256,13 @@ async def _session_announcement(ctx: Context, session: AsyncSession | None) -> d
 async def _thread_request(ctx: Context, session: AsyncSession | None) -> dict | None:
     """In a chat (the chat mic or typed chat: ``ctx.chat_thread_id``), the
     person's own latest announce request in the thread, within the window:
-    a USER row from this phone (or a keyless caller's), never an assistant
-    reply."""
+    the phone's own user rows (domovoi/phone_voice.py ``recent_requests``),
+    never an assistant reply."""
     if session is None or ctx.chat_thread_id is None or not is_phone_room(ctx.room_id):
         return None
-    device = str(ctx.room_id)[len(PHONE_ROOM_PREFIX):]
-    rows = (
-        await session.execute(
-            text(
-                "SELECT content, EXTRACT(EPOCH FROM created_at) FROM chat_messages "
-                "WHERE thread_id = :t AND role = 'user' AND (device_id = :d OR device_id IS NULL) "
-                "AND created_at > now() - make_interval(secs => :w) ORDER BY id DESC LIMIT 10"
-            ),
-            {"t": int(ctx.chat_thread_id), "d": device, "w": ANNOUNCE_AGAIN_WINDOW_SEC},
-        )
-    ).all()
-    for content, at in rows:
+    from domovoi.phone_voice import recent_requests
+
+    for content, at in await recent_requests(session, ctx, ANNOUNCE_AGAIN_WINDOW_SEC):
         found = _announce_request(content or "")
         if found is not None:
             return {"room": found[0], "text": found[1], "at": float(at or 0)}
@@ -444,10 +437,18 @@ class IntercomHandler(Handler):
             expect_followup=asked,
         )
 
+    async def handle_confirmation(self, kind, data, affirmative, ctx, session) -> Response:
+        """A bare yes or no to "What should I announce?" (the router hands a
+        choice's reply to :meth:`handle_choice_reply` first): no is "nothing",
+        yes asks again, since a yes is not what to announce."""
+        if not affirmative:
+            return Response(text=NOTHING_ANNOUNCED_TEXT, session_id=ctx.session_id, matched_handler=self.name)
+        return await self._ask_what(data.get("room") if isinstance(data.get("room"), str) else None, ctx, session)
+
     async def handle_choice_reply(self, kind, data, transcript, ctx, session) -> Response | None:
         """The reply to "What should I announce?": its words are the
-        announcement ("never mind" takes it back). Another pointer, or a
-        question gone stale, is an ordinary turn."""
+        announcement ("never mind" takes it back). Another pointer, a
+        command, or a question gone stale is an ordinary turn."""
         if kind != WHAT_KIND or float(data.get("expires_at") or 0) < time.time():
             return None
         said = (transcript or "").strip()
@@ -455,9 +456,14 @@ class IntercomHandler(Handler):
             return Response(text=NOTHING_ANNOUNCED_TEXT, session_id=ctx.session_id, matched_handler=self.name)
         if _pointer(said) is not None:
             return None
-        from domovoi.router import strip_leading_filler
+        from domovoi.router import first_fast_path, strip_leading_filler
 
-        message = _clean_message(strip_leading_filler(said), ctx.said)
+        request = strip_leading_filler(said)
+        if first_fast_path(request) is not None:
+            # A command after all ("stop the music", "announce dinner is
+            # ready"): routed as one, never read out.
+            return None
+        message = _clean_message(request, ctx.said)
         if not message:
             return None
         room = data.get("room") if isinstance(data.get("room"), str) else None

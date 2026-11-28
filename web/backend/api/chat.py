@@ -130,6 +130,11 @@ from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery as help_delivery
 from domovoi.config import settings as core_settings
 from domovoi.profile_context import build_profile_prefix
+# The router's pure planning (plan_route, goes_to_the_tool_model) for the
+# typed send's house-command hop. Imported here, at load: the web process's
+# import guard (plugin_host) refuses a domovoi.* import made later.
+from domovoi import router as core_router
+from domovoi.away import keys as away_keys
 from domovoi.voice_identifier import speaker_is_confident
 from domovoi.doc_qa import headsup as _headsup
 from web.backend.api import chat_doc_jobs as _jobs
@@ -3064,8 +3069,6 @@ async def _router_hop_kind(
 ) -> str | None:
     """"followup", "fast" or "tool" for a typed message the house's router
     should have, or None (the chat answers). See the section above."""
-    from domovoi import router as core_router
-
     q = (question or "").strip()
     if not q or len(q) > COMMAND_MAX_CHARS or "\n" in q:
         return None
@@ -3126,8 +3129,6 @@ def _router_hop_headers(request: Request | None) -> dict[str, str]:
         forward[chat_access.DEVICE_KEY_HEADER] = key
     proven = chat_access.proven_device(request)
     if proven is not None:
-        from domovoi.away import keys as away_keys
-
         secret = away_keys.read_bridge_secret()
         if secret is not None:
             forward[chat_access.AWAY_BRIDGE_HEADER] = secret

@@ -48,14 +48,14 @@ async def test_a_phone_chats_from_away(house, tmp_path) -> None:  # noqa: F811
             assert await ph.connect(loop.port) == (1, wire.MAX_PICTURE)
             await ph.request(1, {"op": "chat.send", "chat_id": None,
                                  "client_id": "0b7c4a52-3f1e-4d6a-9e2b-7c1d0a9f8e31",
-                                 "text": "What's on the shopping list?"})
+                                 "text": "How far away is the moon?"})
             out = await ph.answer(1, timeout=30)
             kinds = [k for k, _ in out]
             assert kinds[0] == wire.RESP and kinds[-1] == wire.EVENT
             resp, done = out[0][1], out[-1][1]
-            assert resp["user_message"]["content"] == "What's on the shopping list?"
+            assert resp["user_message"]["content"] == "How far away is the moon?"
             assert done == {"type": "done", "message": done["message"]}
-            assert done["message"]["content"] == "you said: What's on the shopping list?"
+            assert done["message"]["content"] == "you said: How far away is the moon?"
             # Its chats, and only its own (private to the phone).
             await ph.request(2, {"op": "chat.list"})
             (kind, listing), = await ph.answer(2)
