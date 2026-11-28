@@ -1,0 +1,87 @@
+{
+  "source": "ios/scripts/make-away-noise-fixture.py, from domovoi/friend_houses/noise.py and domovoi/away/wire.py; the IK vector is cacophony's (domovoi/tests/fixtures/noise_vectors.json)",
+  "cacophony_ik": [
+    {
+      "protocol_name": "Noise_IK_25519_ChaChaPoly_SHA256",
+      "init_prologue": "4a6f686e2047616c74",
+      "init_static": "e61ef9919cde45dd5f82166404bd08e38bceb5dfdfded0a34c8df7ed542214d1",
+      "init_ephemeral": "893e28b9dc6ca8d611ab664754b8ceb7bac5117349a4439a6b0569da977c464a",
+      "init_remote_static": "31e0303fd6418d2f8c0e78b91f22e8caed0fbe48656dcf4767e4834f701b8f62",
+      "resp_prologue": "4a6f686e2047616c74",
+      "resp_static": "4a3acbfdb163dec651dfa3194dece676d437029c62a408b4c5ea9114246e4893",
+      "resp_ephemeral": "bbdb4cdbd309f1a1f2e1456967fe288cadd6f712d65dc7b7793d5e63da6b375b",
+      "handshake_hash": "0b0f68fb0c27e03ce9b97565995ed4838cc0581b762ef72b062f6a546419fad7",
+      "messages": [
+        {
+          "payload": "4c756477696720766f6e204d69736573",
+          "ciphertext": "ca35def5ae56cec33dc2036731ab14896bc4c75dbb07a61f879f8e3afa4c7944718da798efbcd91528520204f904b9bd6c7413dccdc214d951e15253e39987f18146e8cd0873654207148333479d4d16c289f0294b29960a72f48e0b7bba2e89083169825e59642148d492020664ccf7"
+        },
+        {
+          "payload": "4d757272617920526f746862617264",
+          "ciphertext": "95ebc60d2b1fa672c1f46a8aa265ef51bfe38e7ccb39ec5be34069f1448088435361e70b2ed446e6c9ec387d1d6b3b840f194e373979d241b203c4acafccf5"
+        },
+        {
+          "payload": "462e20412e20486179656b",
+          "ciphertext": "050e9f3c8fac16b68dbce8f8c4bfbf6617c897f9ada4aa29aa19c8"
+        },
+        {
+          "payload": "4361726c204d656e676572",
+          "ciphertext": "344233a6cabb7141d80f3da2fedc311d9646bbb0f505afe403a667"
+        },
+        {
+          "payload": "4a65616e2d426170746973746520536179",
+          "ciphertext": "62cdeeb172ad7ade7aa7d9e069da5790f12331bfa00177787a1d0810c67dc3b2b4"
+        },
+        {
+          "payload": "457567656e2042f6686d20766f6e2042617765726b",
+          "ciphertext": "029bead1b40992327044d409d9a1f3ad8f36c3c452775d557e18bbeb2e8dfcead32d514024"
+        }
+      ]
+    }
+  ],
+  "away": {
+    "prologue": "646f6d6f766f692d617761792d7631",
+    "phone_static": "1111111111111111111111111111111111111111111111111111111111111140",
+    "phone_ephemeral": "2222222222222222222222222222222222222222222222222222222222222240",
+    "house_static": "3333333333333333333333333333333333333333333333333333333333333340",
+    "house_static_public": "7e5d920f947f0ffe04b83d798a3cb3caeda5c11fd35fcf17ec4b7f83faed387e",
+    "house_ephemeral": "4444444444444444444444444444444444444444444444444444444444444440",
+    "phone_hello": "00010205312e352e30",
+    "house_hello": "000100100000",
+    "message1": "fc031cb68f05b61351dce6b659105421dfabfbb766b2dcfe2b8bb9b9f761952f136f57210cf9c55a6c6578576a1d6a62210d32fc378843c98596cb008442dd6a2f126b59cba3857af915d6447508108fdd37f43c7f9440c7a849cd08c740d4bf80ee7dae367c577b00",
+    "message2": "05fe7a72fe0d632972ca369c3fcbfec75f296d4042493834ba6c45072d896032ffe06bd74393e2e9aabf1cd6210d4b46748a2324b0ae",
+    "handshake_hash": "1a43e5b1c18339d507f8f87659ceefd9cf9ce059236854570f8a2a10640c5599",
+    "transport": [
+      {
+        "from": "phone",
+        "plaintext": "0100000001007b226f70223a22636861742e6c697374227d",
+        "ciphertext": "bee9acb8a183076de63455e044c0cc01027b2696a58d26ea6eeca7d1d9dc0dad238e1ac7bf68d347"
+      },
+      {
+        "from": "house",
+        "plaintext": "8100000001007b2274687265616473223a5b5d2c226e657874223a6e756c6c7d",
+        "ciphertext": "7d6ef143f7b227740e28e5a442d18380c688f11147a235f23172321a242b3edda839571f21f61fcdb065b2f43fccd5ec"
+      },
+      {
+        "from": "phone",
+        "plaintext": "030000000000",
+        "ciphertext": "0dd769637006387bbf440e5ba3758edc272821e81e7d"
+      },
+      {
+        "from": "house",
+        "plaintext": "840000000000",
+        "ciphertext": "273a4b73b740d1f8c602f0819da97f1d1feaee6883f8"
+      },
+      {
+        "from": "phone",
+        "plaintext": "02000000020000000000ffd8ffe0",
+        "ciphertext": "2ad0092e266b2cb55f35e454941f755cbc84d190bac2c4712d83aaedbb30"
+      },
+      {
+        "from": "house",
+        "plaintext": "8500000000007b22636f6465223a227265766f6b6564227d",
+        "ciphertext": "d670487e035446ca0fc3bebdfd6861b985888f66e58052942e90053a8b8a20c9c61bfe9958c2035b"
+      }
+    ]
+  }
+}
