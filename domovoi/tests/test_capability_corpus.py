@@ -7,7 +7,7 @@ model. Everything that needs no model, no network and no database is
 asserted here:
 
 * the corpus and the house fixtures are well-formed (unique ids, houses
-  that exist, valid verdicts, needs_change ids N1..N18 without the
+  that exist, valid verdicts, needs_change ids N1..N19 without the
   resolved N7 and N10);
 * the global reply checks (no hedge on a question, no plugin names, no
   secrets, menu paths that exist in web/static/settings.jsx) on sample
@@ -122,7 +122,7 @@ def test_the_list_is_covered() -> None:
     """Every group of the question list is in the corpus, the trust groups
     and DO IT concretely enough to check without a judge."""
     groups = {c.group for c in CASES}
-    assert groups == set(range(1, 14)) | set(range(15, 25))
+    assert groups == set(range(1, 14)) | set(range(15, 26))
     for g in (10, 16, 17, 18, 20):
         concrete = [c for c in CASES if c.group == g and not c.judge and not c.skip_reason]
         assert concrete, f"group {g} has no concrete case"

@@ -134,7 +134,9 @@ PLUGIN_STATUS = ("ok", "error", "crash")
 # (device-state questions answered by the model) was found 2026-11-26 and
 # fixed with house_facts' device-state answers (16.4-16.4g are stub cases).
 # N18 (2026-11-26): a proven admin gets the Plugins-page pointer for a missing feature.
-NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 19) if i not in (7, 10))
+# N19 (2026-11-27): a typed house action (announce, timer, list, music, drop-in,
+# broadcast) is done for real or gets a plain can't, never a pretend-done.
+NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 20) if i not in (7, 10))
 CASE_STATUS = ("verified", "unverified")
 
 # What a house fixture may say (the schema the test checks).
@@ -777,6 +779,7 @@ def reset_state(house: dict) -> None:
     STATE["threads"] = {}      # thread name -> [{"id", "role", "stats"}]
     STATE["thread_ids"] = {}   # thread name -> int
     STATE["next_row"] = 1
+    STATE["chat_log"] = {}     # thread name -> [{"role", "content"}] (the model's history)
 
 
 def _mem_insert(h: dict, p: dict) -> list[dict[str, Any]]:
@@ -1472,7 +1475,10 @@ async def run_chat_turn(
 
     resp = await ollama.AsyncClient(host=model_url).chat(
         model=model or settings.ollama_model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": utterance}],
+        # chat._history_for_model: the thread's earlier turns ride along.
+        messages=[{"role": "system", "content": system},
+                  *STATE.get("chat_log", {}).get(thread, []),
+                  {"role": "user", "content": utterance}],
     )
     _chat_row(thread, "assistant", {"model_role": "chat"})
     return Turn("reply", resp["message"]["content"], None, "chat")
@@ -1536,9 +1542,13 @@ async def run_case(
             return await run_voice_turn(say, voice_ctx[0])
         if case.where == "playbox":
             return await run_playbox_turn(say, house)
-        return await run_chat_turn(say, house, device=device or default_device(house),
-                                   thread=thread, model_url=model_url, model=model,
-                                   away=case.where == "away")
+        t = await run_chat_turn(say, house, device=device or default_device(house),
+                                thread=thread, model_url=model_url, model=model,
+                                away=case.where == "away")
+        if t.outcome == "reply":
+            STATE.setdefault("chat_log", {}).setdefault(thread, []).extend(
+                [{"role": "user", "content": say}, {"role": "assistant", "content": t.text or ""}])
+        return t
 
     with applied(house, catalogue, lenient=lenient):
         try:
