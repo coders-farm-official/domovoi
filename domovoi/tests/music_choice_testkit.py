@@ -153,7 +153,7 @@ async def contract_play(self, query, ctx, session, *, allow_choice: bool = True)
             if reply is not None:
                 return reply
     q = " by ".join(v for v in (query.get("title"), query.get("artist")) if v) or query.get("any", "")
-    return Response(text=f"I couldn't find anything called {q}.", session_id=ctx.session_id,
+    return Response(text=f'I couldn\'t find "{q}" in the library.', session_id=ctx.session_id,
                     matched_handler=self.name)
 
 

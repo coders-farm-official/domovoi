@@ -509,7 +509,11 @@ class DocumentsHandler(Handler):
     async def handle_choice_reply(self, kind, data, transcript, ctx, session) -> Response | None:
         from domovoi.router import strip_leading_filler
 
-        said = strip_leading_filler(transcript.strip()) or transcript.strip()
+        # Dictation is the letter's words: "Play nice, I told them." is
+        # never turned into a play request (router._play_request).
+        said = strip_leading_filler(
+            transcript.strip(), play_requests=kind != LETTER_DICTATION,
+        ) or transcript.strip()
         expired = time.time() > float((data or {}).get("expires_at") or float("inf"))
         if kind != LETTER_DICTATION and (expired or ctx.trigger == "wake_word"):
             # Asked too long ago, or a fresh wake word: a new request, routed

@@ -248,12 +248,36 @@ _NO_RE = re.compile(
 # ...") collapses in one substitution.
 _LEADING_FILLER_RE = re.compile(
     r"^(?:"
-    r"(?:hey|um|uh|so|well|alright)[,\s]+"
-    r"|(?:yeah|yes|yep|ok|okay)[,\s]+"
-    r"|(?:please|pls|plz)[,\s]+"
+    r"(?:hey|um|uh|so|well|alright)[,.!\s]+"
+    r"|(?:yeah|yes|yep|ok|okay)[,.!\s]+"
+    r"|(?:please|pls|plz)[,.!\s]+"
     r"|(?:can|could|would|will) (?:you|u)(?:[,\s]+(?:please|pls|plz))?[,\s]+"
     r")+"
 )
+# Words said before a "play" that are no part of it (2026-11-28: "Then
+# wait. Play should be here." missed the music's fast path and went to the
+# model, which played an unrelated song). Stripped only when "play" or
+# "put on" follows, so "wait for me" or "now what" keep their words.
+_PLAY_LEAD_RE = re.compile(
+    r"^(?:(?:then|wait|now|and|so|ok|okay|um+|uh+|er+|hmm+|oh|alright|right|actually)"
+    r"[,.!\s]+)+(?=(?:play|put on)\b)"
+)
+# An earlier sentence before a "play" one: "Yes, wrong song though. Play,
+# you should be here." — the request is the "play" sentence. Bounded, and
+# only when the transcript does not already start with the request and the
+# earlier sentence is no command ("set a timer for ten minutes. play
+# music", "stop. play it later" keep it: review 2026-11-28).
+_LATER_PLAY_RE = re.compile(r"^([^.!?]{1,80})[.!?]+\s+(?=(?:play|put on)\b)")
+# What an earlier sentence that is a command begins with, when no fast path
+# takes it (the tool model's commands): it is never dropped.
+_COMMAND_LEAD_RE = re.compile(
+    r"^(?:set|turn|switch|stop|pause|skip|start|add|remove|delete|cancel|remind|call|text"
+    r"|send|lock|unlock|open|close|dim|make|create|tell|read|show|find|search|look|check"
+    r"|put|move|change|record|take|save|print|announce|drop in)\b"
+)
+# "Play, you should be here": the comma Whisper writes after "play" is no
+# part of the title.
+_PLAY_COMMA_RE = re.compile(r"^(play|put on)\s*[,.:;]+\s*")
 
 
 def _parse_yes_no(transcript: str) -> bool | None:
@@ -280,12 +304,14 @@ def normalize_transcript(raw: str) -> str:
     return raw.lower().strip().rstrip(".,!?")
 
 
-def strip_leading_filler(transcript: str) -> str:
+def strip_leading_filler(transcript: str, *, play_requests: bool = True) -> str:
     """Drop leading politeness ("please", "can you", "yeah,") so the
     anchored fast-path regexes still match (see _LEADING_FILLER_RE).
     A "can you <X>?" question whose X is in the capability table, and no
     command's, keeps its "can you" (house_facts.kept_question): it is
-    answered, not carried out."""
+    answered, not carried out. ``play_requests`` (on unless the words are
+    dictation, documents.py): a "play" said after other words is the
+    request alone (:func:`_play_request`)."""
     stripped = _LEADING_FILLER_RE.sub("", transcript)
     if stripped != transcript:
         from domovoi import house_facts
@@ -293,7 +319,24 @@ def strip_leading_filler(transcript: str) -> str:
         kept = house_facts.kept_question(transcript, stripped)
         if kept is not None:
             return kept
-    return stripped
+    return _play_request(stripped) if play_requests else stripped
+
+
+def _play_request(transcript: str) -> str:
+    """A "play X" request said after words that are no part of it ("then
+    wait. play X", "wrong song though. play, X"): the request alone, so the
+    music's fast path — never the tool model — takes it. ``transcript``
+    unchanged otherwise, and always when the earlier sentence is a command
+    of its own."""
+    if not transcript.startswith(("play", "put on")):
+        transcript = _PLAY_LEAD_RE.sub("", transcript, count=1)
+    if not transcript.startswith(("play", "put on")):
+        m = _LATER_PLAY_RE.match(transcript)
+        if m is not None:
+            lead = _LEADING_FILLER_RE.sub("", m.group(1).strip())
+            if not _COMMAND_LEAD_RE.match(lead) and first_fast_path(lead) is None:
+                transcript = transcript[m.end():]
+    return _PLAY_COMMA_RE.sub(r"\1 ", transcript, count=1)
 
 
 def first_fast_path(

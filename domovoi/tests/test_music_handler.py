@@ -342,14 +342,14 @@ async def test_play_cascade_falls_to_provider_then_generic(monkeypatch: pytest.M
     # Provider misses too → generic, not podcast-specific.
     with _registered(_FakeStreamingProvider(stream_result=None)):
         resp2 = await handler._play({"any": "nonexistent thing"}, ctx, None)
-    assert "couldn't find anything called" in resp2.text.lower()
+    assert resp2.text == 'I couldn\'t find "nonexistent thing" in the library or online.'
     assert "podcast" not in resp2.text.lower()
 
 
 @pytest.mark.asyncio
 async def test_play_cascade_graceful_absence_when_no_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Local miss + no podcast + NO streaming-search provider registered →
-    a plain "couldn't find anything called …" (owner, 2026-11-05: the
+    a plain 'couldn't find "…" in the library' (owner, 2026-11-05: the
     reply never mentions providers or plugins), not a crash."""
     from domovoi.handlers.spoken_audio import SpokenAudioHandler
 
@@ -364,7 +364,7 @@ async def test_play_cascade_graceful_absence_when_no_provider(monkeypatch: pytes
     ctx = Context(session_id=None, room_id="kitchen", online=True)
     assert CAPABILITIES.absent(STREAMING_SEARCH_PROVIDER)
     resp = await handler._play({"any": "some unknown song"}, ctx, None)
-    assert resp.text == "I couldn't find anything called some unknown song."
+    assert resp.text == 'I couldn\'t find "some unknown song" in the library.'
     assert "provider" not in resp.text.lower()
 
 
@@ -422,7 +422,7 @@ async def test_provider_finding_nothing_relevant_says_so(monkeypatch: pytest.Mon
     ctx = Context(session_id=None, room_id="kitchen", online=True)
     with _registered(_FakeStreamingProvider(stream_result=None)):
         resp = await plan.fast_path.method(plan.handler, plan.match, ctx, None)
-    assert resp.text == "I couldn't find anything called glitch again by lil' cedo."
+    assert resp.text == "I couldn't find \"glitch again by lil' cedo\" in the library or online."
 
 
 @pytest.mark.asyncio
@@ -1051,4 +1051,112 @@ async def test_play_cascade_survives_a_provider_that_raises(monkeypatch: pytest.
         resp = await MusicHandler()._play(
             {"title": "vrtx", "artist": "quilted moth"}, ctx, None, said="vrtx by quilted moth",
         )
-    assert resp.text == "I couldn't find anything called vrtx by quilted moth."
+    assert resp.text == 'I couldn\'t find "vrtx by quilted moth" in the library or online.'
+
+
+# ─── "play <words>" always reaches the music (2026-11-28) ─────────────────
+# Dining room: "Then wait. Play should be here." (speech-to-text dropped the
+# "you" of "You Should Be Here") missed every fast path, went to the model,
+# and the model played an unrelated song. A "play" request said after words
+# that are no part of it, with a comma after "play", or with a title that
+# reads like a sentence, is the music's title search; one the library has
+# no song for says so and plays nothing.
+
+
+@pytest.mark.parametrize(("said", "title"), [
+    ("Then wait. Play should be here.", "should be here"),
+    ("Play, you should be here.", "you should be here"),
+    ("Wait, play you should be here.", "you should be here"),
+    ("Wait. Play you should be here.", "you should be here"),
+    ("Um, play you should be here.", "you should be here"),
+    ("Okay so play you should be here.", "you should be here"),
+    ("Then play you should be here.", "you should be here"),
+    ("Then, play: you should be here.", "you should be here"),
+    ("Yes, wrong song though. Play, you should be here.", "you should be here"),
+    ("Play you should be here.", "you should be here"),
+    ("Play I want it that way.", "i want it that way"),
+    ("Play don't stop believing.", "don't stop believing"),
+])
+def test_a_play_request_after_filler_is_the_musics_title_search(said: str, title: str) -> None:
+    from domovoi.router import plan_route
+
+    plan = plan_route(said)
+    assert plan is not None and plan.path == "fast", said
+    assert plan.handler.name == "music" and plan.fast_path.pattern is _PLAY_ANY_RE, said
+    assert plan.match.group(1) == title
+
+
+@pytest.mark.parametrize("said", [
+    "wait for me", "now what", "then what happened", "playlist",
+    # An earlier sentence that is a command is never dropped (review
+    # 2026-11-28): the timer, the stop, a command the tool model reads.
+    "set a timer for ten minutes. play music",
+    "stop. play it later",
+    "turn on the porch light. play some jazz",
+])
+def test_words_before_anything_but_play_are_kept(said: str) -> None:
+    from domovoi.router import strip_leading_filler
+
+    assert strip_leading_filler(said) == said
+
+
+def test_dictation_is_never_turned_into_a_play_request() -> None:
+    """documents.py reads a dictated letter's words through the same strip:
+    "Then wait. Play nice, I told them." stays the letter's sentence."""
+    from pathlib import Path
+
+    from domovoi.router import strip_leading_filler
+
+    words = "then wait. play nice, i told them"
+    assert strip_leading_filler(words, play_requests=False) == words
+    assert strip_leading_filler(words) == "play nice, i told them"
+    src = (Path(__file__).resolve().parents[1] / "handlers" / "documents.py").read_text(encoding="utf-8")
+    assert "play_requests=kind != LETTER_DICTATION" in src
+
+
+@pytest.mark.asyncio
+async def test_a_title_the_library_lacks_is_not_found_and_nothing_plays(monkeypatch) -> None:
+    from domovoi.handlers.spoken_audio import SpokenAudioHandler
+    from domovoi.router import plan_route
+
+    _use_miss_mpd()
+
+    async def no_pod(self, ctx, session, show):
+        return None
+
+    monkeypatch.setattr(SpokenAudioHandler, "try_play_latest", no_pod)
+    assert CAPABILITIES.absent(STREAMING_SEARCH_PROVIDER)
+    plan = plan_route("Then wait. Play, you should be here.")
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
+    resp = await plan.fast_path.method(plan.handler, plan.match, ctx, None)
+    assert resp.text == 'I couldn\'t find "you should be here" in the library.'
+    assert resp.music_action is None and resp.matched_handler == "music"
+
+
+class _HasItMPD(_MissMPD):
+    """A library with "You Should Be Here" in it, found by MPD's search."""
+
+    def __init__(self) -> None:
+        self.searched: list[dict] = []
+
+    async def prepare_search(self, query: dict):
+        self.searched.append(dict(query))
+        if query.get("any") == "you should be here":
+            return {"file": "Cole Field/You Should Be Here.mp3", "title": "You Should Be Here",
+                    "artist": "Cole Field"}
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_title_the_library_has_plays_it() -> None:
+    from domovoi.clients import mpd as mpd_module
+    from domovoi.router import plan_route
+
+    mpd = _HasItMPD()
+    mpd_module._clients = {"kitchen": mpd}
+    plan = plan_route("Play, you should be here.")
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
+    resp = await plan.fast_path.method(plan.handler, plan.match, ctx, None)
+    assert mpd.searched == [{"any": "you should be here"}]
+    assert resp.text == "Playing You Should Be Here by Cole Field."
+    assert resp.music_action == "start"
