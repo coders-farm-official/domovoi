@@ -7,7 +7,7 @@ model. Everything that needs no model, no network and no database is
 asserted here:
 
 * the corpus and the house fixtures are well-formed (unique ids, houses
-  that exist, valid verdicts, needs_change ids N1..N20 without the
+  that exist, valid verdicts, needs_change ids N1..N21 without the
   resolved N7 and N10);
 * the global reply checks (no hedge on a question, no plugin names, no
   secrets, menu paths that exist in web/static/settings.jsx) on sample

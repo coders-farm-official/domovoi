@@ -3720,6 +3720,27 @@
       ]
     },
     {
+      "id": "21.8m",
+      "utterance": "remember to call mom",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_not_include": [
+        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind"
+      ],
+      "stored": [],
+      "not_stored": [
+        [
+          null,
+          "call mom"
+        ]
+      ],
+      "requires": "chat_actions",
+      "needs_change": "N21",
+      "note": "the chat mic's twin of 21.8. Model-dependent: the 14B tool model picks the memory tool, so voice stores 'call mom' and says so (honest, but not what was asked). N21, post-1.5.0 with the 'remember to X' reminder offer on both paths (Core 2026-11-28). Typed chat (21.8) stores nothing."
+    },
+    {
       "id": "21.9",
       "utterance": "can you remember that I park on Level 3",
       "where": "chat",

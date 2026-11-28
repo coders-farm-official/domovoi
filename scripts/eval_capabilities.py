@@ -142,7 +142,7 @@ PLUGIN_STATUS = ("ok", "error", "crash")
 # broadcast) runs as the chat mic does (path B), never a pretend-done.
 # N20 (2026-11-27): the intercom announces the pronoun ('announce that' plays
 # "that") and keeps a leading 'that' in the message.
-NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 21) if i not in (7, 10))
+NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 22) if i not in (7, 10))
 CASE_STATUS = ("verified", "unverified")
 
 # What a house fixture may say (the schema the test checks).
