@@ -933,12 +933,23 @@ async def maybe_inject_third_party_ask(
 # you, X?". Only the very next turn's yes, in the same room within
 # ROOM_CHECK_TTL_SEC, in a voice that could be X's (_room_check_voice),
 # saves THAT turn's clip as the room's sample for X — or, where X has only
-# short samples, starts the "count from one to ten" learning that replaces
-# them (_start_room_learning). Nothing unconfirmed is ever saved: drift
-# re-enrolment from borderline matches once filed one person's voice under
-# another (voice_identifier.py, job 4). A room asks a person at most once a
-# day, whatever the answer. Never from a phone, never inside an
-# introduction, never on a turn too short or too noisy to score.
+# short samples, OFFERS the "count from one to ten" learning that replaces
+# them ("Thanks. Want me to learn your voice better here? It takes about a
+# minute."), which starts only on a second yes (_start_room_learning; owner
+# decision 2026-11-28: offer first — until then the first yes started it).
+# Nothing unconfirmed is ever saved: drift re-enrolment from borderline
+# matches once filed one person's voice under another (voice_identifier.py,
+# job 4). A room asks a person at most once a day, whatever the answer, and
+# offers the learning at most once a week (ROOM_LEARN_OFFER_QUIET_SEC).
+# Never from a phone, never inside an introduction, never on a turn too
+# short or too noisy to score.
+#
+# A yes that says more ("yes, wrong song though. Play X"; "yeah it was,
+# turn it up") answers the question AND asks for something (2026-11-28,
+# the owner's dining room): the yes counts as a yes, and the rest of the
+# turn is routed as if it had been said alone (Response.then_route,
+# router._answer_choice). Such a turn never offers or starts the learning:
+# it is in the middle of a request. A "no, play X" saves nothing and plays X.
 
 #: The lowest score that asks (the bar itself is the match threshold).
 ROOM_CHECK_FLOOR = 0.50
@@ -958,6 +969,100 @@ ROOM_CHECK_YES_SLACK = 0.10
 #: When each (person_id, room_id) was last asked. In memory: a restart
 #: forgets it, and the room may ask once more.
 _ROOM_CHECK_ASKED: dict[tuple[int, str], float] = {}
+#: What a bare yes does where the room has only short samples of X. "offer"
+#: (owner decision 2026-11-28: offer first): ROOM_LEARN_OFFER_TEXT, and the
+#: counting starts only on a second yes. "start" is kept as a test hook
+#: only: the first yes starts the counting, as it did from 2026-11-22.
+ROOM_CHECK_LEARNING = "offer"
+ROOM_LEARN_OFFER_TEXT = "Thanks. Want me to learn your voice better here? It takes about a minute."
+#: How long a room stays quiet about the learning after offering it to a
+#: person (a no, no answer, or anything else ends the offer), in seconds.
+ROOM_LEARN_OFFER_QUIET_SEC = 7 * 24 * 3600.0
+#: When each (person_id, room_id) was last offered the learning. In memory,
+#: like _ROOM_CHECK_ASKED: a restart forgets it (the room still asks at most
+#: once a day). A yes to the offer drops the entry.
+_ROOM_LEARN_OFFERED: dict[tuple[int, str], float] = {}
+
+#: The words a yes to "was that you, X?" may carry and still be only a yes
+#: ("yes, that was me", "yeah it is, thanks"). X's own name counts too.
+_BARE_YES_WORDS = frozenset((
+    "yes yeah yep yup sure correct right exactly indeed it its it's that that's thats "
+    "this this's was is me i i'm im am my mine myself voice really definitely absolutely "
+    "totally of course thanks thank you very much uh um oh hi hello hey okay ok well "
+    "sir ma'am indeed was there here sounds sounded like true"
+).split())
+#: Where a request may start inside a reply: after a stop or a comma, or
+#: after a word that turns from the answer to something else.
+_REPLY_BOUNDARY_RE = re.compile(r"[.;:!?,]+\s*|\b(?:but|though|anyway|also|now)\b[\s,]*")
+_REPLY_FILLER_RE = re.compile(r"^(?:(?:hey|um|uh|oh|so|well|alright|ok|okay)\b[\s,.!?]*)+")
+_REPLY_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _answer_words(name: str) -> frozenset[str]:
+    """:data:`_BARE_YES_WORDS`, X's name and the assistant's own names."""
+    extra = set(_REPLY_WORD_RE.findall((name or "").lower()))
+    for n in assistant_names(settings.bot_name):
+        extra.update(_REPLY_WORD_RE.findall(n.replace("\\", "").lower()))
+    return _BARE_YES_WORDS | extra
+
+
+def _only_answer(text: str, name: str) -> bool:
+    """Whether ``text`` (the words after a yes) says nothing but the yes."""
+    allowed = _answer_words(name)
+    return all(w in allowed for w in _REPLY_WORD_RE.findall(text))
+
+
+def _drop_answer_words(text: str, name: str) -> str:
+    """``text`` without the answer words at its start ("it was play X" →
+    "play X")."""
+    allowed = _answer_words(name)
+    words = text.split()
+    while words and words[0].strip(",.!?;:") in allowed:
+        words.pop(0)
+    return " ".join(words)
+
+
+def reply_rest(said: str, affirmative: bool, name: str = "") -> str | None:
+    """What a yes or a no to a parked question said besides the answer, as
+    a turn of its own, or None when it said only the answer. ``said`` is
+    normalized (router.normalize_transcript) and starts with the answer,
+    perhaps after an "um" or an "okay".
+
+    A request inside the rest that a fast path takes is the rest ("yes,
+    wrong song though. Play X" → "play X"; "yeah it was, turn it up" →
+    "turn it up"); the comma in "play, X" is dropped, as Whisper puts one
+    there. A yes whose rest no fast path takes, and is more than the yes
+    ("yes, what's the capital of France"), is routed whole. A no's rest is
+    only ever a fast path's request ("no, play X"): "no, it was my sister"
+    stays a no."""
+    from domovoi.router import _NO_RE, _YES_RE, first_fast_path, strip_leading_filler
+
+    text = _REPLY_FILLER_RE.sub("", said or "")
+    head = (_YES_RE if affirmative else _NO_RE).match(text)
+    if head is None:
+        return None
+    rest = text[head.end():]
+    if not rest.strip(" ,.;:!?-"):
+        return None
+    starts = [0] + [m.end() for m in _REPLY_BOUNDARY_RE.finditer(rest)]
+    for pos in starts:
+        tail = rest[pos:].replace(",", " ")
+        for cand in (tail, _drop_answer_words(tail, name)):
+            cand = strip_leading_filler(" ".join(cand.split()).strip(" .;:!?-"))
+            if not cand:
+                continue
+            hit = first_fast_path(cand)
+            if hit is not None and hit[0].name not in (VoiceProfileHandler.name, "dismiss"):
+                return cand
+    if not affirmative or _only_answer(rest, name):
+        return None
+    # No fast path: the rest after the answer's own clauses, as said.
+    keep = rest
+    for pos in starts:
+        if _only_answer(rest[:pos], name):
+            keep = rest[pos:]
+    keep = " ".join(keep.split()).strip(" ,.;:!?-")
+    return keep or None
 
 
 def _room_check_wanted(ctx: Context, response: Response, ident) -> tuple[int, float] | None:
@@ -1072,7 +1177,7 @@ class VoiceProfileHandler(Handler):
     confirmation_kinds = (
         "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
         "core.room_voice_add", "core.forget_me", "core.name_sound_alike",
-        "core.room_check",
+        "core.room_check", "core.room_learn_offer",
     )
     # "Add this phone's voice to X?" and a satellite's "I already know
     # someone called X. Is that you?" are answered by the very next turn or
@@ -1085,10 +1190,12 @@ class VoiceProfileHandler(Handler):
     # right?" (its reply may be a correction or a spelling, not only a
     # yes/no) and "Did you mean X?" (a heard name that sounds like someone
     # the house knows).
-    # A room's "By the way, was that you, X?" (maybe_ask_room_check) too.
+    # A room's "By the way, was that you, X?" (maybe_ask_room_check) too,
+    # and the "Want me to learn your voice better here?" its yes may offer.
     choice_kinds = (
         "core.phone_voice_add", "core.room_voice_add", "core.forget_me",
         "core.self_intro", "core.name_sound_alike", "core.room_check",
+        "core.room_learn_offer",
     )
     requires_network = "no"
     # Never during a live drop-in: an introduction or a "was that you?"
@@ -2103,6 +2210,8 @@ class VoiceProfileHandler(Handler):
             return await self._handle_sound_alike_reply(data, transcript, ctx, session)
         if kind == "core.room_check":
             return await self._handle_room_check_reply(data, transcript, ctx, session)
+        if kind == "core.room_learn_offer":
+            return await self._handle_learn_offer_reply(data, transcript, ctx, session)
         affirmative = _parse_yes_no(transcript)
         if affirmative is None:
             affirmative = _parse_yes_no(strip_leading_filler(transcript))
@@ -2673,11 +2782,18 @@ class VoiceProfileHandler(Handler):
         (:meth:`_room_check_voice`): the asking turn's clip becomes this
         room's sample for X (marked as claimed, like every sample a yes
         adds), unless X has :data:`ROOM_CHECK_CAP` here already. Where X's
-        samples here are all short, the yes instead starts the room-learning
-        collection (:meth:`_start_room_learning`), which replaces them only
-        with more speech. A yes in somebody else's voice, or too short or
-        noisy to tell whose, saves nothing. No: nothing. Anything else
-        isn't an answer (None: routed as usual), and saves nothing either."""
+        samples here are all short, a bare yes instead OFFERS the
+        room-learning collection (:data:`ROOM_CHECK_LEARNING`;
+        :meth:`_offer_room_learning`), which replaces them only with more
+        speech. A yes in somebody else's voice, or too short or noisy to
+        tell whose, saves nothing. No: nothing. Anything else isn't an
+        answer (None: routed as usual), and saves nothing either.
+
+        A yes or a no that says more (:func:`reply_rest`: "yes, wrong song
+        though. Play X") is answered the same way, without the learning
+        and with nothing more said than "Thanks, X." for a saved clip; the
+        rest goes back to the router as a turn of its own
+        (``Response.then_route``)."""
         from domovoi.router import _parse_yes_no, normalize_transcript, strip_leading_filler
 
         said = normalize_transcript(transcript or "")
@@ -2690,13 +2806,23 @@ class VoiceProfileHandler(Handler):
         if _asked_on_the_phone(data) or phone_chat_mic(ctx) or ctx.from_phone or room_id != ctx.room_id:
             return None
         name = str(data.get("name") or "")
+        rest = reply_rest(said, affirmative, name)
+        if rest is not None:
+            log.info(
+                "room check: the %s carried a request; routing it on",
+                "yes" if affirmative else "no",
+            )
         if not affirmative:
+            if rest is not None:
+                return self._then("", rest, ctx)
             return self._say("Okay, my mistake.", ctx)
         try:
             expired = time.time() > float(data.get("expires_at"))
         except (TypeError, ValueError):
             expired = True
         if expired:
+            if rest is not None:
+                return self._then("", rest, ctx)
             return self._say("That was a while ago, so I didn't save it.", ctx)
         try:
             person_id = int(data.get("person_id"))
@@ -2704,6 +2830,8 @@ class VoiceProfileHandler(Handler):
             person_id = None
         embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
         if person_id is None or embedding is None or not name or not room_id:
+            if rest is not None:
+                return self._then("", rest, ctx)
             return self._say("Something went wrong storing that — your voice wasn't added.", ctx)
         verdict = await self._room_check_voice(data, person_id, room_id, ctx, session)
         if verdict != "theirs":
@@ -2711,6 +2839,9 @@ class VoiceProfileHandler(Handler):
                 "room check: a yes for person_id=%d in room=%s refused (%s voice)",
                 person_id, room_id, verdict,
             )
+            if rest is not None:
+                # The request is what this turn is for; the refusal is only logged.
+                return self._then("", rest, ctx)
             if verdict == "unheard":
                 return self._say(
                     f"I couldn't hear enough to be sure that was you, so I won't save it. "
@@ -2728,16 +2859,25 @@ class VoiceProfileHandler(Handler):
         clips = [[str(data.get("embedding_b64")), secs or 0.0]]
         # X has only short samples here (owner decision 2026-11-22): learn
         # the room as "my name is X" does, so a longer recording REPLACES
-        # them instead of a fourth short clip sitting beside them.
+        # them instead of a fourth short clip sitting beside them — offered
+        # first, and started on a second yes (owner decision 2026-11-28:
+        # offer first). Never from a yes that asked for something else too:
+        # the person is in the middle of a request, and the clip is added
+        # below as any yes's is.
         short = await self._short_room_samples(person_id, room_id, ctx, session, clips)
-        if short:
+        if short and rest is None:
             if await self._is_denylisted(embedding, session):
                 return self._say("I wasn't able to save that voice profile.", ctx)
-            log.info("room check: person_id=%d confirmed in room=%s, learning it", person_id, room_id)
-            learn = await self._start_room_learning(
-                person_id, name, room_id, short, clips, ctx, session,
-                claimed_by=None, lead=f"Thanks, {name}.",
-            )
+            if ROOM_CHECK_LEARNING == "start":
+                log.info("room check: person_id=%d confirmed in room=%s, learning it", person_id, room_id)
+                learn = await self._start_room_learning(
+                    person_id, name, room_id, short, clips, ctx, session,
+                    claimed_by=None, lead=f"Thanks, {name}.",
+                )
+            else:
+                learn = await self._offer_room_learning(
+                    data, person_id, name, room_id, clips, ctx, session,
+                )
             if learn is not None:
                 return learn
         try:
@@ -2746,13 +2886,146 @@ class VoiceProfileHandler(Handler):
             )
         except Exception as e:
             log.warning("room check: counting the room's samples failed: %s", e)
+            if rest is not None:
+                return self._then("", rest, ctx)
             return self._say("Something went wrong saving that — your voice wasn't added.", ctx)
         if here >= ROOM_CHECK_CAP:
+            if rest is not None:
+                return self._then(f"Thanks, {name}.", rest, ctx)
             return self._say(f"Thanks, {name}. I already know your voice in this room.", ctx)
         log.info("room check: person_id=%d confirmed in room=%s", person_id, room_id)
-        return await self._add_room_sample(
-            person_id, name, embedding, room_id, ctx, session, sample_seconds=secs,
+        saved: list = []
+        added = await self._add_room_sample(
+            person_id, name, embedding, room_id, ctx, session, sample_seconds=secs, saved=saved,
         )
+        if rest is not None:
+            return self._then(f"Thanks, {name}." if saved else "", rest, ctx)
+        return added
+
+    def _then(self, text: str, rest: str, ctx: Context) -> Response:
+        """The answer to a parked question (``text``, maybe empty) whose
+        turn asked for something more: ``rest`` is routed next, in the same
+        turn, as if said alone (router._answer_choice), and its reply
+        follows ``text``."""
+        return Response(
+            text=text, session_id=ctx.session_id, matched_handler=self.name, then_route=rest,
+        )
+
+    async def _offer_room_learning(
+        self,
+        data: dict,
+        person_id: int,
+        name: str,
+        room_id: str,
+        clips: list,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response | None:
+        """A bare yes to "was that you, X?" where the room has only short
+        samples of X: :data:`ROOM_LEARN_OFFER_TEXT`, with the offer parked
+        (``core.room_learn_offer``, :meth:`_handle_learn_offer_reply`) for
+        the next turn. Offered to a person in a room at most once in
+        :data:`ROOM_LEARN_OFFER_QUIET_SEC`. None: not offered (offered
+        lately, can't ask back, or it couldn't be parked); the caller then
+        handles the yes as one where learning isn't wanted."""
+        key = (int(person_id), str(room_id))
+        offered = _ROOM_LEARN_OFFERED.get(key)
+        if offered is not None and time.time() - offered < ROOM_LEARN_OFFER_QUIET_SEC:
+            log.info("room check: learning offered to person_id=%d in room=%s lately; not again",
+                     person_id, room_id)
+            return None
+        if not ctx.answerable or ctx.session_id is None:
+            return None
+        try:
+            await request_confirmation(
+                session,
+                ctx.session_id,
+                kind="core.room_learn_offer",
+                handler="voice_profile",
+                data={
+                    "person_id": int(person_id),
+                    "name": name,
+                    "score": data.get("score"),
+                    "clips": clips,
+                    "expires_at": time.time() + ROOM_CHECK_TTL_SEC,
+                    **_origin(ctx),
+                },
+            )
+        except Exception as e:
+            log.warning("room check: parking the learning offer failed: %s", e)
+            return None
+        _ROOM_LEARN_OFFERED[key] = time.time()
+        log.info("room check: person_id=%d confirmed in room=%s, offered learning", person_id, room_id)
+        return Response(
+            text=ROOM_LEARN_OFFER_TEXT, session_id=ctx.session_id,
+            matched_handler=self.name, expect_followup=True,
+        )
+
+    async def _handle_learn_offer_reply(
+        self, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The turn after "Want me to learn your voice better here?"
+        (:meth:`_offer_room_learning`). A bare yes, in time, in the same
+        room and not in somebody else's voice (:meth:`_room_check_voice`):
+        the "count from one to ten" learning starts
+        (:meth:`_start_room_learning`). A no, a late yes, or a yes that asks
+        for something else too ("yes, but play X first": routed on) ends
+        the offer, and the room doesn't offer it again for a week. Anything
+        else isn't an answer (None: routed as usual) and ends it as well."""
+        from domovoi.router import _parse_yes_no, normalize_transcript, strip_leading_filler
+
+        said = normalize_transcript(transcript or "")
+        affirmative = _parse_yes_no(said)
+        if affirmative is None:
+            affirmative = _parse_yes_no(strip_leading_filler(said))
+        if affirmative is None:
+            return None
+        room_id = data.get(_ORIGIN_ROOM_KEY)
+        if _asked_on_the_phone(data) or phone_chat_mic(ctx) or ctx.from_phone or room_id != ctx.room_id:
+            return None
+        name = str(data.get("name") or "")
+        rest = reply_rest(said, affirmative, name)
+        if rest is not None:
+            return self._then("", rest, ctx)
+        if not affirmative:
+            return self._say("Okay, I'll leave it.", ctx)
+        try:
+            expired = time.time() > float(data.get("expires_at"))
+        except (TypeError, ValueError):
+            expired = True
+        if expired:
+            return self._say("That was a while ago, so I'll leave it for now.", ctx)
+        try:
+            person_id = int(data.get("person_id"))
+        except (TypeError, ValueError):
+            person_id = None
+        clips = data.get("clips")
+        if person_id is None or not name or not room_id or not isinstance(clips, list) or not clips:
+            return self._say("Something went wrong there, so I'll leave it for now.", ctx)
+        # The first yes already showed the voice is X's. This one only must
+        # not be somebody else's: a bare "yes" is often too short to score
+        # ("unheard"), and the counting scores every clip it keeps anyway
+        # (_turn_clip), as an introduction's does.
+        verdict = await self._room_check_voice(data, person_id, room_id, ctx, session)
+        if verdict == "someone else":
+            log.info("room check: a yes to the learning offer for person_id=%d refused (%s voice)",
+                     person_id, verdict)
+            return self._say(f"That didn't sound like {name}, so I'll leave it for now.", ctx)
+        short = await self._short_room_samples(person_id, room_id, ctx, session, clips)
+        if short is None:
+            return self._say(f"Thanks, {name}. I already know your voice in this room.", ctx)
+        embedding = _decode_b64_embedding(str(clips[0][0]) if clips[0] else "")
+        if embedding is not None and await self._is_denylisted(embedding, session):
+            return self._say("I wasn't able to save that voice profile.", ctx)
+        _ROOM_LEARN_OFFERED.pop((person_id, str(room_id)), None)
+        log.info("room check: person_id=%d said yes to learning room=%s", person_id, room_id)
+        learn = await self._start_room_learning(
+            person_id, name, room_id, short, clips, ctx, session,
+            claimed_by=None, lead="Great.",
+        )
+        if learn is None:
+            return self._say("Something went wrong there, so I'll leave it for now.", ctx)
+        return learn
 
     async def _room_check_voice(
         self, data: dict, person_id: int, room_id: str, ctx: Context, session: AsyncSession,
