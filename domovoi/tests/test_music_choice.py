@@ -534,7 +534,7 @@ async def test_a_bare_name_the_resolver_is_unsure_of_asks_again(db_session, fake
     assert fake_resolver.played_labels == ["The Velvet Kites"]
 
 
-REASK = "Glass Harbor or the album Moonlit Static?"
+REASK = "Which one, Glass Harbor or the album Moonlit Static?"
 
 
 @requires_db
@@ -731,7 +731,7 @@ async def test_a_play_after_filler_with_one_close_title_asks_never_the_model(
 async def test_which_one_unanswered_twice_says_so_in_the_artists_names(db_session, two_songs) -> None:
     sid = await _asked_which(db_session)
     resp = await _say(db_session, sid, "Quiet ember.", trigger="followup")
-    assert resp.text == "Sum 41 or Ominem?" and resp.expect_followup is True
+    assert resp.text == "Which one, Sum 41 or Ominem?" and resp.expect_followup is True
     resp = await _say(db_session, sid, "Biomina.", trigger="followup")
     assert [c.ref.artist_label for c in two_songs.played] == ["Eminem"]
 
@@ -778,7 +778,7 @@ async def test_a_reply_that_only_holds_an_options_name_never_plays_it(
         # A request of its own: today's search for the words said.
         assert two_lights.resolved[-1] == {"any": said.split("lay ", 1)[1].rstrip(".").lower()}
     elif said == "Turn off the lights.":
-        assert resp.text == "Lights or Bright Lights?"          # no fast path here: asked again
+        assert resp.text == "Which one, Lights or Bright Lights?"  # no fast path here: asked again
     else:
         assert resp.matched_path == "fast"                      # the music's own stop / pause
 

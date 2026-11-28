@@ -56,7 +56,7 @@ What a reply can be (:func:`parse_choice_reply`, pure; a leading "uh,",
 * anything else said on that open mic is the music's to answer, never the
   language model's (owner, 2026-11-28: "Biomina." woke a cold Q&A model
   while a group's music waited): the question is asked once more, briefly
-  ("Sum 41 or Eminem?"), and after a second miss the house says it didn't
+  ("Which one, Sum 41 or Eminem?"), and after a second miss the house says it didn't
   catch it and the music the question interrupted comes back. A dismissal
   ("never mind") is a "no"; "never mind, X" runs X when a fast path
   takes it.
@@ -1095,14 +1095,14 @@ class MusicChoiceMixin:
     async def _ask_again(
         self, data: Mapping[str, Any], ctx: Context, session: AsyncSession,
     ) -> Response:
-        """The same question once more, briefly ("Sum 41 or Eminem?"),
+        """The same question once more, briefly ("Which one, Sum 41 or Eminem?"),
         parked again for its own reply; a second miss is not asked again."""
         options = _parked_options(data)[:SPOKEN_CHOICES]
         names = short_names(options) if options else []
         if len(names) >= 2:
-            prompt = f"{names[0]} or {names[1]}?"
+            prompt = f"Which one, {names[0]} or {names[1]}?"
         elif names:
-            prompt = f"Did you mean {names[0]}? Yes or no?"
+            prompt = f"Do you want {names[0]}?"
         else:
             return self._choice_text(ctx, DIDNT_CATCH_TEXT)
         payload = {k: v for k, v in data.items() if k not in ("handler", "kind", "prompt")}
