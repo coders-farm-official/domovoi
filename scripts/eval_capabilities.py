@@ -1016,6 +1016,11 @@ ACTION_READS: list[tuple[str, re.Pattern[str], Any]] = [
     # The library's fingerprint and the recent plays: none (the stub player
     # answers the search, "Stub Artist": music is checked by shape).
     ("music", re.compile(r"FROM library_tracks\)|started_at > NOW\(\) -", re.I), lambda h, p: []),
+    # The media libraries' own searches (tracks, podcasts, audiobooks,
+    # videos): nothing matches ("play chess with me").
+    ("media search", re.compile(
+        r"^\s*SELECT\b.*?\bFROM\s+(?:library_tracks|podcast_episodes|podcast_subscriptions|audiobook\w*|video\w*)\b",
+        re.I | re.S), lambda h, p: []),
 ]
 
 

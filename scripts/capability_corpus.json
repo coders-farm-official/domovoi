@@ -3706,7 +3706,7 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_not_include": [
-        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind"
+        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind|\\b(?:I'll|I will|I'm going to|let me)\\b[^.?!]*\\b(?:remind|reminder|a note|schedule|notif)"
       ],
       "judge": true,
       "rubric": "Not a memory command: the model answers, and claims no reminder set and nothing remembered.",
@@ -3727,7 +3727,7 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_not_include": [
-        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind"
+        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind|\\b(?:I'll|I will|I'm going to|let me)\\b[^.?!]*\\b(?:remind|reminder|a note|schedule|notif)"
       ],
       "stored": [],
       "not_stored": [
@@ -5471,18 +5471,20 @@
       "where": "chat",
       "house": "base",
       "requires": "chat_actions",
-      "expect": "CAN",
+      "expect": "DEPENDS",
       "kind": "question",
       "must_include": [],
       "must_not_include": [
-        "Broadcasting"
+        "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
       ],
       "did": [],
       "did_not": [
         "^announce"
       ],
       "stub": false,
-      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced"
+      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced",
+      "judge": true,
+      "rubric": "Nothing was announced (a question never acts from typed chat): says plainly it wasn't announced and suggests saying it again or in a room; never announces in its reply or says it did or will."
     },
     {
       "id": "25.14",
@@ -5490,7 +5492,7 @@
       "where": "chat",
       "house": "base",
       "requires": "chat_actions",
-      "expect": "CANT",
+      "expect": "DEPENDS",
       "kind": "command",
       "must_include": [],
       "must_not_include": [
@@ -5503,7 +5505,7 @@
       ],
       "stub": false,
       "judge": true,
-      "rubric": "Can't play chess: the chat model answers plainly, nothing plays and nothing is claimed.",
+      "rubric": "Nothing plays and no player is claimed: the chat model answers as itself (playing chess in text is fine).",
       "note": "a play with no player that finds nothing goes to the chat model (Main 2026-11-28)"
     },
     {
@@ -5561,18 +5563,20 @@
       "where": "chat",
       "house": "proven-admin",
       "requires": "chat_actions",
-      "expect": "CAN",
+      "expect": "DEPENDS",
       "kind": "question",
       "must_include": [],
       "must_not_include": [
-        "Broadcasting"
+        "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
       ],
       "did": [],
       "did_not": [
         "^announce"
       ],
       "stub": false,
-      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced"
+      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced",
+      "judge": true,
+      "rubric": "Nothing was announced (a question never acts from typed chat): says plainly it wasn't announced and suggests saying it again or in a room; never announces in its reply or says it did or will."
     },
     {
       "id": "25.14w",
@@ -5580,7 +5584,7 @@
       "where": "chat",
       "house": "proven-admin",
       "requires": "chat_actions",
-      "expect": "CANT",
+      "expect": "DEPENDS",
       "kind": "command",
       "must_include": [],
       "must_not_include": [
@@ -5593,7 +5597,7 @@
       ],
       "stub": false,
       "judge": true,
-      "rubric": "Can't play chess: the chat model answers plainly, nothing plays and nothing is claimed.",
+      "rubric": "Nothing plays and no player is claimed: the chat model answers as itself (playing chess in text is fine).",
       "note": "a play with no player that finds nothing goes to the chat model (Main 2026-11-28)"
     },
     {
@@ -5651,18 +5655,20 @@
       "where": "away",
       "house": "base",
       "requires": "chat_actions",
-      "expect": "CAN",
+      "expect": "DEPENDS",
       "kind": "question",
       "must_include": [],
       "must_not_include": [
-        "Broadcasting"
+        "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
       ],
       "did": [],
       "did_not": [
         "^announce"
       ],
       "stub": false,
-      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced"
+      "note": "a message ending in '?' never acts through music, intercom or lists: the chat model answers, and says nothing was announced",
+      "judge": true,
+      "rubric": "Nothing was announced (a question never acts from typed chat): says plainly it wasn't announced and suggests saying it again or in a room; never announces in its reply or says it did or will."
     },
     {
       "id": "25.14a",
@@ -5670,7 +5676,7 @@
       "where": "away",
       "house": "base",
       "requires": "chat_actions",
-      "expect": "CANT",
+      "expect": "DEPENDS",
       "kind": "command",
       "must_include": [],
       "must_not_include": [
@@ -5683,7 +5689,7 @@
       ],
       "stub": false,
       "judge": true,
-      "rubric": "Can't play chess: the chat model answers plainly, nothing plays and nothing is claimed.",
+      "rubric": "Nothing plays and no player is claimed: the chat model answers as itself (playing chess in text is fine).",
       "note": "a play with no player that finds nothing goes to the chat model (Main 2026-11-28)"
     }
   ]
