@@ -64,6 +64,7 @@ from sqlalchemy import text
 
 from domovoi.admin_auth import require_device_read
 from domovoi.media_understanding import catalog, switches
+from domovoi.media_understanding import faces as faces_mod
 from web.backend.api import devices as devices_api
 from web.backend.db import session_scope
 
@@ -111,29 +112,6 @@ def _page(offset: int, limit: int, total: int) -> dict[str, Any]:
     more = offset + limit < total
     return {"offset": offset, "limit": limit, "total": total, "more": more,
             "next": offset + limit if more else None}
-
-
-async def _faces(s: Any, item_id: int, *, admin: bool) -> list[dict[str, Any]]:
-    rows = (await s.execute(text(
-        "SELECT f.id, f.person_id, p.name, f.confirmed, f.group_id, f.at_s, f.end_s, "
-        "coalesce(g.hidden, false) AS hidden "
-        "FROM media_faces f LEFT JOIN face_groups g ON g.id = f.group_id "
-        "LEFT JOIN people p ON p.id = f.person_id "
-        "WHERE f.item_id = :i AND (:admin OR NOT coalesce(g.hidden, false)) "
-        "ORDER BY f.at_s NULLS FIRST, f.confirmed DESC, f.quality DESC NULLS LAST, f.id LIMIT :l"),
-        {"i": item_id, "admin": admin, "l": FACES_MAX})).mappings().all()
-    out = []
-    for r in rows:
-        out.append({
-            "person_id": r["person_id"],
-            "name": r["name"] if r["person_id"] is not None else None,
-            "confirmed": bool(r["confirmed"]),
-            "group_id": r["group_id"],
-            "hidden": bool(r["hidden"]),
-            "at_s": float(r["at_s"]) if r["at_s"] is not None else None,
-            "end_s": float(r["end_s"]) if r["end_s"] is not None else None,
-        })
-    return out
 
 
 @router.get("/api/media/items/{item_id}/details", dependencies=[Depends(require_device_read)])
@@ -199,7 +177,7 @@ async def media_item_details(
         if places_shown:
             out["place"] = m["place_name"] or None
         if faces_shown:
-            faces = await _faces(s, item_id, admin=admin)
+            faces = await faces_mod.item_faces(s, item_id, admin=admin, most=FACES_MAX)
             if not admin:
                 for f in faces:
                     f.pop("hidden", None)
