@@ -22,13 +22,11 @@ router = APIRouter(prefix="/v1/away", tags=["away-chat"])
 _KICK: dict[str, Any] = {"task": None}
 
 
-@router.post("/reconcile", dependencies=[Depends(require_device)])
-async def away_reconcile() -> dict[str, Any]:
-    """Apply the enrolled phones and "Chat from away" now: the listener's
-    phone list at once, Tor's keys in the next batched reload (the first
-    phone: a restart). Asked again while one asked here hasn't finished,
-    nothing more is queued: the away watch (every 30 s while the onion
-    runs) picks up anything that one read too early."""
+def kick() -> None:
+    """Reconcile soon, unless a reconcile asked for here hasn't finished
+    yet: the away watch (every 30 s while the onion runs) picks up anything
+    that one read too early. The web's word and a phone's ``away.leave``
+    (:mod:`domovoi.away.bridge`) both come here."""
     import asyncio
 
     from domovoi.friend_houses import service
@@ -39,13 +37,25 @@ async def away_reconcile() -> dict[str, Any]:
                                                                 name="away-chat-reconcile")
         service._PENDING.add(_KICK["task"])
         _KICK["task"].add_done_callback(service._PENDING.discard)
+
+
+@router.post("/reconcile", dependencies=[Depends(require_device)])
+async def away_reconcile() -> dict[str, Any]:
+    """Apply the enrolled phones and "Chat from away" now: the listener's
+    phone list at once, Tor's keys in the next batched reload (the first
+    phone: a restart). Asked again while one asked here hasn't finished,
+    nothing more is queued (:func:`kick`)."""
+    kick()
     return {"ok": True}
 
 
 @router.get("/state", dependencies=[Depends(require_device)])
 async def away_state(device: str | None = Query(None, max_length=64)) -> dict[str, Any]:
-    """``ready`` once Tor runs the away onion (and has ``device``'s key),
-    ``starting`` while it is coming up, null when it doesn't run."""
+    """``ready`` once Tor runs the away onion (and has ``device``'s key) and
+    has had time to publish it, ``publishing`` while the onion's descriptor
+    carrying ``device``'s key is probably still on its way to the Tor
+    network, ``starting`` while it is coming up, null when it doesn't run
+    (:func:`domovoi.friend_houses.service.away_status`)."""
     from domovoi.friend_houses import service
 
     return {"state": service.away_status(device)}

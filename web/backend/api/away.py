@@ -68,6 +68,9 @@ ADMIN_WRITE = [Depends(require_requested_with), Depends(require_admin_security)]
 
 PORT = 80
 BRIDGE_HEADER = "X-Domovoi-Away-Bridge"
+#: The onion's states for a phone (``state`` in enroll and status). A phone
+#: treats one it doesn't know as ``starting``.
+STATES = ("ready", "publishing", "starting")
 
 
 def _refused(status: int, code: str, detail: str) -> JSONResponse:
@@ -122,8 +125,9 @@ async def tell_core(request: Request | None) -> bool:
 
 async def core_state(device_id: str) -> str | None:
     """The core's word on the away onion for this phone: ``ready``,
-    ``starting``, or None (not running). ``starting`` when it doesn't
-    answer."""
+    ``publishing`` (Tor has its key; the descriptor carrying it is probably
+    still on its way), ``starting``, or None (not running). ``starting``
+    when it doesn't answer."""
     import httpx
 
     headers = await service_auth_headers()
@@ -133,7 +137,7 @@ async def core_state(device_id: str) -> str | None:
                                  params={"device": device_id}, headers=headers)
         if r.status_code == 200:
             state = r.json().get("state")
-            return state if state in ("ready", "starting") else None
+            return state if state in STATES else None
     except Exception as e:  # noqa: BLE001 — said as starting
         log.info("away chat: the core's state couldn't be read (%s)", type(e).__name__)
     return "starting"
@@ -167,8 +171,10 @@ async def enroll(body: EnrollBody, request: Request) -> Any:
     authorization: 52 characters of upper-case base32; Noise static: 43
     characters of base64url); the answer is the away onion, its port, the
     house's away Noise key, the protocol number and whether the onion is
-    ``ready`` or still ``starting`` (the first phone's enrolment restarts
-    Tor; later ones ride a batched reload)."""
+    ``ready``, still ``starting`` (the first phone's enrolment restarts
+    Tor; later ones ride a batched reload) or ``publishing`` (Tor has the
+    new key, and the onion's descriptor carrying it is on its way: about a
+    minute)."""
     if not lan_caller(request):
         return _refused(403, "lan_only", "away chat is set up on the home network only")
     tor_raw = away_store.tor_auth_raw(body.tor_auth_pub) if isinstance(body.tor_auth_pub, str) else None
@@ -199,7 +205,7 @@ async def enroll(body: EnrollBody, request: Request) -> Any:
         "port": PORT,
         "house_noise_pub": away_keys.b64url(away_keys.noise_public(house_key)),
         "proto": wire.PROTO,
-        "state": "ready" if state == "ready" else "starting",
+        "state": state if state in ("ready", "publishing") else "starting",
     }
 
 
@@ -226,8 +232,8 @@ async def status(request: Request) -> dict[str, Any]:
     """Why the away onion can or can't be reached, for the app at home
     (the onion itself never says): the house's state (``on``,
     ``away_off``, ``internet_off``), whether this phone is enrolled, and
-    whether its onion is ``ready`` or ``starting`` (null when it isn't
-    enrolled or the house has it off)."""
+    whether its onion is ``ready``, ``publishing`` or ``starting`` (null
+    when it isn't enrolled or the house has it off)."""
     async with session_scope() as s:
         house = await away_store.house_state(s)
         found = await chat_access.device_for_key(s, chat_access.presented_device_key(request))
@@ -236,7 +242,7 @@ async def status(request: Request) -> dict[str, Any]:
     if enrolled and house == "on":
         assert found is not None
         state = await core_state(found[0])
-        if state != "ready":
+        if state not in ("ready", "publishing"):
             await tell_core(request)  # nudge: a word that didn't arrive
             state = "starting"
     return {"house": house, "enrolled": enrolled, "state": state}

@@ -670,7 +670,7 @@ def _away_samples() -> list[bytes]:
     for m in (wire.encode_message(wire.REQ, 7, send[:20], more=True), wire.encode_message(wire.REQ, 7, send[20:]),
               wire.encode_message(wire.REQ, 8, pic), wire.encode_message(wire.BLOB, 8, wire.blob_body(0, b"\xff\xd8")),
               wire.encode_message(wire.BLOB, 8, wire.blob_body(2, b"\xff\x00")),
-              wire.encode_message(wire.PING, 0)):
+              wire.encode_message(wire.PING, 0), wire.encode_message(wire.REQ, 9, b'{"op":"away.leave"}')):
         stream += bytes([len(m)]) + m if len(m) < 256 else b""
     return [
         b"\x00" + wire.encode_phone_hello(2, "1.5.0+3"),
@@ -680,6 +680,9 @@ def _away_samples() -> list[bytes]:
         b"\x02" + b'{"op":"chat.list","op":"chat.list"}',
         b"\x02" + b'{"op":"chat.stream","chat_id":[[[[[1]]]]]}',
         b"\x03" + b"\x05\x09\x02\x10" + b'{"op":"chat.cancel","chat_id":3}',
+        b"\x02" + b'{"op":"away.leave"}',
+        b"\x02" + b'{"op":"away.leave","device_id":"android-1"}',
+        b"\x03" + b"\x03\x07\x0b\x0f" + b'{"op":"away.leave"}',
         b"\x04" + b"\x00\x00\x10" + bytes(range(256)) * 2,
         b"\x05" + stream,
     ]

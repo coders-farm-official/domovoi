@@ -236,6 +236,11 @@ async def handle(device_id: str, noise_hex: str, raw_request: dict[str, Any], pi
     except wire.BadRequest as e:
         yield err(e.code, e.detail)
         return
+    if request.op == wire.LEAVE:
+        # The core answers away.leave itself (domovoi/away/bridge.py); it
+        # never comes here, and is never taken for a send.
+        yield err("bad_request", "away.leave is answered by the core")
+        return
     why = await gate(device_id, noise_hex)
     if why is not None:
         yield line("bye", {"code": why}, end=True)
@@ -253,9 +258,11 @@ async def handle(device_id: str, noise_hex: str, raw_request: dict[str, Any], pi
                 yield out
         elif request.op == "chat.cancel":
             yield await _cancel(viewer, request)
-        else:
+        elif request.op == "chat.send":
             async for out in _send(viewer, request, picture_b64, household):
                 yield out
+        else:  # pragma: no cover — every op is named above
+            yield err("bad_request", "unknown op")
     except HTTPException as e:
         code, detail = _http_code(e)
         yield err(code, detail)

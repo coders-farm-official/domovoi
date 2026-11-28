@@ -12,7 +12,10 @@ relay's lines come back on the listener's "stdin"
 (:meth:`AwayState.from_core`), and the relay reaches the web process's
 real away bridge in this process (``web.backend.main.app`` over an ASGI
 transport), so a request runs through the real chat code against the test
-database. The caller's test enrols the phone first (or writes
+database. httpx's ASGI transport hands the relay a reply only once it has
+all of it, so with ``web_socket=True`` the web app is served by uvicorn on
+a real loopback socket (a free ``127.0.0.1`` port) instead, and the relay
+reaches it over HTTP as it does in a house: replies stream. The caller's test enrols the phone first (or writes
 ``phones.json`` itself with :meth:`AwayLoopback.set_phones`).
 
 Unwired (``core=False``): the listener's events are only recorded, for
@@ -22,6 +25,7 @@ listener-only tests.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import secrets
@@ -163,8 +167,13 @@ def _streams(resp: Any) -> bool:
 class AwayLoopback:
     """``async with AwayLoopback(tmp_path) as loop:`` (see the module doc)."""
 
-    def __init__(self, folder: Path, *, core: bool = True, house_key: X25519PrivateKey | None = None) -> None:
+    def __init__(self, folder: Path, *, core: bool = True, house_key: X25519PrivateKey | None = None,
+                 web_socket: bool = False) -> None:
         self.folder = Path(folder)
+        self.web_socket = web_socket
+        self._web: Any = None
+        self._web_task: asyncio.Task | None = None
+        self.web_port = 0
         self.folder.mkdir(parents=True, exist_ok=True)
         self.core = core
         self.house_key = house_key or X25519PrivateKey.generate()
@@ -202,6 +211,8 @@ class AwayLoopback:
 
     async def __aenter__(self) -> "AwayLoopback":
         if self.core:
+            if self.web_socket:
+                await self._serve_web()
             self._wire_core()
         self._server = await asyncio.start_server(self.state.handle, "127.0.0.1", 0)
         self.port = self._server.sockets[0].getsockname()[1]
@@ -227,9 +238,41 @@ class AwayLoopback:
             kw.pop("trust_env", None)
             return real_client(transport=httpx.ASGITransport(app=web_app, client=("127.0.0.1", 40000)), **kw)
 
-        self._saved = {"send": svc.send_listener_line, "client": httpx.AsyncClient}
+        self._saved = {"send": svc.send_listener_line, "client": httpx.AsyncClient,
+                       "env": {k: os.environ.get(k) for k in ("WEB_HOST", "WEB_PORT")}}
         svc.send_listener_line = to_listener
-        bridge.httpx_client = client
+        if self.web_socket:
+            # The relay's own client (bridge.httpx_client None), to the
+            # real socket: bridge.web_url() reads these.
+            os.environ["WEB_HOST"], os.environ["WEB_PORT"] = "127.0.0.1", str(self.web_port)
+        else:
+            bridge.httpx_client = client
+
+    async def _serve_web(self) -> None:
+        """The web app on a real socket: uvicorn in this event loop (so it
+        shares the test's database engine), on a port the OS picks."""
+        import socket
+
+        import uvicorn
+
+        from web.backend.main import app as web_app
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        self.web_port = sock.getsockname()[1]
+        config = uvicorn.Config(web_app, lifespan="off", log_level="warning", access_log=False,
+                                timeout_graceful_shutdown=2)
+        self._web = uvicorn.Server(config)
+        # In a test's loop: Ctrl-C stays pytest's.
+        self._web.capture_signals = contextlib.nullcontext  # type: ignore[method-assign]
+        self._web_task = asyncio.get_running_loop().create_task(self._web.serve(sockets=[sock]),
+                                                                name="away-loopback-web")
+        for _ in range(500):
+            if self._web.started or self._web_task.done():
+                break
+            await asyncio.sleep(0.01)
+        if not self._web.started:
+            raise RuntimeError("the web app didn't start on its loopback socket")
 
     async def __aexit__(self, *exc: object) -> None:
         from domovoi.away import bridge
@@ -252,6 +295,17 @@ class AwayLoopback:
 
             svc.send_listener_line = self._saved["send"]
             bridge.httpx_client = None
+            for k, v in self._saved["env"].items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        if self._web is not None and self._web_task is not None:
+            self._web.should_exit = True
+            try:
+                await asyncio.wait_for(self._web_task, 10)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001 — closing anyway
+                self._web_task.cancel()
 
 
 __all__ = ["AwayLoopback", "HouseMessage", "Phone"]

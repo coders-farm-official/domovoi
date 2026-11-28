@@ -14,6 +14,10 @@ The reply is driven by the web process, not by this relay or the phone's
 connection: when the connection ends (``away_closed``), the relays for it
 are cancelled here and the web's run carries on and is stored.
 
+One request is the core's own: ``away.leave`` (the phone turns away chat
+off for itself, from away) changes the phones, which the core applies, so
+it is answered here (:func:`leave`) and never reaches the web process.
+
 Bounded: at most :data:`MAX_RELAYS_PER_CONN` relays per connection and
 :data:`MAX_RELAYS` in all (the listener allows four open requests per
 connection and sixteen connections); one over is answered ``unavailable``.
@@ -123,8 +127,19 @@ def on_event(event: dict[str, Any]) -> None:
         _spawn_line(conn, req, "err", {"code": "unavailable", "detail": "the house is busy; try again shortly"},
                     end=True)
         return
-    payload = {"device_id": device, "noise_pub": noise, "request": request.to_json(), "picture": picture}
-    task = asyncio.get_running_loop().create_task(_relay(conn, req, payload), name="away-chat-relay")
+    # A request through the listener proves this phone found the onion:
+    # its descriptor is out (domovoi.friend_houses.service.away_status).
+    from domovoi.friend_houses import service as svc
+
+    svc.away_reached(device, noise)
+    if request.op == wire.LEAVE:
+        # Answered here, not by the web's chat code: it changes the phones,
+        # which are the core's to apply.
+        coro = _leave(conn, req, device, noise)
+    else:
+        payload = {"device_id": device, "noise_pub": noise, "request": request.to_json(), "picture": picture}
+        coro = _relay(conn, req, payload)
+    task = asyncio.get_running_loop().create_task(coro, name="away-chat-relay")
     tasks.add(task)
     task.add_done_callback(lambda t, c=conn: _forget(c, t))
 
@@ -217,6 +232,69 @@ async def _relay(conn: int, req: int, payload: dict[str, Any]) -> None:
                                                "detail": "Your house is busy. Try again shortly."}, end=True)
             except Exception:  # noqa: BLE001 — the listener is gone
                 pass
+
+
+async def leave(device_id: str, noise_hex: str) -> bool:
+    """``away.leave``: the phone that proved ``noise_hex`` over the onion
+    turns away chat off for itself, the same as its ``DELETE
+    /api/away/enroll`` at home, and only for itself (the row goes only when
+    the device AND its Noise key match: :func:`domovoi.away.store.revoke_own`).
+
+    The listener's ``phones.json`` is rewritten before this returns (by its
+    one writer, from the database), so the phone's next handshake is
+    refused. True when a row went; a phone already gone is answered the
+    same. Tor's client keys follow in the reconcile :func:`_leave` asks for
+    once the phone has its answer: a batched reload, or, for the last
+    phone, the restart or stop that takes ``hs-away`` away (an onion with no
+    clients is open, so one is never left configured: tor_config, S1)."""
+    from domovoi.away import store as away_store
+    from domovoi.db.session import session_scope
+    from domovoi.friend_houses import service as svc
+
+    noise = bytes.fromhex(noise_hex)
+    async with session_scope() as s:
+        dropped = await away_store.revoke_own(s, device_id, noise)
+    await svc.write_listener_files()
+    if dropped:
+        log.info("away chat: device %r turned it off from away", device_id)
+    return dropped
+
+
+def _kick_if(task: asyncio.Task) -> None:
+    """Reconcile (Tor's keys) after a leave that removed a phone."""
+    from domovoi.away import routes
+
+    if not task.cancelled() and task.exception() is None and task.result():
+        routes.kick()
+
+
+async def _leave(conn: int, req: int, device_id: str, noise_hex: str) -> None:
+    """One ``away.leave`` request: :func:`leave` (in a task of its own: a
+    connection that drops meanwhile doesn't stop it), then ``RESP {}``,
+    after which the listener closes the phone's connections, then the
+    reconcile. ``ERR unavailable`` when the house couldn't do it (the phone
+    may ask again)."""
+    work = asyncio.get_running_loop().create_task(leave(device_id, noise_hex), name="away-chat-leave")
+    ended = False
+    try:
+        await asyncio.shield(work)
+        ended = True
+        await _send(conn, req, "resp", {}, end=True)
+    except asyncio.CancelledError:
+        ended = True  # the connection ended; the leave itself carries on
+        raise
+    except Exception as e:  # noqa: BLE001 — answered as unavailable
+        log.warning("away chat: a phone's leave failed (%s)", type(e).__name__)
+    finally:
+        if not ended:
+            try:
+                await _send(conn, req, "err", {"code": "unavailable",
+                                               "detail": "Your house is busy. Try again shortly."}, end=True)
+            except Exception:  # noqa: BLE001 — the listener is gone
+                pass
+        # After the answer: the reconcile may stop the listener (the last
+        # phone), and the phone hears its RESP first.
+        work.add_done_callback(_kick_if)
 
 
 class _Unavailable(Exception):
