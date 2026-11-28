@@ -621,7 +621,7 @@ async def test_a_reply_no_fast_path_takes_is_asked_again_and_never_plays_music(
 
 
 @requires_db
-@pytest.mark.parametrize("said", ["Leave it.", "Never mind, thanks.", "Stop asking."])
+@pytest.mark.parametrize("said", ["No matter.", "Never mind, thanks.", "Stop asking."])
 async def test_a_dismissal_is_a_no(db_session, fake_resolver, said) -> None:
     sid = await _asked(db_session)
     resp = await _say(db_session, sid, said, trigger="followup")

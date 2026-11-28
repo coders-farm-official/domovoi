@@ -591,7 +591,7 @@ _DISMISS_RE = re.compile(
     r"^(?:never ?mind|forget (?:it|about it|that)|cancel(?: that| it)?"
     r"|stop asking|leave it|nothing|no matter)\b[,.!]?\s*"
 )
-_QUIET_RE = re.compile(r"^(?:shut up|be quiet|quiet|hush)\b")
+_QUIET_RE = re.compile(r"^(?:shut up|be quiet|hush|quiet down|quiet please)\b|^quiet\Z")
 #: The trigger of the open mic right after the question: the one turn a
 #: reply that names nothing is asked about again on.
 _ANSWER_TRIGGER = "followup"
