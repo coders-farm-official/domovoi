@@ -387,7 +387,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.19.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.20.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -1183,7 +1183,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.19.0"`) is the semver your
+`domovoi.sdk.API_VERSION` (currently `"1.20.0"`) is the semver your
 `domovoi_api` range is checked against. What each minor version added:
 
 | SDK | Added |
@@ -1205,6 +1205,7 @@ from domovoi.sdk import (
 | 1.17 | `playback.relay_url(room_id, remote_url, kind="file"\|"radio")` and `playback.relay_target(url)`: a room's music player plays a REMOTE URL through the core's checked relay instead of fetching it itself (§4.5, "A remote URL for a room's player"); `RelayUnavailable` |
 | 1.18 | the event `core.voice_history_deleted` `{person_id}` and `core_config.voice_history_keep`: **the hook every plugin that stores person-linked data must honour** (§4.21) |
 | 1.19 | `sdk.friend_houses` (apps with friends: `friends()`, `send_mail`, `send_image`, `on_mail`, `on_friends_changed`), `FriendText`, `FriendImage`, `friend_sentence`, `friend_reply` and per-plugin friend ids (§4.22). A plugin holding the `friend_houses` permission has every handler reply filtered for speech, with a stand-in in the history |
+| 1.20 | `sdk.speech.interim(ctx, text)`: a short line said in the room now, as the opening of the turn's reply, while your handler keeps working (§4.17) |
 
 Ask for the version whose names you use (`">=1.4"` for 1.4's), or
 feature-test so an older core still loads you: call `ctx.add_container` only
@@ -2104,6 +2105,30 @@ write it into the music library and queue it in the room's player, or
 serve it to the dashboard. Rendering takes real CPU on a box without a
 GPU; render ahead of playback rather than in a request handler. Empty
 text raises `ValueError`. Core process only.
+
+```python
+# SDK 1.20: a slow search inside a handler
+task = asyncio.create_task(search(query))
+done, _ = await asyncio.wait({task}, timeout=3)
+if not done:
+    await sdk.speech.interim(ctx, "Still looking…")
+results = await task
+```
+
+`interim(ctx, text) -> bool` says a short line in the room right away, as
+the opening of this turn's reply, while your handler keeps working; the
+reply's own words follow in the same response. Use it for a handler that
+can take more than a few seconds, not to fill every pause. At most once
+per turn, and it shares that one line with the core's "I'm waking up my
+language model" notice, so it may already be taken: `True` when your line
+went out, `False` when it was not said. It is said only on a voice turn:
+typed chat, the dashboard and `/v1/intent` get `False` and nothing is
+shown. Empty text is refused, and the line is cut to 120 characters. A
+line that went out is listed in the room's history before the reply. Never
+name the service doing the work ("Still looking…", not "Asking <site>…").
+A `friend_houses` plugin's line is filtered like its announcements. Never
+raises; a speech failure is `False`. `RecordingSpeech` in
+`domovoi.sdk.testing` records it and returns `True`.
 
 ### 4.18 Containers — `ctx.add_container` (SDK 1.5)
 
