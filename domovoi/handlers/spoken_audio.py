@@ -797,7 +797,9 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
         return val if isinstance(val, dict) else None
 
     async def _remember(self, ctx: Context, session: AsyncSession, item: dict[str, Any]) -> None:
-        if not ctx.session_id:
+        if not ctx.session_id or ctx.no_player:
+            # No player of the client's own (the dashboard's typed chat):
+            # nothing will play, so nothing is remembered as playing.
             return
         try:
             await SessionRepository(session).set_context_key(ctx.session_id, _CTX_KEY, item)

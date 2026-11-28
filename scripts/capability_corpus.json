@@ -3706,17 +3706,96 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_not_include": [
-        "I'll remember|remembered|reminder (?:is )?set|I've set|I will remind"
+        "\\b(?:remind|reminder|a note|schedule|notif)"
       ],
-      "judge": true,
-      "rubric": "Not a memory command: the model answers, and claims no reminder set and nothing remembered.",
       "device": "ana-phone",
+      "stored": [
+        [
+          null,
+          "^call mom$"
+        ]
+      ],
+      "not_stored": [],
+      "note": "one house memory and exactly this line, no model, on chat and voice alike (Main 76c3e92f, Core's rule 2026-11-28). Closes N21.",
+      "must_include": [
+        "^I'll remember: call mom\\.$"
+      ],
+      "stub": true,
+      "requires": "chat_actions"
+    },
+    {
+      "id": "21.8m",
+      "utterance": "remember to call mom",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_not_include": [
+        "\\b(?:remind|reminder|a note|schedule|notif)"
+      ],
+      "stored": [
+        [
+          null,
+          "^call mom$"
+        ]
+      ],
+      "not_stored": [],
+      "requires": "chat_actions",
+      "note": "one house memory and exactly this line, no model, on chat and voice alike (Main 76c3e92f, Core's rule 2026-11-28). Closes N21.",
+      "must_include": [
+        "^I'll remember: call mom\\.$"
+      ],
+      "stub": true
+    },
+    {
+      "id": "21.11",
+      "utterance": "remember to call mom at 5",
+      "where": "chat",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^I'll remind you at 5 (?:AM|PM) to call mom\\.$"
+      ],
+      "must_not_include": [],
       "stored": [],
       "not_stored": [
         [
           null,
           "call mom"
         ]
+      ],
+      "requires": "chat_actions",
+      "stub": true,
+      "note": "with a time, 'remember to X' sets a reminder through the reminder path, not a memory (Main 76c3e92f); chat and voice alike",
+      "device": "ana-phone",
+      "did": [
+        "^timer:\\d+$"
+      ]
+    },
+    {
+      "id": "21.11m",
+      "utterance": "remember to call mom at 5",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^I'll remind you at 5 (?:AM|PM) to call mom\\.$"
+      ],
+      "must_not_include": [],
+      "stored": [],
+      "not_stored": [
+        [
+          null,
+          "call mom"
+        ]
+      ],
+      "requires": "chat_actions",
+      "stub": true,
+      "note": "with a time, 'remember to X' sets a reminder through the reminder path, not a memory (Main 76c3e92f); chat and voice alike",
+      "did": [
+        "^timer:\\d+$"
       ]
     },
     {
@@ -4517,8 +4596,8 @@
       ],
       "did_not": [],
       "stub": true,
-      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the announcement is the message, not 'that ana, ben and amber ...' (the mic keeps 'that' today)",
-      "needs_change": "N20"
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the announcement is the message, not 'that ana, ben and amber ...' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions"
     },
     {
       "id": "25.1",
@@ -4535,8 +4614,9 @@
         "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' (the mic keeps 'that' today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.1w",
@@ -4553,8 +4633,9 @@
         "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' (the mic keeps 'that' today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.1a",
@@ -4571,8 +4652,9 @@
         "^announce:kitchen,garage:Ana,? Ben,? and Amber need another shot$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' (the mic keeps 'that' today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is the message, not 'that ana, ben and amber ...' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.2m",
@@ -4597,8 +4679,8 @@
         }
       ],
       "stub": true,
-      "note": "the chat mic (phone_voice without speech): the words typed chat must give. 'announce that' continues the thread: the earlier message again, never the word 'that' (the mic broadcasts 'that' today)",
-      "needs_change": "N20"
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. 'announce that' continues the thread: the earlier message again, never the word 'that' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions"
     },
     {
       "id": "25.2",
@@ -4622,8 +4704,9 @@
           "say": "Please announce that Ana, Ben and Amber need another shot"
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' (the mic broadcasts 'that' today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.2w",
@@ -4647,8 +4730,9 @@
           "say": "Please announce that Ana, Ben and Amber need another shot"
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' (the mic broadcasts 'that' today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.2a",
@@ -4672,8 +4756,9 @@
           "say": "Please announce that Ana, Ben and Amber need another shot"
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' (the mic broadcasts 'that' today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). 'announce that' continues the thread: the earlier message again, never the word 'that' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.9",
@@ -4699,8 +4784,9 @@
           "reply": "I'll let them know. Ana, Ben, and Amber, you two will need another round, please."
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.9w",
@@ -4726,8 +4812,9 @@
           "reply": "I'll let them know. Ana, Ben, and Amber, you two will need another round, please."
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.9a",
@@ -4753,8 +4840,9 @@
           "reply": "I'll let them know. Ana, Ben, and Amber, you two will need another round, please."
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a thread from before the fix: the old pretend reply is in the history; 'announce that' announces the person's message, never the old reply's words",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.3m",
@@ -4782,8 +4870,8 @@
         }
       ],
       "stub": true,
-      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the earlier message again, never 'it to the rooms please' (what the mic broadcasts today)",
-      "needs_change": "N20"
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the earlier message again, never 'it to the rooms please' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions"
     },
     {
       "id": "25.3",
@@ -4810,8 +4898,9 @@
           "say": "Announce that"
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' (what the mic broadcasts today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.3w",
@@ -4838,8 +4927,9 @@
           "say": "Announce that"
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' (what the mic broadcasts today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.3a",
@@ -4866,8 +4956,9 @@
           "say": "Announce that"
         }
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' (what the mic broadcasts today)"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the earlier message again, never 'it to the rooms please' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.4m",
@@ -4885,7 +4976,8 @@
       ],
       "did_not": [],
       "stub": true,
-      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked"
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked",
+      "requires": "chat_actions"
     },
     {
       "id": "25.4",
@@ -4902,8 +4994,9 @@
         "^music:kitchen:start$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.4w",
@@ -4920,8 +5013,9 @@
         "^music:kitchen:start$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.4a",
@@ -4938,8 +5032,9 @@
         "^music:kitchen:start$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the music read-back; the fixture's player is the stub (Stub Artist), so its shape is checked",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.5m",
@@ -4957,7 +5052,8 @@
       ],
       "did_not": [],
       "stub": true,
-      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the timer read-back, and a 10-minute timer is set"
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the timer read-back, and a 10-minute timer is set",
+      "requires": "chat_actions"
     },
     {
       "id": "25.5",
@@ -4974,8 +5070,9 @@
         "^timer:600$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.5w",
@@ -4992,8 +5089,9 @@
         "^timer:600$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.5a",
@@ -5010,8 +5108,9 @@
         "^timer:600$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the timer read-back, and a 10-minute timer is set",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.6m",
@@ -5029,7 +5128,8 @@
       ],
       "did_not": [],
       "stub": true,
-      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the list read-back, and milk is on the list"
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the list read-back, and milk is on the list",
+      "requires": "chat_actions"
     },
     {
       "id": "25.6",
@@ -5046,8 +5146,9 @@
         "^list_item:Shopping:milk$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.6w",
@@ -5064,8 +5165,9 @@
         "^list_item:Shopping:milk$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.6a",
@@ -5082,8 +5184,9 @@
         "^list_item:Shopping:milk$"
       ],
       "did_not": [],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the list read-back, and milk is on the list",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.7m",
@@ -5093,7 +5196,7 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "^(?:I can't tell which room you're in\\.|I can't do that from chat yet\\b.*)$"
+        "^I can't tell which room you're in\\.$"
       ],
       "must_not_include": [
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
@@ -5103,7 +5206,8 @@
         "^dropin"
       ],
       "stub": true,
-      "note": "the chat mic (phone_voice without speech): the words typed chat must give. OPEN (Main): a phone's drop-in. The mic says 'I can't tell which room you're in.' today; the fixed chat line is accepted too. Never a made-up look into the room"
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. a phone's drop-in: the mic's own line, pinned by Main 2026-11-27 (chat equals the mic). Never a made-up look into the room",
+      "requires": "chat_actions"
     },
     {
       "id": "25.7",
@@ -5113,7 +5217,7 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "^(?:I can't tell which room you're in\\.|I can't do that from chat yet\\b.*)$"
+        "^I can't tell which room you're in\\.$"
       ],
       "must_not_include": [
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
@@ -5122,8 +5226,9 @@
       "did_not": [
         "^dropin"
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). OPEN (Main): a phone's drop-in. The mic says 'I can't tell which room you're in.' today; the fixed chat line is accepted too. Never a made-up look into the room"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a phone's drop-in: the mic's own line, pinned by Main 2026-11-27 (chat equals the mic). Never a made-up look into the room",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.7w",
@@ -5133,7 +5238,7 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "^(?:I can't tell which room you're in\\.|I can't do that from chat yet\\b.*)$"
+        "^I can't tell which room you're in\\.$"
       ],
       "must_not_include": [
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
@@ -5142,8 +5247,9 @@
       "did_not": [
         "^dropin"
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). OPEN (Main): a phone's drop-in. The mic says 'I can't tell which room you're in.' today; the fixed chat line is accepted too. Never a made-up look into the room"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a phone's drop-in: the mic's own line, pinned by Main 2026-11-27 (chat equals the mic). Never a made-up look into the room",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.7a",
@@ -5153,7 +5259,7 @@
       "expect": "DO_IT",
       "kind": "command",
       "must_include": [
-        "^(?:I can't tell which room you're in\\.|I can't do that from chat yet\\b.*)$"
+        "^I can't tell which room you're in\\.$"
       ],
       "must_not_include": [
         "\\blet me (?:listen|look|check)\\b|\\bI (?:can |could )?(?:hear|see|sense)\\b|\\bI don'?t (?:hear|see) (?:any|anything|anyone|a |the )|\\bsounds? like\\b|\\blooks? like\\b|\\bthe kitchen is\\b|\\beverything (?:seems|looks|is) (?:fine|in order)\\b"
@@ -5162,8 +5268,9 @@
       "did_not": [
         "^dropin"
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). OPEN (Main): a phone's drop-in. The mic says 'I can't tell which room you're in.' today; the fixed chat line is accepted too. Never a made-up look into the room"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). a phone's drop-in: the mic's own line, pinned by Main 2026-11-27 (chat equals the mic). Never a made-up look into the room",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.8m",
@@ -5183,8 +5290,8 @@
         "^announce:[^:]*:that\\b"
       ],
       "stub": true,
-      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the announcement is 'dinner's ready', not 'that dinner's ready'",
-      "needs_change": "N20"
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. the announcement is 'dinner's ready', not 'that dinner's ready' N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions"
     },
     {
       "id": "25.8",
@@ -5203,8 +5310,9 @@
       "did_not": [
         "^announce:[^:]*:that\\b"
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.8w",
@@ -5223,8 +5331,9 @@
       "did_not": [
         "^announce:[^:]*:that\\b"
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'",
+      "requires": "chat_actions",
+      "stub": true
     },
     {
       "id": "25.8a",
@@ -5243,8 +5352,403 @@
       "did_not": [
         "^announce:[^:]*:that\\b"
       ],
-      "needs_change": "N19",
-      "note": "N19 path B (owner 2026-11-27): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'"
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). the announcement is 'dinner's ready', not 'that dinner's ready'",
+      "requires": "chat_actions",
+      "stub": true
+    },
+    {
+      "id": "25.10m",
+      "utterance": "Announce that",
+      "where": "chat_mic",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^What should I announce\\?$"
+      ],
+      "must_not_include": [],
+      "did": [],
+      "did_not": [
+        "^announce"
+      ],
+      "stub": true,
+      "note": "the chat mic (phone_voice without speech): the words typed chat must give. N20 (Core's decision): 'announce that' with nothing of this person's to repeat in the thread or room asks 'What should I announce?' and announces nothing N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions"
+    },
+    {
+      "id": "25.10",
+      "utterance": "Announce that",
+      "where": "chat",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^What should I announce\\?$"
+      ],
+      "must_not_include": [],
+      "did": [],
+      "did_not": [
+        "^announce"
+      ],
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). N20 (Core's decision): 'announce that' with nothing of this person's to repeat in the thread or room asks 'What should I announce?' and announces nothing N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
+    },
+    {
+      "id": "25.10w",
+      "utterance": "Announce that",
+      "where": "chat",
+      "house": "proven-admin",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^What should I announce\\?$"
+      ],
+      "must_not_include": [],
+      "did": [],
+      "did_not": [
+        "^announce"
+      ],
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). N20 (Core's decision): 'announce that' with nothing of this person's to repeat in the thread or room asks 'What should I announce?' and announces nothing N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
+    },
+    {
+      "id": "25.10a",
+      "utterance": "Announce that",
+      "where": "away",
+      "house": "base",
+      "expect": "EXACT",
+      "kind": "question",
+      "must_include": [
+        "^What should I announce\\?$"
+      ],
+      "must_not_include": [],
+      "did": [],
+      "did_not": [
+        "^announce"
+      ],
+      "note": "N19 path B (owner 2026-11-27; fixed on wf/chat-actions): typed chat runs the house action as the chat mic does (POST /v1/phone/text, wf/chat-actions), with the mic's read-back; what the phone path refuses gets 'I can't do that from chat yet.'. Was: the model pretended (baseline 72/72). N20 (Core's decision): 'announce that' with nothing of this person's to repeat in the thread or room asks 'What should I announce?' and announces nothing N20 fixed on wf/chat-actions.",
+      "requires": "chat_actions",
+      "stub": true
+    },
+    {
+      "id": "25.11m",
+      "utterance": "Dinner is ready",
+      "where": "chat_mic",
+      "house": "base",
+      "requires": "chat_actions",
+      "before": [
+        {
+          "say": "Announce that"
+        }
+      ],
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "the mic announces the answer at once"
+    },
+    {
+      "id": "25.13m",
+      "utterance": "Can you announce that dinner is ready?",
+      "where": "chat_mic",
+      "house": "base",
+      "requires": "chat_actions",
+      "expect": "DO_IT",
+      "kind": "question",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [],
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "the mic announces a question-shaped request at once; typed chat (25.13) leaves it to the chat model by design"
+    },
+    {
+      "id": "25.11",
+      "utterance": "Dinner is ready",
+      "where": "chat",
+      "house": "base",
+      "requires": "chat_actions",
+      "before": [
+        {
+          "say": "Announce that"
+        }
+      ],
+      "expect": "EXACT",
+      "kind": "command",
+      "must_include": [
+        "^Announce “Dinner is ready” to every room\\?$"
+      ],
+      "did": [],
+      "did_not": [
+        "^announce"
+      ],
+      "stub": true,
+      "note": "typed chat reads the answer back first and announces nothing yet (Main 2026-11-28: only after 'What should I announce?', typed only)"
+    },
+    {
+      "id": "25.12",
+      "utterance": "yes",
+      "where": "chat",
+      "house": "base",
+      "requires": "chat_actions",
+      "before": [
+        {
+          "say": "Announce that"
+        },
+        {
+          "say": "Dinner is ready"
+        }
+      ],
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "after the read-back, a yes announces the message in every room"
+    },
+    {
+      "id": "25.13",
+      "utterance": "Can you announce that dinner is ready?",
+      "where": "chat",
+      "house": "base",
+      "requires": "chat_actions",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [
+        "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
+      ],
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "a polite 'can you ... ?' is a command (Core 2026-11-28): typed chat broadcasts at once, as voice (25.13m) does; the reply never pretends"
+    },
+    {
+      "id": "25.14",
+      "utterance": "play chess with me",
+      "where": "chat",
+      "house": "base",
+      "requires": "chat_actions",
+      "expect": "DEPENDS",
+      "kind": "command",
+      "must_include": [],
+      "must_not_include": [
+        "^Playing",
+        "I couldn't reach"
+      ],
+      "did": [],
+      "did_not": [
+        "^music"
+      ],
+      "stub": false,
+      "judge": true,
+      "rubric": "Nothing plays and no player is claimed: the chat model answers as itself (playing chess in text is fine).",
+      "note": "a play with no player that finds nothing goes to the chat model (Main 2026-11-28)"
+    },
+    {
+      "id": "25.11w",
+      "utterance": "Dinner is ready",
+      "where": "chat",
+      "house": "proven-admin",
+      "requires": "chat_actions",
+      "before": [
+        {
+          "say": "Announce that"
+        }
+      ],
+      "expect": "EXACT",
+      "kind": "command",
+      "must_include": [
+        "^Announce “Dinner is ready” to every room\\?$"
+      ],
+      "did": [],
+      "did_not": [
+        "^announce"
+      ],
+      "stub": true,
+      "note": "typed chat reads the answer back first and announces nothing yet (Main 2026-11-28: only after 'What should I announce?', typed only)"
+    },
+    {
+      "id": "25.12w",
+      "utterance": "yes",
+      "where": "chat",
+      "house": "proven-admin",
+      "requires": "chat_actions",
+      "before": [
+        {
+          "say": "Announce that"
+        },
+        {
+          "say": "Dinner is ready"
+        }
+      ],
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "after the read-back, a yes announces the message in every room"
+    },
+    {
+      "id": "25.13w",
+      "utterance": "Can you announce that dinner is ready?",
+      "where": "chat",
+      "house": "proven-admin",
+      "requires": "chat_actions",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [
+        "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
+      ],
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "a polite 'can you ... ?' is a command (Core 2026-11-28): typed chat broadcasts at once, as voice (25.13m) does; the reply never pretends"
+    },
+    {
+      "id": "25.14w",
+      "utterance": "play chess with me",
+      "where": "chat",
+      "house": "proven-admin",
+      "requires": "chat_actions",
+      "expect": "DEPENDS",
+      "kind": "command",
+      "must_include": [],
+      "must_not_include": [
+        "^Playing",
+        "I couldn't reach"
+      ],
+      "did": [],
+      "did_not": [
+        "^music"
+      ],
+      "stub": false,
+      "judge": true,
+      "rubric": "Nothing plays and no player is claimed: the chat model answers as itself (playing chess in text is fine).",
+      "note": "a play with no player that finds nothing goes to the chat model (Main 2026-11-28)"
+    },
+    {
+      "id": "25.11a",
+      "utterance": "Dinner is ready",
+      "where": "away",
+      "house": "base",
+      "requires": "chat_actions",
+      "before": [
+        {
+          "say": "Announce that"
+        }
+      ],
+      "expect": "EXACT",
+      "kind": "command",
+      "must_include": [
+        "^Announce “Dinner is ready” to every room\\?$"
+      ],
+      "did": [],
+      "did_not": [
+        "^announce"
+      ],
+      "stub": true,
+      "note": "typed chat reads the answer back first and announces nothing yet (Main 2026-11-28: only after 'What should I announce?', typed only)"
+    },
+    {
+      "id": "25.12a",
+      "utterance": "yes",
+      "where": "away",
+      "house": "base",
+      "requires": "chat_actions",
+      "before": [
+        {
+          "say": "Announce that"
+        },
+        {
+          "say": "Dinner is ready"
+        }
+      ],
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "after the read-back, a yes announces the message in every room"
+    },
+    {
+      "id": "25.13a",
+      "utterance": "Can you announce that dinner is ready?",
+      "where": "away",
+      "house": "base",
+      "requires": "chat_actions",
+      "expect": "DO_IT",
+      "kind": "command",
+      "must_include": [
+        "^Broadcasting to the house\\.$"
+      ],
+      "must_not_include": [
+        "^\"?(?:Dinner is (?:now )?ready|Attention|Hello,? everyone)|I've (?:just )?announced|\\bI(?:'ve| have) (?:let|told) (?:everyone|them)|announcing"
+      ],
+      "did": [
+        "^announce:kitchen,garage:dinner is ready$"
+      ],
+      "did_not": [],
+      "stub": true,
+      "note": "a polite 'can you ... ?' is a command (Core 2026-11-28): typed chat broadcasts at once, as voice (25.13m) does; the reply never pretends"
+    },
+    {
+      "id": "25.14a",
+      "utterance": "play chess with me",
+      "where": "away",
+      "house": "base",
+      "requires": "chat_actions",
+      "expect": "DEPENDS",
+      "kind": "command",
+      "must_include": [],
+      "must_not_include": [
+        "^Playing",
+        "I couldn't reach"
+      ],
+      "did": [],
+      "did_not": [
+        "^music"
+      ],
+      "stub": false,
+      "judge": true,
+      "rubric": "Nothing plays and no player is claimed: the chat model answers as itself (playing chess in text is fine).",
+      "note": "a play with no player that finds nothing goes to the chat model (Main 2026-11-28)"
     }
   ]
 }

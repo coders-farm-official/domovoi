@@ -426,6 +426,13 @@ class PlaylistHandler(Handler):
         "next" there is the phone's own next and no room's state is
         touched."""
         queue = await phone_play.playlist_queue(session, playlist_id, mode, picked.track_id)
+        if ctx.no_player:
+            # A client with no player of its own (the dashboard's typed
+            # chat): nothing will play, so nothing is recorded or moved on.
+            return phone_play.play_on_phone(
+                self.name, ctx, f"Playing {playlist_name}.", [phone_play.track_item(r) for r in queue],
+                data={"playlist_id": playlist_id, "playlist_name": playlist_name},
+            )
         await persist_resume_position(session, playlist_id, mode, picked.position)
         await record_media_play(
             session,

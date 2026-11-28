@@ -452,9 +452,13 @@ def test_other_messages_still_reach_the_model(house, model) -> None:
     with _client() as c:
         t = _thread(c)
         said, done = _send(c, t, "what's a good name for a cat?", house["dev"]["ana"])
-        _send(c, t, "remember to buy milk", house["dev"]["ana"])
+        # "remember to <task>" is the house's since 1.5.0 (memory, or with a
+        # time a reminder: typed chat's router hop), never the model's; the
+        # core isn't running here, so the plain line says nothing was done.
+        _, todo = _send(c, t, "remember to buy milk", house["dev"]["ana"])
     assert said == "model says" and done["stats"]["model_role"] == "chat"
-    assert len(model) == 2
+    assert todo["stats"]["model_role"] == "action"
+    assert len(model) == 1
     assert "You can't save or delete memories yourself" in model[0][0]["content"]
 
 

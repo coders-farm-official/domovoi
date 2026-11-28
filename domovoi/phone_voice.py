@@ -1,4 +1,5 @@
-"""Phone push-to-talk turns — the chat mic (``POST /v1/phone/voice``).
+"""Phone turns in a chat — the chat mic (``POST /v1/phone/voice``) and
+typed house commands (``POST /v1/phone/text``).
 
 The Android chat screen has a mic button that opens a hold-to-talk view
 (android ``ui/screens/chat/VoiceView.kt``): press and hold records, release
@@ -49,6 +50,25 @@ REQUEST (multipart/form-data):
 
 RESPONSE (200, JSON): see :func:`run_phone_turn`.
 
+TYPED TURNS (``POST /v1/phone/text``, 1.5.0). The same turn without
+speech-to-text or text-to-speech (:func:`run_phone_text_turn`; one routing
+function, :func:`_route_phone_turn`, serves both): the web's typed send
+hands it a house command, so typed chat does what the mic does. Same
+session per phone and thread (a question asked by voice can be answered
+typed, and back), same thread checks and refusals. Credited to the person
+the caller's device KEY belongs to (no voice to identify); ``trigger``
+``typed``, so it never adds a voice sample. The reply row is
+``source = 'typed'``, ``stats.model_role = 'action'``; the typed row is
+the web's (``user_message_id``), and the reply is written only while
+that row has none, so nothing is written twice. A satellite's own setting
+and a play for a player the client doesn't have get fixed lines
+(:data:`CHAT_ROOM_SETTING_TEXT`, :data:`CHAT_NO_PLAYER_TEXT`).
+``fast_paths_only`` (the web's typed chat, domovoi/typed_chat.py): only
+the router's fast tiers, never a model, never the chat's own handlers; a
+turn none takes comes back ``handled: false`` with nothing written, and
+the web's own chat model answers it (``Context.fast_paths_only``).
+A keyless caller may not name a phone that holds a device key.
+
 AUTHENTICATION. The device tier with no pre-setup grace
 (``admin_auth.require_device_after_setup``), as the drop-in socket: the
 household ``X-Device-Token`` or an admin Bearer, and 501 before an admin
@@ -75,7 +95,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
-from domovoi import chat_access
+from domovoi import chat_access, typed_chat
 from domovoi.chat_titles import first_words_title
 from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import (
@@ -91,7 +111,8 @@ from domovoi.clients.whisper import (
 from domovoi import stt_denoise
 from domovoi.config import settings
 from domovoi.db.session import session_scope
-from domovoi.models import PHONE_ROOM_PREFIX, Context, Intent, Response
+from domovoi.handlers.base import SATELLITE_SETTING_TEXT
+from domovoi.models import DEFERRED_PATH, PHONE_ROOM_PREFIX, Context, Intent, Response
 from domovoi.voice_identifier import OUTCOME_ERROR, speaker_is_confident
 from domovoi.log_privacy import said
 
@@ -475,6 +496,9 @@ def _fan_out(app: Any, response: Response, room: str) -> None:
 
 # ─── The chat thread ──────────────────────────────────────────────────────
 
+#: Whether user row ``:u`` of thread ``:t`` already has its reply.
+ANSWERED_SQL = typed_chat.ANSWERED_SQL
+
 _ROW_COLUMNS = (
     "id, role, content, images, model, error, created_at, stats, device_id, "
     "source, speaker_person_id, speaker_confidence, "
@@ -535,10 +559,16 @@ async def _write_turn(
     model: str | None,
     error: str | None,
     stats: dict[str, Any],
+    source: str = "voice",
+    user_row_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Both turns into the thread, as the typed send writes them (and the
     thread titled by its first message), then ``chat_changed`` so open
-    dashboards and apps re-read it.
+    dashboards and apps re-read it. ``source``: ``'voice'`` (the chat
+    mic) or ``'typed'`` (the text turn). ``user_row_id``: the person's row
+    is already in the thread (the web's typed send wrote it, and
+    :func:`run_phone_text_turn` checked it): only the reply is written,
+    and the thread was titled then.
 
     The speaker is re-read in the insert itself: the turn may have deleted
     them ("forget me"), or an admin may have while it was answered, and the
@@ -549,77 +579,162 @@ async def _write_turn(
 
     try:
         async with session_scope() as s:
-            user = (
-                await s.execute(
-                    text(
-                        f"""
-                        INSERT INTO chat_messages
-                            (thread_id, role, content, device_id, source,
-                             speaker_person_id, speaker_confidence)
-                        VALUES (
-                            :t, 'user', :c, :dev, 'voice',
-                            (SELECT p.id FROM people p WHERE p.id = CAST(:sp AS BIGINT)),
-                            CASE
-                                WHEN CAST(:sp AS BIGINT) IS NOT NULL AND NOT EXISTS (
-                                    SELECT 1 FROM people p WHERE p.id = CAST(:sp AS BIGINT)
-                                ) THEN NULL
-                                ELSE CAST(:sc AS REAL)
-                            END
-                        )
-                        RETURNING {_ROW_COLUMNS}
-                        """
-                    ),
-                    {
-                        # The device its key resolved to (chat_access),
-                        # never the self-asserted phone_id.
-                        "t": thread_id, "c": transcript, "dev": device_id,
-                        "sp": speaker_person_id, "sc": speaker_confidence,
-                    },
-                )
-            ).mappings().first()
+            if user_row_id is not None:
+                # The person's row, locked until the reply is in: a second
+                # writer for it (the web's own line after a hop it gave up
+                # on) waits, then finds the reply and writes nothing.
+                user = (
+                    await s.execute(
+                        text(
+                            f"SELECT {_ROW_COLUMNS} FROM chat_messages "
+                            "WHERE id = :u AND thread_id = :t AND role = 'user' FOR UPDATE"
+                        ),
+                        {"u": user_row_id, "t": thread_id},
+                    )
+                ).mappings().first()
+                if user is None:
+                    # Gone (the chat was deleted while the turn was answered),
+                    # or never this thread's.
+                    raise PhoneTurnRefused(404, "message not found in this chat", "message_not_found")
+            else:
+                user = await _insert_user_row(s, thread_id=thread_id, transcript=transcript,
+                                              device_id=device_id, source=source,
+                                              speaker_person_id=speaker_person_id,
+                                              speaker_confidence=speaker_confidence)
+            # One reply per person's row: written only while it has none.
             assistant = (
                 await s.execute(
                     text(
                         f"""
                         INSERT INTO chat_messages
                             (thread_id, role, content, model, error, stats, source)
-                        VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB), 'voice')
+                        SELECT :t, 'assistant', :c, :m, :e, CAST(:st AS JSONB), :src
+                         WHERE NOT ({ANSWERED_SQL})
                         RETURNING {_ROW_COLUMNS}
                         """
                     ),
                     {
                         "t": thread_id, "c": reply, "m": model, "e": error,
-                        "st": json.dumps(stats),
+                        "st": json.dumps(stats), "src": source, "u": user["id"],
                     },
                 )
             ).mappings().first()
-            await s.execute(
-                text(
-                    """
-                    UPDATE chat_threads
-                       SET updated_at = now(),
-                           title = COALESCE(title, :c)
-                     WHERE id = :t
-                    """
-                ),
-                # The first five words, as a typed first message is titled
-                # (domovoi/chat_titles.py); the web's title job may then
-                # write a better one.
-                {"t": thread_id, "c": first_words_title(transcript)},
-            )
+            if assistant is None:
+                raise PhoneTurnRefused(409, "this message already has a reply", "already_answered")
+            if user_row_id is None:
+                await s.execute(
+                    text(
+                        """
+                        UPDATE chat_threads
+                           SET updated_at = now(),
+                               title = COALESCE(title, :c)
+                         WHERE id = :t
+                        """
+                    ),
+                    # The first five words, as a typed first message is titled
+                    # (domovoi/chat_titles.py); the web's title job may then
+                    # write a better one.
+                    {"t": thread_id, "c": first_words_title(transcript)},
+                )
+            else:
+                await s.execute(text("UPDATE chat_threads SET updated_at = now() WHERE id = :t"),
+                                {"t": thread_id})
             await s.execute(text("SELECT pg_notify('chat_changed', 'message')"))
     except IntegrityError as e:
         if not await _thread_exists(thread_id):
             # The thread was deleted while the turn was being answered.
             raise PhoneTurnRefused(404, "thread not found", "thread_not_found") from e
-        log.error("phone voice: the turn into thread %s could not be saved: %s", thread_id, e)
+        log.error("phone turn: the turn into thread %s could not be saved: %s", thread_id, e)
         raise PhoneTurnRefused(
             500, "Domovoi answered, but couldn't save the turn into this chat.", "save_failed",
         ) from e
     return [message_dict(user), message_dict(assistant)]
 
 
+async def _insert_user_row(
+    s: Any, *, thread_id: int, transcript: str, device_id: str | None, source: str,
+    speaker_person_id: int | None, speaker_confidence: float | None,
+) -> Any:
+    """The person's row. The speaker is re-read in the insert itself (see
+    :func:`_write_turn`)."""
+    return (
+        await s.execute(
+            text(
+                f"""
+                INSERT INTO chat_messages
+                    (thread_id, role, content, device_id, source,
+                     speaker_person_id, speaker_confidence)
+                VALUES (
+                    :t, 'user', :c, :dev, :src,
+                    (SELECT p.id FROM people p WHERE p.id = CAST(:sp AS BIGINT)),
+                    CASE
+                        WHEN CAST(:sp AS BIGINT) IS NOT NULL AND NOT EXISTS (
+                            SELECT 1 FROM people p WHERE p.id = CAST(:sp AS BIGINT)
+                        ) THEN NULL
+                        ELSE CAST(:sc AS REAL)
+                    END
+                )
+                RETURNING {_ROW_COLUMNS}
+                """
+            ),
+            {
+                # The device its key resolved to (chat_access), never the
+                # self-asserted phone_id.
+                "t": thread_id, "c": transcript, "dev": device_id, "src": source,
+                "sp": speaker_person_id, "sc": speaker_confidence,
+            },
+        )
+    ).mappings().first()
+
+
+
+
+async def recent_requests(session: Any, ctx: Context, window_sec: float) -> list[tuple[str, float]]:
+    """``(text, epoch)`` of the person's own recent messages in the chat a
+    phone turn was said in (``ctx.chat_thread_id``, set only here after the
+    thread was checked), newest first, within ``window_sec``: USER rows from
+    this phone (a keyless typed caller's: those with no device), never a
+    reply. For the intercom's
+    "announce that" (handlers/intercom.py)."""
+    if ctx.chat_thread_id is None or not str(ctx.room_id or "").startswith(PHONE_ROOM_PREFIX):
+        return []
+    device = str(ctx.room_id)[len(PHONE_ROOM_PREFIX):]
+    # This phone's own rows; a keyless typed caller (the web names it
+    # "chat-<thread>") has rows with no device, and only those are its.
+    keyless = device.startswith(KEYLESS_PHONE_PREFIX)
+    rows = (
+        await session.execute(
+            text(
+                "SELECT content, EXTRACT(EPOCH FROM created_at) FROM chat_messages "
+                "WHERE thread_id = :t AND role = 'user' "
+                + ("AND device_id IS NULL " if keyless else "AND device_id = :d ")
+                + "AND created_at > now() - make_interval(secs => :w) ORDER BY id DESC LIMIT 10"
+            ),
+            {"t": int(ctx.chat_thread_id), "w": float(window_sec), **({} if keyless else {"d": device})},
+        )
+    ).all()
+    return [(str(r[0] or ""), float(r[1] or 0)) for r in rows]
+
+
 # ─── The turn ─────────────────────────────────────────────────────────────
+
+#: The phone id the web's typed chat names a keyless caller's session with
+#: ("chat-<thread id>"): no device is ever named so.
+KEYLESS_PHONE_PREFIX = "chat-"
+
+#: The longest typed message the text turn routes.
+MAX_TEXT_CHARS = 2000
+
+#: The text turn's fixed replies, written as the reply (never a model's):
+#: what typed chat can't do yet, said plainly, with where it can be done.
+CHAT_CANT_TEXT = "I can't do that from chat yet."
+CHAT_ROOM_SETTING_TEXT = (
+    CHAT_CANT_TEXT + " It's a setting on the room's speaker, so say it in that room."
+)
+CHAT_NO_PLAYER_TEXT = (
+    CHAT_CANT_TEXT + " This chat has no music player of its own: name a room, "
+    "like \"play jazz in the kitchen\", or say it to a room."
+)
 
 
 def _not_heard(reason: str, room: str) -> dict[str, Any]:
@@ -639,6 +754,136 @@ def _not_heard(reason: str, room: str) -> dict[str, Any]:
         "messages": [],
         "error": None,
     }
+
+
+def _check_thread_id(thread_id: int) -> None:
+    if not 1 <= int(thread_id) <= MAX_THREAD_ID:
+        raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
+
+
+async def _check_caller(thread_id: int, phone_id: str, viewer: chat_access.Viewer) -> None:
+    """The caller may write into the thread, and a phone with a key speaks
+    as itself only (``phone_id`` names the routing session, phone-<id>)."""
+    await _check_thread(thread_id, viewer)
+    if viewer.device_id is not None and phone_id != viewer.device_id:
+        raise PhoneTurnRefused(403, "phone_id isn't this phone's device id", "not_this_phone")
+    if viewer.device_id is None and await _keyed_device(phone_id):
+        # A keyless caller naming a phone that holds a device key would
+        # speak in that phone's routing session (its parked questions): a
+        # keyed phone presents its key.
+        raise PhoneTurnRefused(403, "phone_id is another phone's device id", "not_this_phone")
+
+
+async def _keyed_device(phone_id: str) -> bool:
+    """Whether ``phone_id`` is a device that holds a device key (V086)."""
+    async with session_scope() as s:
+        if not await chat_access.has_device_keys(s):
+            return False
+        row = (await s.execute(
+            text("SELECT 1 FROM devices WHERE device_id = :d AND device_key_hash IS NOT NULL"),
+            {"d": phone_id},
+        )).first()
+    return row is not None
+
+
+async def _route_phone_turn(
+    app: Any,
+    *,
+    room: str,
+    thread_id: int,
+    request: str,
+    player: dict[str, Any],
+    person_id: int | None,
+    trigger: str,
+    stages: dict[str, int],
+    fast_paths_only: bool = False,
+    skip_handlers: tuple[str, ...] = (),
+    no_player: bool = False,
+    voice: dict[str, Any] | None = None,
+    hooks: Any = None,
+) -> tuple[Response | None, dict[str, str] | None]:
+    """Route one phone turn, voice or typed, through the router satellites
+    use, in this phone's session for this thread. ``voice``: the Context
+    fields voice identification gave (none for a typed turn); ``hooks``:
+    ``await hooks(session, response, ctx)`` in the turn's transaction (the
+    voice profile hooks). Returns the response, or None and the error a
+    failed turn is recorded with."""
+    from domovoi.router import route
+
+    probe = getattr(getattr(app, "state", None), "probe", None)
+    session_id = session_for(room, thread_id)
+    ctx = Context(
+        room_id=room,
+        session_id=session_id,
+        online=bool(getattr(probe, "online", True)),
+        bot_name=settings.bot_name,
+        person_id=person_id,
+        trigger=trigger,
+        app=app,
+        device_kind="phone",
+        device_player=player,
+        chat_thread_id=int(thread_id),
+        fast_paths_only=fast_paths_only,
+        skip_handlers=tuple(skip_handlers),
+        no_player=no_player,
+        **(voice or {}),
+    )
+    intent = Intent(transcript=request, room_id=room, session_id=session_id)
+
+    response: Response | None = None
+    error: dict[str, str] | None = None
+    t0 = time.perf_counter()
+    try:
+        async with session_scope() as s:
+            response = await route(intent, ctx, s)
+            if hooks is not None:
+                await hooks(s, response, ctx)
+    except Exception:  # noqa: BLE001 — recorded in the thread, not lost
+        log.exception("phone turn: the turn from %s failed", room)
+        response = None
+        error = {"detail": TURN_FAILED_TEXT, "code": "turn_failed"}
+    stages["route_ms"] = int((time.perf_counter() - t0) * 1000)
+    if response is not None:
+        remember_session(room, thread_id, response.session_id)
+    return response, error
+
+
+def _turn_stats(
+    stages: dict[str, int], started: float, role: str, response: Response | None,
+    error: dict[str, str] | None,
+) -> dict[str, Any]:
+    """The reply row's ``stats``: the stage times, who answered, and whether
+    Domovoi asked a question back (the next message in the thread answers
+    it, as the next press does)."""
+    stats: dict[str, Any] = {
+        **stages,
+        "model_role": role,
+        "wall_ms": int((time.perf_counter() - started) * 1000),
+    }
+    if response is not None:
+        stats["matched_handler"] = response.matched_handler
+        stats["matched_path"] = response.matched_path
+        if response.expect_followup:
+            stats["expect_followup"] = True
+    if error is not None:
+        stats["error_code"] = error["code"]
+    return {k: v for k, v in stats.items() if v is not None}
+
+
+def _speaker_of(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Who the stored user row names: nobody when the turn forgot them."""
+    row = messages[0]
+    if row.get("speaker_person_id") is None:
+        return None
+    return {
+        "person_id": row["speaker_person_id"],
+        "name": row.get("speaker_name"),
+        "confidence": row.get("speaker_confidence"),
+        "confident": row["speaker_confident"],
+    }
+
+
+# ─── A spoken turn (the chat mic) ─────────────────────────────────────────
 
 
 async def run_phone_turn(
@@ -673,19 +918,14 @@ async def run_phone_turn(
         }
     """
     phone_id = valid_phone_id(phone_id)
-    if not 1 <= int(thread_id) <= MAX_THREAD_ID:
-        raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
+    _check_thread_id(thread_id)
     room = phone_room(phone_id)
     pcm = pcm_from_upload(audio)
     # Who may speak into this chat: chat_access, from the caller's device
     # key (the web forwards it), never from phone_id. ``viewer`` None is
     # a keyless household caller.
     viewer = viewer or chat_access.Viewer()
-    await _check_thread(thread_id, viewer)
-    if viewer.device_id is not None and phone_id != viewer.device_id:
-        # phone_id names the routing session (phone-<id>): a phone with a
-        # key speaks as itself only.
-        raise PhoneTurnRefused(403, "phone_id isn't this phone's device id", "not_this_phone")
+    await _check_caller(thread_id, phone_id, viewer)
     if len(pcm) < MIN_CLIP_SEC * BYTES_PER_SEC:
         return _not_heard("too_short", room)
     if room in _BUSY:
@@ -716,7 +956,6 @@ async def _answer(
     speak: bool = True,
     device_id: str | None = None,
 ) -> dict[str, Any]:
-    from domovoi.router import route
     from domovoi.streaming import run_voice_profile_hooks
 
     started = time.perf_counter()
@@ -735,48 +974,23 @@ async def _answer(
     person_id = getattr(ident, "person_id", None)
     embedding = getattr(ident, "embedding", None)
 
-    probe = getattr(getattr(app, "state", None), "probe", None)
-    session_id = session_for(room, thread_id)
-    ctx = Context(
-        room_id=room,
-        session_id=session_id,
-        online=bool(getattr(probe, "online", True)),
-        bot_name=settings.bot_name,
-        person_id=person_id,
-        presence_tier=getattr(ident, "presence_tier", None),
-        embedding_bytes=embedding.astype("float32").tobytes() if embedding is not None else None,
-        voice_candidates=list(getattr(ident, "candidates", ()) or ()),
-        voice_outcome=(
-            getattr(ident, "outcome", None) if ident is not None
-            else OUTCOME_ERROR
-        ),
-        trigger="push_to_talk",
-        app=app,
-        device_kind="phone",
-        device_player=player,
-        chat_thread_id=int(thread_id),
+    async def _hooks(s: Any, response: Response, ctx: Context) -> None:
+        await run_voice_profile_hooks(
+            s, response=response, ctx=ctx, ident=ident, person_id=person_id,
+            transcript=request, audio_seconds=len(pcm) / BYTES_PER_SEC,
+        )
+
+    response, error = await _route_phone_turn(
+        app, room=room, thread_id=thread_id, request=request, player=player,
+        person_id=person_id, trigger="push_to_talk", stages=stages, hooks=_hooks,
+        voice={
+            "presence_tier": getattr(ident, "presence_tier", None),
+            "embedding_bytes": embedding.astype("float32").tobytes() if embedding is not None else None,
+            "voice_candidates": list(getattr(ident, "candidates", ()) or ()),
+            "voice_outcome": getattr(ident, "outcome", None) if ident is not None else OUTCOME_ERROR,
+        },
     )
-    intent = Intent(transcript=request, room_id=room, session_id=session_id)
-
-    response: Response | None = None
-    error: dict[str, str] | None = None
-    t0 = time.perf_counter()
-    try:
-        async with session_scope() as s:
-            response = await route(intent, ctx, s)
-            await run_voice_profile_hooks(
-                s, response=response, ctx=ctx, ident=ident, person_id=person_id,
-                transcript=request, audio_seconds=len(pcm) / BYTES_PER_SEC,
-            )
-    except Exception:  # noqa: BLE001 — recorded in the thread, not lost
-        log.exception("phone voice: the turn from %s failed", room)
-        response = None
-        error = {"detail": TURN_FAILED_TEXT, "code": "turn_failed"}
-    stages["route_ms"] = int((time.perf_counter() - t0) * 1000)
-
     reply = response.text if response is not None else ""
-    if response is not None:
-        remember_session(room, thread_id, response.session_id)
 
     t0 = time.perf_counter()
     # The phone that speaks the reply itself (its own voice pick) asked for
@@ -790,16 +1004,7 @@ async def _answer(
         _fan_out(app, response, room)
 
     score = _speaker_score(ident)
-    stats: dict[str, Any] = {
-        **stages,
-        "model_role": "voice",
-        "wall_ms": int((time.perf_counter() - started) * 1000),
-    }
-    if response is not None:
-        stats["matched_handler"] = response.matched_handler
-        stats["matched_path"] = response.matched_path
-    if error is not None:
-        stats["error_code"] = error["code"]
+    stats = _turn_stats(stages, started, "voice", response, error)
     messages = await _write_turn(
         thread_id=thread_id,
         device_id=device_id,
@@ -810,7 +1015,7 @@ async def _answer(
         # The Q&A model wrote a "qa" reply; a command's reply is Domovoi's own.
         model=settings.ollama_model if response is not None and response.matched_path == "qa" else None,
         error=error["detail"] if error is not None else None,
-        stats={k: v for k, v in stats.items() if v is not None},
+        stats=stats,
     )
     log.info(
         "phone voice: %s thread=%s heard %r%s -> %s/%s (speaker %s %s) in %d ms",
@@ -828,22 +1033,240 @@ async def _answer(
             {"mime": "audio/wav", "b64": base64.b64encode(wav).decode("ascii")}
             if wav else None
         ),
-        # Who the stored row names: nobody when the turn forgot them.
-        "speaker": (
-            {
-                "person_id": messages[0]["speaker_person_id"],
-                "name": messages[0].get("speaker_name"),
-                "confidence": messages[0].get("speaker_confidence"),
-                "confident": messages[0]["speaker_confident"],
-            }
-            if messages[0].get("speaker_person_id") is not None else None
-        ),
+        "speaker": _speaker_of(messages),
         "expect_followup": expect_followup,
         "actions": actions,
         "matched_handler": getattr(response, "matched_handler", None),
         "matched_path": getattr(response, "matched_path", None),
         "session_id": str(response.session_id) if response is not None and response.session_id else None,
         "room_id": room,
+        "messages": messages,
+        "error": error,
+    }
+
+
+# ─── A typed turn (POST /v1/phone/text) ───────────────────────────────────
+
+
+async def _device_person(viewer: chat_access.Viewer) -> int | None:
+    """The person the caller's device belongs to (``devices.owner_person_id``)
+    — the device its KEY resolved to, never an id the caller names. None
+    for a keyless caller, a shared screen (the whole household's), a device
+    nobody owns, or a database without the column: the turn is then
+    nobody's, as a voice the mic doesn't recognise."""
+    if viewer.device_id is None or viewer.shared_screen:
+        return None
+    async with session_scope() as s:
+        if not await chat_access._column_exists(s, "devices", "owner_person_id"):
+            return None
+        row = (
+            await s.execute(
+                text(
+                    "SELECT p.id FROM devices d JOIN people p ON p.id = d.owner_person_id "
+                    "WHERE d.device_id = :d"
+                ),
+                {"d": viewer.device_id},
+            )
+        ).first()
+    return int(row[0]) if row is not None else None
+
+
+async def _check_user_row(thread_id: int, user_message_id: int, said_text: str) -> None:
+    """The typed row the reply answers: the person's row in this thread,
+    saying what is routed, with no reply of its own yet (one reply per row:
+    a second turn for it would double-write)."""
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                text(
+                    f"SELECT m.content, {ANSWERED_SQL} AS answered FROM chat_messages m "
+                    "WHERE m.id = :u AND m.thread_id = :t AND m.role = 'user'"
+                ),
+                {"u": user_message_id, "t": thread_id},
+            )
+        ).first()
+    if row is None or (row[0] or "").strip() != said_text:
+        raise PhoneTurnRefused(404, "message not found in this chat", "message_not_found")
+    if row[1]:
+        raise PhoneTurnRefused(409, "this message already has a reply", "already_answered")
+
+
+def _room_targeted(response: Response) -> bool:
+    """A media reply that acted on a named room ("play jazz in the kitchen":
+    handlers/room_commands.py), not on the phone's own player."""
+    data = response.data if isinstance(response.data, dict) else {}
+    return bool(data.get("room_id") or data.get("room"))
+
+
+def _typed_reply(
+    response: Response, plays_here: bool,
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]] | None:
+    """The reply a typed turn writes, the actions handed back, and what the
+    stats note about it; None when the chat's own model should answer
+    instead. A satellite's own setting gets a fixed line. With no player of
+    the client's own (``plays_here`` false, the dashboard): a play,
+    transport or volume command for the phone's player gets a fixed line
+    (and nothing of a play was recorded: ``Context.no_player``); the
+    player's other answers ("what's playing", a play that found nothing:
+    "play chess with me") are the chat's. A chat must not say it did what
+    it can't."""
+    text_ = response.text or ""
+    actions = list(response.device_actions or [])
+    if text_ == SATELLITE_SETTING_TEXT:
+        return CHAT_ROOM_SETTING_TEXT, [], {"fixed_reply": "room_setting"}
+    if plays_here:
+        return text_, actions, {}
+    dropped = {"fixed_reply": "no_player", "actions_dropped": [str(a.get("type")) for a in actions]}
+    if response.matched_handler in typed_chat.MEDIA_HANDLERS and not _room_targeted(response):
+        if actions or response.failure == "not_playing":
+            # A play, transport or volume for the phone's player ("can you
+            # pause the music?" asks it even with nothing playing there).
+            return CHAT_NO_PLAYER_TEXT, [], dropped
+        return None
+    if actions:
+        # Another handler's actions for the phone: nothing plays here either.
+        return CHAT_NO_PLAYER_TEXT, [], dropped
+    return text_, actions, {}
+
+
+async def run_phone_text_turn(
+    app: Any,
+    *,
+    phone_id: str,
+    thread_id: int,
+    text_: str,
+    player: dict[str, Any] | None = None,
+    viewer: chat_access.Viewer | None = None,
+    user_message_id: int | None = None,
+    plays_here: bool = False,
+    fast_paths_only: bool = False,
+) -> dict[str, Any]:
+    """Answer one TYPED turn as the chat mic answers a spoken one, without
+    speech-to-text or text-to-speech: the same router, phone session per
+    thread (so "yes" or "announce that" continues what the last turn
+    asked), confirmations, guest and private-chat rules. Credited to the
+    person the caller's device belongs to (:func:`_device_person`).
+
+    ``user_message_id``: the typed row already in the thread (the web's
+    send wrote it): only the reply is written, and only while that row has
+    none. Without it, both rows are written (``source = 'typed'``).
+    ``plays_here``: the client plays ``actions`` itself (as the app does
+    for the mic); otherwise a play for the phone's player is not played,
+    not recorded, and the reply says so (:func:`_typed_reply`).
+    ``fast_paths_only`` (the web's typed chat): only the router's fast
+    tiers, a parked question or a fast path (core or plugin), never a
+    model, and never the chat's own handlers (domovoi/typed_chat.py); a
+    turn none takes is not answered or written (``handled: false``) and
+    the caller's own model answers it.
+
+    Returns :func:`run_phone_turn`'s answer without ``audio``, plus
+    ``handled``. Raises :class:`PhoneTurnRefused` for a refused turn."""
+    phone_id = valid_phone_id(phone_id)
+    _check_thread_id(thread_id)
+    room = phone_room(phone_id)
+    said_text = (text_ or "").strip()
+    if len(said_text) > MAX_TEXT_CHARS:
+        raise PhoneTurnRefused(413, f"a typed turn is at most {MAX_TEXT_CHARS} characters", "text_too_long")
+    viewer = viewer or chat_access.Viewer()
+    await _check_caller(thread_id, phone_id, viewer)
+    if not any(ch.isalnum() for ch in said_text):
+        return _not_handled(room, said_text, reason="blank")
+    if fast_paths_only and not typed_chat.eligible(said_text):
+        return _not_handled(room, said_text)
+    if user_message_id is not None:
+        await _check_user_row(thread_id, user_message_id, said_text)
+    if room in _BUSY:
+        raise PhoneTurnRefused(409, "this phone's last turn is still being answered", "busy")
+    _BUSY.add(room)
+    try:
+        from domovoi import voice_activity
+
+        async with voice_activity.turn("phone"):
+            return await _answer_text(
+                app, room=room, thread_id=thread_id, said_text=said_text, player=player or {},
+                device_id=viewer.device_id, person_id=await _device_person(viewer),
+                user_message_id=user_message_id, plays_here=plays_here, fast_paths_only=fast_paths_only,
+            )
+    finally:
+        _BUSY.discard(room)
+
+
+def _not_handled(room: str, said_text: str, *, reason: str | None = None,
+                 session_id: str | None = None) -> dict[str, Any]:
+    """A typed turn the house leaves to the chat: nothing written."""
+    out = _not_heard(reason or "", room)
+    out.pop("audio", None)
+    return {**out, "heard": reason is None, "reason": reason, "transcript": said_text,
+            "session_id": session_id, "matched_path": DEFERRED_PATH, "handled": False}
+
+
+async def _answer_text(
+    app: Any,
+    *,
+    room: str,
+    thread_id: int,
+    said_text: str,
+    player: dict[str, Any],
+    device_id: str | None,
+    person_id: int | None,
+    user_message_id: int | None,
+    plays_here: bool,
+    fast_paths_only: bool,
+) -> dict[str, Any]:
+    from domovoi.router import plan_route
+
+    started = time.perf_counter()
+    stages: dict[str, int] = {}
+    # The chat's own handlers, and a prose-prone one asked a question ("tell
+    # everyone ... is what I'd say, right?"), are never this turn's to run.
+    skip = typed_chat.skip_handlers(plan_route(said_text), said_text) if fast_paths_only else ()
+    response, error = await _route_phone_turn(
+        app, room=room, thread_id=thread_id, request=said_text, player=player,
+        person_id=person_id, trigger="typed", stages=stages, fast_paths_only=fast_paths_only,
+        skip_handlers=skip, no_player=not plays_here,
+    )
+    session_id = str(response.session_id) if response is not None and response.session_id else None
+    shaped = _typed_reply(response, plays_here) if response is not None else ("", [], {})
+    if response is not None and (response.matched_path == DEFERRED_PATH or shaped is None):
+        # No fast tier took it, or it was the phone player's: the caller's
+        # model answers. Nothing written into the chat.
+        log.info("phone text: %s thread=%s %r -> the chat answers (%s)", room, thread_id, said(said_text),
+                 response.matched_handler or "no fast path")
+        return _not_handled(room, said_text, session_id=session_id)
+
+    reply, actions, notes = shaped
+    expect_followup = bool(response is not None and response.expect_followup)
+    if response is not None:
+        _fan_out(app, response, room)
+    stats = {**_turn_stats(stages, started, "action", response, error), **notes}
+    messages = await _write_turn(
+        thread_id=thread_id,
+        device_id=device_id,
+        transcript=said_text,
+        reply=reply,
+        speaker_person_id=None,
+        speaker_confidence=None,
+        model=None,
+        error=error["detail"] if error is not None else None,
+        stats=stats,
+        source="typed",
+        user_row_id=user_message_id,
+    )
+    log.info(
+        "phone text: %s thread=%s %r -> %s/%s (person %s) in %d ms",
+        room, thread_id, said(said_text),
+        getattr(response, "matched_handler", None), getattr(response, "matched_path", None),
+        person_id, stats["wall_ms"],
+    )
+    return {
+        "heard": True, "reason": None, "transcript": said_text, "speaker": None,
+        "room_id": room, "session_id": session_id,
+        "handled": True,
+        "reply": reply,
+        "expect_followup": expect_followup,
+        "actions": actions,
+        "matched_handler": getattr(response, "matched_handler", None),
+        "matched_path": getattr(response, "matched_path", None),
         "messages": messages,
         "error": error,
     }

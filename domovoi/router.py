@@ -33,7 +33,7 @@ from domovoi.dropin_common import END_STOP, END_WEAK, end_call_kind, room_in_cal
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import FastPath, Handler, as_fast_path, satellite_setting_refusal
 from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
-from domovoi.models import Context, Intent, Response
+from domovoi.models import DEFERRED_PATH, Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix, wants_profile
 from domovoi.spoken_answer import SpokenAnswer, StreamedQA
 from domovoi.turn_timings import timings_for_row
@@ -250,8 +250,8 @@ _LEADING_FILLER_RE = re.compile(
     r"^(?:"
     r"(?:hey|um|uh|so|well|alright)[,\s]+"
     r"|(?:yeah|yes|yep|ok|okay)[,\s]+"
-    r"|please[,\s]+"
-    r"|(?:can|could|would|will) you(?:[,\s]+please)?[,\s]+"
+    r"|(?:please|pls|plz)[,\s]+"
+    r"|(?:can|could|would|will) (?:you|u)(?:[,\s]+(?:please|pls|plz))?[,\s]+"
     r")+"
 )
 
@@ -1097,7 +1097,9 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
 
     session_repo = SessionRepository(session)
     session_id = await session_repo.get_or_create(ctx.session_id, ctx.room_id)
-    ctx = ctx.model_copy(update={"session_id": session_id})
+    # The turn's own words, as said or typed (Context.said): the fast paths
+    # read them normalized, a handler that repeats words keeps their casing.
+    ctx = ctx.model_copy(update={"session_id": session_id, "said": intent.transcript})
 
     ollama_client = get_ollama_client()
 
@@ -1360,6 +1362,8 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
     # True), so a degraded handler's offline-capable paths keep running
     # and its `fallback_offline` is genuinely reachable for the rest.
     hit = first_fast_path(transcript)
+    if hit is not None and hit[0].name in ctx.skip_handlers:
+        hit = None  # not this turn's to take (a typed turn: Context.skip_handlers)
     # A weather plugin's handler failed this turn: core weather may step in
     # at the Q&A step below (domovoi/weather.py).
     weather_plugin_failed = False
@@ -1449,6 +1453,13 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         # turn goes on to the tool model and the Q&A model as if no fast
         # path had matched.
         log.info("fast path %s declined %r; routing on", handler.name, said(transcript))
+
+    if ctx.fast_paths_only:
+        # A typed chat turn no fast tier took (phone_voice's text turn): no
+        # model is asked, nothing is said or recorded here; the chat's own
+        # model answers it.
+        return Response(text="", session_id=session_id, matched_handler=None,
+                        matched_path=DEFERRED_PATH, online=ctx.online)
 
     # Answers the house's settings decide, before any model is asked: what
     # Domovoi can't do here, and why, never depends on the small model.

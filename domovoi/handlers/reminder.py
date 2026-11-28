@@ -301,6 +301,17 @@ _CREATE_TASK_AT_RE = re.compile(
     rf"^remind me{_POLITE} (?P<connector>to|about) (?P<message>.+?),? {_WHEN}{_POLITE}$"
 )
 
+# "remember to call mom in 20 minutes" / "remember to call mom at 5" /
+# "remember to call mom tomorrow at 9": "remind me to ..." said as
+# "remember to ...", the same grammars. Without a time it is a memory
+# ("remember to call mom": handlers/memory.py), never left to a model.
+_REMEMBER_IN_RE = re.compile(
+    rf"^remember{_POLITE} to (?P<message>.+?) in (?P<duration>{DURATION_PATTERN}){_FROM_NOW}{_POLITE}$"
+)
+_REMEMBER_AT_RE = re.compile(
+    rf"^remember{_POLITE} (?P<connector>to) (?P<message>.+?),? {_WHEN}{_POLITE}$"
+)
+
 # "set a reminder for 6 pm" / "a reminder at noon to eat" / "set a reminder
 # for tomorrow at 9 to call the bank". After "for", only a time that can't
 # be a count ("for 7" might be minutes; "for 7 pm" can't).
@@ -704,6 +715,9 @@ class ReminderHandler(Handler):
             FastPath(_CREATE_TASK_AT_RE, ReminderHandler._create_at_from_match),
             FastPath(_CREATE_NOUN_AT_RE, ReminderHandler._create_at_from_match),
             FastPath(_CREATE_TOPIC_AT_RE, ReminderHandler._create_at_from_match),
+            # "remember to <task> in 20 minutes / at 5": as "remind me to".
+            FastPath(_REMEMBER_IN_RE, ReminderHandler._create_from_match),
+            FastPath(_REMEMBER_AT_RE, ReminderHandler._create_at_from_match),
             FastPath(_WAKE_AT_RE, ReminderHandler._wake_at_from_match),
             FastPath(_WAKE_IN_RE, ReminderHandler._wake_in_from_match),
             FastPath(_CREATE_ALARM_RE, ReminderHandler._alarm_from_match),
