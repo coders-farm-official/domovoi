@@ -3452,7 +3452,8 @@ phones can find it, a friend's key can never reach it, and a phone's key
 can never reach friend messaging. As Tor's rules require, the onion isn't
 configured at all until the first phone has enrolled (an onion with no
 authorized clients would be open), and that first change restarts Tor;
-later changes are batched. Tor's authorization only decides who can find
+later changes are batched, and the last phone leaving takes the onion
+away with a restart (or stops Tor), never a reload. Tor's authorization only decides who can find
 it: every connection then runs a Noise IK handshake against the house's
 away key (never the Friend Houses session key), and the listener refuses
 any phone key that isn't on the **current** list core rewrites on every
@@ -3460,10 +3461,11 @@ change and the listener re-reads before each handshake, whatever Tor
 still has cached. Everything before and around that is refused in
 silence, so a stranger who somehow has the address learns nothing.
 
-**What it can reach.** Five chat requests and nothing else: list its
-chats, read one, send a message (text, and a picture up to 1 MiB), pick
-up a reply still being written, and stop one. No dashboard, no media, no
-settings, no other API. The request set is closed and parsed strictly
+**What it can reach.** Five chat requests and one more, and nothing else:
+list its chats, read one, send a message (text, and a picture up to
+1 MiB), pick up a reply still being written, stop one, and turn away chat
+off for itself (`away.leave`). No dashboard, no media, no settings, no
+other API. The request set is closed and parsed strictly
 (`domovoi/away/wire.py`, fuzzed with the other parsers of outside input):
 a frame or message that breaks the protocol closes the connection; a
 well-formed request asking for something it may not gets a plain error.
@@ -3497,7 +3499,9 @@ at once. A connection that says nothing for two minutes is closed, and so
 is one whose request in pieces, or whose picture, isn't finished within
 two minutes. The listener's container is capped at 192 MB of memory.
 
-**Taking it away.** The phone turning it off, an admin's **Remove**,
+**Taking it away.** The phone turning it off (at home, or from away with
+`away.leave`, which the core answers itself and which only ever removes
+the phone that proved its key on that connection), an admin's **Remove**,
 "Chat from away" off, the internet answer "never", marking the device a
 shared screen, the device losing the key it enrolled with, or **changing
 the household token** each stop the phone. The dashboard's chat code

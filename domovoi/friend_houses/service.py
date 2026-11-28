@@ -80,9 +80,22 @@ _LISTENER: dict[str, Any] = {"proc": None, "task": None, "stopping": False, "ima
                              "mode": (True, False)}
 # Away chat: "starting" while its onion is being brought up, "ready" once
 # Tor runs it, None when it doesn't; ``authorized`` is the phones' file ids
-# Tor has been given, ``phones`` the enrolments last applied.
-_AWAY: dict[str, Any] = {"state": None, "authorized": frozenset(), "phones": (), "watch": None}
+# Tor has been given, ``keys`` the (file id, Tor key) pairs it was given,
+# ``publishing`` file id -> (monotonic deadline, Noise key) for a phone
+# whose key Tor took recently (away_status), ``phones`` the enrolments
+# last applied.
+_AWAY: dict[str, Any] = {"state": None, "authorized": frozenset(), "keys": frozenset(), "publishing": {},
+                         "phones": (), "watch": None}
 AWAY_WATCH_SEC = 30.0
+# After Tor takes a phone's client key, it builds and uploads a new
+# descriptor for the away onion, and the phone can't find the onion until
+# that descriptor is out (40-90 s seen on phones, batching included). Tor
+# runs with no control port (tor_config: core never talks to one), and its
+# notice-level log doesn't say when an upload lands, so the upload can't be
+# seen: away_status says "publishing" for these windows instead, or until a
+# request from that phone arrives over the onion (it found it).
+AWAY_PUBLISH_AFTER_RELOAD_SEC = 60.0
+AWAY_PUBLISH_AFTER_START_SEC = 120.0  # a start or restart bootstraps first
 
 
 def _root() -> Path:
@@ -268,14 +281,58 @@ async def _away_inputs() -> tuple[bool, list[Any]]:
 def away_status(device_id: str | None = None) -> str | None:
     """Away chat's state for the web's ``GET /api/away/status``: ``ready``
     once Tor runs the away onion (with ``device_id``: and has that phone's
-    key), ``starting`` while it is being brought up or that phone's key is
-    waiting for the next batched reload, None when it isn't running."""
+    key, and has had time to publish it), ``publishing`` for a while after
+    Tor took that phone's key (:data:`AWAY_PUBLISH_AFTER_RELOAD_SEC`: the
+    descriptor carrying it is probably still on its way, and the phone
+    can't find the onion yet), ``starting`` while it is being brought up or
+    that phone's key is waiting for the next batched reload, None when it
+    isn't running."""
     state = _AWAY["state"]
     if state != "ready" or device_id is None:
         return state
     from domovoi.away.store import Phone
 
-    return "ready" if Phone(device_id, "", b"").file_id in _AWAY["authorized"] else "starting"
+    file_id = Phone(device_id, "", b"").file_id
+    if file_id not in _AWAY["authorized"]:
+        return "starting"
+    publishing = _AWAY["publishing"].get(file_id)
+    if publishing is not None and time.monotonic() < publishing[0]:
+        return "publishing"
+    return "ready"
+
+
+def away_reached(device_id: str, noise_hex: str) -> None:
+    """A request from this phone came over the onion: it found the
+    descriptor, so it isn't "publishing" any more. Only for the Noise key
+    the phone enrolled with when Tor took its key (an enrolment since then
+    waits out its own window)."""
+    from domovoi.away.store import Phone
+
+    file_id = Phone(device_id, "", b"").file_id
+    publishing = _AWAY["publishing"].get(file_id)
+    if publishing is not None and publishing[1] == noise_hex:
+        _AWAY["publishing"] = {k: v for k, v in _AWAY["publishing"].items() if k != file_id}
+
+
+def _away_applied(phones: list[Any], action: str) -> None:
+    """Tor runs the away onion with ``phones``' keys, just applied by
+    ``action``: each key Tor didn't have before (every key, after a start
+    or a restart) is "publishing" for its window."""
+    now = time.monotonic()
+    keys = frozenset((p.file_id, p.tor_auth_pub) for p in phones)
+    fresh_start = action in ("start", "restart")
+    window = AWAY_PUBLISH_AFTER_START_SEC if fresh_start else AWAY_PUBLISH_AFTER_RELOAD_SEC
+    fresh = keys if fresh_start else keys - _AWAY["keys"]
+    ids = {file_id for file_id, _ in keys}
+    publishing = {k: v for k, v in _AWAY["publishing"].items() if k in ids and v[0] > now}
+    noise = {p.file_id: p.noise_pub.hex() for p in phones}
+    for file_id, _ in fresh:
+        publishing[file_id] = (now + window, noise[file_id])
+    _AWAY.update(state="ready", authorized=frozenset(ids), keys=keys, publishing=publishing)
+
+
+def _away_down() -> None:
+    _AWAY.update(state=None, authorized=frozenset(), keys=frozenset(), publishing={})
 
 
 async def _reconcile() -> None:
@@ -288,7 +345,7 @@ async def _reconcile() -> None:
     if sys.platform == "win32":
         _STATE.update(status="unavailable" if enabled else "off",
                       detail="Friend Houses runs on the server's Linux side" if enabled else None)
-        _AWAY.update(state=None)
+        _away_down()
         return
     policy = egress.policy()
     peers: list[_Peer] = []
@@ -325,8 +382,13 @@ async def _reconcile() -> None:
         _STATE.update(applied=w, onion=None, pairing=None, was_on=False,
                       status="off" if not enabled else "stopped",
                       detail=None if not enabled else _why_stopped(policy, len(peers)))
-        _AWAY.update(state=None, authorized=frozenset(), phones=())
+        _away_down()
+        _AWAY["phones"] = ()
         return
+    # From here Tor runs. hs-away is in the torrc only while a phone has a
+    # client key on disk (tc.wanted, and the check below): an onion with no
+    # clients is open (S1), so the last phone going takes it away with a
+    # restart (or the stop above), never a reload.
 
     if fh_wanted and fid.load() is None:
         fid.create()
@@ -372,7 +434,7 @@ async def _reconcile() -> None:
                       detail="The firewall rules that keep Friend Houses away from your home network "
                              "aren't in place. Update Domovoi, or run its installer again."
                              if enabled else None)
-        _AWAY.update(state=None, authorized=frozenset())
+        _away_down()
         _retry_reconcile_later()
         return
     if enabled:
@@ -392,10 +454,10 @@ async def _reconcile() -> None:
             _STATE["last_reload"] = time.monotonic()
     _STATE["applied"] = w
     if w.away_onion:
-        _AWAY.update(state="ready", authorized=frozenset(p.file_id for p in phones))
+        _away_applied(phones, action)
         _start_away_watch()
     else:
-        _AWAY.update(state=None, authorized=frozenset())
+        _away_down()
         _stop_away_watch()
 
     onion = await _wait_for_onion(folder, "hs-main") if w.main_onion else None

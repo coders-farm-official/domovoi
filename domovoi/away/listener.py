@@ -25,7 +25,10 @@ picture reassembly with its sha256) and the per-device limits
 (:data:`LIMITS`). A request that survives is handed to core as one JSON
 line on stdout (``away``); core runs it through the house's own chat code
 and answers on stdin (``away {...}`` lines, :meth:`AwayState.from_core`),
-which this module frames back to the phone.
+which this module frames back to the phone. ``away.leave`` (the phone
+turning away chat off for itself) is answered by core, which takes the
+phone off ``phones.json`` first; the RESP then closes every connection the
+phone has (``BYE revoked``), and its next handshake is refused.
 
 Nothing from a message's text or a picture is logged here.
 """
@@ -63,6 +66,7 @@ PIECES_DEADLINE_SEC = 120.0   # a REQ arriving in pieces: closed past it
 OPEN_REQUESTS = 4           # per connection: ERR busy
 PINGS_PER_MINUTE = 30       # per connection; more is closed
 MAX_DISCARDING = 4          # refused requests whose pictures are still arriving
+LEAVING_GRACE_SEC = 30.0    # a leaving connection outlives its removal at most this long
 WATCH_EVERY_SEC = 2.0
 OUTBOX_MAX_BYTES = 1536 * 1024  # a phone that stops reading is closed
 #: Picture bytes being received across the house (each picture's declared
@@ -76,6 +80,9 @@ LIMITS = {
     "send_hour": (3600.0, 200),
     "other_minute": (60.0, 60),
     "picture_hour": (3600.0, 30),
+    # away.leave also counts as an "other" request; a leave that worked
+    # ends the phone's away chat, so more than a few is a phone retrying.
+    "leave_minute": (60.0, 5),
 }
 PICTURE_BYTES_PER_HOUR = 20_000_000
 
@@ -132,6 +139,8 @@ class Device:
     def charge(self, request: wire.Request, now: float) -> int:
         """0 and spent, or the seconds to wait (nothing spent)."""
         names = ["send_minute", "send_hour"] if request.op == "chat.send" else ["other_minute"]
+        if request.op == wire.LEAVE:
+            names.append("leave_minute")
         if request.picture is not None:
             names.append("picture_hour")
         wait = max(self.windows[n].wait(now) for n in names)
@@ -200,7 +209,16 @@ class Conn:
     # counted as open, for at most PICTURE_DEADLINE_SEC.
     discarding: dict[int, tuple[wire.PictureSink, asyncio.TimerHandle]] = field(default_factory=dict)
     forwarded: set[int] = field(default_factory=set)
+    # The away.leave requests among ``forwarded``, each with the monotonic
+    # time its grace ends: core's RESP to one ends every connection of this
+    # phone's key (it no longer has away chat).
+    leaving: dict[int, float] = field(default_factory=dict)
     pings: Window = field(default_factory=lambda: Window(60.0, PINGS_PER_MINUTE))
+
+    def leaving_now(self, now: float) -> bool:
+        """Whether a leave sent on this connection is still waiting for
+        core's answer, within :data:`LEAVING_GRACE_SEC` of being sent."""
+        return any(until > now for until in self.leaving.values())
 
     @property
     def open(self) -> int:
@@ -271,7 +289,11 @@ class AwayState:
         if not phones.on:
             return "away_off"
         if phones.by_key.get(conn.noise) != conn.device:
-            return "revoked"
+            # A phone leaving (away.leave) is off the list before core's
+            # answer arrives: that answer goes out first, then BYE revoked
+            # (:meth:`left`). Core always ends the request, RESP or ERR;
+            # should it not, the grace runs out and the removal stands.
+            return None if conn.leaving_now(time.monotonic()) else "revoked"
         return None
 
     def bye(self, conn: Conn, code: str) -> None:
@@ -332,6 +354,20 @@ class AwayState:
                 return
         if end or kind == wire.ERR:
             conn.forwarded.discard(r)
+            if conn.leaving.pop(r, None) is not None and kind == wire.RESP:
+                self.left(conn.device, conn.noise)
+
+    def left(self, device: str, noise: bytes) -> None:
+        """The phone turned away chat off for itself (``away.leave``) with
+        the Noise key ``noise``: core has already taken it off
+        ``phones.json``, so its next handshake is refused; every connection
+        with that key is closed now, each after what was queued for it (the
+        leave's RESP first). A connection of the same device with another
+        key (it enrolled again meanwhile) is that key's, and stays."""
+        dev = self.devices.get(device)
+        for conn in list(dev.conns if dev is not None else ()):
+            if conn.noise == noise:
+                self.bye(conn, "revoked")
 
     # ── one connection ──────────────────────────────────────────────────
 
@@ -575,6 +611,8 @@ class AwayState:
 
     def _forward(self, conn: Conn, req: int, request: wire.Request, picture: bytes | None) -> None:
         conn.forwarded.add(req)
+        if request.op == wire.LEAVE:
+            conn.leaving[req] = time.monotonic() + LEAVING_GRACE_SEC
         self.emit("away", conn=str(conn.id), device=conn.device, noise=conn.noise.hex(), req=str(req),
                   request=json.dumps(request.to_json(), separators=(",", ":")),
                   picture=base64.b64encode(picture).decode("ascii") if picture else "")

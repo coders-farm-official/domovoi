@@ -35,6 +35,9 @@ from web.backend.main import app as web_app
 
 pytestmark = [requires_db, pytest.mark.asyncio]
 
+#: The web's real word from the core, before any fixture stubs it.
+REAL_CORE_STATE = away_api.core_state
+
 
 @pytest.fixture
 def told(monkeypatch):
@@ -107,6 +110,79 @@ async def test_enrolling_again_replaces_both_keys(away_db, told, tmp_path) -> No
         async with session_scope() as s:
             (row,) = await away_store.current_phones(s)
         assert row.tor_auth_pub == p["body"]["tor_auth_pub"]
+
+
+async def test_publishing_passes_through_enroll_and_status(away_db, told, monkeypatch) -> None:
+    """Tor has the phone's key, its descriptor is on its way: said as is,
+    and the status route doesn't nudge the core (it has applied it all)."""
+    async def publishing(_device):
+        return "publishing"
+
+    monkeypatch.setattr(away_api, "core_state", publishing)
+    async with web_client() as c:
+        base, _, _ = await claimed(c)
+        p = await phone(c, base)
+        assert (await enroll(c, p))["state"] == "publishing"
+        assert told == ["reconcile"]
+        r = await c.get("/api/away/status", headers=p["headers"])
+        assert r.json() == {"house": "on", "enrolled": True, "state": "publishing"}
+        assert told == ["reconcile"]                                  # no nudge
+
+
+def _core_says(monkeypatch, said) -> None:
+    """The core's ``GET /v1/away/state`` answers ``{"state": said}``."""
+    import httpx
+
+    class Answer:
+        status_code = 200
+
+        def json(self):
+            return {"state": said}
+
+    class Client:
+        def __init__(self, **_kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, params=None, headers=None):
+            assert url.endswith("/v1/away/state") and set(params) == {"device"}
+            return Answer()
+
+    async def headers():
+        return {}
+
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    monkeypatch.setattr(away_api, "service_auth_headers", headers)
+
+
+async def test_a_state_the_web_doesnt_know_is_starting(away_db, told, monkeypatch) -> None:
+    """A core that says a state this web doesn't know (a later core, say):
+    the real core_state reads it as None, and enroll and status say
+    starting, as a phone would."""
+    monkeypatch.setattr(away_api, "core_state", REAL_CORE_STATE)    # not the fixture's stub
+    _core_says(monkeypatch, "uploading")
+    async with web_client() as c:
+        base, _, _ = await claimed(c)
+        p = await phone(c, base)
+        assert (await enroll(c, p))["state"] == "starting"
+        r = await c.get("/api/away/status", headers=p["headers"])
+        assert r.json() == {"house": "on", "enrolled": True, "state": "starting"}
+        assert told == ["reconcile", "reconcile"]                     # enroll's, then the nudge
+
+
+@pytest.mark.parametrize("said,heard", [
+    ("ready", "ready"), ("publishing", "publishing"), ("starting", "starting"),
+    ("uploading", None), (None, None), (7, None),
+])
+async def test_core_state_keeps_only_the_known_states(monkeypatch, said, heard) -> None:
+    _core_says(monkeypatch, said)
+    assert await REAL_CORE_STATE("android-1") == heard
+    assert away_api.STATES == ("ready", "publishing", "starting")
 
 
 async def test_lan_only(away_db, told) -> None:
