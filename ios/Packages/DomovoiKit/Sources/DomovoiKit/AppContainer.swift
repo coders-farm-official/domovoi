@@ -493,6 +493,14 @@ public final class AppContainer: Sendable {
     /// The device keys and the per-server device ids (1.5.0, ``DeviceKeyStore``):
     /// the app hands the Keychain's; a test's container keeps them in memory.
     public let deviceKeys: DeviceKeyStore
+    /// Away chat's keys (1.5.0, ``AwayKeyStore``): the app hands the
+    /// Keychain's; a test's container keeps them in memory. Wiped here when
+    /// the active server switches away from the one they were made at or is
+    /// forgotten, and when the phone starts over at it under a new device id.
+    public let awayKeys: AwayKeyStore
+    /// Away chat's Tor engine (``AwayTransports/forApp()``) and its folders.
+    public let awayTransport: any AwayTransport
+    public let awayDirectories: AwayTorDirectories?
     public let network: NetworkWatch
     public let tokenHealth: TokenHealth
     public let identity: IdentityGate
@@ -574,6 +582,9 @@ public final class AppContainer: Sendable {
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         configuration: URLSessionConfiguration = DomovoiClient.defaultConfiguration(),
         deviceKeys: DeviceKeyStore = DeviceKeyStore(),
+        awayKeys: AwayKeyStore = AwayKeyStore(),
+        awayTransport: any AwayTransport = TorAwayTransport(),
+        awayDirectories: AwayTorDirectories? = nil,
         log: @Sendable @escaping (String, String) -> Void = { _, _ in },
         adminGrants: (any GrantShelf)? = nil,
         adminLocker: (any GrantLocker)? = nil,
@@ -582,6 +593,9 @@ public final class AppContainer: Sendable {
         self.store = store
         self.vault = vault
         self.deviceKeys = deviceKeys
+        self.awayKeys = awayKeys
+        self.awayTransport = awayTransport
+        self.awayDirectories = awayDirectories
         let observers = SinkRegistry()
         self.networkObservers = observers
         let healthSinks = SinkRegistry()
@@ -591,7 +605,12 @@ public final class AppContainer: Sendable {
         // registry, and because a picker that writes the store has no way to
         // reach the shell otherwise.
         let selectionSinks = self.selectionObservers
-        store.notifySelectionChanges(to: { selectionSinks.fire() })
+        store.notifySelectionChanges(to: {
+            // Away chat's keys belong to the server they were made at: a
+            // switch to another one, or a forget, wipes them first.
+            awayKeys.activeServerIs(store.serverURL)
+            selectionSinks.fire()
+        })
 
         let book = ServerBook(
             activeServer: { store.serverURL },
@@ -655,7 +674,11 @@ public final class AppContainer: Sendable {
         // A phone that starts over at a server under a new id drops a grant
         // kept there (it was issued to the old id).
         self.admin = adminSession
-        deviceKeys.startedOver = { server in adminSession.startedOver(server) }
+        deviceKeys.startedOver = { server in
+            adminSession.startedOver(server)
+            // The house revokes away chat on a device-key change.
+            awayKeys.wipe(server: server)
+        }
 
         // The socket, built from the client that was just made rather than
         // from `self.client`, because not every stored property is set yet.

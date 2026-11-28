@@ -570,7 +570,12 @@ struct SettingsSectionScreen: View {
             AiSettingsDashboardPanel(model: model, section: section)
         case "chat":
             // slot: chat
-            AiSettingsChatPanel(model: model)
+            // 1.5.0: chat from away for this phone, above the house's chat
+            // settings.
+            VStack(alignment: .leading, spacing: 12) {
+                AwayChatSettingsCard(model: model)
+                AiSettingsChatPanel(model: model)
+            }
         case "internet":
             // slot: internet
             // Dashboard-only, as Models is: `GET /api/config/internet` is the

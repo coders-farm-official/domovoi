@@ -88,6 +88,38 @@ beside Lists with the inbox's unread count as its badge
   path carries only the checked 64-hex house key and numbers.
   `FriendHousesPlainTextTests` holds the folder to it.
 
+## Away chat
+
+Chat with your house when the phone is away from home (1.5.0), over Tor to
+the house's own away onion, with the same chats and answers as at home
+(`Away*.swift` in DomovoiKit, `Domovoi/Chat/AwayChatView.swift`). The wire is
+Main's AWAY-CHAT-WIRE v1; the house's side is `domovoi/away/`.
+
+- **Set up at home only**: right after pairing the app offers it ("Chat with
+  your house when you're away? You can turn this off any time."), and
+  Settings → Chat & AI → Chat has it for phones paired before. Two X25519
+  keys (Tor client authorization, Noise static) are made on the phone; the
+  private halves stay in the Keychain, `WhenUnlockedThisDeviceOnly`, never
+  synchronised, and are wiped when it is turned off, the server is forgotten
+  or switched, the phone starts over under a new device id, or the house says
+  it isn't enrolled any more.
+- **Tor runs only while the chat screen is open and the phone is away** (the
+  shell's out-of-reach screen), never in the background, and stops shortly
+  after the chat closes (``AwayChatController``). At home chat is today's
+  path.
+- **The engine** is Arti, from the shared Rust crate `domovoi_tor`, linked in
+  later: ``AwayTorEngine`` is its three C calls and ``EngineAwayTransport``
+  runs it; until then ``AwayTransports/forApp()`` is a placeholder that
+  reaches nothing. A DEBUG build launched with `-domovoi-away-direct
+  127.0.0.1:PORT` talks plain TCP to a loopback house instead.
+- **Noise** is `Noise_IK_25519_ChaChaPoly_SHA256` on CryptoKit, checked
+  against cacophony's vector and bytes the house's own `noise.py` wrote
+  (`scripts/make-away-noise-fixture.py`).
+- **End to end against a real house**: `scripts/away_loopback_house.py` serves
+  the dashboard API and the real away listener on loopback (it says how), and
+  `AwayLoopbackE2ETests` enrols, chats, sends a picture and is cut off by a
+  turn-off, over the direct transport.
+
 ## Building and testing
 
 The maintainers' Mac only builds and tests; the code is written and committed

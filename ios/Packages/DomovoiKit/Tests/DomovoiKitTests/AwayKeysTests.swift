@@ -205,3 +205,48 @@ final class AwayKeysTests: XCTestCase {
         XCTAssertFalse(DeviceKeyRoutes.carries("/api/awayx"))
     }
 }
+
+/// The container's hooks: a server switch, a forget and a device-key start
+/// over each wipe the away keys of the server they were made at.
+final class AwayKeysWipeTests: XCTestCase {
+
+    private let a = "http://192.168.1.20:6369"
+    private let b = "http://192.168.1.30:6369"
+
+    private func container(_ keys: AwayKeyStore) -> (AppContainer, InMemoryShellStore) {
+        let store = InMemoryShellStore(serverURL: a, token: "household-abc")
+        store.trustServer(b, identity: TestIdentity.real.pin)
+        let c = AppContainer(store: store, vault: TokenVault(items: InMemoryKeychain()), lock: HouseholdLock(),
+                             awayKeys: keys)
+        return (c, store)
+    }
+
+    private func enrolment(_ server: String) -> AwayEnrolment {
+        AwayEnrolment(server: server, torAuthPrivate: Data(count: 32), noisePrivate: Data(count: 32),
+                      onion: String(repeating: "f", count: 56) + ".onion", port: 80, houseNoisePublic: Data(count: 32), proto: 1)
+    }
+
+    func testSwitchingServersWipesTheOldServersKeys() {
+        let keys = AwayKeyStore()
+        let (_, store) = container(keys)
+        keys.keep(enrolment(a))
+        _ = store.setServerURL(b)
+        XCTAssertNil(keys.enrolment)
+    }
+
+    func testForgettingTheServerWipesItsKeys() {
+        let keys = AwayKeyStore()
+        let (c, _) = container(keys)
+        keys.keep(enrolment(a))
+        _ = c.store.forgetActiveServer()
+        XCTAssertNil(keys.enrolment)
+    }
+
+    func testStartingOverUnderANewDeviceIDWipesThem() {
+        let keys = AwayKeyStore()
+        let (c, _) = container(keys)
+        keys.keep(enrolment(a))
+        _ = c.deviceKeys.startOver(at: a)
+        XCTAssertNil(keys.enrolment)
+    }
+}

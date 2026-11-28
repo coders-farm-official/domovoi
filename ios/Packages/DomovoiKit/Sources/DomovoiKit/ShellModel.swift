@@ -51,6 +51,10 @@ public final class ShellModel {
     /// join" all read this one, over ``AppContainer/admin``.
     public let admin: AdminModel
 
+    /// Away chat (1.5.0): whether it is set up here, the offer after pairing,
+    /// and the controller that decides when the Tor engine runs.
+    public let away: AwayModel
+
     /// Whether this phone can start a chat on itself. See
     /// ``RouteVisibility/phoneCanChat`` — false until the on-device assistant
     /// exists, and this is the one place it is decided.
@@ -301,6 +305,7 @@ public final class ShellModel {
     ) {
         self.container = container
         self.admin = AdminModel(session: container.admin)
+        self.away = ShellModel.awayModel(container: container, deviceSelf: deviceSelf)
         self.phoneCanChat = phoneCanChat
         // The id this phone uses at the ACTIVE server: the install's own,
         // unless it lost its device key there and started over under a new
@@ -428,6 +433,9 @@ public final class ShellModel {
             // The device key goes too (1.5.0): it belongs to the identity the
             // phone paired with, and must not go to whatever answers there now.
             container.deviceKeys.forget(server: url)
+            // Away chat's keys too (1.5.0): the parting call already turned it
+            // off at the house where it could.
+            container.awayKeys.wipe(server: url)
             listenerStore.forgetPick(for: url)
             listenOutbox?.forget(server: normalized)
             Task { @MainActor in
@@ -441,6 +449,29 @@ public final class ShellModel {
         // the first `.active` is not a return, so `scenePhaseChanged` will
         // not refresh.
         updateWaitTick()
+    }
+
+    /// The away chat model over this container: the enrolment routes through
+    /// the app's client (held to the server they were asked of), the app's
+    /// Tor engine and its folders.
+    static func awayModel(container: AppContainer, deviceSelf: (@Sendable () -> DeviceSelf)?) -> AwayModel {
+        let client = container.client
+        let store = container.store
+        let keys = container.deviceKeys
+        let api = AwayEnrolApi(deviceID: {
+            let base = deviceSelf?().deviceID ?? ""
+            return keys.startedOverID(for: store.serverURL) ?? base
+        }) { method, path, body, headers throws(DomovoiError) in
+            try await client.raw(method: method, path: path, body: body, trackPairing: false, timeout: 20,
+                                 headers: headers, onlyTo: store.serverURL)
+        }
+        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? ""
+        let model = AwayModel(keys: container.awayKeys, api: api, transport: container.awayTransport,
+                              version: version, server: { store.serverURL }, directories: container.awayDirectories)
+        container.awayKeys.changed = { [weak model] in
+            Task { @MainActor in model?.keysChanged() }
+        }
+        return model
     }
 
     /// The reachability loop's verdict, on its way to the main actor.
@@ -820,6 +851,8 @@ public final class ShellModel {
         dismissedPairing = false
         dismissedWithToken = nil
         refresh()
+        // The away chat offer, right after pairing (1.5.0).
+        away.paired()
     }
 
     /// `use this phone's media`, on the token-trouble card
@@ -924,8 +957,13 @@ public final class ShellModel {
     /// ``beforeForgetting``.
     @discardableResult
     public func forgetTheActiveServerAfterParting() async -> String? {
-        guard let parting = beforeForgetting else { return forgetTheActiveServer() }
-        return await forgetTheActiveServer(parting: parting)
+        let calendars = beforeForgetting
+        let away = self.away
+        // Away chat's DELETE (1.5.0) goes too, while the token still works.
+        return await forgetTheActiveServer(parting: { url in
+            await away.parting(url)
+            await calendars?(url)
+        })
     }
 
     @discardableResult

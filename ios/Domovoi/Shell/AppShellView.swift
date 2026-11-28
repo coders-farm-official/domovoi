@@ -71,6 +71,27 @@ struct AppShellView: View {
                 // call: with no sender the cadence slot is not consumed at
                 // all (``ShellModel/registerSender``, and I1-C part 2's F9).
                 model.scenePhaseChanged(to: ShellPhase(phase), sendRegister: model.registerSender)
+                // Away chat's engine never runs in the background (1.5.0).
+                model.away.controller.activeChanged(phase != .background)
+            }
+            // Away chat (1.5.0): at home is the shell's own reckoning; the
+            // engine stops at once there, and a silent close since is asked
+            // about (§8 item 8).
+            .onChange(of: model.screen, initial: true) { _, screen in
+                let home = !awayIsAway(screen)
+                model.away.controller.homeChanged(atHome: home)
+                if home { Task { await model.away.checkAtHome() } }
+            }
+            .onChange(of: model.inputs.serverURL) { _, _ in model.away.serverChanged() }
+            // The offer right after pairing.
+            .alert(AwayStrings.settingsTitle, isPresented: Binding(
+                get: { model.away.offerUp },
+                set: { shown in if !shown && model.away.offerUp { model.away.offerAnswered(false) } }
+            )) {
+                Button(AwayStrings.offerYes) { model.away.offerAnswered(true) }
+                Button(AwayStrings.offerNo, role: .cancel) { model.away.offerAnswered(false) }
+            } message: {
+                Text(AwayStrings.offer)
             }
             .task {
                 // The socket is subscribed to in `DomovoiApp.init`, before it

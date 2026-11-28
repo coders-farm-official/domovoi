@@ -62,7 +62,12 @@ public struct AwayClock: Sendable {
     }
 
     public static let system = AwayClock(
-        now: { ProcessInfo.processInfo.systemUptime },
+        // Monotonic, as the rest of the app keeps time (PrivacyInfo.xcprivacy).
+        now: {
+            var ts = timespec()
+            clock_gettime(CLOCK_MONOTONIC, &ts)
+            return Double(ts.tv_sec) + Double(ts.tv_nsec) / 1e9
+        },
         sleep: { try await Task.sleep(for: .milliseconds(Int64(max(0, $0) * 1000))) }
     )
 }

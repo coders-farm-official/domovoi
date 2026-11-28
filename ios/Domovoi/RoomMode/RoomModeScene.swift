@@ -36,6 +36,11 @@ final class HouseholdRoot {
             store: DomovoiApp.store(vault: vault),
             vault: vault,
             deviceKeys: DeviceKeyStore.forApp(),
+            // Away chat (1.5.0): its keys in the Keychain, its Tor engine
+            // and Tor's folders under Application Support.
+            awayKeys: AwayKeyStore.forApp(),
+            awayTransport: HouseholdRoot.awayTransport(),
+            awayDirectories: AwayTorDirectories.forApp(),
             adminGrants: SavedGrantShelf(),
             adminLocker: KeychainGrantLocker(),
             deviceID: { deviceID }
@@ -107,6 +112,24 @@ final class HouseholdRoot {
         // Its category's hidden-previews placeholder: a locked phone with
         // previews hidden shows "A message from a friend house", no words.
         Task { await FhNotificationSink.registerCategory() }
+    }
+
+    /// Away chat's engine: the app's (``AwayTransports/forApp()``), except in
+    /// a DEBUG build launched with `-domovoi-away-direct HOST:PORT`, which
+    /// talks plain TCP to a loopback house (`ios/scripts/away-loopback-house.py`)
+    /// for the Simulator. A Release build has no such argument and no such
+    /// transport.
+    nonisolated static func awayTransport() -> any AwayTransport {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-domovoi-away-direct"), arguments.index(after: index) < arguments.endIndex {
+            let parts = arguments[arguments.index(after: index)].split(separator: ":")
+            if parts.count == 2, let port = UInt16(parts[1]) {
+                return DirectAwayTransport(host: String(parts[0]), port: port)
+            }
+        }
+        #endif
+        return AwayTransports.forApp()
     }
 
     /// The household side goes quiet as the phone becomes a room

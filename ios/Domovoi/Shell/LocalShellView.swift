@@ -39,6 +39,14 @@ struct LocalShellView: View {
     /// (``LocalSettingsView`` says why in place and not as a sheet).
     @State private var settingsOpen = false
 
+    /// Chat from away, open in place of the shell (1.5.0, ``AwayChatView``).
+    @State private var awayChatOpen = false
+
+    /// The house is out of reach and away chat is (or was) set up for it.
+    private var offersAwayChat: Bool {
+        awayIsAway(model.screen) && (model.away.enrolled || model.away.lapsed)
+    }
+
     /// Answer 29's rule, from ``ShellHeaderFold`` — the same one
     /// ``WorkspaceView`` reads, so the two shells cannot fold at different
     /// sizes. This shell has no `AuditStrip` variant, so the header is always
@@ -61,6 +69,8 @@ struct LocalShellView: View {
     var body: some View {
         if settingsOpen {
             LocalSettingsView(model: model, onBack: { settingsOpen = false })
+        } else if awayChatOpen && offersAwayChat {
+            AwayChatView(model: model, onBack: { awayChatOpen = false })
         } else {
             shell
         }
@@ -97,6 +107,7 @@ struct LocalShellView: View {
             // home for the afternoon is asking for (away-layout audit,
             // 2026-11-19).
             if showsRoomModeEntry { RoomModeEntryLine() }
+            if offersAwayChat { AwayChatEntry { awayChatOpen = true } }
             TabView(selection: $model.localSelection) {
                 ForEach(model.localShellTabs, id: \.self) { route in
                     tab(route)

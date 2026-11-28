@@ -40,7 +40,11 @@ public final class AwayChatController {
 
     public private(set) var phase: Phase = .off
     /// The away link for ``ChatModel``, while a session exists.
-    public private(set) var link: (any ChatAwayLink)?
+    public private(set) var link: (any ChatAwayLink)? {
+        didSet { linkEpoch += 1 }
+    }
+    /// Moves whenever ``link`` does, for a view to watch.
+    public private(set) var linkEpoch = 0
 
     public private(set) var chatOpen = false
     public private(set) var atHome = true
@@ -292,6 +296,10 @@ public final class AwayModel {
         keysTick += 1
         controller.keysChanged()
     }
+
+    /// The keys came or went from somewhere else (a server switch or forget,
+    /// a device-key start-over).
+    public func keysChanged() { keysMoved() }
 
     // MARK: the offer
 
