@@ -227,8 +227,10 @@ const ChatPrivacy = ({ thread, sharedScreen, onShare }) => {
       </span>
       {!sharedScreen && thread.can_share && (
         <label className="chat-privacy-switch" title={CHAT_SHARE_HELP}>
-          <input type="checkbox" checked={!!thread.shared} onChange={(e) => onShare(e.target.checked)}/>
-          <span>Share with household</span>
+          <input type="checkbox" checked={!!thread.shared} aria-label="Share with household"
+                 onChange={(e) => onShare(e.target.checked)}/>
+          <span className="chat-privacy-switch-long">Share with household</span>
+          <span className="chat-privacy-switch-short" aria-hidden="true">Share</span>
         </label>
       )}
     </span>
