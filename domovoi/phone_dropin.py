@@ -262,6 +262,11 @@ class PhoneDropinSession:
             # The room is still playing the reply that announced the call
             # (StreamSession._dropin_leg_ready opens it there).
             return
+        if getattr(peer, "utterance_active", False) is True:
+            # The room is capturing a command ("hang up"): the phone's
+            # voice stays off its speaker until it ends, as in
+            # StreamSession._on_audio.
+            return
         try:
             await peer.ws.send_bytes(data)
         except Exception as e:  # noqa: BLE001

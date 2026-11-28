@@ -921,6 +921,7 @@ async def identify(
     room_id: str | None = None,
     samples: str = SATELLITE_SAMPLES,
     satellite_id: str | None = None,
+    learn: bool = True,
 ) -> IdentificationResult:
     """Embed + match + compute presence. Best-effort — failures degrade
     to ``person_id=None, presence_tier="high"`` so the core
@@ -942,6 +943,11 @@ async def identify(
     phone samples first, see the module docstring). A phone turn never
     learns, whatever ``room_id`` says, and is never held back as noisy
     (a phone is held close to the mouth).
+
+    ``learn=False``: score and name as usual, but count nothing towards
+    learning the room and save nothing (job 4) — a capture made during a
+    live drop-in, whose audio may hold the other room's voice from this
+    room's speaker. It also breaks a run of confident matches there.
     """
     phone = samples == PHONE_SAMPLES
     voice = await embed_print(pcm_int16) if embedding is _EMBED_HERE else _as_print(embedding)
@@ -1054,7 +1060,10 @@ async def identify(
             except Exception as e:
                 log.warning("touch_last_seen failed: %s", e)
 
-            if not phone:
+            if not phone and not learn:
+                if room_id is not None:
+                    _forget_run((matched_person, room_id))
+            elif not phone:
                 # Learning is a satellite's alone: a phone turn never
                 # saves a sample by itself, into either set.
                 await _learn_room(

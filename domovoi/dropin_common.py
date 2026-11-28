@@ -9,6 +9,7 @@ streaming layer can all share the same feasibility logic.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Feasibility result codes. "ok" means a drop-in can be opened right now;
@@ -16,10 +17,63 @@ from typing import Any
 # (DropInHandler) or an HTTP status (the admin endpoint).
 OK = "ok"
 
+#: What ends a drop-in when it is said IN a room that is in one, ahead of
+#: everything else the turn could mean (a parked question, an introduction
+#: collecting its clips, music's bare "stop"). Outside a call none of this
+#: is special: a bare "stop" stays the music's (handlers/dropin.py's own
+#: ``_END_RE`` never takes it). Matched against the transcript as
+#: :func:`end_call_phrase` cleans it.
+_END_CALL_RE = re.compile(
+    r"^(?:(?:stop|stop it|stop that|stop now)(?: stop)*"
+    r"|hang up(?: now)?(?: the (?:call|phone|drop[- ]?in))?"
+    r"|end it|end (?:the )?(?:call|drop[- ]?in)(?: now)?"
+    r"|stop (?:the )?(?:call|drop[- ]?in)"
+    r"|leave (?:the )?(?:call|drop[- ]?in)"
+    r"|disconnect|that's enough|cancel(?: the (?:call|drop[- ]?in))?)"
+    r"(?: please)?$"
+)
+
+
+def end_call_phrase(transcript: str) -> bool:
+    """Whether ``transcript`` (already lowercased by the router's
+    ``normalize_transcript``) asks to end a live drop-in: "stop", "Stop.",
+    "stop stop", "hang up", "end the drop-in", "okay, hang up please"."""
+    t = re.sub(r"[.!?,;:]+", " ", (transcript or "").lower())
+    t = " ".join(t.split())
+    for lead in ("okay ", "ok ", "please ", "hey ", "um ", "uh "):
+        if t.startswith(lead):
+            t = t[len(lead):]
+    return bool(_END_CALL_RE.match(t))
+
+
+def room_in_call(app: Any, room_id: str | None) -> bool:
+    """Whether ``room_id`` is in a live drop-in right now
+    (``app.state.active_dropins``, kept by the streaming layer)."""
+    if app is None or not room_id:
+        return False
+    active = getattr(getattr(app, "state", None), "active_dropins", None) or {}
+    return room_id in active
+
+
+def starts_live_audio(response: Any) -> bool:
+    """Whether this reply hands the room's speaker or microphone to
+    something else the moment it has been said: a drop-in being opened,
+    accepted or ended (``dropin_action``), or an announcement going out to
+    other rooms (``announce_to_rooms``). Such a turn never asks anything
+    back ("By the way, was that you, X?") and never opens a follow-up
+    listen: the follow-up capture and the call (or the announcement) would
+    fight over the same microphone and speaker."""
+    if response is None:
+        return False
+    return bool(getattr(response, "dropin_action", None)) or bool(
+        getattr(response, "announce_to_rooms", None)
+    )
+
 
 def pretty_room(room_id: str) -> str:
-    """Spoken form of a room_id — ``living_room`` → ``living room``."""
-    return room_id.replace("_", " ")
+    """Spoken form of a room_id — ``living_room`` → ``living room``,
+    ``dining-room`` → ``dining room``."""
+    return room_id.replace("_", " ").replace("-", " ")
 
 
 def room_may_reach_other_rooms(app: Any, room_id: str | None) -> bool:
