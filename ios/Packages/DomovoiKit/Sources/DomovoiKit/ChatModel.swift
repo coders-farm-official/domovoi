@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// The Chat screen: the household's threads, the archived view, the search, the
 /// three writes a thread takes, and the conversation with its live reply.
@@ -116,6 +117,24 @@ public final class ChatModel {
     private var stream: Task<Void, Never>?
     private var pinKeys: Set<String>
 
+    // MARK: away chat (1.5.0, ``ChatAwayLink``)
+
+    /// The away path, while the phone is away from home and away chat runs
+    /// (``AwayChatController``): the list, the history, a send, a resume and a
+    /// cancel go over it instead of the home server's routes. Nil: today's
+    /// path. A box, so the reads built in `init` see the current one.
+    private let awayBox = ChatAwayBox()
+
+    /// The pictures this phone sent from away this session, by the id of the
+    /// message that carried them: drawn in place of the placeholder a
+    /// picture the phone doesn't hold gets (v1: pictures aren't downloadable
+    /// away).
+    public private(set) var awayPictures: [Int64: Data] = [:]
+
+    /// Told after each away request, with its failure (nil: it worked), so
+    /// the header can follow (``AwayChatController/linkAnswered()``).
+    @ObservationIgnored public var awayAnswered: (@MainActor (Error?) -> Void)?
+
     // MARK: private chats (1.5.0, ``ChatPrivacyRules``)
 
     /// The open thread's access as the server last said it (its messages'
@@ -208,16 +227,21 @@ public final class ChatModel {
 
         let client = container.client
         let scope = self.scope
+        let away = self.awayBox
         self.threads = ApiRead(in: container, eventTypes: Self.listEvents) {
-            try await client.get(ChatPrivacyRules.threadsPath(archived: false, all: scope.showingAll), as: ChatThreadList.self)
+            if let link = away.link { return try await link.threads(archived: false) }
+            return try await client.get(ChatPrivacyRules.threadsPath(archived: false, all: scope.showingAll), as: ChatThreadList.self)
         }
         self.archivedThreads = ApiRead(in: container, eventTypes: Self.listEvents) {
-            try await client.get(ChatPrivacyRules.threadsPath(archived: true, all: scope.showingAll), as: ChatThreadList.self)
+            if let link = away.link { return try await link.threads(archived: true) }
+            return try await client.get(ChatPrivacyRules.threadsPath(archived: true, all: scope.showingAll), as: ChatThreadList.self)
         }
         // No `eventTypes`: what Ollama has installed does not change because a
         // chat did, and `chat.changed` arrives on every message.
         self.models = ApiRead(in: container) {
-            try await client.get(ChatPath.models, as: ChatModelsInfo.self)
+            // Not on the away path: the five requests don't include it.
+            if away.link != nil { throw AwayClosed.closedHere }
+            return try await client.get(ChatPath.models, as: ChatModelsInfo.self)
         }
     }
 
@@ -348,6 +372,8 @@ public final class ChatModel {
     }
 
     private func search(_ trimmed: String) async {
+        // Away there is no search (v1): the screen offers none.
+        guard awayBox.link == nil else { return }
         let client = container.client
         let path = ChatRules.threadSearchPath(query: trimmed)
         do {
@@ -382,7 +408,11 @@ public final class ChatModel {
 
     /// What a row's menu offers, with the pin state this phone has.
     public func actions(for row: ChatRow) -> [String] {
-        ChatRules.rowActions(row.pinned(isPinned(row)))
+        let all = ChatRules.rowActions(row.pinned(isPinned(row)))
+        // Away, only what the five requests and this phone can do: a pin is
+        // this phone's, and sharing reads the chat through `chat.history`.
+        guard onAway else { return all }
+        return all.filter { [ChatStrings.actionPin, ChatStrings.actionUnpin, ChatStrings.actionShare].contains($0) }
     }
 
     // MARK: - the three writes
@@ -452,6 +482,8 @@ public final class ChatModel {
         body: Data?,
         said: String? = nil
     ) {
+        // Away, the house takes no writes but a send (§6).
+        guard awayBox.link == nil else { return }
         let client = container.client
         let epoch = houseEpoch
         Task { @MainActor [weak self] in
@@ -487,9 +519,15 @@ public final class ChatModel {
         let client = container.client
         let title = row.title
         let epoch = houseEpoch
+        let away = awayBox.link
         Task { @MainActor [weak self] in
-            guard let list = try? await client.get(ChatPath.messages(id), as: ChatMessageList.self)
-            else { return }
+            let read: ChatMessageList?
+            if let away {
+                read = try? await away.messages(id)
+            } else {
+                read = try? await client.get(ChatPath.messages(id), as: ChatMessageList.self)
+            }
+            guard let list = read else { return }
             // ``houseEpoch``: this one hands a whole conversation to the share
             // sheet, so a read from the house the person has left would put
             // the *other house's* words into whatever they share next.
@@ -523,7 +561,9 @@ public final class ChatModel {
         storedAccess = nil
         unsharing = false
         transcript.clear()
-        loadMessages(id)
+        // Away, a reply still being written for this phone is picked up once
+        // the rows are in (`chat.stream`).
+        loadMessages(id, resume: awayBox.link != nil)
     }
 
     /// A new chat. **Nothing is made on the server** until the first message
@@ -610,10 +650,14 @@ public final class ChatModel {
         return visionMissingText(models.data?.visionModel)
     }
 
-    private func loadMessages(_ id: Int64) {
+    private func loadMessages(_ id: Int64, resume: Bool = false) {
         let client = container.client
         let who = deviceID
         let epoch = houseEpoch
+        if let away = awayBox.link {
+            loadAway(id, link: away, who: who, epoch: epoch, resume: resume)
+            return
+        }
         Task { @MainActor [weak self] in
             do {
                 let list = try await client.get(ChatPath.messages(id), as: ChatMessageList.self)
@@ -660,9 +704,16 @@ public final class ChatModel {
     ///   clip is the message, and the server's reply ("I'm watching
     ///   party.mp4 (2:31) now. …") comes back at once with no model asked.
     @discardableResult
-    public func send(_ text: String, videoToken: String? = nil) -> Bool {
+    public func send(_ text: String, videoToken: String? = nil, picture: AwayPicture? = nil) -> Bool {
         let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let video = videoToken.flatMap { $0.isEmpty ? nil : $0 }
+        if let away = awayBox.link {
+            // Away (1.5.0): words and a picture; no video.
+            guard video == nil, !content.isEmpty || picture != nil, canSend, conversationOpen else { return false }
+            sendAway(content, picture: picture, link: away)
+            return true
+        }
+        guard picture == nil else { return false }
         guard !content.isEmpty || video != nil, canSend, conversationOpen else { return false }
         sending = true
         transcript.beginSend(content: content, atISO: nowISO())
@@ -726,7 +777,8 @@ public final class ChatModel {
     /// and the transcript puts the old reply back.
     @discardableResult
     public func retry() -> Bool {
-        guard let id = openThread, canSend, transcript.beginRetry() else { return false }
+        // Away there is no retry: the five requests don't include it.
+        guard awayBox.link == nil, let id = openThread, canSend, transcript.beginRetry() else { return false }
         sending = true
         let epoch = houseEpoch
         stream = Task { @MainActor [weak self] in
@@ -899,6 +951,7 @@ public final class ChatModel {
     /// of an open chat, or for a new chat on a phone with a key; never on a
     /// shared screen.
     public var showsShareSwitch: Bool {
+        if onAway { return false }
         if let access = openAccess { return ChatPrivacyRules.showsShareSwitch(access, sharedScreen: isSharedScreen) }
         return newChat && hasDeviceKey && !isSharedScreen
     }
@@ -942,7 +995,7 @@ public final class ChatModel {
 
     /// `PATCH /threads/{id}` with `shared` (the owning phone, or an admin).
     private func setShared(_ want: Bool) {
-        guard let id = openThread else { return }
+        guard awayBox.link == nil, let id = openThread else { return }
         let client = container.client
         let epoch = houseEpoch
         Task { @MainActor [weak self] in
@@ -974,7 +1027,7 @@ public final class ChatModel {
 
     /// The admin's filter is offered (``ChatPrivacyRules/offersScope(_:showingAll:)``).
     public var offersScope: Bool {
-        ChatPrivacyRules.offersScope(
+        !onAway && ChatPrivacyRules.offersScope(
             (threads.data?.threads ?? []) + (archivedThreads.data?.threads ?? []), showingAll: allChats
         )
     }
@@ -1101,5 +1154,159 @@ public struct ChatShare: Equatable, Sendable {
     public init(title: String, text: String) {
         self.title = title
         self.text = text
+    }
+}
+
+// MARK: - away chat (1.5.0)
+
+/// The away link, readable from the reads `init` builds (any thread).
+final class ChatAwayBox: Sendable {
+    private let box = Mutex<(any ChatAwayLink)?>(nil)
+    var link: (any ChatAwayLink)? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
+}
+
+extension ChatModel {
+
+    /// The chat on screen is going the away path.
+    public var onAway: Bool { awayBox.link != nil }
+
+    /// Go the away path (`link`), or back to today's (nil): what
+    /// ``AwayChatController`` hands over as the phone leaves home, the engine
+    /// starts or stops, or the phone gets home. Everything in flight on the
+    /// old path is dropped (``houseEpoch``'s rule), the lists are read again,
+    /// and an open chat is read again on the new path.
+    public func useAway(_ link: (any ChatAwayLink)?) {
+        let was = awayBox.link
+        guard (was as AnyObject?) !== (link as AnyObject?) else { return }
+        houseEpoch += 1
+        debounce?.cancel()
+        cancelStream()
+        awayBox.link = link
+        filter = ""
+        hits = nil
+        searchFailed = false
+        allChats = false
+        scope.showingAll = false
+        unsharing = false
+        refreshLists()
+        if let openThread {
+            transcript.clear()
+            loadMessages(openThread, resume: link != nil)
+        }
+    }
+
+    /// Stop this phone's reply in the open chat (`chat.cancel`). The stream
+    /// ends with the house's `cancelled` error and the partial reply is kept,
+    /// as at home.
+    public func cancelAwayReply() {
+        guard let link = awayBox.link, let id = openThread, sending else { return }
+        Task { _ = try? await link.cancel(id) }
+    }
+
+    /// Whether the open chat's reply can be stopped from here.
+    public var canCancelAwayReply: Bool { onAway && sending && openThread != nil }
+
+    fileprivate func loadAway(_ id: Int64, link: any ChatAwayLink, who: String?, epoch: Int, resume: Bool) {
+        Task { @MainActor [weak self] in
+            do {
+                let list = try await link.messages(id)
+                guard let self, self.stillHome(epoch), self.openThread == id else { return }
+                if let thread = list.thread, thread.id == id { self.storedAccess = thread }
+                self.transcript.load(list.messages, thisDeviceID: who)
+                self.awayAnswered?(nil)
+                if resume { self.resumeAway(id, link: link, epoch: epoch) }
+            } catch {
+                guard let self, self.stillHome(epoch), self.openThread == id else { return }
+                self.awayAnswered?(error)
+                if (error as? AwayErr)?.code == "not_found" {
+                    self.gone()
+                    return
+                }
+                self.toast = awayFailureLine(error)
+            }
+        }
+    }
+
+    /// `chat.stream`: a reply the house is still writing for this phone in
+    /// `id`, after a dropped connection or a reopened app.
+    private func resumeAway(_ id: Int64, link: any ChatAwayLink, epoch: Int) {
+        guard !sending else { return }
+        stream = Task { @MainActor [weak self] in
+            guard let events = try? await link.resume(id) else { return }
+            guard let self, self.stillHome(epoch), self.openThread == id, !Task.isCancelled,
+                  self.transcript.beginResume() else { return }
+            self.sending = true
+            await self.consumeAway(events, epoch: epoch, hadPicture: false)
+            guard self.stillHome(epoch) else { return }
+            self.endStream()
+            if !Task.isCancelled, self.openThread == id { self.loadMessages(id) }
+        }
+    }
+
+    /// A send over the away path: the user turn goes on screen at once, the
+    /// house stores it (making the chat when this is a new one), and the
+    /// reply streams in. When it has landed the chat is read again, so the
+    /// rows are the house's own (a reply too large for one event is only
+    /// whole there, §8 item 4).
+    fileprivate func sendAway(_ content: String, picture: AwayPicture?, link: any ChatAwayLink) {
+        sending = true
+        transcript.beginSend(content: content, atISO: nowISO(), pictures: picture == nil ? 0 : 1)
+        let epoch = houseEpoch
+        let chatID = openThread
+        let clientID = AwayRequest.newClientID()
+        stream = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let start: AwaySendStart
+            do {
+                start = try await link.send(chatID: chatID, clientID: clientID, text: content, picture: picture)
+            } catch {
+                guard self.stillHome(epoch) else { return }
+                self.awayAnswered?(error)
+                if (error as? AwayErr)?.code == "not_found" {
+                    self.endStream()
+                    self.gone()
+                    return
+                }
+                self.transcript.failLive(awayFailureLine(error, hadPicture: picture != nil))
+                self.endStream()
+                return
+            }
+            guard self.stillHome(epoch), !Task.isCancelled else { return }
+            if let picture { self.awayPictures[start.messageID] = picture.jpeg }
+            if chatID == nil {
+                // The chat this send made, unless the person moved on.
+                guard self.newChat, self.openThread == nil else { return }
+                self.openThread = start.chatID
+                self.newChat = false
+            } else if self.openThread != chatID {
+                return
+            }
+            let ok = await self.consumeAway(start.events, epoch: epoch, hadPicture: picture != nil)
+            guard self.stillHome(epoch) else { return }
+            self.endStream()
+            if ok, !Task.isCancelled, self.openThread == start.chatID { self.loadMessages(start.chatID) }
+        }
+    }
+
+    /// Apply a reply's events; false when the connection failed under it
+    /// (said where the reply is).
+    @discardableResult
+    private func consumeAway(_ events: AsyncThrowingStream<ServerEvent, Error>, epoch: Int, hadPicture: Bool) async -> Bool {
+        do {
+            for try await event in events {
+                guard !Task.isCancelled, stillHome(epoch) else { break }
+                react(to: transcript.apply(event))
+            }
+            awayAnswered?(nil)
+            return true
+        } catch {
+            guard stillHome(epoch) else { return false }
+            awayAnswered?(error)
+            transcript.failLive(awayFailureLine(error, hadPicture: hadPicture))
+            return false
+        }
     }
 }

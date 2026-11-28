@@ -61,6 +61,10 @@ public struct ChatLiveMessage: Equatable, Sendable {
     /// see that the omission was a decision rather than an oversight.
     public var hasAttachments: Bool
 
+    /// How many pictures the row carries (`images`). Away chat (1.5.0) draws
+    /// a placeholder for each one this phone doesn't hold itself.
+    public var pictures: Int
+
     /// The list's identity, assigned once when the message joins the
     /// transcript and never reused.
     ///
@@ -84,6 +88,7 @@ public struct ChatLiveMessage: Equatable, Sendable {
         speakerName: String? = nil,
         retryable: Bool = false,
         hasAttachments: Bool = false,
+        pictures: Int = 0,
         ordinal: Int = 0
     ) {
         self.role = role
@@ -100,6 +105,7 @@ public struct ChatLiveMessage: Equatable, Sendable {
         self.speakerName = speakerName
         self.retryable = retryable
         self.hasAttachments = hasAttachments
+        self.pictures = pictures
         self.ordinal = ordinal
     }
 
@@ -126,6 +132,7 @@ public struct ChatLiveMessage: Equatable, Sendable {
         if let code = row.stats?.errorCode { errorCode = code }
         retryable = row.retryable
         hasAttachments = row.hasAttachments
+        pictures = row.images.count
         if row.error == nil { content = row.content }
     }
 
@@ -171,6 +178,7 @@ extension ChatMessage {
             speakerName: speakerName,
             retryable: retryable,
             hasAttachments: hasAttachments,
+            pictures: images.count,
             ordinal: ordinal
         )
     }
@@ -350,14 +358,27 @@ public struct ChatTranscript: Equatable, Sendable {
     /// The user row is stamped **here** and not by the server: the server sends
     /// no row back for it, and the two clocks agree to the second on a LAN
     /// (`ChatScreen.kt:747`).
-    public mutating func beginSend(content: String, atISO: String) {
+    public mutating func beginSend(content: String, atISO: String, pictures: Int = 0) {
         append(ChatLiveMessage(
             role: "user",
             content: content,
             createdAt: atISO,
-            device: ChatStrings.thisPhone
+            device: ChatStrings.thisPhone,
+            hasAttachments: pictures > 0,
+            pictures: pictures
         ))
         appendPendingReply()
+    }
+
+    /// Pick up a reply the house is still writing (away chat's `chat.stream`,
+    /// 1.5.0): a pending reply after the rows already loaded, which the
+    /// stream's first `delta` (everything so far) fills. False while a reply
+    /// is already live here.
+    @discardableResult
+    public mutating func beginResume() -> Bool {
+        guard liveIndex == nil else { return false }
+        appendPendingReply()
+        return true
     }
 
     /// Take the last reply out and put a pending one in its place (`retry`,
