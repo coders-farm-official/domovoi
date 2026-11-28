@@ -159,8 +159,9 @@ _TELL_RE = re.compile(
 #   or, in a chat, the person's own earlier announce request in the thread
 #   (the typed message, never an assistant reply: an old reply that only
 #   pretended to announce must not be read out), within the last few
-#   minutes. With neither, Domovoi asks "What should I announce?" and the
-#   next turn's words are the announcement.
+#   minutes; the session's own announcement first. With neither, Domovoi
+#   asks "What should I announce?" and the next turn's words are the
+#   announcement.
 
 # "that" introducing a clause (two words or more after it), so "announce
 # that" alone is a pointer, never the word "that".
@@ -276,9 +277,18 @@ async def _thread_request(ctx: Context, session: AsyncSession | None) -> dict | 
 
 
 async def _what_to_repeat(ctx: Context, session: AsyncSession | None) -> dict | None:
-    """The newer of the two sources above, or None."""
-    found = [f for f in (await _session_announcement(ctx, session), await _thread_request(ctx, session)) if f]
-    return max(found, key=lambda f: f["at"]) if found else None
+    """This session's last announcement, else the thread's last request
+    (above), else None. A source that can't be read is only nothing found:
+    Domovoi then asks."""
+    for source in (_session_announcement, _thread_request):
+        try:
+            hit = await source(ctx, session)
+        except Exception as e:  # noqa: BLE001
+            log.warning("intercom: couldn't read what to announce again: %s", type(e).__name__)
+            hit = None
+        if hit:
+            return hit
+    return None
 
 
 async def _remember_announcement(

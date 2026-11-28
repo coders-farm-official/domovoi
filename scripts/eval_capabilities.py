@@ -886,6 +886,12 @@ FIXTURE_READS: list[tuple[str, re.Pattern[str], Any]] = [
      _device_row),
     ("chat's previous row", re.compile(r"SELECT role, stats FROM chat_messages WHERE thread_id", re.I),
      _previous_chat_row),
+    # The intercom's "announce that" in a chat reads the person's own recent
+    # requests in the thread (handlers/intercom.py _thread_request). The
+    # sandbox keeps no message text: nothing is found, and the session's
+    # last announcement (or the question) answers.
+    ("chat's recent requests", re.compile(r"SELECT content, EXTRACT\(EPOCH FROM created_at\) FROM chat_messages", re.I),
+     lambda h, p: []),
     ("room board", re.compile(r"SELECT board FROM satellites", re.I),
      lambda h, p: [{"board": "android_room" if h.get("asker") == "room_mode_phone" else "pi"}]),
 ]
