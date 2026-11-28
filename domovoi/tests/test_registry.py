@@ -220,6 +220,7 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
         "voice_profile": {
             "core.phone_voice_add", "core.room_voice_add", "core.forget_me",
             "core.self_intro", "core.name_sound_alike", "core.room_check",
+            "core.room_learn_offer",
         },
         "printing": {"core.print_pick", "core.print_printer", "core.printer_pick", "core.scan_more"},
         "lists": {"core.lists_add_which"},
@@ -244,6 +245,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "voice_profile": {
             "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
             "core.room_voice_add", "core.forget_me", "core.name_sound_alike", "core.room_check",
+            "core.room_learn_offer",
         },
         "double_check": {"core.self_doubt_offer", "core.prefs_offer"},
         "memory": {"core.pending_memory_offer", "core.forget_what"},

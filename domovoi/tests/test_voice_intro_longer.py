@@ -368,8 +368,10 @@ def test_the_phone_keeps_the_one_clip_introduction() -> None:
 @pytest.fixture
 def quiet_rooms():
     voice_profile._ROOM_CHECK_ASKED.clear()
+    voice_profile._ROOM_LEARN_OFFERED.clear()
     yield
     voice_profile._ROOM_CHECK_ASKED.clear()
+    voice_profile._ROOM_LEARN_OFFERED.clear()
 
 
 async def _known_person(
@@ -657,25 +659,136 @@ async def test_an_unknown_voice_that_isnt_priya_is_refused(db_session, quiet_roo
 
 
 # ─── A room with only short samples asks again (1.4.1) ────────────────────
+#
+# Its yes OFFERS the learning; the counting starts on a second yes (owner
+# decision 2026-11-28: offer first). ROOM_CHECK_LEARNING = "start" is the
+# test hook for 1.4.1's start-at-once.
 
 LEARN_AFTER_CHECK = (
     "Thanks, Priya. Let me learn your voice better here: count from one to "
     "ten for me, at your normal voice."
 )
+OFFER = "Thanks. Want me to learn your voice better here? It takes about a minute."
+LEARN_AFTER_OFFER = (
+    "Great. Let me learn your voice better here: count from one to ten for "
+    "me, at your normal voice."
+)
+
+
+async def _offered(db_session) -> tuple[int, Context, dict]:
+    """Priya asked in a kitchen with one short sample of her, her bare yes
+    answered: the learning offered and parked."""
+    pid, ctx, pending = await _asked(db_session, "office", "kitchen")
+    offer = await VoiceProfileHandler().handle_choice_reply(
+        "core.room_check", pending, "Yes.", _yes(ctx, await _voice(788)), db_session,
+    )
+    assert offer.text == OFFER and offer.expect_followup is True
+    parked = await _pending(db_session, ctx.session_id)
+    assert parked["kind"] == "core.room_learn_offer" and parked["person_id"] == pid
+    return pid, ctx, parked
 
 
 @requires_db
-async def test_a_short_sample_room_asks_and_its_yes_learns_the_room(db_session, quiet_rooms) -> None:
+async def test_a_short_sample_rooms_bare_yes_offers_and_a_second_yes_learns_the_room(
+    db_session, quiet_rooms,
+) -> None:
     """Priya's kitchen sample is one second long: the kitchen asks on a
-    near-miss, and her yes starts the counting that replaces that sample
-    (only with more speech: test_voice_intro_longer's "Is that you?"
-    tests run the rest). Nothing is replaced yet; her office sample and
-    other people's samples are not touched."""
+    near-miss, her yes offers the learning (nothing saved, nothing
+    started), and her second yes starts the counting that replaces that
+    sample (only with more speech: the "Is that you?" tests below run the
+    rest). Nothing is replaced yet; her office sample and other people's
+    samples are not touched."""
     sarah, _sv = await _known_person(db_session, "kitchen", secs=1.0, name="Sarah", level=500)
-    pid, ctx, pending = await _asked(db_session, "office", "kitchen")
+    pid, ctx, offer = await _offered(db_session)
     before = (await db_session.execute(text(
         "SELECT id, room_id, sample_seconds FROM voice_profiles WHERE person_id = ANY(:p) ORDER BY id"),
         {"p": [pid, sarah]})).all()
+    assert await _count(db_session, pid) == 2     # the offer saved nothing
+    assert (pid, "kitchen") in voice_profile._ROOM_LEARN_OFFERED
+
+    learn = await VoiceProfileHandler().handle_choice_reply(
+        "core.room_learn_offer", offer, "Yes.", _yes(ctx, await _voice(789)), db_session,
+    )
+    assert learn.text == LEARN_AFTER_OFFER and learn.expect_followup is True
+    assert (pid, "kitchen") not in voice_profile._ROOM_LEARN_OFFERED
+    collecting = await _pending(db_session, ctx.session_id)
+    assert collecting["kind"] == "core.self_intro" and collecting["stage"] == "count"
+    assert collecting["learn_room"] == "kitchen"
+    # Seeded with the clip the question was about.
+    assert collecting["clips"] == offer["clips"]
+    priya_kitchen = (await db_session.execute(text(
+        "SELECT id FROM voice_profiles WHERE person_id = :p AND room_id = 'kitchen'"),
+        {"p": pid})).scalars().all()
+    assert collecting["replace_ids"] == [int(i) for i in priya_kitchen]
+    after = (await db_session.execute(text(
+        "SELECT id, room_id, sample_seconds FROM voice_profiles WHERE person_id = ANY(:p) ORDER BY id"),
+        {"p": [pid, sarah]})).all()
+    assert after == before
+
+
+@requires_db
+@pytest.mark.parametrize("reply", ["No.", "late", "what time is it"])
+async def test_a_no_a_late_yes_or_anything_else_ends_the_offer_for_a_week(
+    db_session, quiet_rooms, monkeypatch, reply,
+) -> None:
+    """The offer ends unanswered, and the room doesn't offer it to her
+    again for seven days: the clip she already confirmed is kept as a
+    short sample (review 5); the next day's yes saves its clip as a plain
+    yes does (at most three); a week later it offers again."""
+    pid, ctx, offer = await _offered(db_session)
+    handler = VoiceProfileHandler()
+    if reply == "late":
+        offer["expires_at"] = time.time() - 1
+        out = await handler.handle_choice_reply("core.room_learn_offer", offer, "yes", ctx, db_session)
+        assert out.text == "That was a while ago, so I'll leave it for now."
+    elif reply == "No.":
+        out = await handler.handle_choice_reply("core.room_learn_offer", offer, reply, ctx, db_session)
+        assert out.text == "Okay, I'll leave it."
+    else:
+        assert await handler.handle_choice_reply(
+            "core.room_learn_offer", offer, reply, ctx, db_session,
+        ) is None
+    assert await _count(db_session, pid) == 3
+    newest = (await db_session.execute(text(
+        "SELECT embedding, room_id, sample_seconds FROM voice_profiles WHERE person_id = :p "
+        "ORDER BY id DESC LIMIT 1"), {"p": pid})).one()
+    assert newest[1] == "kitchen" and newest[2] == pytest.approx(1.5)
+    assert voice_profile._b64_embedding(np.frombuffer(bytes(newest[0]), dtype=np.float32)) == (
+        offer["clips"][0][0]
+    )
+    await SessionRepository(db_session).set_context_key(ctx.session_id, "pending_confirmation", None)
+
+    real = time.time
+    monkeypatch.setattr(voice_profile.time, "time", lambda: real() + 24 * 3600 + 5)
+    ctx2, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx2, response=response, ident=_ident(pid, await _voice(790)))
+    pending = await _pending(db_session, ctx2.session_id)
+    yes = await handler.handle_choice_reply(
+        "core.room_check", pending, "Yes.", _yes(ctx2, await _voice(791)), db_session,
+    )
+    assert yes.text == "Done — I'll know your voice in this room now, Priya."
+    assert not yes.expect_followup
+    # Nothing new parked (the router clears the answered question itself).
+    assert (await _pending(db_session, ctx2.session_id))["kind"] == "core.room_check"
+    assert await _count(db_session, pid) == 4
+
+    monkeypatch.setattr(voice_profile.time, "time", lambda: real() + 8 * 24 * 3600)
+    ctx3, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx3, response=response, ident=_ident(pid, await _voice(792)))
+    pending = await _pending(db_session, ctx3.session_id)
+    again = await handler.handle_choice_reply(
+        "core.room_check", pending, "Yes.", _yes(ctx3, await _voice(793)), db_session,
+    )
+    assert again.text == OFFER
+
+
+@requires_db
+async def test_the_start_hook_starts_the_learning_on_the_first_yes(
+    db_session, quiet_rooms, monkeypatch,
+) -> None:
+    """ROOM_CHECK_LEARNING = "start" (a test hook): 1.4.1's behaviour."""
+    monkeypatch.setattr(voice_profile, "ROOM_CHECK_LEARNING", "start")
+    pid, ctx, pending = await _asked(db_session, "office", "kitchen")
     assert pending["speech_sec"] == 1.5
     learn = await VoiceProfileHandler().handle_choice_reply(
         "core.room_check", pending, "Yes.", _yes(ctx, await _voice(788)), db_session,
@@ -688,10 +801,288 @@ async def test_a_short_sample_room_asks_and_its_yes_learns_the_room(db_session, 
         "SELECT id FROM voice_profiles WHERE person_id = :p AND room_id = 'kitchen'"),
         {"p": pid})).scalars().all()
     assert collecting["replace_ids"] == [int(i) for i in priya_kitchen]
-    after = (await db_session.execute(text(
-        "SELECT id, room_id, sample_seconds FROM voice_profiles WHERE person_id = ANY(:p) ORDER BY id"),
-        {"p": [pid, sarah]})).all()
-    assert after == before
+    assert await _count(db_session, pid) == 2
+
+
+# ─── "Yes, wrong song though. Play X" (2026-11-28) ────────────────────────
+#
+# The owner's dining room: the yes to "was that you, X?" carried a request,
+# and the whole turn was taken as the yes — the counting started, and the
+# play was lost. Now the yes counts, the request is routed as if said
+# alone, in the same turn, and no learning is offered or started.
+
+THE_CASE = "Yes, wrong song though. Play, you should be here."
+
+
+async def _route_said(db_session, ctx: Context, said: str, monkeypatch) -> tuple[Response, list[str]]:
+    """``said`` through the REAL router, as the turn after the question:
+    the reply, and every transcript the router looked for a fast path in
+    and found one (handler name: transcript)."""
+    from domovoi import router as router_module
+    from domovoi.models import Intent
+
+    seen: list[str] = []
+    real = router_module.first_fast_path
+
+    def spy(transcript, handlers=None):
+        hit = real(transcript, handlers)
+        if hit is not None:
+            seen.append(f"{hit[0].name}: {transcript}")
+        return hit
+
+    monkeypatch.setattr(router_module, "first_fast_path", spy)
+    response = await router_module.route(
+        Intent(transcript=said, room_id=ctx.room_id, session_id=ctx.session_id), ctx, db_session,
+    )
+    await db_session.commit()
+    return response, seen
+
+
+async def _logged(db_session, sid) -> tuple[str, str, str]:
+    row = (await db_session.execute(text(
+        "SELECT user_text, assistant_text, matched_handler FROM conversation_log "
+        "WHERE session_id = :s ORDER BY id DESC LIMIT 1"), {"s": str(sid)})).one()
+    return row[0], row[1], row[2]
+
+
+@requires_db
+@pytest.mark.parametrize("rooms", [(), ("office", "kitchen")], ids=["no sample here", "a short one here"])
+async def test_the_case_a_yes_with_a_request_saves_the_yes_and_plays(
+    db_session, quiet_rooms, monkeypatch, rooms,
+) -> None:
+    pid, voice = await _known_person(db_session, *rooms)
+    ctx, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx, response=response, ident=_ident(pid, voice))
+    before = await _count(db_session, pid)
+
+    reply, seen = await _route_said(db_session, _yes(ctx, await _voice(788)), THE_CASE, monkeypatch)
+    # The request reached music, on its own.
+    assert "music: play you should be here" in seen
+    assert reply.matched_handler == "music" and reply.matched_path == "fast"
+    assert reply.text.startswith("Thanks, Priya. ")
+    # The yes counted: that turn's clip is the kitchen's sample for her.
+    assert await _count(db_session, pid) == before + 1
+    kitchen = [r for r in await _sample_rows(pid) if r[1] == "kitchen"]
+    assert kitchen[-1][0] == voice.tobytes()
+    # No learning: nothing parked, no offer, nothing remembered as offered.
+    pending = await _pending(db_session, ctx.session_id)
+    assert not pending or pending.get("kind") not in ("core.self_intro", "core.room_learn_offer")
+    assert "count from one to ten" not in reply.text and OFFER not in reply.text
+    assert voice_profile._ROOM_LEARN_OFFERED == {}
+    # One turn, one row: what was said, and what the room heard.
+    user_text, assistant_text, handler = await _logged(db_session, ctx.session_id)
+    assert user_text == THE_CASE and handler == "music"
+    assert assistant_text == reply.text
+
+
+@requires_db
+async def test_a_bare_yes_is_as_before(db_session, quiet_rooms, monkeypatch) -> None:
+    pid, voice = await _known_person(db_session)
+    ctx, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx, response=response, ident=_ident(pid, voice))
+    reply, seen = await _route_said(db_session, _yes(ctx, await _voice(788)), "Yes, that was me.", monkeypatch)
+    assert reply.text == "Done — I'll know your voice in this room now, Priya."
+    assert reply.matched_handler == "voice_profile" and reply.matched_path == "confirmation"
+    assert seen == []
+    assert await _count(db_session, pid) == 2
+
+
+@requires_db
+async def test_no_with_a_request_saves_nothing_and_plays(db_session, quiet_rooms, monkeypatch) -> None:
+    pid, voice = await _known_person(db_session)
+    ctx, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx, response=response, ident=_ident(pid, voice))
+    reply, seen = await _route_said(db_session, _yes(ctx, await _voice(788)), "No, play some jazz.", monkeypatch)
+    assert "music: play some jazz" in seen
+    assert reply.matched_handler == "music"
+    assert "my mistake" not in reply.text.lower()
+    assert await _count(db_session, pid) == 1
+    user_text, _said, _h = await _logged(db_session, ctx.session_id)
+    assert user_text == "No, play some jazz."
+
+
+@requires_db
+async def test_a_yes_with_a_request_in_someone_elses_voice_saves_nothing_and_plays(
+    db_session, quiet_rooms, monkeypatch,
+) -> None:
+    pid, voice = await _known_person(db_session)
+    ctx, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx, response=response, ident=_ident(pid, voice))
+    reply, seen = await _route_said(db_session, _yes(ctx, await _voice(388)), THE_CASE, monkeypatch)
+    assert "music: play you should be here" in seen
+    assert not reply.text.startswith("Thanks")
+    assert await _count(db_session, pid) == 1
+
+
+@requires_db
+async def test_a_yes_with_a_request_to_the_offer_routes_it_and_starts_nothing(
+    db_session, quiet_rooms, monkeypatch,
+) -> None:
+    pid, ctx, _offer = await _offered(db_session)
+    reply, seen = await _route_said(
+        db_session, _yes(ctx, await _voice(789)), "Yes, but play some jazz first.", monkeypatch,
+    )
+    assert "music: play some jazz first" in seen
+    assert reply.matched_handler == "music"
+    pending = await _pending(db_session, ctx.session_id)
+    assert not pending or pending.get("kind") != "core.self_intro"
+    # The offer ended without the learning: her confirmed clip is kept.
+    assert await _count(db_session, pid) == 3
+
+
+REPLIES = [
+    # (said, as the router read it, (the answer, the rest routed — None:
+    # only the answer))
+    ("yes", True, (True, None)),
+    ("yes, that was me", True, (True, None)),
+    ("yeah, it's me, priya", True, (True, None)),
+    ("yes, that was priya", True, (True, None)),
+    ("yes it is, thanks", True, (True, None)),
+    ("yep, that's right", True, (True, None)),
+    ("yes, thank you domovoi", True, (True, None)),
+    ("yes, wrong song though. play, you should be here", True, (True, "play you should be here")),
+    ("yes, wrong song though. play you should be here", True, (True, "play you should be here")),
+    ("yeah it was, turn it up", True, (True, "turn it up")),
+    ("yes play some jazz", True, (True, "play some jazz")),
+    ("um, yes, pause the music", True, (True, "pause the music")),
+    ("yes, what's the capital of france", True, (True, "what's the capital of france")),
+    ("yes it was. what's the capital of france", True, (True, "what's the capital of france")),
+    # Review 1: natural yeses are a yes, nothing more for the model.
+    ("yes please", True, (True, None)),
+    ("sure, go ahead", True, (True, None)),
+    ("yeah alright", True, (True, None)),
+    ("yes, sounds good", True, (True, None)),
+    ("yeah, let's do it", True, (True, None)),
+    ("yes, sorry", True, (True, None)),
+    ("yes, wrong song though", True, (True, None)),
+    # Review 2: a yes that takes itself back is a no.
+    ("yeah, no", True, (False, None)),
+    ("yes, no wait, that was sam", True, (False, None)),
+    ("yes, actually it wasn't", True, (False, None)),
+    ("yeah no, play some jazz", True, (False, "play some jazz")),
+    # Review 2/3: an introduction or a dismissal inside a yes is the answer.
+    ("yes, my name is alex", True, (False, None)),
+    ("yes, i'm in the kitchen", True, (True, None)),
+    ("yes, that's fine", True, (True, None)),
+    ("no", False, (False, None)),
+    ("no, it was my sister", False, (False, None)),
+    ("no it wasn't me", False, (False, None)),
+    ("no, play some jazz", False, (False, "play some jazz")),
+]
+
+
+@pytest.mark.parametrize("said,polarity,read", REPLIES, ids=[r[0] for r in REPLIES])
+def test_what_a_reply_says_besides_the_answer(said, polarity, read) -> None:
+    parts = voice_profile.read_reply(normalize_transcript(said), polarity, "Priya")
+    assert (parts.affirmative, parts.rest) == read
+    assert voice_profile.reply_rest(normalize_transcript(said), polarity, "Priya") == read[1]
+
+
+@pytest.mark.parametrize("said", [
+    "yes", "yes please", "yeah, thanks", "sure thank you", "yep, please", "correct",
+])
+def test_a_yes_early_commit_takes_as_complete_is_a_bare_yes(said) -> None:
+    """Agrees with early_commit: a turn it commits as a whole yes to a
+    choice is read here as only the yes."""
+    from domovoi.early_commit import _COMPLETE_YES_RE
+
+    said = normalize_transcript(said)
+    assert _COMPLETE_YES_RE.match(said)
+    assert voice_profile.read_reply(said, True, "Priya") == (True, None, False)
+
+
+def test_the_offers_yes_keeps_only_a_fast_path_request() -> None:
+    said = normalize_transcript("Yes. What's the capital of France?")
+    assert voice_profile.read_reply(said, True, "Priya", questions=False).rest is None
+    said = normalize_transcript("Yes, but play some jazz first.")
+    assert voice_profile.read_reply(said, True, "Priya", questions=False).rest == "play some jazz first"
+
+
+def test_the_routed_rest_keeps_how_it_was_said() -> None:
+    from domovoi.router import said_slice
+
+    assert said_slice("Yes, announce Dinner is ready.", "announce dinner is ready") == (
+        "announce Dinner is ready"
+    )
+    assert said_slice(THE_CASE, "play you should be here") == "Play you should be here"
+    assert said_slice("Yes.", "something else") == "something else"
+
+
+@requires_db
+async def test_a_natural_yes_offers_and_a_natural_yes_to_the_offer_learns(
+    db_session, quiet_rooms, monkeypatch,
+) -> None:
+    """Review 1: "Yes, sorry" to the room check is a bare yes (the offer,
+    no sample, no model turn); "Yes please" to the offer starts the
+    counting."""
+    pid, ctx, _pending_check = await _asked(db_session, "office", "kitchen")
+    await db_session.commit()
+    offer, _seen = await _route_said(db_session, _yes(ctx, await _voice(788)), "Yes, sorry.", monkeypatch)
+    assert offer.text == OFFER and offer.matched_path == "confirmation"
+    assert await _count(db_session, pid) == 2
+    learn, _seen = await _route_said(db_session, _yes(ctx, await _voice(789)), "Yes please.", monkeypatch)
+    assert learn.text == LEARN_AFTER_OFFER
+    assert (await _pending(db_session, ctx.session_id))["stage"] == "count"
+
+
+@requires_db
+@pytest.mark.parametrize("said", ["Yeah, no.", "Yes, no wait, that was Sam.", "Yes, my name is Sam."])
+async def test_a_yes_that_takes_itself_back_saves_nothing(
+    db_session, quiet_rooms, monkeypatch, said,
+) -> None:
+    pid, voice = await _known_person(db_session)
+    ctx, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx, response=response, ident=_ident(pid, voice))
+    reply, _seen = await _route_said(db_session, _yes(ctx, await _voice(788)), said, monkeypatch)
+    assert reply.text == "Okay, my mistake."
+    assert await _count(db_session, pid) == 1
+    assert await _pending(db_session, ctx.session_id) is None     # no introduction either
+
+
+@requires_db
+@pytest.mark.parametrize("said", ["Yes, I'm in the kitchen.", "Yes, that's fine."])
+async def test_an_introduction_or_dismissal_shape_in_a_yes_is_just_the_yes(
+    db_session, quiet_rooms, monkeypatch, said,
+) -> None:
+    """Review 3: not routed to the introduction or the dismissal."""
+    pid, voice = await _known_person(db_session)
+    ctx, response = await _turn(db_session)
+    assert await maybe_ask_room_check(db_session, ctx=ctx, response=response, ident=_ident(pid, voice))
+    reply, _seen = await _route_said(db_session, _yes(ctx, await _voice(788)), said, monkeypatch)
+    assert reply.text == "Done — I'll know your voice in this room now, Priya."
+    assert await _count(db_session, pid) == 2
+    assert await _pending(db_session, ctx.session_id) is None
+
+
+@requires_db
+async def test_counting_after_the_room_check_takes_only_the_asked_voice(
+    db_session, quiet_rooms, monkeypatch,
+) -> None:
+    """Review 4: a clip in a room learning started from "was that you,
+    X?" must pass that question's voice rule, not only resemble the clips
+    so far (here everything "resembles", to show the rule decides)."""
+    monkeypatch.setattr(voice_profile, "_resembles", lambda clips, clip: True)
+    pid, ctx, offer = await _offered(db_session)
+    learn = await VoiceProfileHandler().handle_choice_reply(
+        "core.room_learn_offer", offer, "Yes.", _yes(ctx, await _voice(789)), db_session,
+    )
+    assert learn.text == LEARN_AFTER_OFFER
+    collecting = await _pending(db_session, ctx.session_id)
+    assert collecting["check_score"] == 0.55
+
+    # Somebody else counts: the clip doesn't count.
+    other = await VoiceProfileHandler().handle_choice_reply(
+        "core.self_intro", dict(collecting), COUNTING, _yes(ctx, await _voice(388)), db_session,
+    )
+    assert other.text == SENTENCE
+    assert len((await _pending(db_session, ctx.session_id))["clips"]) == 1
+    # Priya counts: it does.
+    mine = await VoiceProfileHandler().handle_choice_reply(
+        "core.self_intro", dict(collecting), COUNTING, _yes(ctx, await _voice(787)), db_session,
+    )
+    assert mine.text == SENTENCE
+    after = await _pending(db_session, ctx.session_id)
+    assert len(after["clips"]) == 2 and after["check_score"] == 0.55
 
 
 # ─── "I already know you" in a room that hasn't learned you (2026-11-16) ──

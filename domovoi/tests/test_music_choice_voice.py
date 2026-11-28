@@ -17,7 +17,11 @@ The room was playing music when the person woke it (its resumable URL is
   once the follow-up capture times out;
 * "no, play X" plays X;
 * a whole "yes" may end its follow-up capture early (tier B); "no, play X"
-  may not.
+  may not;
+* in a group (the room is a shared queue's host): the question never
+  stops or restarts the member room, the group stays whole, and the asking
+  room gets the group's music back when the question goes unanswered or is
+  asked again and still missed; the answer plays for the whole group.
 """
 
 from __future__ import annotations
@@ -194,6 +198,89 @@ async def test_a_whole_yes_may_end_its_followup_early_a_correction_may_not(voice
     assert early_commit_for("No.", pending=pending) is None
     assert early_commit_for("No, play the Velvet Kites.", pending=pending) is None
     assert early_commit_for("Velvet Kites.", pending=pending) is None
+
+
+# ─── In a group (2026-11-28) ──────────────────────────────────────────────
+#
+# The dining room hosts a shared queue the garage hears. "Play in too deep"
+# in the dining room asked which one; the answer ("Biomina.") went to a
+# cold Q&A model, and the dining room sat silent through it while the
+# garage played on. The question is the asking room's turn alone: the
+# garage is never stopped or restarted by it, the group stays whole, and
+# the asking room gets the group's music back however the question ends.
+
+GARAGE = "garage"
+
+
+@pytest.fixture
+def grouped(voice):
+    from domovoi import music_groups
+    from domovoi.tests.test_music_under_capture import _Socket
+
+    garage = streaming.StreamSession(_Socket(voice.app), GARAGE)  # type: ignore[arg-type]
+    voice.app.state.active_sessions[GARAGE] = garage
+    voice.app.state.resumable_music[GARAGE] = URL       # it hears the host's stream
+    sh = music_groups.Share(id="test-share", host=ROOM, members=[GARAGE])
+    music_groups._shares[sh.id] = sh
+    music_groups._by_room[ROOM] = music_groups._by_room[GARAGE] = sh.id
+    voice.garage = garage  # type: ignore[attr-defined]
+    try:
+        yield voice
+    finally:
+        music_groups._shares.pop(sh.id, None)
+        music_groups._by_room.pop(ROOM, None)
+        music_groups._by_room.pop(GARAGE, None)
+
+
+def _garage_frames(voice) -> list[dict]:
+    return [f for _t, k, f in voice.garage.ws.sent if k == "text"]
+
+
+def _group_whole(voice) -> bool:
+    from domovoi import music_groups
+
+    sh = music_groups.share_of(GARAGE)
+    return sh is not None and sh.rooms == [ROOM, GARAGE] and music_groups.host_of(GARAGE) == ROOM
+
+
+async def test_in_a_group_an_unanswered_question_brings_the_asking_room_back(grouped) -> None:
+    await _asked(grouped)
+    assert _garage_frames(grouped) == [] and _group_whole(grouped)
+    await grouped.start_capture("followup", 2)
+    await grouped.frames(20)
+    grouped.capture_goes_quiet()                    # nobody answered
+    await _until(lambda: grouped.starts() != [])
+    assert grouped.starts() == [{"type": "music_start", "stream_url": URL}]
+    assert _garage_frames(grouped) == [] and _group_whole(grouped)
+    assert grouped.app.state.resumable_music[GARAGE] == URL
+
+
+async def test_in_a_group_a_reply_that_names_nothing_is_asked_again_then_the_music_comes_back(
+    grouped,
+) -> None:
+    await _asked(grouped)
+    end = await grouped.say("Quiet ember.", trigger="followup", utt=2)
+    assert end["expect_followup"] is True           # asked again, never the model
+    await _settle(0.05)
+    assert grouped.starts() == [] and grouped.sess.music_block() == "followup"
+    end = await grouped.say("Quiet ember.", trigger="followup", utt=3)
+    assert end["expect_followup"] is False          # "Sorry, I didn't catch that."
+    await _settle(0.05)
+    assert grouped.starts() == [{"type": "music_start", "stream_url": URL}]
+    assert grouped.fake.played == []
+    assert _garage_frames(grouped) == [] and _group_whole(grouped)
+    assert await grouped.pending() is None
+
+
+async def test_in_a_group_the_answer_plays_for_the_whole_group(grouped) -> None:
+    """The pick replaces the host's queue: the garage hears it on the
+    stream it already plays; only the asking room is sent the start."""
+    await _asked(grouped)
+    await grouped.say("Moonlit Static.", trigger="followup", utt=2)
+    await _settle(0.05)
+    assert grouped.fake.played_labels == ["Moonlit Static"]
+    assert grouped.starts() == [{"type": "music_start", "stream_url": NEW_URL}]
+    assert _garage_frames(grouped) == [] and _group_whole(grouped)
 
 
 async def test_an_early_committed_yes_is_answered_by_the_choice(voice) -> None:

@@ -2622,10 +2622,27 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed,
     else if (!e.shiftKey && (a === last || !el.contains(a))) { e.preventDefault(); first.focus(); }
   };
 
+  // "Playing on …" under the transport: where it plays, and the way to the
+  // "play on" list, which sits at the bottom of the sheet — below the tall
+  // panel, off a phone's screen (2026-11-28). It scrolls the list into
+  // view and moves the focus there.
+  const onRef = React.useRef(null);
+  const toPlayOn = () => {
+    const el = onRef.current;
+    if (!el) return;
+    try {
+      if (typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: _mpReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+      }
+    } catch {}
+    try { if (el.focus) el.focus({ preventScroll: true }); } catch {}
+  };
+
   const it = p.current;
   const dur = p.durationSec || it.durationSec || 0;
   const pct = dur > 0 ? Math.min(100, (p.positionSec / dur) * 100) : 0;
   const remote = p.target.kind === 'room';
+  const playsOn = remote ? p.target.roomId : 'this browser';
   const playing = p.status === 'playing';
   const spoken = !!(it.meta && it.meta.itemType);
   const seekAt = (e) => {
@@ -2751,6 +2768,12 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed,
                   <Icon name="skip-forward" size={20}/>
                 </button>
               </div>
+              <button type="button" className="btn btn-ghost mp-sheet-where" onClick={toPlayOn}
+                      aria-label={`playing on ${playsOn}, choose where it plays`}
+                      title="choose where it plays">
+                <Icon name="speaker" size={16}/>
+                <span>playing on <b>{playsOn}</b></span>
+              </button>
               {!remote && (
                 <div className="mp-sheet-vol">
                   <button className="btn btn-ghost btn-icon" onClick={p.toggleMute}
@@ -2779,7 +2802,7 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed,
                 {!remote && typeof ChapterList === 'function' && <ChapterList p={p} bare/>}
               </section>
             )}
-            <section className="mp-sheet-sec mp-sheet-on" aria-label="play on">
+            <section ref={onRef} tabIndex={-1} className="mp-sheet-sec mp-sheet-on" aria-label="play on">
               <div className="mp-sheet-sec-head">play on</div>
               <PlayerCastTargets p={p} big/>
             </section>

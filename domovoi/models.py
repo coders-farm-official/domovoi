@@ -246,6 +246,13 @@ class Context(BaseModel):
     # off_answers.turn_on_line), never whether anything may be done. Every
     # admin action keeps its own endpoint gate.
     proven_admin: bool = False
+    # Set on the copy of a turn's context that routes the rest of a reply to
+    # a parked question (Response.then_route; router._answer_choice): what
+    # was actually said, and the question's own reply ("Thanks, Alex.").
+    # The router routes only the rest; the turn's rows record the whole of
+    # what was said, and the reply with the question's part in front. None
+    # on every other turn.
+    answered_first: tuple[str, str] | None = None
 
     @property
     def from_phone(self) -> bool:
@@ -355,6 +362,13 @@ class Response(BaseModel):
     # the room for paused. A voice turn says ``text`` as it always did.
     # Never serialized.
     failure: str | None = Field(default=None, exclude=True)
+    # A reply to a parked question that also asked for something ("yes,
+    # wrong song though. Play X" to "was that you, X?"): the question's
+    # handler answered its part (``text``, may be empty) and puts the rest
+    # here; the router routes it in the same turn as if said alone and
+    # speaks its reply after ``text`` (router._answer_choice). Set only by a
+    # handle_choice_reply. Never serialized.
+    then_route: str | None = Field(default=None, exclude=True)
     # What the phone itself should do for a phone turn (Context.from_phone):
     # the media a satellite would have played in its room, played on the
     # phone with the app's own player, and the transport and volume

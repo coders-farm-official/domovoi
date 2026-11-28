@@ -2821,6 +2821,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
     MUSIC_SPEAKER_WAIT_SEC = 10.0
     # How often a waiting music_start looks again.
     MUSIC_HOLD_POLL_SEC = 0.05
+    # A reply whose audio has run out while its response is still open
+    # (no response_end) for this long shows the "thinking" ring instead of
+    # "speaking": the core said a line ahead of its answer (a cold model
+    # load's "Just a moment, …") and is still working it out. Well past the
+    # gap between two sentences of one answer.
+    REPLY_QUIET_RING_SEC = 3.0
 
     # From the wake word until the mic thread is back listening for the
     # next one: the acknowledgement, the capture, the wait for the reply,
@@ -3901,6 +3907,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # warning, rate-limited so a continuous starvation event
             # doesn't spam the journal at 10 Hz.
             last_starvation_log = 0.0
+            # A reply gone quiet mid-response (`REPLY_QUIET_RING_SEC`):
+            # when its audio ran out, and whether the ring was handed to
+            # "thinking" for it.
+            starved_since: float | None = None
+            quiet_ring = False
+            # The response the stall is counted for (`_response_starts`):
+            # a new response_start starts the count again.
+            starved_for = getattr(self, "_response_starts", 0)
             while not self.shutdown_event.is_set():
                 try:
                     sr, data = self.playback_q.get(timeout=0.1)
@@ -3926,6 +3940,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         not self.playback_active.is_set()
                         and not self.dropin_active.is_set()
                     ):
+                        starved_since, quiet_ring = None, False
                         if self.playback_q.empty() and (
                             out_stream is not None
                             or self._post_playback_state is not None
@@ -3939,6 +3954,33 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         # any moment. Rate-limit at 1/sec because while
                         # we're starved this branch fires every 100ms.
                         now = time.monotonic()
+                        starts = getattr(self, "_response_starts", 0)
+                        if starts != starved_for:
+                            # A new response: its own stall, from now.
+                            starved_for, starved_since, quiet_ring = starts, None, False
+                        if starved_since is None:
+                            starved_since = now
+                        if quiet_ring:
+                            continue
+                        if (
+                            now - starved_since >= self.REPLY_QUIET_RING_SEC
+                            and not self.dropin_active.is_set()
+                        ):
+                            # Not a glitch: the core said a line ahead of
+                            # its answer ("Just a moment, I'm waking up my
+                            # language model.") and is still working it
+                            # out. The ring stops showing speech nobody
+                            # hears (a blue pulse for minutes, 2026-11-28)
+                            # and shows the core thinking until the answer
+                            # speaks or the turn ends.
+                            quiet_ring = True
+                            self._leds.set_state_if("speaking", "thinking")
+                            log.info(
+                                "reply paused mid-response for %.1fs; the server "
+                                "is still working on it (thinking ring)",
+                                now - starved_since,
+                            )
+                            continue
                         if now - last_starvation_log > 1.0:
                             log.warning(
                                 "playback queue drained mid-response — TTS bytes "
@@ -3947,6 +3989,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
                             )
                             last_starvation_log = now
                     continue
+
+                starved_since = None
+                if quiet_ring:
+                    # The answer is here: the ring speaks again.
+                    quiet_ring = False
+                    self._leds.set_state_if("thinking", "speaking")
 
                 if self.stop_playback.is_set():
                     self._drain_playback_q()

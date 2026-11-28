@@ -92,6 +92,19 @@ def test_a_windows_zone_name_is_read_from_the_feeds_vtimezone() -> None:
     assert all(e.end - e.start == timedelta(minutes=15) for e in r.events)
 
 
+def test_a_zone_offset_of_a_day_or_more_is_ignored_not_a_crash() -> None:
+    # Found by the fuzzer: a TZOFFSETTO of +2500 made Python's tzinfo raise
+    # ValueError mid-conversion. The observance is skipped; the event still
+    # reads (here as floating local time, the zone being unusable).
+    vtz = ("BEGIN:VTIMEZONE\r\nTZID:Odd\r\nBEGIN:STANDARD\r\nDTSTART:19700101T000000\r\n"
+           "TZOFFSETFROM:+2500\r\nTZOFFSETTO:+2500\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\n")
+    r = parse(cal("UID:z\nSUMMARY:Odd\nDTSTART;TZID=Odd:20261105T090000", head=vtz))
+    assert [e.title for e in r.events] == ["Odd"]
+    assert calendar_ics._offset("+2500") is None
+    assert calendar_ics._offset("+1400") == timedelta(hours=14)
+    assert calendar_ics._offset("-0959") == -timedelta(hours=9, minutes=59)
+
+
 def test_weekly_count_exdate_and_a_moved_and_a_cancelled_occurrence() -> None:
     text = cal(
         "UID:s\nSUMMARY:Practice\nDTSTART:20261102T220000Z\nDURATION:PT1H\n"

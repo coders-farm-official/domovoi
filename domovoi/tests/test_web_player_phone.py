@@ -380,6 +380,26 @@ SCENARIOS = {
         "return { acts: acts(), openAfterCast, calls: h.calls };",
         api={**ROOMS, "POST /api/playlists": {"id": 7}},
     ),
+    # "Playing on …" under the transport: says where, and takes the focus
+    # to the "play on" list at the sheet's foot (2026-11-28: off a phone's
+    # screen below the panel, nobody found it).
+    "sheet_where_it_plays": _scenario(
+        "h.render(); await openSheet(); await h.settle(); h.rerender();"
+        "const where = h.find(cls('mp-sheet-where'));"
+        "const info = { aria: where.props['aria-label'], text: h.findAll((e) => h.inside(e, (a) => a === where)"
+        "  && typeof e.text === 'string').map((e) => e.text).join(' '), icon: iconOf(where),"
+        "  inNow: h.inside(where, cls('mp-sheet-now')), type: where.props.type };"
+        "const on = h.find((e) => e.type === 'section' && e.props['aria-label'] === 'play on');"
+        "const before = focused().length;"
+        "await h.click(cls('mp-sheet-where'));"
+        "return { info, tabIndex: on.props.tabIndex, focusedNow: focused().slice(before), acts: acts() };",
+        api=ROOMS,
+    ),
+    "sheet_where_it_plays_remote": _scenario(
+        "h.render(); await openSheet(); await h.settle(); h.rerender();"
+        "return h.find(cls('mp-sheet-where')).props['aria-label'];",
+        p=KITCHEN, api=ROOMS,
+    ),
     "sheet_remote": _scenario(
         "h.render(); await openSheet(); await h.settle(); h.rerender();"
         "const rows = h.findAll((e) => e.type === 'button' && inSheet(e) && (e.props.style || {}).minHeight === 48);"
@@ -908,6 +928,26 @@ def test_the_sheet_does_what_the_bar_and_its_panels_did(driven) -> None:
     assert posts[0] == ("POST", "/api/playlists", {"name": "road trip"})
     # The whole queue in one request (track_ids[], P5).
     assert [p[1] for p in posts[1:]] == ["/api/playlists/7/tracks"]
+
+
+def test_the_sheet_says_where_it_plays_and_goes_to_the_play_on_list(driven) -> None:
+    w = driven["sheet_where_it_plays"]
+    assert w["info"]["aria"] == "playing on this browser, choose where it plays"
+    assert "this browser" in w["info"]["text"] and w["info"]["icon"] == "speaker"
+    assert w["info"]["inNow"] is True and w["info"]["type"] == "button"
+    # The list is focusable (tabIndex -1) and gets the focus; nothing is cast.
+    assert w["tabIndex"] == -1
+    assert w["focusedNow"] == ["play on"]
+    assert w["acts"] == []
+    assert driven["sheet_where_it_plays_remote"] == "playing on kitchen, choose where it plays"
+
+
+def test_the_where_it_plays_chip_is_a_44px_target() -> None:
+    base, _, _ = _sheet_css()
+    assert _px(_rule(base, ".mp-sheet .mp-sheet-where"), "min-height") == [44]
+    # A long room id ellipsizes inside the chip instead of widening it.
+    label = _rule(base, ".mp-sheet .mp-sheet-where span")
+    assert "min-width: 0;" in label and "text-overflow: ellipsis;" in label
 
 
 def test_a_room_cast_in_the_sheet(driven) -> None:

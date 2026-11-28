@@ -802,9 +802,9 @@ async def test_play_x_from_y_is_read_as_it_was_said(db_session, lyric_library, p
 async def test_anything_else_falls_through_to_the_old_cascade(db_session, lyric_library, player) -> None:
     sid = await _session(db_session)
     resp = await _say(db_session, sid, "play quartz meridian lantern dusk")
-    assert resp.text == "I couldn't find anything called quartz meridian lantern dusk."
+    assert resp.text == 'I couldn\'t find "quartz meridian lantern dusk" in the library.'
     resp = await _say(db_session, sid, "play the river")                     # too short to look
-    assert resp.text == "I couldn't find anything called the river."
+    assert resp.text == 'I couldn\'t find "the river" in the library.'
     resp = await _say(db_session, sid, "play glass harbor")                  # a name still wins
     assert resp.text.startswith("Playing ") and "the song with those words" not in resp.text
     assert player.files_calls
@@ -816,11 +816,11 @@ async def test_allow_choice_and_avoid_are_respected(db_session, lyric_library, p
     ctx = Context(session_id=sid, room_id=ROOM, online=False)
     handler = _music()
     resp = await handler._play({"any": "a sleepy heron counts the"}, ctx, db_session, allow_choice=False)
-    assert resp.text == "I couldn't find anything called a sleepy heron counts the."
+    assert resp.text == 'I couldn\'t find "a sleepy heron counts the" in the library.'
     first = await library_match.resolve_lyrics(db_session, SIX_WORDS, mode="fallback")
     resp = await handler._play({"any": SIX_WORDS}, ctx, db_session, avoid=(first.best.ref,))
     await db_session.commit()
-    assert resp.text == f"I couldn't find anything called {SIX_WORDS}."
+    assert resp.text == f'I couldn\'t find "{SIX_WORDS}" in the library.'
     assert player.files_calls == []
 
 
@@ -829,7 +829,7 @@ async def test_switched_off(db_session, lyric_library, player, monkeypatch) -> N
     monkeypatch.setattr(settings, "lyrics_search_enabled", False)
     sid = await _session(db_session)
     resp = await _say(db_session, sid, f"play {SIX_WORDS}")
-    assert resp.text == f"I couldn't find anything called {SIX_WORDS}."      # never looks in lyrics
+    assert resp.text == f'I couldn\'t find "{SIX_WORDS}" in the library.'      # never looks in lyrics
     resp = await _say(db_session, sid, f"play the song that goes {CHORUS_1}")
     assert resp.text == "Finding songs by their words is turned off. An admin can turn it on in Settings → System → Advanced → Library."
     assert player.files_calls == []
