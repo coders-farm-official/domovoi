@@ -47,6 +47,8 @@ public enum DeviceKeyRoutes {
         "/api/faces",
         "/api/media/search",
         "/api/devices",
+        // Away chat's setup at home (1.5.0): enrol, status, turn off.
+        "/api/away",
     ]
 
     /// The room plays that replace a room's queue (music.py `_note_room_start`).
