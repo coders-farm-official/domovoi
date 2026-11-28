@@ -273,6 +273,8 @@ WINDOWS_ZONES: dict[str, str] = {
 }
 
 _OFFSET_RE = re.compile(r"^([+-])(\d{2})(\d{2})(\d{2})?$")
+#: The largest zone offset a feed may give (ISO 8601's bound, under a day).
+_MAX_OFFSET = timedelta(hours=18)
 
 
 def _offset(value: str) -> timedelta | None:
@@ -280,8 +282,13 @@ def _offset(value: str) -> timedelta | None:
     if not m:
         return None
     sign = -1 if m.group(1) == "-" else 1
-    return sign * timedelta(hours=int(m.group(2)), minutes=int(m.group(3)),
-                            seconds=int(m.group(4) or 0))
+    off = sign * timedelta(hours=int(m.group(2)), minutes=int(m.group(3)),
+                           seconds=int(m.group(4) or 0))
+    # A zone's offset must stay under a day (Python's tzinfo refuses one
+    # that doesn't, mid-conversion, with a ValueError the feed would raise
+    # as a crash; found by the fuzzer). Real offsets stop at 14 hours: an
+    # observance with a bigger one is skipped.
+    return off if abs(off) <= _MAX_OFFSET else None
 
 
 class VTimezone(tzinfo):
