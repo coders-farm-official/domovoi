@@ -1086,11 +1086,32 @@ def test_a_play_request_after_filler_is_the_musics_title_search(said: str, title
     assert plan.match.group(1) == title
 
 
-@pytest.mark.parametrize("said", ["wait for me", "now what", "then what happened", "playlist"])
+@pytest.mark.parametrize("said", [
+    "wait for me", "now what", "then what happened", "playlist",
+    # An earlier sentence that is a command is never dropped (review
+    # 2026-11-28): the timer, the stop, a command the tool model reads.
+    "set a timer for ten minutes. play music",
+    "stop. play it later",
+    "turn on the porch light. play some jazz",
+])
 def test_words_before_anything_but_play_are_kept(said: str) -> None:
     from domovoi.router import strip_leading_filler
 
     assert strip_leading_filler(said) == said
+
+
+def test_dictation_is_never_turned_into_a_play_request() -> None:
+    """documents.py reads a dictated letter's words through the same strip:
+    "Then wait. Play nice, I told them." stays the letter's sentence."""
+    from pathlib import Path
+
+    from domovoi.router import strip_leading_filler
+
+    words = "then wait. play nice, i told them"
+    assert strip_leading_filler(words, play_requests=False) == words
+    assert strip_leading_filler(words) == "play nice, i told them"
+    src = (Path(__file__).resolve().parents[1] / "handlers" / "documents.py").read_text(encoding="utf-8")
+    assert "play_requests=kind != LETTER_DICTATION" in src
 
 
 @pytest.mark.asyncio

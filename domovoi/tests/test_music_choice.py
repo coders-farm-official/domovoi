@@ -193,14 +193,58 @@ ARTIST_AND_ALBUM = [
 @pytest.mark.parametrize("reply, expected", [
     ("biomina", 1), ("by eminem", 1), ("eminem", 1), ("ominem", 1), ("emanem", 1),
     ("the eminem one please", 1), ("play the eminem one", 1), ("in too deep by eminem", 1),
-    ("the sum 41 one", 0), ("sum forty one", 0), ("some 41", 0), ("sum", 0),
+    ("the sum 41 one", 0), ("sum forty one", 0), ("some 41", 0),
     ("the one by sum 41", 0), ("by some forty-one", 0),
-    # names neither, or both
+    # names neither, or both; a word that only BEGINS a name names nothing
     ("in too deep", None), ("quiet ember", None), ("good night", None), ("thank you", None),
     ("you", None), ("i don't know", None), ("whatever", None), ("", None),
+    ("sum", None), ("some", None),
 ])
 def test_which_of_two_songs_of_one_name_a_reply_names_by_sound(reply, expected) -> None:
     assert match_option(reply, TWO_SONGS) == expected
+
+
+def _artist(name: str) -> dict:
+    return {"type": "artist", "label": name, "name": name}
+
+
+def _song(name: str, artist: str) -> dict:
+    return {"type": "title", "label": name, "name": name, "artist": artist, "artist_speak": artist}
+
+
+# The review's probe (2026-11-28): each of these picked an option.
+@pytest.mark.parametrize("options, reply", [
+    ([_artist("Steppenwolf"), _artist("Blue Oyster Cult")], "stop"),
+    ([_artist("Passenger"), _artist("Birdy")], "pause"),
+    ([_song("Lights", "Aster Vale"), _song("Bright Lights", "Ninefold")], "turn off the lights"),
+    ([_song("Lights", "Aster Vale"), _song("Bright Lights", "Ninefold")], "northern lights"),
+    ([_song("Lights", "Aster Vale"), _song("Bright Lights", "Ninefold")], "city lights"),
+    (ARTIST_AND_ALBUM, "moonlight sonata"),
+    (TWO_SONGS, "some"),
+])
+def test_a_reply_that_holds_or_begins_a_name_names_no_option(options, reply) -> None:
+    assert match_option(reply, options) is None
+    assert match_option(reply, options, strict=True) is None
+
+
+def test_a_name_said_whole_still_picks_it() -> None:
+    lights = [_song("Lights", "Aster Vale"), _song("Bright Lights", "Ninefold")]
+    assert match_option("lights", lights) == 0
+    assert match_option("bright lights", lights) == 1
+    assert match_option("the bright lights one", lights, strict=True) == 1
+    assert match_option("steppenwolf", [_artist("Steppenwolf"), _artist("Blue Oyster Cult")]) == 0
+
+
+def test_only_the_options_the_question_said_are_answered() -> None:
+    """Three parked, two said: the third is reached by number only."""
+    from domovoi.handlers.music import MusicHandler
+
+    third = {"ref": {"type": "artist", "key": "velvetkites", "label": "The Velvet Kites"},
+             "speak": "The Velvet Kites"}
+    data = {"candidates": [c.to_dict() for c in ASK.candidates] + [third]}
+    refs = [GLASS, MOONLIT, KITES]
+    assert MusicHandler._option_named("velvet kites", data, refs) is None
+    assert MusicHandler._option_named("moonlit static", data, refs) == 1
 
 
 def test_options_are_told_apart_by_what_differs() -> None:
@@ -504,7 +548,7 @@ async def test_a_bare_reply_the_library_knows_nothing_by_is_asked_again_never_ro
     woke a cold Q&A model while a group's music waited). The question is
     asked once more, briefly; a second miss says so and drops it."""
     sid = await _asked(db_session)
-    resp = await _say(db_session, sid, "Quiet Ember.")
+    resp = await _say(db_session, sid, "Quiet Ember.", trigger="followup")
     assert fake_resolver.resolved[-1] == {"any": "quiet ember"}
     assert fake_resolver.played == []
     assert resp.text == REASK
@@ -515,7 +559,7 @@ async def test_a_bare_reply_the_library_knows_nothing_by_is_asked_again_never_ro
     assert str(sid) in confirmations.CHOICE_PARKED
     # A second miss: said so, the question dropped, nothing played — and no
     # follow-up and no music_action, so the interrupted music comes back.
-    resp = await _say(db_session, sid, "Quiet Ember.")
+    resp = await _say(db_session, sid, "Quiet Ember.", trigger="followup")
     assert resp.text == "Sorry, I didn't catch that."
     assert resp.matched_path == "confirmation" and resp.expect_followup is False
     assert resp.music_action is None and fake_resolver.played == []
@@ -525,10 +569,27 @@ async def test_a_bare_reply_the_library_knows_nothing_by_is_asked_again_never_ro
 @requires_db
 async def test_the_question_asked_again_is_answered_like_the_first(db_session, fake_resolver) -> None:
     sid = await _asked(db_session)
-    assert (await _say(db_session, sid, "Quiet Ember.")).text == REASK
-    resp = await _say(db_session, sid, "The second one.")
+    assert (await _say(db_session, sid, "Quiet Ember.", trigger="followup")).text == REASK
+    resp = await _say(db_session, sid, "The second one.", trigger="followup")
     assert fake_resolver.played_labels == ["Moonlit Static"]
     assert resp.music_action == "start" and resp.matched_path == "confirmation"
+
+
+@requires_db
+@pytest.mark.parametrize("trigger", [None, "wake_word", "barge_in", "push_to_talk"])
+@pytest.mark.parametrize("said", ["Quiet Ember.", "Lock the front door.", "Turn off the lights."])
+async def test_only_the_open_mic_after_the_question_is_asked_again(
+    db_session, fake_resolver, trigger, said,
+) -> None:
+    """Review 2026-11-28: a wake word said over the question (barge_in),
+    the phone's mic (push_to_talk) and typed chat (no trigger) are turns of
+    their own. Re-asked, "lock the front door" was asked about and then
+    dropped. Only the follow-up mic is asked again."""
+    sid = await _asked(db_session)
+    resp = await _say(db_session, sid, said, trigger=trigger)
+    assert resp.matched_path != "confirmation" and resp.text != REASK
+    assert fake_resolver.played == [] and resp.music_action is None
+    assert await _pending(db_session, sid) is None
 
 
 @requires_db
@@ -553,30 +614,38 @@ async def test_a_reply_no_fast_path_takes_is_asked_again_and_never_plays_music(
     db_session, fake_resolver, said,
 ) -> None:
     sid = await _asked(db_session)
-    resp = await _say(db_session, sid, said)
+    resp = await _say(db_session, sid, said, trigger="followup")
     assert fake_resolver.played == []
     assert resp.text == REASK and resp.matched_path == "confirmation"
     assert resp.music_action is None
 
 
 @requires_db
-@pytest.mark.parametrize("said", ["Shut up.", "Never mind, play the radio.", "Be quiet."])
+@pytest.mark.parametrize("said", ["Leave it.", "Never mind, thanks.", "Stop asking."])
 async def test_a_dismissal_is_a_no(db_session, fake_resolver, said) -> None:
     sid = await _asked(db_session)
-    resp = await _say(db_session, sid, said)
+    resp = await _say(db_session, sid, said, trigger="followup")
     assert resp.text == "OK." and resp.matched_path == "confirmation"
     assert fake_resolver.played == [] and resp.music_action is None
     assert await _pending(db_session, sid) is None
 
 
 @requires_db
-async def test_a_fresh_wake_word_turn_is_routed_as_its_own(db_session, fake_resolver) -> None:
-    """The question waits a minute; a person who says the wake word again
-    and asks something else is asking something else."""
+async def test_never_mind_and_a_command_runs_the_command(db_session, fake_resolver) -> None:
     sid = await _asked(db_session)
-    resp = await _say(db_session, sid, "Lock the front door.", trigger="wake_word")
-    assert resp.matched_path != "confirmation" and resp.music_action is None
-    assert fake_resolver.played == []
+    resp = await _say(db_session, sid, "Never mind, play the Velvet Kites.", trigger="followup")
+    assert fake_resolver.played_labels == ["The Velvet Kites"]
+    assert resp.music_action == "start"
+    assert await _pending(db_session, sid) is None
+
+
+@requires_db
+@pytest.mark.parametrize("said", ["Shut up.", "Be quiet."])
+async def test_shut_up_is_routed_never_answered_with_the_music_back(db_session, fake_resolver, said) -> None:
+    sid = await _asked(db_session)
+    resp = await _say(db_session, sid, said, trigger="followup")
+    assert resp.matched_path != "confirmation" and resp.text != "OK."
+    assert fake_resolver.played == [] and resp.music_action != "start"
     assert await _pending(db_session, sid) is None
 
 
@@ -661,10 +730,57 @@ async def test_a_play_after_filler_with_one_close_title_asks_never_the_model(
 @requires_db
 async def test_which_one_unanswered_twice_says_so_in_the_artists_names(db_session, two_songs) -> None:
     sid = await _asked_which(db_session)
-    resp = await _say(db_session, sid, "Quiet ember.")
+    resp = await _say(db_session, sid, "Quiet ember.", trigger="followup")
     assert resp.text == "Sum 41 or Ominem?" and resp.expect_followup is True
-    resp = await _say(db_session, sid, "Biomina.")
+    resp = await _say(db_session, sid, "Biomina.", trigger="followup")
     assert [c.ref.artist_label for c in two_songs.played] == ["Eminem"]
+
+
+@requires_db
+@pytest.mark.parametrize("said", ["Some.", "Some music.", "Biomina."])
+async def test_a_fresh_wake_word_never_picks_by_sound(db_session, two_songs, said) -> None:
+    sid = await _asked_which(db_session)
+    resp = await _say(db_session, sid, said, trigger="wake_word")
+    assert two_songs.played == [] and resp.matched_path != "confirmation"
+
+
+# The review's collisions (2026-11-28): two options whose names a command,
+# a request or a longer phrase only CONTAINS or BEGINS. None of them is an
+# answer.
+
+LIGHTS = EntityRef(type="title", key="lights|aster", label="Lights", artist_label="Aster Vale")
+BRIGHT = EntityRef(type="title", key="brightlights|ninefold", label="Bright Lights",
+                   artist_label="Ninefold")
+
+
+@pytest.fixture
+def two_lights(fake_resolver, monkeypatch):
+    fake_resolver.asks["lights"] = Resolution(
+        "ask", (cand(LIGHTS, 0.8), cand(BRIGHT, 0.8)), heard="lights", reason="fuzzy",
+    )
+    return fake_resolver
+
+
+@requires_db
+@pytest.mark.parametrize("said", [
+    "Turn off the lights.", "Play Northern Lights.", "Play City Lights.",
+    "No, play Northern Lights.", "Stop.", "Pause.",
+])
+async def test_a_reply_that_only_holds_an_options_name_never_plays_it(
+    db_session, two_lights, said,
+) -> None:
+    sid = await _session(db_session)
+    resp = await _say(db_session, sid, "Play lights.")
+    assert resp.text == "Did you mean Lights by Aster Vale, or Bright Lights by Ninefold?"
+    resp = await _say(db_session, sid, said, trigger="followup")
+    assert two_lights.played == [], said
+    if said.startswith(("Play", "No, play")):
+        # A request of its own: today's search for the words said.
+        assert two_lights.resolved[-1] == {"any": said.split("lay ", 1)[1].rstrip(".").lower()}
+    elif said == "Turn off the lights.":
+        assert resp.text == "Lights or Bright Lights?"          # no fast path here: asked again
+    else:
+        assert resp.matched_path == "fast"                      # the music's own stop / pause
 
 
 @requires_db

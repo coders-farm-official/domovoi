@@ -3875,6 +3875,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # "thinking" for it.
             starved_since: float | None = None
             quiet_ring = False
+            # The response the stall is counted for (`_response_starts`):
+            # a new response_start starts the count again.
+            starved_for = getattr(self, "_response_starts", 0)
             while not self.shutdown_event.is_set():
                 try:
                     sr, data = self.playback_q.get(timeout=0.1)
@@ -3914,6 +3917,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         # any moment. Rate-limit at 1/sec because while
                         # we're starved this branch fires every 100ms.
                         now = time.monotonic()
+                        starts = getattr(self, "_response_starts", 0)
+                        if starts != starved_for:
+                            # A new response: its own stall, from now.
+                            starved_for, starved_since, quiet_ring = starts, None, False
                         if starved_since is None:
                             starved_since = now
                         if quiet_ring:

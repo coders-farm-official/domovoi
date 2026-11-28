@@ -45,16 +45,21 @@ What a reply can be (:func:`parse_choice_reply`, pure; a leading "uh,",
   ("biomina" for "by Ominem") — the options' names that tell them apart
   (two songs called the same: their artists), folded so that names that
   sound alike compare alike (stdlib ``difflib`` over a phonetic fold);
+  Never a name a reply merely holds or begins ("turn off the lights" and
+  an option "Lights", "some" and "Sum 41"), and a "play X" only when X,
+  whole, plainly is an option;
 * a command with a fast path of its own ("stop", "what time is it", "play
-  X") is not about the choice: the router routes it as an ordinary turn
+  X"), a question, "shut up", and any turn but the open mic right after
+  the question (a wake word, also one said over it, the phone's mic, typed
+  chat) is not about the choice: the router routes it as an ordinary turn
   and the question is dropped;
-* anything else is the music's to answer, never the language model's
-  (owner, 2026-11-28: "Biomina." woke a cold Q&A model while a group's
-  music waited): the question is asked once more, briefly ("Sum 41 or
-  Eminem?"), and after a second miss the house says it didn't catch it and
-  the music the question interrupted comes back. A dismissal ("never mind",
-  "shut up") is a "no". A turn opened by a fresh wake word is the
-  exception: it is a turn of its own, and routed as one.
+* anything else said on that open mic is the music's to answer, never the
+  language model's (owner, 2026-11-28: "Biomina." woke a cold Q&A model
+  while a group's music waited): the question is asked once more, briefly
+  ("Sum 41 or Eminem?"), and after a second miss the house says it didn't
+  catch it and the music the question interrupted comes back. A dismissal
+  ("never mind") is a "no"; "never mind, X" runs X when a fast path
+  takes it.
 
 A suggestion turned down ("no") stays turned down for those words in this
 conversation for :data:`DECLINED_TTL_SEC`: asking for the same thing again
@@ -122,13 +127,19 @@ _GONE_TEXT = "That one isn't in your library anymore."
 #: comes back (the streaming layer's auto-resume after a reply that asks
 #: nothing).
 DIDNT_CATCH_TEXT = "Sorry, I didn't catch that."
-#: What opens a turn that is a new one, not an answer: a reply to a parked
-#: question that no fast path takes is still routed as a turn of its own
-#: when the person said the wake word for it.
-_FRESH_TRIGGERS = frozenset({"wake_word"})
+#: What opens a turn that is a new one, not an answer: a wake word (also
+#: when it is said over the question: "barge_in"), the phone's mic button.
+#: Such a turn never picks an option by sound; it is routed as a turn of
+#: its own unless it says yes, no or an ordinal.
+_FRESH_TRIGGERS = frozenset({"wake_word", "barge_in", "push_to_talk"})
 #: A reply naming one of several options by sound (:func:`match_option`):
 #: the best must score at least this, and beat the next by the margin.
-OPTION_MIN_SCORE = 0.75
+#: (0.75 let "moonlight sonata" pick the album Moonlit Static and "city
+#: lights" an option "Lights", review 2026-11-28.) A "play X" said in
+#: reply is held to OPTION_STRICT_SCORE: it is a request of its own unless
+#: X is plainly one of them.
+OPTION_MIN_SCORE = 0.82
+OPTION_STRICT_SCORE = 0.85
 OPTION_MARGIN = 0.1
 
 
@@ -458,19 +469,52 @@ def sound_key(text: str | None) -> str:
 
 def _likeness(said: str, name: str) -> float:
     """How well ``said`` (a sound key) names ``name`` (a sound key), 0-1:
-    the whole of it, glued to a "by" in front (Whisper writes "by Ominem"
-    as one word), or holding the name whole in a longer reply."""
+    the whole of the one against the whole of the other, or against the
+    name with a "by" in front (Whisper writes "by Ominem" as one word,
+    "biomina"). Never part of either: a reply that merely holds a name
+    ("turn off the lights" and an option "Lights") or begins one ("some"
+    and "Sum 41") names nothing (review 2026-11-28)."""
     if not said or not name:
         return 0.0
     ratio = difflib.SequenceMatcher(None, said, name, autojunk=False).ratio()
     glued = _DOUBLE_RE.sub(r"\1", "ba" + name)   # sound_key("by") is "ba"
     by = difflib.SequenceMatcher(None, said, glued, autojunk=False).ratio()
-    best = max(ratio, by)
-    if len(name) >= 4 and name in said:
-        best = max(best, 0.9)
-    if len(said) >= 3 and name.startswith(said):
-        best = max(best, 0.8)          # "Sum" for "Sum 41"
-    return best
+    return max(ratio, by)
+
+
+def _plain_words(text: str | None) -> str:
+    """Lower-case words and digits, single-spaced: how a name is found
+    inside a reply word for word."""
+    return " ".join(re.findall(r"[a-z0-9']+", (text or "").lower()))
+
+
+def _shared_phrases(options: list[Mapping[str, Any]]) -> list[str]:
+    """The names every option has (the title of two songs called "In Too
+    Deep"): said in a reply ("in too deep by Eminem"), they pick none."""
+    sets = [{_plain_words(n) for n in (o.get("label"), o.get("name")) if n} for o in options]
+    shared = set.intersection(*sets) if sets else set()
+    return sorted((p for p in shared if p), key=len, reverse=True)
+
+
+def _option_forms(reply: str, options: list[Mapping[str, Any]], *, strict: bool) -> set[str]:
+    """The sound keys of ``reply`` to compare with the options' names: the
+    reply, the reply without the words said around a name ("the … one",
+    "the one by …"), and that without a name every option shares and a
+    "by" left in front. ``strict`` (a "play X" said in reply): the trimmed
+    words alone."""
+    t = _POLITE_TAIL_RE.sub("", _strip_punct(reply or "").rstrip(",.!?").lower())
+    trimmed = _OPTION_TAIL_RE.sub("", _OPTION_LEAD_RE.sub("", t)).strip()
+    if strict:
+        forms = {trimmed}
+    else:
+        bare = f" {_plain_words(trimmed)} "
+        for phrase in _shared_phrases(options):
+            bare = bare.replace(f" {phrase} ", " ")
+        bare = re.sub(r"^\s*(?:by|from)\s+", "", bare).strip()
+        forms = {t, trimmed, bare}
+    keys = {sound_key(f) for f in forms if f and f.strip()}
+    keys.discard("")
+    return keys
 
 
 def _distinct_names(options: list[Mapping[str, Any]]) -> list[list[str]]:
@@ -494,18 +538,19 @@ def _distinct_names(options: list[Mapping[str, Any]]) -> list[list[str]]:
     return out
 
 
-def match_option(reply: str, options: list[Mapping[str, Any]]) -> int | None:
-    """Which of ``options`` (two or more; each ``label`` / ``name`` /
-    ``artist`` / ``artist_speak``) ``reply`` names by how it sounds, or
-    None. The best must score :data:`OPTION_MIN_SCORE` and beat the next
-    best by :data:`OPTION_MARGIN`: a reply that sounds like neither, or
-    like both, names none."""
+def match_option(
+    reply: str, options: list[Mapping[str, Any]], *, strict: bool = False,
+) -> int | None:
+    """Which of ``options`` (the two or more the question SAID; each
+    ``label`` / ``name`` / ``artist`` / ``artist_speak``) ``reply`` names
+    by how it sounds, or None. The best must score
+    :data:`OPTION_MIN_SCORE` and beat the next best by
+    :data:`OPTION_MARGIN`: a reply that sounds like neither, or like both,
+    names none. ``strict``: ``reply`` is the X of a "play X" said in reply,
+    compared whole (see :func:`_option_forms`)."""
     if len(options) < 2:
         return None
-    t = _POLITE_TAIL_RE.sub("", _strip_punct(reply or "").rstrip(",.!?").lower())
-    trimmed = _OPTION_TAIL_RE.sub("", _OPTION_LEAD_RE.sub("", t))
-    forms = {sound_key(f) for f in (t, trimmed) if f.strip()}
-    forms.discard("")
+    forms = _option_forms(reply, options, strict=strict)
     if not forms:
         return None
     scores = []
@@ -513,7 +558,8 @@ def match_option(reply: str, options: list[Mapping[str, Any]]) -> int | None:
         scores.append(max((_likeness(f, n) for f in forms for n in names), default=0.0))
     ranked = sorted(range(len(scores)), key=lambda i: -scores[i])
     best, runner = ranked[0], ranked[1]
-    if scores[best] < OPTION_MIN_SCORE or scores[best] - scores[runner] < OPTION_MARGIN:
+    floor = OPTION_STRICT_SCORE if strict else OPTION_MIN_SCORE
+    if scores[best] < floor or scores[best] - scores[runner] < OPTION_MARGIN:
         return None
     return best
 
@@ -536,12 +582,19 @@ def short_names(options: list[Mapping[str, Any]]) -> list[str]:
     return ["the first one", "the second one", "the third one"][: len(options)]
 
 
-# A reply that dismisses the question ("never mind, play the radio" too):
-# a "no" — never a turn for the language model.
+# A reply that dismisses the question: a "no" — never a turn for the
+# language model. Whatever follows it ("never mind, play the radio") is a
+# command of its own when a fast path takes it. ("Shut up" and "be quiet"
+# are not here: they ask the room to be quiet, so they are routed as the
+# commands they are, never answered with the music back.)
 _DISMISS_RE = re.compile(
-    r"^(?:never ?mind|forget (?:it|about it|that)|cancel(?: that| it)?|shut up|be quiet"
-    r"|stop asking|leave it|nothing|no matter)\b"
+    r"^(?:never ?mind|forget (?:it|about it|that)|cancel(?: that| it)?"
+    r"|stop asking|leave it|nothing|no matter)\b[,.!]?\s*"
 )
+_QUIET_RE = re.compile(r"^(?:shut up|be quiet|quiet|hush)\b")
+#: The trigger of the open mic right after the question: the one turn a
+#: reply that names nothing is asked about again on.
+_ANSWER_TRIGGER = "followup"
 
 
 # ─── The parked payload ────────────────────────────────────────────────────
@@ -929,9 +982,15 @@ class MusicChoiceMixin:
         # Which of several, by how it sounds: "Eminem", "by Eminem", "the
         # Sum 41 one", Whisper's "biomina" — before the library is asked
         # about the words, which would shuffle all of Eminem for "by Eminem".
-        # Never the request's own words said again after a "no".
-        if data is not None and not (reply.negated and _words_key(name) == _words_key(heard)):
-            pos = self._option_named(name, data, refs)
+        # Never the request's own words said again after a "no", never on a
+        # fresh turn, and a request ("no, play Northern Lights") only when
+        # its words are plainly one of them, whole.
+        if (
+            data is not None
+            and getattr(ctx, "trigger", None) not in _FRESH_TRIGGERS
+            and not (reply.negated and _words_key(name) == _words_key(heard))
+        ):
+            pos = self._option_named(name, data, refs, strict=reply.explicit)
             if pos is not None:
                 return await self._play_parked(refs[pos], ctx, session)
         if reply.explicit and not reply.negated:
@@ -956,13 +1015,16 @@ class MusicChoiceMixin:
         return await self._not_an_answer(transcript or name, data, refs, ctx, session, named=True)
 
     @staticmethod
-    def _option_named(text: str, data: Mapping[str, Any], refs: list[EntityRef]) -> int | None:
-        """Which parked option ``text`` names by sound (:func:`match_option`),
-        as an index into ``refs``; None for one option, or no clear one."""
+    def _option_named(
+        text: str, data: Mapping[str, Any], refs: list[EntityRef], *, strict: bool = False,
+    ) -> int | None:
+        """Which option the question SAID (the first :data:`SPOKEN_CHOICES`)
+        ``text`` names by sound (:func:`match_option`), as an index into
+        ``refs``; None for one option, or no clear one."""
         options = _parked_options(data)
-        if len(options) != len(refs) or len(refs) < 2:
+        if len(options) != len(refs):
             return None
-        return match_option(text, options)
+        return match_option(text, options[:SPOKEN_CHOICES], strict=strict)
 
     async def _not_an_answer(
         self,
@@ -974,28 +1036,57 @@ class MusicChoiceMixin:
         *,
         named: bool = False,
     ) -> Response | None:
-        """A reply that is none of the parked question's answers. A command
-        with a fast path of its own (and any turn a fresh wake word opened)
-        is routed as an ordinary turn: None. Anything else is answered here
-        and never reaches the language model: a dismissal is a "no"; the
-        question is asked once more, briefly; a second miss says so, and
-        the music the question interrupted comes back (no follow-up, no
-        music_action: the streaming layer's auto-resume)."""
-        from domovoi.router import first_fast_path, strip_leading_filler
+        """A reply that is none of the parked question's answers (None: it
+        is routed as an ordinary turn, and the question is dropped).
+        In this order:
+
+        * "play X" / "put on X": one of the options when X, whole, plainly
+          is one ("play the Eminem one"); otherwise the request it is;
+        * a command a fast path takes, a question, or any turn but the
+          open mic right after the question (``trigger`` "followup": a wake
+          word, also one said over the question, the phone's mic, typed
+          chat) is routed as itself;
+        * "shut up", "be quiet": routed, as the quiet they ask for;
+        * a dismissal is a "no" ("OK.", the music back); "never mind, X"
+          runs X when a fast path takes it;
+        * one of the options by sound ("biomina");
+        * otherwise the question is asked once more, briefly; a second miss
+          says so, and the music the question interrupted comes back (no
+          follow-up, no music_action: the streaming layer's auto-resume).
+
+        Nothing here ever reaches the language model."""
+        from domovoi.router import first_fast_path, run_fast_path, strip_leading_filler
 
         t = strip_leading_filler(_strip_punct(transcript or "").rstrip(",.!?"))
-        if not named and t:
-            # "Play the Eminem one", or a "pass" the parser read as a command.
+        if not t:
+            return None
+        trigger = getattr(ctx, "trigger", None)
+        lead = re.match(r"(?:play|put on)\s+", t)
+        if lead is not None:
+            if not named and trigger not in _FRESH_TRIGGERS:
+                pos = self._option_named(t[lead.end():], data, refs, strict=True)
+                if pos is not None:
+                    return await self._play_parked(refs[pos], ctx, session)
+            return None
+        if first_fast_path(t) is not None or _QUESTION_RE.match(t):
+            return None
+        if trigger != _ANSWER_TRIGGER or _QUIET_RE.match(t):
+            return None
+        dismissed = _DISMISS_RE.match(t)
+        if dismissed is not None:
+            rest = t[dismissed.end():].strip()
+            hit = first_fast_path(strip_leading_filler(rest)) if rest else None
+            if hit is not None:
+                handler, fp, m = hit
+                response = await run_fast_path(handler, fp, m, ctx, session)
+                if response is not None:
+                    return response
+            remember_declined(ctx.session_id, data.get("heard"), refs)
+            return self._choice_text(ctx, "OK.")
+        if not named:
             pos = self._option_named(t, data, refs)
             if pos is not None:
                 return await self._play_parked(refs[pos], ctx, session)
-        if not t or first_fast_path(t) is not None:
-            return None
-        if getattr(ctx, "trigger", None) in _FRESH_TRIGGERS:
-            return None
-        if _DISMISS_RE.match(t):
-            remember_declined(ctx.session_id, data.get("heard"), refs)
-            return self._choice_text(ctx, "OK.")
         if data.get("reasked"):
             log.info("music: did-you-mean not answered after asking again; dropped")
             return self._choice_text(ctx, DIDNT_CATCH_TEXT)

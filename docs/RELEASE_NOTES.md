@@ -10,9 +10,10 @@ a way that would otherwise get reported as a bug.
   never handed to the language model: options are matched by how the
   reply sounds ("by Eminem", "the Sum 41 one", a misheard "biomina"), the
   question is asked once more briefly ("Sum 41 or Eminem?"), and a second
-  miss says "Sorry, I didn't catch that." and brings the music back. A
-  command with a fast path, or a new wake-word turn, is still its own
-  turn. A "play" said after other words ("Then wait. Play …", "Play, you
+  miss says "Sorry, I didn't catch that." and brings the music back. That
+  happens only on the open mic right after the question: a command with a
+  fast path, a question, "shut up", a wake word (also one said over the
+  question), the phone's mic and typed chat are turns of their own. A "play" said after other words ("Then wait. Play …", "Play, you
   should be here") is the music's title search. A title nothing plays is
   answered `I couldn't find "<words>" in the library.` (`… in the library
   or online.` when a streaming provider looked too); it used to be "I

@@ -1257,6 +1257,33 @@ def test_a_reply_gone_quiet_mid_response_shows_thinking_until_it_speaks_again(mo
     assert sat._leds.state == "idle"
 
 
+def test_a_new_response_start_counts_its_own_stall(monkeypatch):
+    """A response_start in the middle of a stall (the next reply) starts
+    the count again: the ring is not handed to thinking early."""
+    RecordingOut.written = []
+    monkeypatch.setattr(client.Satellite, "REPLY_QUIET_RING_SEC", 0.8)
+    sat = _playback_sat(monkeypatch, RecordingOut)
+    sat._response_starts = 1
+    chunk = b"\x01\x00" * 1600
+    sat.playback_active.set()
+    sat._leds.state = "speaking"
+    sat.playback_q.put((16000, chunk))
+    t = threading.Thread(target=sat._playback_thread_run, daemon=True)
+    t.start()
+    try:
+        time.sleep(0.6)
+        sat._response_starts = 2                     # the next response_start
+        time.sleep(0.5)                              # 1.1 s of silence, 0.5 s of it this one's
+        assert sat._leds.state == "speaking"
+        deadline = time.monotonic() + 3
+        while sat._leds.state != "thinking" and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert sat._leds.state == "thinking"
+    finally:
+        sat.shutdown_event.set()
+        t.join(3)
+
+
 def test_a_short_gap_between_sentences_keeps_the_speaking_ring(monkeypatch):
     RecordingOut.written = []
     sat = _playback_sat(monkeypatch, RecordingOut)

@@ -882,7 +882,7 @@ html.mp-docked { --player-h: 64px; }
   min-height: 44px; padding: 0 14px; border-radius: var(--r-full);
   font-size: 13px; color: var(--fg-muted);
 }
-.mp-sheet .mp-sheet-where span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-sheet .mp-sheet-where span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-sheet .mp-sheet-where b { color: var(--fg); font-weight: 600; }
 .mp-sheet-on:focus { outline: none; }
 .mp-sheet-on:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }

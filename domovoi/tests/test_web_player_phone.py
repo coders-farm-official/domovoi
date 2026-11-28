@@ -945,6 +945,9 @@ def test_the_sheet_says_where_it_plays_and_goes_to_the_play_on_list(driven) -> N
 def test_the_where_it_plays_chip_is_a_44px_target() -> None:
     base, _, _ = _sheet_css()
     assert _px(_rule(base, ".mp-sheet .mp-sheet-where"), "min-height") == [44]
+    # A long room id ellipsizes inside the chip instead of widening it.
+    label = _rule(base, ".mp-sheet .mp-sheet-where span")
+    assert "min-width: 0;" in label and "text-overflow: ellipsis;" in label
 
 
 def test_a_room_cast_in_the_sheet(driven) -> None:
