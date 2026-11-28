@@ -7730,9 +7730,11 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
 
     This endpoint:
       * looks up file metadata directly from ``library_tracks``,
-      * hands the file to MPD using the same three-stage lookup
-        ``MusicHandler._play_random`` uses (tag search → filename
-        substring → basename fallback), with NO external fallback,
+      * hands the file to MPD the way ``MusicHandler._play_random`` does
+        (``prepare_library_track``: the exact file first, then tag search
+        → filename substring → basename), with NO external fallback,
+      * answers a failure with one plain sentence in ``detail`` (no path,
+        no ids) that the apps and the dashboard show as it is,
       * writes one ``intents_log`` row (``transcript='[ui] play
         library track #N'``, ``matched_handler='music'``,
         ``matched_path=NULL``) for audit, and
@@ -7744,9 +7746,8 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
     its mpg123 just like every other admin music path.
     """
     import time
-    from pathlib import PurePath
 
-    from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
+    from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for, prepare_library_track
     from domovoi.db.repositories import IntentLogRepository
     from domovoi.handlers.shared.play_history import record_media_play
     from domovoi.up_next import rooms as up_next_rooms
@@ -7799,43 +7800,34 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
             detail="That song's file isn't on this server any more.",
         )
     mpd = get_mpd_client_for(body.room_id)
-    # Three-stage lookup mirroring MusicHandler._play_random's
-    # bulletproof pattern (music.py:329-352): tag → filename
-    # substrings → basename. The basename fallback is what hits in
-    # practice for libraries with empty/messy ID3 tags — MPD inside
-    # docker sees the same file at /music/<basename>.
+    # The row's exact file first; the tag / filename / basename searches
+    # only when the player refuses that path (prepare_library_track). The
+    # DB's names may not be the file's own: metadata enrichment rewrites
+    # titles and credits the file's tags never carried.
     song: dict[str, Any] | None = None
     try:
-        if title and artist:
-            song = await mpd.prepare_search({"title": title, "artist": artist})
-        elif title:
-            song = await mpd.prepare_search({"title": title})
-        if song is None:
-            substrings = [s_ for s_ in (title, artist) if s_]
-            if substrings:
-                song = await mpd.prepare_filename(*substrings)
-        if song is None and file_path:
-            basename = PurePath(file_path).name
-            if basename:
-                log.info(
-                    "admin play-track id=%s fell through to basename %r",
-                    body.track_id, basename,
-                )
-                song = await mpd.prepare_filename(basename)
+        song = await prepare_library_track(
+            mpd, title=title, artist=artist, file_path=file_path,
+        )
     except Exception as e:
         log.warning("admin play-track id=%s MPD raised: %s", body.track_id, e)
+        where = await _room_spoken_name(body.room_id)
         raise HTTPException(
             status_code=502,
-            detail=f"MPD error playing track {body.track_id}: {e}",
+            detail=(
+                f"The music player in {where} didn't answer. "
+                "Try again in a minute."
+            ),
         ) from e
 
     if not song:
+        log.info(
+            "admin play-track id=%s: the room's player has no file %r",
+            body.track_id, file_path,
+        )
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"MPD couldn't find track {body.track_id} (file_path "
-                f"{file_path!r}) — try 'rescan my library'"
-            ),
+            detail=await _track_not_found_detail(body.room_id, title, file_path),
         )
 
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -7896,6 +7888,47 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
         "latency_ms": latency_ms,
         "up_next": {"session_id": session_id} if session_id else None,
     }
+
+
+async def _room_spoken_name(room_id: str) -> str:
+    """How a message names a room: "the garage", or its label from
+    Settings → Rooms. Never fails: the id itself when the rooms can't be
+    read."""
+    from domovoi.handlers.shared.rooms import household_rooms, spoken_room
+
+    try:
+        async with session_scope() as s:
+            for r in await household_rooms(s, app):
+                if r.room_id == room_id:
+                    return r.spoken
+    except Exception as e:  # noqa: BLE001 — the message still goes out
+        log.debug("room name for %s not read: %s", room_id, e)
+    return spoken_room(room_id)
+
+
+def _track_display_title(title: str | None, file_path: str | None) -> str:
+    """The song's name for a message: its title, else its file's name
+    without the extension or a bracketed video id. Never the path."""
+    import re
+    from pathlib import PurePath
+
+    if title and title.strip():
+        return " ".join(title.split())
+    stem = PurePath(file_path or "").stem
+    stem = " ".join(re.sub(r"\[[A-Za-z0-9_-]{11}\]", " ", stem).split())
+    return stem or "that song"
+
+
+async def _track_not_found_detail(room_id: str, title: str | None, file_path: str | None) -> str:
+    """The 404 a play-in-a-room answers when the room's player has no file
+    for the row: one plain sentence (the apps and the dashboard show it as
+    it is), no path, no ids."""
+    where = await _room_spoken_name(room_id)
+    name = _track_display_title(title, file_path)
+    return (
+        f'The music player in {where} can\'t find "{name}" yet. '
+        'Say "rescan my library", or try again in a minute.'
+    )
 
 
 def _library_file_present(file_path: str) -> bool:
