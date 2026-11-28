@@ -189,6 +189,10 @@ android {
     // comes from the onnxruntime-android dependency below.
     sourceSets["main"].jniLibs.srcDir("../native/sherpa-onnx/jniLibs")
     sourceSets["main"].java.srcDir("../native/sherpa-onnx/kotlin")
+    // Away chat's Tor: Arti with the app's JNI calls (libdomovoi_tor.so),
+    // built from the repository's native/domovoi-tor crate by its
+    // build-android.sh, the same crate the iPhone app builds.
+    sourceSets["main"].jniLibs.srcDir("../native/domovoi-tor/jniLibs")
     // ONNX Runtime's Java API (and so its JNI bridge, libonnxruntime4j_jni.so)
     // is used since the phone's own voice: the phonemizer's out-of-dictionary
     // model and the Piper voice run on it (phonemizer/, assistant/PiperVoice.kt).
@@ -229,6 +233,12 @@ android {
             // resources/models) and skip otherwise.
             (findProperty("domovoi.oww.dir") as String?)?.let { test.systemProperty("domovoi.oww.dir", it) }
             (findProperty("domovoi.room.clips") as String?)?.let { test.systemProperty("domovoi.room.clips", it) }
+            // Away chat against a running house (away/AwayLoopbackE2ETest): its
+            // house.json, from a maintainer's local harness; skipped without.
+            (findProperty("domovoi.away.house") as String?)?.let {
+                test.systemProperty("domovoi.away.house", it)
+                test.outputs.upToDateWhen { false }
+            }
             test.systemProperty("domovoi.repo.dir", rootProject.file("..").absolutePath)
             // The variant's open-source list (openSource, below), as the APK
             // carries it: OpenSourceLicencesTest holds it to the licences
@@ -419,6 +429,39 @@ val sherpaJniLibsCheck = tasks.register<SherpaJniLibsCheck>("checkSherpaJniLibs"
     jniLibs.set(rootProject.layout.projectDirectory.dir("native/sherpa-onnx/jniLibs"))
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(sherpaJniLibsCheck) }
+
+/**
+ * Away chat's Tor library (libdomovoi_tor.so) is in
+ * android/native/domovoi-tor/jniLibs for every ABI this build packages, as
+ * sherpa-onnx's is checked above: a build that makes it itself (F-Droid
+ * runs native/domovoi-tor/build-android.sh) would otherwise ship an APK
+ * whose away chat can't start.
+ */
+abstract class DomovoiTorLibsCheck : DefaultTask() {
+    @get:Input
+    abstract val abis: ListProperty<String>
+
+    @get:Internal
+    abstract val jniLibs: DirectoryProperty
+
+    @TaskAction
+    fun check() {
+        val dir = jniLibs.get().asFile
+        val missing = abis.get().filter { abi -> File(dir, "$abi/libdomovoi_tor.so").let { !it.isFile || it.length() == 0L } }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "libdomovoi_tor.so is missing from android/native/domovoi-tor/jniLibs for ${missing.joinToString()}: " +
+                    "run native/domovoi-tor/build-android.sh --install for them",
+            )
+        }
+    }
+}
+
+val domovoiTorLibsCheck = tasks.register<DomovoiTorLibsCheck>("checkDomovoiTorLibs") {
+    abis.set(appAbis)
+    jniLibs.set(rootProject.layout.projectDirectory.dir("native/domovoi-tor/jniLibs"))
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(domovoiTorLibsCheck) }
 
 /**
  * Every 64-bit native library in the built APKs loads on a phone with 16 KB
@@ -801,6 +844,9 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
+    // Away chat (away/): the Noise handshake's X25519 and ChaCha20-Poly1305
+    // (AwayNoise). Its Tor is native/domovoi-tor's Arti library (above).
+    implementation(libs.bouncycastle.bcprov)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)

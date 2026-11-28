@@ -97,12 +97,18 @@ class OpenSourceLicencesTest {
         assertTrue(File(dir, OpenSourceLicences.ORT_LICENCE).readText().contains("Copyright (c) Microsoft Corporation"))
         assertTrue(File(dir, OpenSourceLicences.ORT_NOTICES).readText().contains("Eigen"))
         assertTrue(File(dir, OpenSourceLicences.LIBYUV_LICENCE).readText().contains("The LibYuv Project Authors"))
+        // Away chat's Tor: every crate's own licence files, the one MPL-2.0 crate among them.
+        File(dir, OpenSourceLicences.DOMOVOI_TOR_NOTICE).readText().let { t ->
+            assertTrue(t.contains("arti-client 0.48.0"))
+            assertTrue(t.contains("option-ext") && t.contains("Mozilla Public License"))
+        }
     }
 
     /** The parts the assistant plan names, each with its licence. */
     @Test fun thePlansPartsAreAllListed() {
         val names = OPEN_SOURCE_PARTS.joinToString("\n") { "${it.name} ${it.note.orEmpty()}" }
-        listOf("LiteRT-LM", "sherpa-onnx", "ONNX Runtime", "Eigen (MPL-2.0, unmodified)", "Piper voices", "CameraX and ZXing").forEach {
+        listOf("LiteRT-LM", "sherpa-onnx", "ONNX Runtime", "Eigen (MPL-2.0, unmodified)", "Piper voices", "CameraX and ZXing",
+            "Arti", "MPL-2.0, unmodified (option-ext)").forEach {
             assertTrue("missing $it", names.contains(it))
         }
         listOf(ModelCatalog.gemma4E2b, ModelCatalog.moonshineTinyEn, ModelCatalog.sileroVad).forEach { m ->
@@ -118,6 +124,7 @@ class OpenSourceLicencesTest {
         assertEquals("MIT", OpenSourceLicences.spdx(PomLicence("MIT License", "https://opensource.org/licenses/MIT")))
         assertEquals("BSD-3-Clause", OpenSourceLicences.spdx(PomLicence("New BSD License", null)))
         assertEquals("BSD", OpenSourceLicences.spdx(PomLicence("BSD License", null)))
+        assertEquals("MIT", OpenSourceLicences.spdx(PomLicence("Bouncy Castle Licence", "https://www.bouncycastle.org/licence.html")))
         assertEquals(null, OpenSourceLicences.spdx(PomLicence("GNU General Public License, version 2", null)))
         assertEquals("a GPL library would fail the agreement check", null,
             OpenSourceLicences.spdx(PomLicence("GNU Lesser General Public License", "https://www.gnu.org/licenses/lgpl.html")))

@@ -9,7 +9,13 @@
 #                   builds in, Eigen's MPL-2.0 among them); the AAR has neither
 #   libyuv/LICENSE  https://chromium.googlesource.com/libyuv/libyuv, main: BSD-3-Clause;
 #                   CameraX's camera-core builds libyuv in (its POM says so)
+#   domovoi-tor/THIRD-PARTY-LICENSES.txt  every crate built into away chat's
+#                   Tor (libdomovoi_tor.so, native/domovoi-tor) with its own
+#                   licence files, written by
+#                   native/domovoi-tor/third_party_licences.py from Cargo.lock
+#                   (2026-11-27; write it again with any Cargo.lock change)
 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  Apache-2.0.txt
 2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c  onnxruntime/LICENSE
 0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2  onnxruntime/ThirdPartyNotices.txt
 2b2cc1180c7e6988328ad2033b04b80117419db9c4c584918bbb3cfec7e9364f  libyuv/LICENSE
+8c12a2b91274ac973240bf40a2f7c3dae8293d0e460a40b9f2aa84573e38de69  domovoi-tor/THIRD-PARTY-LICENSES.txt

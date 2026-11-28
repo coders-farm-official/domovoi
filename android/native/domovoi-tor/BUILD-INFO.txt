@@ -1,0 +1,6 @@
+libdomovoi_tor.so, built by native/domovoi-tor/build-android.sh
+rustc: rustc 1.100.1 (20ddd0171 2026-11-25)
+cargo-ndk: cargo-ndk 4.1.2
+NDK: 29.0.14206865
+arti-client: 0.48.0
+API: 26
