@@ -412,6 +412,11 @@ def phone_refusal(handler: Handler, ctx: Context) -> Response | None:
     return None
 
 
+#: How recently a timer or alarm must have been announced in a room for a
+#: bare "stop" said there during a drop-in to silence it instead of ending
+#: the call (router._route_turn).
+IN_CALL_HEARD_SEC = 10.0
+
 #: Said instead of a handler that must not run during a live drop-in
 #: (``Handler.works_in_call`` False: learning a voice, an introduction).
 CALL_REFUSAL_TEXT = "That has to wait until the drop-in is over. Say hang up to end it."
@@ -1168,11 +1173,18 @@ async def _route_turn(intent: Intent, ctx: Context, session: AsyncSession) -> Re
         if not own_call or pending_now:
             ending = None
     if ending == END_STOP and ctx.room_id and isinstance(session, AsyncSession):
-        # A timer or an alarm going off in the room is silenced first, as a
-        # bare "stop" always does (handlers/music.py); the next one hangs up.
+        # A timer or an alarm the room has just HEARD go off is silenced
+        # first, as a bare "stop" always does (handlers/music.py); the next
+        # one hangs up. Only one actually announced there in the last few
+        # seconds (IN_CALL_HEARD_SEC): during a call announcements are held,
+        # so a timer still waiting for the call to end was heard by nobody,
+        # and this "stop" is for the call — the timer keeps its turn and
+        # rings once the call is over.
         from domovoi.room_display import stop_ringing_by_voice
 
-        if await stop_ringing_by_voice(session, ctx.room_id, ctx.app) is not None:
+        if await stop_ringing_by_voice(
+            session, ctx.room_id, ctx.app, heard_within_sec=IN_CALL_HEARD_SEC,
+        ) is not None:
             response = Response(
                 text="Okay.", session_id=session_id, matched_handler="music",
                 matched_path="fast", online=ctx.online, expect_followup=False,

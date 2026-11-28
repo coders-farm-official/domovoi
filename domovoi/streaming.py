@@ -921,6 +921,13 @@ DROPIN_READY_WAIT_SEC = 10.0
 # none, a spare PC names its kind. Only these get the silent response that
 # ends a reply's wait during a call (StreamSession._needs_reply_release).
 PY_SATELLITE_BOARDS: frozenset[str | None] = frozenset({None, "linux_pc", "windows_pc"})
+# Phones in room mode (android_room, ios_room): they may end a capture with
+# no utterance_end at all (muted mid-command). See _quiet_capture_over_sec.
+ROOM_PHONE_BOARDS: frozenset[str] = frozenset({"android_room", "ios_room"})
+# In a call, audio coming again after a capture's audio stopped this long is
+# the call's, and the capture is over — for a device that always ends its
+# captures with utterance_end (a gap shorter than this is the link).
+QUIET_CAPTURE_OVER_SEC = 6.0
 
 # When a room can take an out-of-turn announcement (a timer or reminder
 # going off elsewhere, domovoi/timer_delivery.py): StreamSession.
@@ -2521,7 +2528,7 @@ class StreamSession:
         if (
             peer is not None and self.utterance_active
             and (self._response_task is None or self._response_task.done())
-            and now - previous_audio_at >= ANNOUNCE_CAPTURE_FRESH_SEC
+            and now - previous_audio_at >= self._quiet_capture_over_sec()
         ):
             # Audio again after a capture went quiet with no utterance_end
             # (a phone muted mid-command cancels its turn that way): that
@@ -8385,6 +8392,20 @@ class StreamSession:
         while in a call). Any other board is not known to need it, so it
         isn't sent."""
         return self.board in PY_SATELLITE_BOARDS
+
+    def _quiet_capture_over_sec(self) -> float:
+        """How long a capture's audio must have stopped, in a call, before
+        audio arriving again is taken as the call's and the capture as
+        over (`_on_audio`). A phone in room mode cancels a command with no
+        utterance_end (muted mid-capture), so for it the freshness gap
+        itself (ANNOUNCE_CAPTURE_FRESH_SEC) is enough. The Python satellite
+        always ends a capture with utterance_end (or noisy_capture), so a
+        gap there is the link, not the end — a Wi-Fi hiccup in the middle
+        of "hang up" — and only a much longer one
+        (QUIET_CAPTURE_OVER_SEC) is taken as the capture being gone."""
+        if self.board in ROOM_PHONE_BOARDS:
+            return ANNOUNCE_CAPTURE_FRESH_SEC
+        return QUIET_CAPTURE_OVER_SEC
 
     def holds_call_audio(self, now: float | None = None) -> bool:
         """Whether the other room's call audio must not go to this room's

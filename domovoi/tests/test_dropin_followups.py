@@ -325,6 +325,7 @@ async def test_a_stale_capture_holds_nothing(_quiet_calls) -> None:
     mid-command) does not keep the other room off its speaker, and the
     room's own audio, once it comes again, goes back to the call."""
     garage, kitchen = _pair()
+    kitchen.board = "android_room"
     await garage._begin_dropin(kitchen)
     await kitchen._on_control({"type": "utterance_start", "trigger": "wake_word", "utt": 1})
     kitchen._last_audio_at -= streaming.ANNOUNCE_CAPTURE_FRESH_SEC + 0.1   # went quiet
@@ -336,6 +337,24 @@ async def test_a_stale_capture_holds_nothing(_quiet_calls) -> None:
     assert kitchen.utterance_active is False
     assert len(kitchen.audio_buf) == 0
     assert len(garage.ws.sent) == m + 1            # relayed to the garage
+    await garage._end_dropin(ended_by=GARAGE)
+
+
+async def test_a_pi_command_survives_a_wifi_gap(_quiet_calls) -> None:
+    """A Pi always ends its capture with utterance_end: two seconds without
+    frames mid-"hang up" is the link, and the command is kept."""
+    garage, kitchen = _pair()
+    await garage._begin_dropin(kitchen)
+    await kitchen._on_control({"type": "utterance_start", "trigger": "wake_word", "utt": 1})
+    await kitchen._on_audio(FRAME)
+    kitchen._last_audio_at -= 2.0                  # a 2 s Wi-Fi gap
+    await kitchen._on_audio(FRAME)                 # frames resume
+    assert kitchen.utterance_active is True
+    assert len(kitchen.audio_buf) == 2 * len(FRAME)
+    # Gone far longer than any hiccup: the capture is over.
+    kitchen._last_audio_at -= streaming.QUIET_CAPTURE_OVER_SEC + 0.1
+    await kitchen._on_audio(FRAME)
+    assert kitchen.utterance_active is False
     await garage._end_dropin(ended_by=GARAGE)
 
 
@@ -771,26 +790,91 @@ def _call_app():
     return _app(active_dropins={GARAGE: {"peer": KITCHEN}, KITCHEN: {"peer": GARAGE}})
 
 
+@pytest.fixture
+async def fire_ledger(db_session):
+    from domovoi.tests.timer_fires_testkit import apply_v018
+
+    await apply_v018()
+    yield db_session
+    await db_session.rollback()
+    await apply_v018()
+
+
+async def _fire(s, *, outcome: str, ago: float = 3.0) -> int:
+    """A timer set in the garage that went off ``ago`` seconds ago, and the
+    garage's delivery row: ``pending`` (held, waiting for the room to be
+    free — a call holds it), or ``spoken`` (heard there)."""
+    from sqlalchemy import text
+
+    fid = (await s.execute(
+        text(
+            "INSERT INTO timer_fires (timer_id, kind, label, message, origin_room_id, "
+            "created_at, due_at, fired_at, base_text) VALUES (1, 'timer', NULL, NULL, :r, "
+            "now() - interval '10 minutes', now() - make_interval(secs => :ago), "
+            "now() - make_interval(secs => :ago), 'x') RETURNING id"
+        ),
+        {"r": GARAGE, "ago": ago},
+    )).scalar_one()
+    await s.execute(
+        text(
+            "INSERT INTO timer_fire_deliveries (fire_id, room_id, is_origin, outcome, started_at, "
+            "finished_at) VALUES (:f, :r, true, :out, "
+            "CASE WHEN :out = 'pending' THEN NULL ELSE now() - make_interval(secs => :ago) END, "
+            "CASE WHEN :out IN ('spoken', 'interrupted') THEN now() - make_interval(secs => :ago) END)"
+        ),
+        {"f": fid, "r": GARAGE, "out": outcome, "ago": ago},
+    )
+    return int(fid)
+
+
+async def _fire_state(s, fid: int) -> tuple:
+    from sqlalchemy import text
+
+    return (await s.execute(
+        text(
+            "SELECT f.acked_at IS NULL, d.outcome FROM timer_fires f "
+            "JOIN timer_fire_deliveries d ON d.fire_id = f.id WHERE f.id = :f"
+        ),
+        {"f": fid},
+    )).one()
+
+
 @requires_db
-async def test_a_ringing_timer_is_silenced_before_the_call_ends(db_session, monkeypatch) -> None:
-    import domovoi.room_display as room_display
+async def test_a_held_timer_nobody_heard_does_not_take_the_calls_stop(fire_ledger) -> None:
+    """The garage's timer went off during the call: its announcement is
+    held (pending) until the room is free. A bare "stop" there is for the
+    call — it ends it, and the timer is neither acknowledged nor cancelled:
+    it is still due to ring once the call is over."""
+    from domovoi.timer_delivery import ringing_fire
 
-    rang: list[str] = []
+    s = fire_ledger
+    fid = await _fire(s, outcome="pending")
+    r = await _route(s, "stop", in_call=True, app=_call_app())
+    assert r.dropin_action == "end"
+    assert tuple(await _fire_state(s, fid)) == (True, "pending")
+    # Still the room's ringing timer, so it announces when the call is over.
+    ringing = await ringing_fire(s, GARAGE)
+    assert ringing is not None and ringing.fire_id == fid
 
-    async def _ringing(session, room_id, app=None):
-        rang.append(room_id)
-        return 42
 
-    async def _quiet(session, room_id, app=None):
-        return None
-
-    monkeypatch.setattr(room_display, "stop_ringing_by_voice", _ringing)
-    r = await _route(db_session, "stop", in_call=True, app=_call_app())
-    assert rang == [GARAGE]
+@requires_db
+async def test_a_timer_just_heard_is_silenced_before_the_call_ends(fire_ledger) -> None:
+    """One actually announced in the room seconds ago (it rang just before
+    the call opened): the first "stop" silences it, the next hangs up."""
+    s = fire_ledger
+    fid = await _fire(s, outcome="spoken", ago=3.0)
+    r = await _route(s, "stop", in_call=True, app=_call_app())
     assert r.text == "Okay." and r.dropin_action is None
-    # Nothing ringing any more: the next "stop" hangs up.
-    monkeypatch.setattr(room_display, "stop_ringing_by_voice", _quiet)
-    r = await _route(db_session, "stop", in_call=True, app=_call_app())
+    assert (await _fire_state(s, fid))[0] is False          # acknowledged
+    r = await _route(s, "stop", in_call=True, app=_call_app())
+    assert r.dropin_action == "end"
+
+
+@requires_db
+async def test_a_timer_heard_long_ago_does_not_take_the_calls_stop(fire_ledger) -> None:
+    s = fire_ledger
+    await _fire(s, outcome="spoken", ago=20.0)    # inside the 30 s ack window, not "just"
+    r = await _route(s, "stop", in_call=True, app=_call_app())
     assert r.dropin_action == "end"
 
 
