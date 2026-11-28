@@ -3308,6 +3308,21 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     run, _music_exit_reason(rc, run.stderr_tail), run.attempt,
                 )
 
+    def _repaint_ring(self) -> None:
+        """Repaint the ring when it is handed back (a session accepted, the
+        wake word armed), with its resting state matched to the player
+        first. The room's player runs on through an outage (the server's
+        music players outlive a core restart) and nothing from the core
+        redraws the ring until the next turn: 2026-11-28, a group's dining
+        room stayed dark while its music played. Only the resting states
+        (idle, music) are judged; anything else (a call, a turn) is left to
+        its owner."""
+        if self._is_music_playing():
+            self._leds.set_state_if("idle", "music")
+        else:
+            self._leds.set_state_if("music", "idle")
+        self._leds.resync()
+
     def _is_music_playing(self) -> bool:
         """True if a music mpg123 subprocess is currently running. Checked at
         wake time (before _stop_music) so a spoken wake greeting can be
@@ -8370,7 +8385,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         log.info("wake word armed (listening for %r)", self._wake_word)
         if self._ring_handoff_pending:
             self._ring_handoff_pending = False
-            self._leds.resync()
+            self._repaint_ring()
 
         while not self.shutdown_event.is_set():
             self._wake_heartbeat = time.monotonic()
@@ -9722,7 +9737,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return      # a mic thread is still loading; the ring is its job
         self._ring_handoff_pending = False
         if self.fatal_error is None and not self._voice_gate_closed:
-            self._leds.resync()
+            self._repaint_ring()
 
     def _on_session_ended(self) -> None:
         """Wake any thread waiting on a response that's not coming.
