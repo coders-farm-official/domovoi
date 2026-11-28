@@ -42,3 +42,9 @@ codegen-units = 1
 # fault in Tor ends the chat's connection, not the app.
 panic = "unwind"
 strip = true
+
+[patch.crates-io]
+# sysinfo 0.38.4 (through tor-memquota) calls proc_pidinfo, which is
+# macOS-only, so it doesn't build for iOS. Upstream fixed it in 0.40.0, which
+# tor-memquota 0.48.0 can't take yet; vendor/README.md has the one change.
+sysinfo = { path = "vendor/sysinfo-0.38.4" }
