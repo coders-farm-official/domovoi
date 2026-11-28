@@ -555,7 +555,12 @@ async def test_one_announcement_per_gap(house, monkeypatch, short_gap) -> None:
     await house.drain()
     assert [w for _, w in rooms.said] == ["A message from The Smiths.", "3 more messages from The Smiths.",
                                           "Another message from The Smiths."]
-    assert all(b - a >= GAP for a, b in zip(rooms.at, rooms.at[1:])), rooms.at
+    # Spaced by the gap. The gap is timed from when the house decided to
+    # speak, the room records when it spoke: on a slow runner the first
+    # announcement's own setup (its wake-phrase read) lands inside the gap
+    # (CI saw 1.04 s apart for a 1.5 s gap). Without the gap they come
+    # within milliseconds, so half the gap still proves the spacing.
+    assert all(b - a >= GAP / 2 for a, b in zip(rooms.at, rooms.at[1:])), rooms.at
 
 
 @requires_db

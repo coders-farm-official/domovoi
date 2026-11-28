@@ -105,7 +105,11 @@ if str(REPO_ROOT) not in sys.path:
 VERDICTS = ("CAN", "CANT", "DEPENDS", "ADMIN", "DO_IT", "EXACT")
 # "away": a phone's chat from away over the house's onion (1.5.0 away chat,
 # web/backend/away_bridge.py): the home chat under that phone's identity.
-WHERE = ("voice", "chat", "playbox", "phone", "away")
+# "chat_mic": the phone chat's mic button (domovoi/phone_voice.py _answer)
+# without speech: route() as that phone, credited to its person, one
+# conversation per chat thread. Typed chat's house actions (N19, 1.5.0
+# wf/chat-actions) answer as this does.
+WHERE = ("voice", "chat", "playbox", "phone", "away", "chat_mic")
 # Who can chat from away: the enrolled phone's person; a valid admin_grant
 # makes that one turn a proven admin. Shared screens and guests are refused
 # at enrol (AWAY-CHAT-WIRE.md section 8), so no away case has those askers.
@@ -134,7 +138,11 @@ PLUGIN_STATUS = ("ok", "error", "crash")
 # (device-state questions answered by the model) was found 2026-11-26 and
 # fixed with house_facts' device-state answers (16.4-16.4g are stub cases).
 # N18 (2026-11-26): a proven admin gets the Plugins-page pointer for a missing feature.
-NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 19) if i not in (7, 10))
+# N19 (2026-11-27): a typed house action (announce, timer, list, music, drop-in,
+# broadcast) runs as the chat mic does (path B), never a pretend-done.
+# N20 (2026-11-27): the intercom announces the pronoun ('announce that' plays
+# "that") and keeps a leading 'that' in the message.
+NEEDS_CHANGE_IDS = tuple(f"N{i}" for i in range(1, 21) if i not in (7, 10))
 CASE_STATUS = ("verified", "unverified")
 
 # What a house fixture may say (the schema the test checks).
@@ -194,6 +202,11 @@ class Case:
     not_one_of: list[str] = field(default_factory=list)
     # The reply differs from the last ``before`` turn's reply.
     differs_from_before: bool = False
+    # What the turn did (Turn.actions, e.g. "announce:kitchen,garage:<text>",
+    # "timer:600", "list_item:Shopping:milk", "music:kitchen:start"): each
+    # regex must match one action; ``did_not`` regexes must match none.
+    did: list[str] = field(default_factory=list)
+    did_not: list[str] = field(default_factory=list)
 
 
 def case_group(case_id: str) -> int:
@@ -227,6 +240,7 @@ def load_corpus(path: Path = DEFAULT_CORPUS) -> list[Case]:
                 one_of=_as_list(c.get("one_of")), one_of_rest=c.get("one_of_rest"),
                 not_one_of=_as_list(c.get("not_one_of")),
                 differs_from_before=bool(c.get("differs_from_before")),
+                did=_as_list(c.get("did")), did_not=_as_list(c.get("did_not")),
             )
         )
     return out
@@ -678,6 +692,11 @@ class _Rows:
     def scalar_one(self) -> Any:
         return self.scalar()
 
+    def one(self) -> Any:
+        if not self._rows:
+            raise LookupError("no row")
+        return tuple(self._rows[0].values())
+
     def scalar(self) -> Any:
         return next(iter(self._rows[0].values())) if self._rows else None
 
@@ -777,6 +796,11 @@ def reset_state(house: dict) -> None:
     STATE["threads"] = {}      # thread name -> [{"id", "role", "stats"}]
     STATE["thread_ids"] = {}   # thread name -> int
     STATE["next_row"] = 1
+    STATE["chat_log"] = {}     # thread name -> [{"role", "content"}] (the model's history)
+    STATE["actions"] = []      # what a chat_mic turn did (Turn.actions)
+    STATE["sessions"] = {}     # conversation id -> its context (sessions.context)
+    STATE["mic_sessions"] = {}  # chat thread name -> its conversation id
+    STATE["list_items"] = []
 
 
 def _mem_insert(h: dict, p: dict) -> list[dict[str, Any]]:
@@ -867,6 +891,97 @@ FIXTURE_READS: list[tuple[str, re.Pattern[str], Any]] = [
 ]
 
 
+def _sess_insert(h: dict, p: dict) -> tuple[list, int]:
+    STATE["sessions"].setdefault(str(p.get("id")), {})
+    return [], 1
+
+
+def _sess_id(h: dict, p: dict) -> list[dict[str, Any]]:
+    return [{"id": p["id"]}] if str(p.get("id")) in STATE["sessions"] else []
+
+
+def _sess_context(h: dict, p: dict) -> list[dict[str, Any]]:
+    sid = str(p.get("id"))
+    return [{"context": STATE["sessions"][sid]}] if sid in STATE["sessions"] else []
+
+
+def _sess_update(h: dict, p: dict) -> tuple[list, int]:
+    if "ctx" in p:
+        STATE["sessions"][str(p["id"])] = json.loads(p["ctx"])
+    return [], 1
+
+
+def _did(kind: str):
+    def write(h: dict, p: dict) -> tuple[list, int]:
+        n = len(STATE["actions"]) + 1
+        if kind == "timer":
+            secs = None
+            if p.get("expires_at") is not None:
+                from datetime import datetime, timezone
+
+                start = p.get("created_at") or datetime.now(tz=timezone.utc)
+                secs = round((p["expires_at"] - start).total_seconds())
+            STATE["actions"].append(f"timer:{secs}")
+        else:
+            STATE["actions"].append(kind)
+        return [{"id": n}], 1
+    return write
+
+
+def _list_rows(h: dict, p: dict) -> list[dict[str, Any]]:
+    return [{"id": i, "name": name, "position": i, "open": 0, "done": 0, "c": None, "u": None}
+            for i, name in enumerate(h.get("lists") or ["Shopping"], start=1)]
+
+
+def _list_item_insert(h: dict, p: dict) -> tuple[list, int]:
+    if h.get("list_writes") == "error":
+        raise RuntimeError("the fixture's list write fails (list_writes: error)")
+    STATE["list_items"].append(dict(p))
+    name = next((r["name"] for r in _list_rows(h, p) if r["id"] == p.get("l")), p.get("l"))
+    STATE["actions"].append(f"list_item:{name}:{p.get('t')}")
+    return [{"id": len(STATE["list_items"])}], 1
+
+
+def _list_item_read(h: dict, p: dict) -> list[dict[str, Any]]:
+    i = int(p["id"]) - 1
+    if not 0 <= i < len(STATE["list_items"]):
+        return []
+    it = STATE["list_items"][i]
+    return [{"id": p["id"], "list_id": it["l"], "text": it["t"], "done": False, "done_at": None,
+             "position": i, "pid": it.get("p"), "name": None, "room": it.get("r"),
+             "via": it.get("v"), "c": None, "u": None}]
+
+
+def _room_rows(h: dict, p: dict) -> list[dict[str, Any]]:
+    return [{"room_id": r["id"], "label": None, "sat_type": "pi", "seen": True}
+            for r in h.get("rooms") or []]
+
+
+ACTION_READS: list[tuple[str, re.Pattern[str], Any]] = [
+    # The conversation and the turn's bookkeeping (router._persist_turn).
+    ("conversation", re.compile(r"INSERT INTO sessions\b", re.I), _sess_insert),
+    ("conversation", re.compile(r"SELECT id FROM sessions WHERE id", re.I), _sess_id),
+    ("conversation", re.compile(r"SELECT context FROM sessions WHERE id", re.I), _sess_context),
+    ("conversation", re.compile(r"UPDATE sessions\b", re.I), _sess_update),
+    ("turn log", re.compile(r"(?:INSERT INTO|UPDATE) (?:intents_log|conversation_log|media_plays)\b", re.I),
+     lambda h, p: ([{"id": 1}], 1)),
+    ("turn log", re.compile(r"FROM information_schema\.columns", re.I), lambda h, p: [{"x": 1}]),
+    ("notify", re.compile(r"SELECT pg_notify", re.I), lambda h, p: [{"x": None}]),
+    # Timers, lists, rooms, music.
+    ("timer", re.compile(r"INSERT INTO timers\b", re.I), _did("timer")),
+    ("lists", re.compile(r"FROM lists l LEFT JOIN list_items", re.I), _list_rows),
+    ("list item", re.compile(r"SELECT COUNT\(\*\) FROM list_items", re.I), lambda h, p: [{"n": 0}]),
+    ("list item", re.compile(r"INSERT INTO list_items\b", re.I), _list_item_insert),
+    ("list item", re.compile(r"FROM list_items i LEFT JOIN people p .*AND i\.id = :id", re.I), _list_item_read),
+    ("list item", re.compile(r"FROM list_items i LEFT JOIN people p", re.I), lambda h, p: []),
+    ("list item", re.compile(r"UPDATE lists SET updated_at", re.I), lambda h, p: ([], 1)),
+    ("rooms", re.compile(r"FROM \(SELECT room_id FROM rooms UNION", re.I), _room_rows),
+    # The library's fingerprint and the recent plays: none (the stub player
+    # answers the search, "Stub Artist": music is checked by shape).
+    ("music", re.compile(r"FROM library_tracks\)|started_at > NOW\(\) -", re.I), lambda h, p: []),
+]
+
+
 class FixtureSession:
     """Stands where route() passes its AsyncSession and where
     ``session_scope()`` opens one: the reads in FIXTURE_READS come from the
@@ -876,7 +991,8 @@ class FixtureSession:
     async def execute(self, stmt: Any, params: Any = None, *a: Any, **k: Any) -> _Rows:
         sql = " ".join(str(stmt).split())
         house = CURRENT["house"]
-        for _what, rx, rows in FIXTURE_READS:
+        reads = FIXTURE_READS + (ACTION_READS if CURRENT.get("actions") else [])
+        for _what, rx, rows in reads:
             if rx.search(sql):
                 got = rows(house, params if isinstance(params, dict) else {})
                 if isinstance(got, tuple):   # (rows, rowcount): a write
@@ -902,6 +1018,13 @@ class FixtureSession:
 
     async def flush(self, *a: Any) -> None:
         return None
+
+    @contextlib.asynccontextmanager
+    async def begin_nested(self) -> Any:
+        if not CURRENT.get("actions"):
+            TOUCHES.db.append("session.begin_nested")
+            raise NeedsDB("session.begin_nested")
+        yield self
 
     async def close(self) -> None:
         return None
@@ -1318,6 +1441,8 @@ class Turn:
     detail: str = ""
     # The case's stored / not_stored checks that failed (check_state).
     state_problems: list[str] = field(default_factory=list)
+    # What the turn did in the house (see Case.did).
+    actions: list[str] = field(default_factory=list)
 
 
 async def run_voice_turn(utterance: str, ctx: Any) -> Turn:
@@ -1330,6 +1455,67 @@ async def run_voice_turn(utterance: str, ctx: Any) -> Turn:
     # The next turn is in the same conversation, as on a satellite.
     ctx.session_id = resp.session_id
     return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path)
+
+
+async def run_chat_mic_turn(utterance: str, house: dict, *, device: str | None, thread: str) -> Turn:
+    """The phone chat's mic (domovoi/phone_voice.py _answer) without speech:
+    route() as the phone (its PHONE_ROOM_PREFIX room, device_kind phone,
+    push to talk), credited to the device's person, one conversation per
+    chat thread. The fixture's rooms have music players and are connected;
+    what the turn does lands in Turn.actions (announcements from the reply,
+    timers and list items from their writes, music from its dispatch)."""
+    import asyncio
+
+    from domovoi import room_music
+    from domovoi.clients import mpd as mpd_mod
+    from domovoi.models import Intent
+    from domovoi.phone_voice import phone_room
+    from domovoi.router import route
+
+    dev = next((d for d in house.get("devices") or [] if d["id"] == device), {})
+    room = phone_room(device or "phone")
+    ctx = build_context(house).model_copy(update={
+        "room_id": room, "device_kind": "phone", "trigger": "push_to_talk",
+        "person_id": dev.get("person_id"), "voice_outcome": None, "voice_candidates": [],
+        "presence_tier": None, "chat_thread_id": STATE["thread_ids"].setdefault(thread, len(STATE["thread_ids"]) + 1),
+        "session_id": STATE["mic_sessions"].get(thread),
+    })
+    live = ctx.app.state
+    live.satellite_full_duplex = {r: True for r in live.active_sessions}
+    live.satellite_volume = {}
+    live.active_dropins = {}
+
+    async def dispatch(app: Any, response: Any, room_id: str, *, start_paused: bool = False) -> None:
+        STATE["actions"].append(f"music:{room_id}:{response.music_action}")
+
+    # The turn's own players: a stub player started here must not still be
+    # playing in a later case (2.19 "show me the queue" heard 25.4m's jazz).
+    saved_ports, saved_dispatch = dict(mpd_mod._room_ports), room_music.dispatch_music
+    saved_clients = dict(mpd_mod._clients)
+    mpd_mod._clients.clear()
+    mpd_mod._room_ports.clear()
+    mpd_mod._room_ports.update({r["id"]: (6600 + 2 * i, 6601 + 2 * i)
+                                for i, r in enumerate(house.get("rooms") or [])})
+    room_music.dispatch_music = dispatch
+    CURRENT["actions"] = True
+    before = len(STATE["actions"])
+    try:
+        resp = await route(Intent(transcript=utterance, room_id=room, session_id=ctx.session_id),
+                           ctx, FixtureSession())
+        for _ in range(10):   # the room's music task runs after the reply
+            await asyncio.sleep(0)
+    finally:
+        CURRENT["actions"] = False
+        room_music.dispatch_music = saved_dispatch
+        mpd_mod._room_ports.clear()
+        mpd_mod._room_ports.update(saved_ports)
+        mpd_mod._clients.clear()
+        mpd_mod._clients.update(saved_clients)
+    STATE["mic_sessions"][thread] = resp.session_id
+    did = STATE["actions"][before:]
+    if resp.announce_to_rooms:
+        did.insert(0, f"announce:{','.join(resp.announce_to_rooms)}:{resp.announce_text or ''}")
+    return Turn("reply", resp.text or "", resp.matched_handler, resp.matched_path, actions=did)
 
 
 def _fixture_caller(house: dict, device: str | None) -> Any:
@@ -1472,7 +1658,10 @@ async def run_chat_turn(
 
     resp = await ollama.AsyncClient(host=model_url).chat(
         model=model or settings.ollama_model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": utterance}],
+        # chat._history_for_model: the thread's earlier turns ride along.
+        messages=[{"role": "system", "content": system},
+                  *STATE.get("chat_log", {}).get(thread, []),
+                  {"role": "user", "content": utterance}],
     )
     _chat_row(thread, "assistant", {"model_role": "chat"})
     return Turn("reply", resp["message"]["content"], None, "chat")
@@ -1536,14 +1725,30 @@ async def run_case(
             return await run_voice_turn(say, voice_ctx[0])
         if case.where == "playbox":
             return await run_playbox_turn(say, house)
-        return await run_chat_turn(say, house, device=device or default_device(house),
-                                   thread=thread, model_url=model_url, model=model,
-                                   away=case.where == "away")
+        if case.where == "chat_mic":
+            return await run_chat_mic_turn(say, house, device=device or default_device(house), thread=thread)
+        t = await run_chat_turn(say, house, device=device or default_device(house),
+                                thread=thread, model_url=model_url, model=model,
+                                away=case.where == "away")
+        if t.outcome == "reply":
+            STATE.setdefault("chat_log", {}).setdefault(thread, []).extend(
+                [{"role": "user", "content": say}, {"role": "assistant", "content": t.text or ""}])
+        return t
 
     with applied(house, catalogue, lenient=lenient):
         try:
             said_before, before_texts = [], []
             for b in case.before:
+                if "reply" in b:
+                    # A turn from before (an old reply in the thread): seeded, not run.
+                    th = b.get("thread", case.thread)
+                    _chat_row(th, "user")
+                    _chat_row(th, "assistant", {"model_role": "chat"})
+                    STATE["chat_log"].setdefault(th, []).extend(
+                        [{"role": "user", "content": b["say"]}, {"role": "assistant", "content": b["reply"]}])
+                    said_before.append(f"{b['say']!r} -> {b['reply']!r} (seeded)")
+                    before_texts.append(b["reply"])
+                    continue
                 t = await one(b["say"], b.get("device", case.device), b.get("thread", case.thread))
                 said_before.append(f"{b['say']!r} -> {t.text!r}")
                 before_texts.append(t.text)
@@ -1598,6 +1803,7 @@ class Result:
     needs_change: str | None = None
     judge_score: int | None = None
     judge_reason: str = ""
+    actions: list[str] = field(default_factory=list)
     detail: str = ""
     # --runs N: how many scored runs passed, of how many; every run's own
     # status, reply and problems.
@@ -1636,7 +1842,7 @@ def score(case: Case, turn: Turn, house: dict, tree: SettingsTree, catalogue: di
         id=case.id, group=case.group, utterance=case.utterance, house=case.house,
         where=case.where, expect=case.expect, outcome=turn.outcome, status=turn.outcome,
         text=turn.text, handler=turn.handler, path=turn.path, needs_change=case.needs_change,
-        detail=turn.detail,
+        detail=turn.detail, actions=list(turn.actions),
     )
     if turn.outcome not in ("reply", "raised"):
         return r
@@ -1644,6 +1850,13 @@ def score(case: Case, turn: Turn, house: dict, tree: SettingsTree, catalogue: di
     if turn.outcome == "raised":
         problems.insert(0, f"handler raised ({turn.detail}); the turn is silent")
     problems += turn.state_problems
+    for pat in case.did:
+        if not any(re.search(pat, a, re.I) for a in turn.actions):
+            problems.append(f"didn't do /{pat}/ (did: {turn.actions or 'nothing'})")
+    for pat in case.did_not:
+        hit = next((a for a in turn.actions if re.search(pat, a, re.I)), None)
+        if hit is not None:
+            problems.append(f"did {hit!r} (/{pat}/)")
     problems += global_problems(case, turn.text, house, tree, catalogue)
     r.problems = list(dict.fromkeys(problems))
     ok = not r.problems
